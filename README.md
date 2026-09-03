@@ -13,6 +13,7 @@ This is the real product (v2). [jarvis-starter-kit](https://github.com/david-dar
 - **Brain** — reusable `SKILL.md` procedures, plus a browsable graph of your Obsidian-style vault, which is where the assistant's long-term memory actually lives.
 - **Channels** — reach the same assistant from Discord, with conversation state shared through the same sessions and vault.
 - **Cookbook** — download and run local models without a separate install.
+- **Remote access** — reach JARVIS from your phone or another computer over [Tailscale](https://tailscale.com), set up from Settings → Remote Access. Nothing is exposed to the public internet: the listener binds only to your Tailscale address, serves real HTTPS, and requires a login.
 
 Memory is a folder of markdown notes, not a database — so it stays readable, portable, and editable by you or any other tool.
 
@@ -57,7 +58,8 @@ npm run dist
 
 - By default (`AUTH_ENABLED=false`) the app runs as a single trusted local user with no login — the sane default for a desktop app on your own machine.
 - Set `AUTH_ENABLED=true` to turn on real accounts: bcrypt password hashes, session cookies, optional TOTP 2FA, and an admin/non-admin split. **Use this for any setup reachable beyond localhost.**
-- `scripts/run_remote.py` serves the app over your Tailscale network only (never `0.0.0.0`), with a real Tailscale-issued TLS cert and auth forced on.
+- **Remote access** (Settings → Remote Access) binds only to your Tailscale interface address — never `0.0.0.0` — serves a real Tailscale-issued TLS certificate, and refuses to start unless a login exists. `scripts/run_remote.py` is the equivalent CLI path for development.
+- TLS certificates are stored in your data directory, never in the app folder, so they can't end up in a backup or a distributed build.
 - Credentials (email passwords, API keys, bot tokens) are encrypted at rest with a key generated per install. Everything sensitive lives in `data/`, which is git-ignored and excluded from packaged builds.
 
 ## Configuration
