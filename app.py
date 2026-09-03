@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 
 from core.constants import STATIC_DIR
 from core.middleware import SecurityHeadersMiddleware
-from core import custom_tabs, task_scheduler
+from core import custom_tabs, remote_access, task_scheduler
 from core.channels import discord_channel
 from routes import (
     auth_routes,
@@ -28,6 +28,7 @@ from routes import (
     document_routes,
     vault_routes,
     cookbook_routes,
+    remote_routes,
 )
 from core import llamacpp_engine
 from services import chat_service
@@ -42,7 +43,12 @@ async def lifespan(_app: FastAPI):
     # context manager; identical behavior, one modern mechanism.
     task_scheduler.start()
     await discord_channel.start()
+    # Restores the remote listener across restarts if the user turned it on
+    # (core/remote_access.py). Never raises — a machine that's dropped off
+    # the tailnet must still boot normally.
+    await remote_access.start_if_enabled()
     yield
+    await remote_access.stop()
     task_scheduler.stop()
     await discord_channel.stop()
     await chat_service.shutdown()
@@ -73,6 +79,7 @@ app.include_router(channels_routes.router)
 app.include_router(document_routes.router)
 app.include_router(vault_routes.router)
 app.include_router(cookbook_routes.router)
+app.include_router(remote_routes.router)
 
 # Developer Mode (David's ask 2026-09-01) — the only app.py edit a custom
 # tab ever needs. Every routes/tab_*.py found here gets mounted; adding a

@@ -25,6 +25,8 @@ import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(SCRIPT_DIR)
+sys.path.insert(0, BASE_DIR)
+from core.constants import DATA_DIR  # noqa: E402  (needs BASE_DIR on the path first)
 
 TAILSCALE_EXE = shutil.which("tailscale") or r"C:\Program Files\Tailscale\tailscale.exe"
 
@@ -57,14 +59,21 @@ def resolve_tailscale_hostname():
 
 
 def resolve_tailscale_cert(hostname):
-    cert_path = os.path.join(SCRIPT_DIR, f"{hostname}.crt")
-    key_path = os.path.join(SCRIPT_DIR, f"{hostname}.key")
+    # Certs live in the data directory, never in the repo. They used to be
+    # written here in scripts/, which is how they nearly shipped inside an
+    # installer (2026-09-03 packaging audit — the build filter swept in
+    # scripts/*.key). Shares the location with core/remote_access.py so the
+    # in-app toggle and this script reuse the same issued certificate.
+    certs_dir = os.path.join(DATA_DIR, "certs")
+    os.makedirs(certs_dir, exist_ok=True)
+    cert_path = os.path.join(certs_dir, f"{hostname}.crt")
+    key_path = os.path.join(certs_dir, f"{hostname}.key")
     if os.path.exists(cert_path) and os.path.exists(key_path):
         return cert_path, key_path
     try:
         result = subprocess.run(
-            [TAILSCALE_EXE, "cert", hostname],
-            capture_output=True, text=True, timeout=30, cwd=SCRIPT_DIR,
+            [TAILSCALE_EXE, "cert", "--cert-file", cert_path, "--key-file", key_path, hostname],
+            capture_output=True, text=True, timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

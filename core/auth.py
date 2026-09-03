@@ -42,7 +42,27 @@ INTERNAL_TOOL_TOKEN = secrets.token_hex(32)
 
 
 def auth_enabled() -> bool:
-    return os.getenv("AUTH_ENABLED", "false").lower() in {"1", "true", "yes"}
+    """True if EITHER the AUTH_ENABLED env var or the persisted setting says
+    so. Two sources because they serve different deployments: the env var is
+    how scripted/server runs force auth on (scripts/run_remote.py), while the
+    setting is how a user turns on accounts from the desktop UI — a packaged
+    app gives them nowhere to set an env var.
+
+    Deliberately OR, never AND: neither source can switch auth off when the
+    other has turned it on. Turning on remote access (core/remote_access.py)
+    sets the persisted flag, so exposing the app to a network can never
+    silently leave it running with the single-trusted-local-user bypass.
+
+    Imported lazily to avoid a circular import — core.settings reads
+    core.constants, and this module is imported by middleware that settings
+    routes depend on."""
+    if os.getenv("AUTH_ENABLED", "false").lower() in {"1", "true", "yes"}:
+        return True
+    try:
+        from core import settings as settings_store
+        return bool(settings_store.get_setting("auth_enabled"))
+    except Exception:
+        return False
 
 
 class AuthManager:

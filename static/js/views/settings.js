@@ -33,6 +33,7 @@ const NAV_SECTIONS = [
   { id: "integrations", label: "Integrations", render: renderIntegrationsPanel },
   { id: "vault", label: "Vault", render: renderVaultPanel },
   { id: "channels", label: "Channels", render: renderChannelsPanel },
+  { id: "remote", label: "Remote Access", render: renderRemotePanel },
   { id: "account", label: "Account", render: renderAccountPanel },
   { id: "shortcuts", label: "Shortcuts", render: renderShortcutsPanel },
 ];
@@ -840,6 +841,170 @@ async function renderVaultPanel(content) {
 // a real place to add secondary comms channels — Discord is the only real
 // one today, core/channels/registry.py is built so a second channel is one
 // more list entry, not a rewrite, rather than faking options that don't work).
+// -- Remote Access (David's ask 2026-09-03: users should be able to set up
+// Tailscale remote access themselves during setup, the way we run it by
+// hand). Deliberately a checklist rather than one "Enable" button that
+// either works or doesn't: every prerequisite (Tailscale installed, signed
+// in, an account created, HTTPS certs available for the tailnet) is a
+// separate thing the user might be missing, and a single opaque failure
+// gives them nothing to act on. See core/remote_access.py.
+async function renderRemotePanel(content) {
+  content.innerHTML = "";
+  content.appendChild(el("div", { class: "title", text: "Remote Access" }));
+  content.appendChild(el("div", {
+    class: "meta", style: "margin:4px 0 16px;line-height:1.6;",
+    text: "Reach this JARVIS from your phone or another computer over Tailscale, a private network between your own devices. Nothing is exposed to the public internet — only devices signed into your Tailscale account can connect.",
+  }));
+
+  const body = el("div");
+  content.appendChild(body);
+
+  async function refresh() {
+    body.innerHTML = "";
+    let s;
+    try {
+      s = await api("/api/remote/status");
+    } catch (e) {
+      body.appendChild(el("div", { class: "meta", style: "color:var(--danger);", text: `Couldn't read status: ${e.message}` }));
+      return;
+    }
+
+    // Live state first, when it's on.
+    if (s.running_now && s.url) {
+      const urlRow = el("div", { class: "glass bracket card", style: "margin-bottom:14px;" }, [
+        el("div", { class: "card-row" }, [
+          el("div", {}, [
+            el("div", { class: "title", style: "color:var(--accent);", text: "Remote access is on" }),
+            el("div", { class: "meta", style: "margin-top:4px;", text: "Open this address from any device signed into your Tailscale account:" }),
+            el("div", { style: "margin-top:6px;font-size:13px;color:var(--text);word-break:break-all;", text: s.url }),
+          ]),
+          el("div", { class: "card-row", style: "gap:6px;" }, [
+            el("button", { class: "btn", text: "Copy link", onclick: async () => {
+              await navigator.clipboard.writeText(s.url);
+              toast("Link copied", "success");
+            }}),
+            el("button", { class: "btn danger", text: "Turn off", onclick: async () => {
+              await api("/api/remote/disable", { method: "POST" });
+              toast("Remote access turned off", "success");
+              await refresh();
+            }}),
+          ]),
+        ]),
+      ]);
+      body.appendChild(urlRow);
+      return;
+    }
+
+    // Otherwise: the checklist.
+    const steps = [
+      {
+        ok: s.installed,
+        label: "Tailscale installed",
+        hint: s.installed ? "Found on this machine." : "Tailscale is a free private network for your own devices. Install it, then come back here.",
+        action: s.installed ? null : { label: "Get Tailscale", href: "https://tailscale.com/download" },
+      },
+      {
+        ok: s.logged_in,
+        label: "Signed in to Tailscale",
+        hint: s.logged_in
+          ? `This machine is ${s.hostname || "on your tailnet"}.`
+          : "Open the Tailscale app and sign in, then refresh below.",
+      },
+      {
+        ok: s.auth_ready,
+        label: "JARVIS account created",
+        hint: s.auth_ready
+          ? "A login is set up."
+          : "Remote access needs a real login — without one, anyone reaching this machine on your network would get straight in.",
+      },
+    ];
+
+    for (const step of steps) {
+      const row = el("div", { class: "card-row", style: "align-items:flex-start;gap:10px;padding:10px 0;border-top:1px solid var(--border);" }, [
+        el("div", { class: "card-row", style: "align-items:flex-start;gap:10px;flex:1;" }, [
+          el("span", { class: `status-dot ${step.ok ? "ok" : "warn"}`, style: "margin-top:5px;" }),
+          el("div", {}, [
+            el("div", { style: "font-size:13px;color:var(--text);", text: step.label }),
+            el("div", { class: "meta", style: "margin-top:3px;line-height:1.5;", text: step.hint }),
+          ]),
+        ]),
+        step.action
+          ? el("a", { href: step.action.href, target: "_blank", rel: "noopener", class: "btn", style: "text-decoration:none;flex-shrink:0;", text: step.action.label })
+          : el("div"),
+      ]);
+      body.appendChild(row);
+    }
+
+    // Inline first-account creation, so the user doesn't have to go find
+    // two unrelated settings before the toggle will work.
+    if (!s.auth_ready) {
+      const userInput = el("input", { placeholder: "Username", autocomplete: "off" });
+      const passInput = el("input", { type: "password", placeholder: "Password (8+ characters)", autocomplete: "new-password" });
+      const createBtn = el("button", { class: "btn", text: "Create account" });
+      createBtn.addEventListener("click", async () => {
+        if (!userInput.value.trim() || !passInput.value) {
+          toast("Enter a username and password", "error");
+          return;
+        }
+        createBtn.disabled = true;
+        try {
+          await api("/api/remote/create-account", {
+            method: "POST",
+            body: JSON.stringify({ username: userInput.value.trim(), password: passInput.value }),
+          });
+          toast("Account created — you'll sign in with this from now on", "success");
+          await refresh();
+        } finally {
+          createBtn.disabled = false;
+        }
+      });
+      body.appendChild(el("div", { class: "glass card", style: "margin-top:14px;" }, [
+        el("div", { class: "title", style: "font-size:12.5px;", text: "Create your login" }),
+        el("div", { class: "meta", style: "margin:4px 0 10px;line-height:1.5;", text: "This turns on accounts for JARVIS everywhere, including on this computer — so you'll sign in here too. That's deliberate: it's the same app either way." }),
+        el("div", { class: "form-grid" }, [
+          el("div", { class: "field field-grow" }, [el("label", { text: "Username" }), userInput]),
+          el("div", { class: "field field-grow" }, [el("label", { text: "Password" }), passInput]),
+          createBtn,
+        ]),
+      ]));
+    }
+
+    const allReady = s.installed && s.logged_in && s.auth_ready;
+    const enableBtn = el("button", {
+      class: "btn",
+      text: "Turn on remote access",
+      disabled: !allReady,
+      title: allReady ? "" : "Finish the steps above first",
+    });
+    enableBtn.addEventListener("click", async () => {
+      enableBtn.disabled = true;
+      enableBtn.textContent = "Setting up…";
+      try {
+        const res = await api("/api/remote/enable", { method: "POST", body: JSON.stringify({}) });
+        toast("Remote access is on", "success");
+        await refresh();
+      } catch (e) {
+        // api() already toasted the real reason (cert not available for the
+        // tailnet, port in use, etc.) — just restore the button.
+        enableBtn.disabled = false;
+        enableBtn.textContent = "Turn on remote access";
+      }
+    });
+
+    body.appendChild(el("div", { class: "card-row", style: "margin-top:16px;gap:8px;" }, [
+      enableBtn,
+      el("button", { class: "btn", text: "Refresh", onclick: refresh }),
+    ]));
+
+    body.appendChild(el("div", {
+      class: "meta", style: "margin-top:12px;line-height:1.6;",
+      text: "The first time you turn this on, JARVIS asks Tailscale for an HTTPS certificate so your browser trusts the connection. If your tailnet doesn't have HTTPS certificates enabled yet, you'll be told exactly where to switch them on.",
+    }));
+  }
+
+  await refresh();
+}
+
 async function renderChannelsPanel(content) {
   content.innerHTML = "";
   content.append(

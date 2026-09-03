@@ -6,7 +6,7 @@ import { api, el } from "./api.js";
 // Discord config) rather than any special onboarding-only API surface, so
 // "set it up now" and "set it up later from Settings" are the exact same
 // code path.
-const STEPS = ["welcome", "vault", "discord", "finish"];
+const STEPS = ["welcome", "vault", "discord", "remote", "finish"];
 
 export async function run(overlay, onComplete) {
   let step = 0;
@@ -131,11 +131,53 @@ export async function run(overlay, onComplete) {
       ]);
     },
 
+    // Remote access (David's ask 2026-09-03). Deliberately introduces the
+    // feature and checks what's already in place, but doesn't try to run the
+    // whole multi-step setup inside the wizard — installing and signing into
+    // Tailscale happens outside this app, so pushing someone through it here
+    // would mean a dead-end step for anyone who doesn't have it yet. The
+    // full guided checklist lives in Settings > Remote Access, which this
+    // links to; onboarding's job is making sure users know it exists.
+    remote: () => {
+      const statusEl = el("div", { class: "meta", style: "margin:10px 0;line-height:1.6;", text: "Checking this machine…" });
+
+      api("/api/remote/status")
+        .then((s) => {
+          if (s.running_now && s.url) {
+            statusEl.textContent = `Already on — reachable at ${s.url}`;
+          } else if (s.installed && s.logged_in) {
+            statusEl.textContent = `Tailscale is installed and signed in on this machine (${s.hostname || "ready"}). You can switch remote access on in Settings → Remote Access whenever you want it.`;
+          } else if (s.installed) {
+            statusEl.textContent = "Tailscale is installed here but not signed in yet. Sign in, then finish setup in Settings → Remote Access.";
+          } else {
+            statusEl.textContent = "Tailscale isn't installed on this machine yet. It's free, and it's what makes the connection private — install it, then finish setup in Settings → Remote Access.";
+          }
+        })
+        .catch(() => {
+          statusEl.textContent = "You can set this up any time from Settings → Remote Access.";
+        });
+
+      return el("div", {}, [
+        el("h2", { text: "Reach JARVIS from anywhere" }),
+        el("div", { class: "sub", text: "Optional — JARVIS can be reachable from your phone or another computer over Tailscale, a private network between your own devices. Nothing is exposed to the public internet, and it requires a login." }),
+        statusEl,
+        el("a", {
+          href: "https://tailscale.com/download", target: "_blank", rel: "noopener",
+          class: "btn", style: "text-decoration:none;display:inline-block;",
+          text: "Get Tailscale",
+        }),
+        el("div", { class: "onboarding-actions" }, [
+          el("button", { class: "btn", text: "Back", onclick: () => goTo(2) }),
+          el("button", { class: "btn", text: "Skip / Continue", onclick: () => goTo(4) }),
+        ]),
+      ]);
+    },
+
     finish: () => el("div", {}, [
       el("h2", { text: "You're set." }),
       el("div", { class: "sub", text: "One last thing — JARVIS doesn't come with a default model. Head to Settings → Add Models to connect Claude Code CLI, a local server (Ollama, llama.cpp, vLLM), or an API provider, then pick it from the dropdown above the chat box. You can add more any time." }),
       el("div", { class: "onboarding-actions" }, [
-        el("button", { class: "btn", text: "Back", onclick: () => goTo(2) }),
+        el("button", { class: "btn", text: "Back", onclick: () => goTo(3) }),
         el("button", { class: "btn", text: "Enter JARVIS", onclick: async () => {
           await api("/api/settings/onboarding-complete", { method: "POST" });
           onComplete();

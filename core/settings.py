@@ -21,6 +21,18 @@ DEFAULTS: dict[str, Any] = {
     "disabled_tools": [],  # Settings > Admin > Agent Tools, David's ask 2026-08-31
     "developer_mode_enabled": False,  # Sidebar toggle, David's ask 2026-09-01
     "custom_tab_order": [],  # Settings > Admin > Custom Tabs, David's ask 2026-09-01
+    # Remote access over Tailscale (David's ask 2026-09-03: users should be
+    # able to set this up during onboarding the way we run it by hand).
+    # See core/remote_access.py.
+    "remote_access_enabled": False,
+    "remote_access_port": 8422,
+    # Turning on real accounts from the UI. AUTH_ENABLED (env) still forces
+    # auth on for dev/scripted runs; this is the desktop-app equivalent,
+    # since a packaged app has no sensible place for a user to set an env
+    # var. Deliberately one-directional in core/auth.py: either source being
+    # true enables auth, so this can never be used to switch auth OFF for a
+    # deployment that set the env var.
+    "auth_enabled": False,
 }
 
 
