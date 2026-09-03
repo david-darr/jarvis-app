@@ -13,6 +13,7 @@ over from v1, so the connected session's own file read/write tools operate on
 vault notes by default. No separate memory-store API needed for the core
 mechanism, same as how the real JARVIS (voice-line/brain.py) works today.
 """
+import asyncio
 import os
 
 from claude_agent_sdk import (
@@ -26,6 +27,14 @@ from claude_agent_sdk import (
 from core import hive_mind_server, integrations, settings as settings_store, system_prompt
 from core.constants import REPO_CODE_DIRS
 from core.vault import resolve_vault_dir
+
+# David's ask 2026-09-03: run_turn_stream() used to await the Claude Code CLI
+# subprocess with no timeout at all, so a hung/crashed subprocess (or a
+# reconnect that never fully completes) left the chat UI spinning forever
+# with no error. This caps the wait per received message, not per whole
+# turn, so a legitimately long tool-call chain that's still making progress
+# isn't cut off — only real silence trips it.
+TURN_MESSAGE_TIMEOUT_SECONDS = 180
 
 
 class Brain:
@@ -188,7 +197,22 @@ class Brain:
 
         await self._client.query(user_text)
 
-        async for message in self._client.receive_response():
+        response_iter = self._client.receive_response().__aiter__()
+        while True:
+            try:
+                message = await asyncio.wait_for(
+                    response_iter.__anext__(), timeout=TURN_MESSAGE_TIMEOUT_SECONDS
+                )
+            except StopAsyncIteration:
+                return
+            except asyncio.TimeoutError:
+                yield (
+                    "\n\n[JARVIS: Claude Code didn't respond within "
+                    f"{TURN_MESSAGE_TIMEOUT_SECONDS}s and may be stuck — try sending "
+                    "your message again, or restart the app if it keeps happening.]"
+                )
+                return
+
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):
