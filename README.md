@@ -16,14 +16,17 @@ This is the real product (v2). [jarvis-starter-kit](https://github.com/david-dar
 
 Memory is a folder of markdown notes, not a database — so it stays readable, portable, and editable by you or any other tool.
 
-## Requirements
+## Install
 
-- **Python 3.12+** with the dependencies in `requirements.txt`
-- **Node 18+** (only to run or build the desktop shell)
+Download the installer, run it, open JARVIS. **Nothing else needs to be installed** — a complete Python runtime with every dependency ships inside the app, so it works on a machine that has never had Python on it.
 
-> **Note:** the desktop build does not yet bundle a Python runtime — it launches the backend using the project's own `.venv`, or a `python` on your PATH. A packaged app on a machine without Python and these dependencies installed will show a "backend didn't start" screen. Bundling a standalone runtime is a known, tracked gap.
+First launch walks you through onboarding: pick a vault folder and connect at least one model.
 
-## Running it
+Your data lives in `%APPDATA%\JARVIS\data` (Windows), separate from the program files, so updating or reinstalling never touches your chats, notes, or credentials.
+
+## Developing
+
+Requirements: **Python 3.12+** and **Node 18+**.
 
 **Backend:**
 ```
@@ -39,13 +42,16 @@ npm install
 npm start
 ```
 
-First launch walks you through onboarding: pick a vault folder and connect at least one model.
+In dev the shell uses your `.venv`; a packaged build uses its own bundled runtime.
 
-**Building a distributable:**
+**Building the installer:**
 ```
 cd electron
 npm run dist
 ```
+`predist` runs `scripts/build_runtime.py` first, which downloads an embeddable Python, installs `requirements.txt` into it, and verifies the result can import the app's dependency graph. That runtime (~400MB) is what gets bundled. Installed size is roughly 620MB.
+
+> **Windows note:** building the NSIS installer requires **Developer Mode** enabled (Settings → System → For developers), or an elevated terminal. electron-builder's signing toolchain contains macOS symlinks, and Windows blocks symlink creation for non-elevated users without it. This only affects *building* the installer — the app itself and `win-unpacked/` build fine either way.
 
 ## Access and security
 
@@ -61,6 +67,7 @@ npm run dist
 | `AUTH_ENABLED` | `false` | Turn on real accounts + login |
 | `APP_BIND` | `127.0.0.1` | Bind address |
 | `APP_PORT` | `8420` | Port |
+| `JARVIS_DATA_DIR` | in-repo `data/` | Where all runtime state is stored. The desktop app sets this to the per-user app-data location automatically. |
 | `JARVIS_BACKEND_URL` | — | Point the Electron shell at an already-running backend instead of spawning one |
 
 ## Layout
@@ -78,4 +85,10 @@ specs/         Living architecture docs
 
 ## Status
 
-Actively developed and used daily. The desktop shell, all tabs, auth, scheduling, and channels work; the main known gap is the bundled-Python packaging note above.
+Actively developed and used daily. The desktop shell, all tabs, auth, scheduling, and channels work, and the packaged build is self-contained — verified by running it against an empty data directory on a clean interpreter.
+
+Not yet done: the installer is unsigned, so Windows SmartScreen will warn on first run until it builds reputation (or a code-signing certificate is added). macOS and Linux targets are configured but untested.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

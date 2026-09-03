@@ -6,15 +6,19 @@
 // plain HTTP as "front door #2" (the web-access path, no Electron involved)
 // — this file only owns the desktop-shell half.
 //
-// Phase 8 (Packaging & distribution, 2026-09-01): the backend is now spawned
+// Phase 8 (Packaging & distribution, 2026-09-01): the backend is spawned
 // automatically as a child process instead of requiring a separately-run dev
-// server — the actual "download it, double-click it, it works" requirement.
-// Real remaining gap, not silently glossed over: this still shells out to a
-// Python interpreter that must exist on the machine (the project's own
-// `.venv` in dev, or a bare `python`/`python3` on PATH otherwise) — it does
-// NOT bundle a standalone Python runtime the way a real PyInstaller-frozen
-// backend would. A genuinely dependency-free end-user install needs that
-// bundling as its own follow-up; not built this pass.
+// server — the "download it, double-click it, it works" requirement.
+//
+// Completed 2026-09-03 (David: "download the app just like any other
+// mainstream app and have it work out of the box"): a full Python runtime
+// with every dependency preinstalled now ships inside the installer, built
+// by scripts/build_runtime.py and bundled as an extraResource. The packaged
+// app no longer depends on anything being installed on the user's machine.
+// See resolveBackendPython() below for the lookup order, and that script's
+// docstring for why an embedded interpreter rather than a PyInstaller
+// freeze (custom tabs are imported at runtime, so a frozen module graph
+// would break them).
 
 const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 const { spawn } = require("child_process");
@@ -35,20 +39,43 @@ const SHOULD_SPAWN_BACKEND = !process.env.JARVIS_BACKEND_URL;
 
 let backendProcess = null;
 
+// Lookup order, most-specific first:
+//   1. The bundled runtime (scripts/build_runtime.py) — what every packaged
+//      install uses. Present in dev too once the script has been run.
+//   2. The project's own .venv — the normal dev path.
+//   3. A bare python/python3 on PATH — last resort for a source checkout
+//      where neither of the above has been set up.
 function resolveBackendPython() {
+  const bundled = process.platform === "win32"
+    ? path.join(REPO_ROOT, "runtime", "python.exe")
+    : path.join(REPO_ROOT, "runtime", "bin", "python3");
+  if (fs.existsSync(bundled)) return bundled;
+
   const venvPython = process.platform === "win32"
     ? path.join(REPO_ROOT, ".venv", "Scripts", "python.exe")
     : path.join(REPO_ROOT, ".venv", "bin", "python");
   if (fs.existsSync(venvPython)) return venvPython;
+
   return process.platform === "win32" ? "python" : "python3";
 }
 
 function startBackend() {
   const pythonExe = resolveBackendPython();
+  console.log(`[backend] using interpreter: ${pythonExe}`);
   backendProcess = spawn(
     pythonExe,
     ["-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", "8420"],
-    { cwd: REPO_ROOT, stdio: "pipe" },
+    {
+      cwd: REPO_ROOT,
+      stdio: "pipe",
+      // User data must NOT live inside the install directory: an update or
+      // uninstall would take the per-install encryption key, saved sessions,
+      // and encrypted credentials with it. app.getPath("userData") is the
+      // OS-correct per-user location (%APPDATA%\JARVIS on Windows,
+      // ~/Library/Application Support/JARVIS on macOS). core/constants.py
+      // reads JARVIS_DATA_DIR and falls back to the in-repo data/ for dev.
+      env: { ...process.env, JARVIS_DATA_DIR: path.join(app.getPath("userData"), "data") },
+    },
   );
   backendProcess.stdout.on("data", (d) => process.stdout.write(`[backend] ${d}`));
   backendProcess.stderr.on("data", (d) => process.stderr.write(`[backend] ${d}`));
@@ -99,11 +126,19 @@ async function createWindow() {
   if (SHOULD_SPAWN_BACKEND) startBackend();
   const ok = await waitForBackend();
   if (!ok) {
+    // No longer tells the user to go install Python — the runtime ships with
+    // the app now, so if this screen appears it's a genuine fault (port 8420
+    // already taken, antivirus quarantining the runtime, a corrupt install),
+    // not something they forgot to set up.
     win.loadURL(
-      "data:text/html,<body style='background:%230a0a0f;color:%23ff5f5f;font-family:sans-serif;" +
-      "display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center;padding:0 40px;'>" +
-      "JARVIS's backend didn't start. Confirm Python and its dependencies are installed " +
-      "(see README), then relaunch.</body>",
+      "data:text/html,<body style='background:%230a0a0f;color:%23d8f4ff;font-family:system-ui,sans-serif;" +
+      "display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;" +
+      "text-align:center;padding:0 40px;gap:10px;'>" +
+      "<h2 style='color:%23ff5f5f;font-weight:400;margin:0;'>JARVIS couldn't start</h2>" +
+      "<p style='color:%236b8a99;font-size:14px;max-width:460px;line-height:1.6;margin:0;'>" +
+      "The backend didn't come up. The most common cause is another program already using port 8420. " +
+      "Restarting your computer usually clears it. If it keeps happening, reinstalling JARVIS will " +
+      "replace anything damaged &mdash; your data is stored separately and won't be lost.</p></body>",
     );
     return;
   }

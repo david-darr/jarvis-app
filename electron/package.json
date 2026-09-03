@@ -1,10 +1,14 @@
 {
   "name": "jarvis-app",
-  "version": "0.0.1",
-  "description": "JARVIS desktop shell (Electron) — wraps the local FastAPI backend in a real window, no visible browser chrome.",
+  "version": "1.0.0",
+  "description": "JARVIS — a self-hosted AI workspace and agent harness.",
   "main": "main.js",
+  "author": "David Darr",
+  "license": "MIT",
   "scripts": {
     "start": "electron .",
+    "build-runtime": "python ../scripts/build_runtime.py",
+    "predist": "npm run build-runtime",
     "dist": "electron-builder"
   },
   "devDependencies": {
@@ -14,7 +18,8 @@
   "build": {
     "appId": "com.davidmichael.jarvis",
     "productName": "JARVIS",
-    "directories": { "output": "../dist" },
+    "copyright": "Copyright © 2026 David Darr",
+    "directories": { "output": "../dist", "buildResources": "." },
     "files": ["main.js", "preload.js", "icon.png"],
     "extraResources": [
       {
@@ -36,8 +41,38 @@
           "!scripts/*.key",
           "!scripts/*.pem"
         ]
+      },
+      {
+        "from": "runtime",
+        "to": "backend/runtime",
+        "filter": ["**/*", "!**/__pycache__/**", "!**/*.pyc"]
       }
     ],
-    "win": { "target": "nsis" }
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "icon.png",
+      "artifactName": "JARVIS-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "JARVIS",
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "icon.png",
+      "uninstallerIcon": "icon.png"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.productivity",
+      "icon": "icon.png"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Utility",
+      "icon": "icon.png"
+    }
   }
 }
