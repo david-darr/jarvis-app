@@ -6,13 +6,23 @@ Auto-extraction from conversations and import-from-URL (both real Odysseus
 features) are deliberately out of this pass — this is the CRUD foundation
 those would build on top of, not a commitment to build them yet.
 """
+import logging
 import os
 import re
+import shutil
 from typing import Optional
 
-from core.constants import DATA_DIR
+from core.constants import BASE_DIR, DATA_DIR
+
+logger = logging.getLogger(__name__)
 
 SKILLS_DIR = os.path.join(DATA_DIR, "skills")
+
+# Skills that ship with the app (David's ask 2026-09-03). They live here
+# rather than in data/skills because data/ is deliberately excluded from
+# packaged builds (it holds credentials and chat history), so anything
+# seeded there in development would never reach a real download.
+SKILL_TEMPLATES_DIR = os.path.join(BASE_DIR, "skill_templates")
 
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
 
@@ -37,14 +47,69 @@ def _parse(raw: str) -> dict:
         return {"description": "", "body": raw.strip()}
     frontmatter_text, body = match.groups()
     description = ""
-    for line in frontmatter_text.splitlines():
-        if line.startswith("description:"):
-            description = line.split(":", 1)[1].strip()
+    lines = frontmatter_text.splitlines()
+    for i, line in enumerate(lines):
+        if not line.startswith("description:"):
+            continue
+        value = line.split(":", 1)[1].strip()
+        # YAML block scalar ("description: |" / ">") — the real text is the
+        # indented lines that follow, not the marker. The bundled humanizer
+        # skill uses this form, and without handling it the Brain tab showed
+        # its description as a literal "|".
+        if value in ("|", ">", "|-", ">-"):
+            collected = []
+            for follow in lines[i + 1:]:
+                if follow.strip() and not follow.startswith((" ", "\t")):
+                    break  # dedented — next frontmatter key
+                collected.append(follow.strip())
+            value = " ".join(p for p in collected if p)
+        description = value
+        break
     return {"description": description, "body": body.strip()}
 
 
 def _render(description: str, body: str) -> str:
     return f"---\ndescription: {description}\n---\n\n{body.strip()}\n"
+
+
+def seed_default_skills() -> list[str]:
+    """Copy the bundled skills into the user's skills folder on first run.
+
+    Tracked per-slug in settings rather than "copy if the folder is missing":
+    a user who deletes a bundled skill means it, and resurrecting it on every
+    launch would be the app arguing with them. Each slug is therefore only
+    ever seeded once.
+
+    Returns the slugs actually seeded this call.
+    """
+    from core import settings as settings_store
+
+    if not os.path.isdir(SKILL_TEMPLATES_DIR):
+        return []
+
+    already = set(settings_store.get_setting("seeded_skills") or [])
+    seeded = []
+    for slug in sorted(os.listdir(SKILL_TEMPLATES_DIR)):
+        template_dir = os.path.join(SKILL_TEMPLATES_DIR, slug)
+        if not os.path.isdir(template_dir) or slug in already:
+            continue
+        target_dir = os.path.join(SKILLS_DIR, slug)
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+            for filename in os.listdir(template_dir):
+                src = os.path.join(template_dir, filename)
+                dst = os.path.join(target_dir, filename)
+                # Never clobber a skill the user already has under this name.
+                if os.path.isfile(src) and not os.path.exists(dst):
+                    shutil.copy2(src, dst)
+            seeded.append(slug)
+        except OSError:
+            logger.exception("skills_service: couldn't seed bundled skill '%s'", slug)
+
+    if seeded:
+        settings_store.update_settings(seeded_skills=sorted(already | set(seeded)))
+        logger.info("skills_service: seeded bundled skills %s", ", ".join(seeded))
+    return seeded
 
 
 def list_skills() -> list[dict]:

@@ -5,7 +5,7 @@ across every domain and destroy data globally.
 """
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from core import custom_tabs, events, model_endpoints, settings as settings_store, system_admin, task_scheduler
@@ -55,6 +55,34 @@ async def list_custom_tabs(user: str = Depends(require_user)) -> list[dict]:
     rest of this file: every user needs this to render the sidebar, it's
     not a diagnostic/admin surface."""
     return custom_tabs.list_manifests()
+
+
+@router.get("/tab-templates")
+async def list_tab_templates(user: str = Depends(require_user)) -> list[dict]:
+    """Premade tabs offered in the New Tab gallery (David's ask 2026-09-03).
+    require_user, not admin: this is a normal "add a feature" surface, same
+    as the custom-tabs nav listing above."""
+    return custom_tabs.list_templates()
+
+
+class TabTemplateRequest(BaseModel):
+    enabled: bool
+
+
+@router.post("/tab-templates/{slug}")
+async def set_tab_template(slug: str, body: TabTemplateRequest, request: Request,
+                           user: str = Depends(require_user)) -> dict:
+    try:
+        result = custom_tabs.set_template_enabled(slug, body.enabled)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="unknown tab template")
+    # Mount immediately so the tab works right away rather than after a
+    # restart. Disabling stops it being listed//navigable; its already-mounted
+    # routes stay until restart (same limitation custom_tabs.delete documents
+    # — Python can't unmount a FastAPI router at runtime).
+    if body.enabled:
+        custom_tabs.mount_one(request.app, slug)
+    return result
 
 
 class CustomTabOrderRequest(BaseModel):

@@ -6,7 +6,7 @@
 // conversation rather than a second bespoke chat renderer — see the
 // handoff at the bottom of this file and chat.js's matching pending-handoff
 // check in render().
-import { api, el, customSelect } from "../api.js";
+import { api, el, customSelect, toast } from "../api.js";
 
 function modelLabel(ep) {
   return ep.kind === "claude_cli" ? `${ep.name} (${ep.model || "CLI default"})` : `${ep.name} (${ep.model})`;
@@ -28,8 +28,14 @@ export async function render(container) {
 
   const header = el("div", { class: "new-tab-header" }, [
     el("h1", { text: "New Tab" }),
-    el("p", { text: "Describe what you want — JARVIS builds it into a real tab using your connected AI model." }),
+    el("p", { text: "Add a ready-made tab, or describe your own and JARVIS builds it with your connected AI model." }),
   ]);
+
+  // Premade tabs (David's ask 2026-09-03) — real, already-built tabs that
+  // ship dormant with the app. One click switches one on, versus asking a
+  // model to rebuild something equivalent from scratch.
+  const templatesWrap = el("div", { class: "new-tab-form", style: "margin-bottom:26px;" });
+  renderTemplates(templatesWrap);
 
   // Real bug found live 2026-09-02: the handoff session had no model_endpoint_id
   // (sessions ship with none by default — see chat_service.py's
@@ -151,5 +157,56 @@ export async function render(container) {
     buildBtn,
   ]);
 
-  container.append(header, form);
+  container.append(header, templatesWrap, form);
+}
+
+async function renderTemplates(wrap) {
+  const templates = await api("/api/system/tab-templates").catch(() => []);
+  wrap.innerHTML = "";
+  if (!templates.length) return;
+
+  wrap.append(
+    el("div", { class: "new-tab-section-title", text: "Ready-made tabs" }),
+    el("div", { class: "meta", style: "margin:-4px 0 12px;line-height:1.6;", text: "Built and ready — add one and it appears in your sidebar straight away." }),
+  );
+
+  for (const t of templates) {
+    const btn = el("button", {
+      class: t.enabled ? "btn danger" : "btn",
+      text: t.enabled ? "Remove" : "Add",
+    });
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = t.enabled ? "Removing…" : "Adding…";
+      try {
+        await api(`/api/system/tab-templates/${t.slug}`, {
+          method: "POST",
+          body: JSON.stringify({ enabled: !t.enabled }),
+        });
+        toast(
+          t.enabled ? `${t.label} removed` : `${t.label} added — it's in your sidebar now`,
+          "success",
+        );
+        // Rebuild the sidebar so the tab appears/disappears without a reload.
+        // Same "click the real nav item" convention used by switchTab above:
+        // dispatch a custom event app.js listens for rather than importing it.
+        document.dispatchEvent(new CustomEvent("jarvis:tabs-changed"));
+        await renderTemplates(wrap);
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = t.enabled ? "Remove" : "Add";
+      }
+    });
+
+    wrap.appendChild(el("div", { class: "glass bracket card template-card" }, [
+      el("div", { class: "card-row", style: "align-items:flex-start;" }, [
+        el("div", { style: "flex:1;min-width:0;" }, [
+          el("div", { class: "title", text: t.label + (t.enabled ? " · added" : "") }),
+          el("div", { class: "meta", style: "margin-top:4px;line-height:1.55;", text: t.blurb }),
+          t.detail ? el("div", { class: "meta", style: "margin-top:6px;color:var(--text-faint);line-height:1.55;", text: t.detail }) : null,
+        ]),
+        btn,
+      ]),
+    ]));
+  }
 }

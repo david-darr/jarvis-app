@@ -33,6 +33,14 @@ DEFAULTS: dict[str, Any] = {
     # true enables auth, so this can never be used to switch auth OFF for a
     # deployment that set the env var.
     "auth_enabled": False,
+    # Bundled skills already copied into the user's skills folder — tracked
+    # per-slug so deleting one doesn't get it resurrected next launch.
+    "seeded_skills": [],
+    # Premade tabs the user has switched on (David's ask 2026-09-03). The
+    # code for these ships with the app but stays unmounted until opted into,
+    # so a download doesn't arrive carrying someone else's workflow. See
+    # core/custom_tabs.py's TAB_TEMPLATES.
+    "enabled_tab_templates": [],
 }
 
 

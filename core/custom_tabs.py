@@ -31,18 +31,68 @@ VIEWS_DIR = os.path.join(BASE_DIR, "static", "js", "views")
 SERVICES_DIR = os.path.join(BASE_DIR, "services")
 TAB_MODULE_PREFIX = "tab_"
 
+# Premade tabs (David's ask 2026-09-03). Their code ships with the app but
+# stays dormant until a user adds one from the New Tab gallery — a fresh
+# download shouldn't arrive carrying somebody else's workflow, but rebuilding
+# a working tab from scratch just to try it is worse. So: shipped, not
+# mounted, one click to switch on.
+#
+# Each entry is a real tab already built to the routes/tab_<slug>.py
+# convention; enabling just makes discover() stop skipping it.
+TAB_TEMPLATES = {
+    "school": {
+        "label": "School",
+        "blurb": "Track courses, assignments and due dates, with a per-course chat that remembers what you're working on.",
+        "detail": "Built around coursework: add assignments with due dates, keep drafts, and talk to JARVIS about a specific class in a chat that accumulates that course's context.",
+    },
+}
+
+
+def template_slugs() -> set[str]:
+    return set(TAB_TEMPLATES)
+
+
+def enabled_templates() -> set[str]:
+    return set(settings_store.get_setting("enabled_tab_templates") or [])
+
+
+def list_templates() -> list[dict]:
+    enabled = enabled_templates()
+    return [
+        {"slug": slug, "enabled": slug in enabled, **meta}
+        for slug, meta in sorted(TAB_TEMPLATES.items(), key=lambda kv: kv[1]["label"])
+    ]
+
+
+def set_template_enabled(slug: str, enabled: bool) -> dict:
+    if slug not in TAB_TEMPLATES:
+        raise KeyError(slug)
+    current = enabled_templates()
+    if enabled:
+        current.add(slug)
+    else:
+        current.discard(slug)
+    settings_store.update_settings(enabled_tab_templates=sorted(current))
+    return {"slug": slug, "enabled": enabled}
+
 
 def discover() -> list[tuple[str, ModuleType]]:
     """(slug, imported module) for every routes/tab_*.py, sorted by slug."""
     found = []
     if not os.path.isdir(ROUTES_DIR):
         return found
+    templates = template_slugs()
+    enabled = enabled_templates()
     for filename in sorted(os.listdir(ROUTES_DIR)):
         if not (filename.startswith(TAB_MODULE_PREFIX) and filename.endswith(".py")):
             continue
         module_name = filename[:-3]
         slug = module_name[len(TAB_MODULE_PREFIX):]
         if not slug:
+            continue
+        # A premade tab's code ships with the app but stays invisible until
+        # the user adds it from the New Tab gallery.
+        if slug in templates and slug not in enabled:
             continue
         try:
             mod = importlib.import_module(f"routes.{module_name}")
@@ -64,6 +114,28 @@ def mount_all(app) -> None:
             continue
         app.include_router(router)
         logger.info("custom_tabs: mounted tab_%s", slug)
+
+
+def mount_one(app, slug: str) -> bool:
+    """Mount a single tab's router into the already-running app, so adding a
+    premade tab works immediately instead of "now restart the server."
+    FastAPI accepts include_router after startup; the route table is just a
+    list. Idempotent — mounting an already-mounted prefix is skipped."""
+    try:
+        mod = importlib.import_module(f"routes.{TAB_MODULE_PREFIX}{slug}")
+    except Exception:
+        logger.exception("custom_tabs: couldn't import routes.tab_%s", slug)
+        return False
+    router = getattr(mod, "router", None)
+    if router is None:
+        return False
+    prefix = getattr(router, "prefix", "")
+    if prefix and any(getattr(r, "path", "").startswith(prefix) for r in app.routes):
+        return True  # already mounted (e.g. enabled twice in one session)
+    app.include_router(router)
+    app.openapi_schema = None  # force the schema to regenerate with the new routes
+    logger.info("custom_tabs: mounted tab_%s at runtime", slug)
+    return True
 
 
 def list_manifests() -> list[dict]:
@@ -94,6 +166,13 @@ def delete(slug: str) -> dict:
     unmount an already-included FastAPI router at runtime. Same "needs a
     restart" caveat the build-custom-tab Skill already states for *adding*
     a tab, now also true for removing one."""
+    # A premade tab's files are shipped app files, not something the user
+    # created — deleting them would break the gallery and be undone by the
+    # next update anyway. Switching it off is the correct "remove".
+    if slug in TAB_TEMPLATES:
+        set_template_enabled(slug, False)
+        return {"removed": [], "disabled": slug}
+
     removed = []
     candidates = [
         os.path.join(ROUTES_DIR, f"{TAB_MODULE_PREFIX}{slug}.py"),

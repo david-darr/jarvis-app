@@ -329,6 +329,9 @@ async function boot() {
 async function startApp() {
   const customTabs = await buildSidebar();
   setupMobileMenu();
+  // Adding/removing a premade tab (views/new-tab.js) rebuilds the nav so it
+  // appears immediately instead of after a reload.
+  document.addEventListener("jarvis:tabs-changed", () => { buildSidebar(); });
   commandPalette.init({ nav: NAV, customTabs: customTabs || [], switchTab, openSettings });
   await switchTab("home");
 }

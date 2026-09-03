@@ -481,6 +481,9 @@ input[type="checkbox"]:checked::after {
 .new-tab-chip:hover { color: var(--text); border-color: var(--border-strong); }
 .new-tab-chip.active { color: var(--accent); background: var(--accent-dim); border-color: var(--border-strong); }
 .new-tab-error { color: var(--danger); font-size: 12.5px; }
+/* Premade-tab gallery (David's ask 2026-09-03) */
+.new-tab-section-title { font-size: 13px; color: var(--text); letter-spacing: 0.5px; margin-bottom: 6px; }
+.template-card { margin-bottom: 10px; }
 .new-tab-build-btn { align-self: flex-start; padding: 10px 20px; font-size: 13.5px; }
 
 /* -- onboarding ---------------------------------------------------------

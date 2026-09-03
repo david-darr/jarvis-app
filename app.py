@@ -31,7 +31,7 @@ from routes import (
     remote_routes,
 )
 from core import llamacpp_engine
-from services import chat_service
+from services import chat_service, skills_service
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
@@ -45,6 +45,10 @@ async def lifespan(_app: FastAPI):
     # 2026-09-03: the app reported "no priorities" while the connected vault
     # was full of them). See core/vault_sync.py.
     vault_sync.sync_on_startup()
+    # Bundled skills (build-custom-tab, humanizer) copied into the user's
+    # skills folder on first run — data/ isn't packaged, so they can only
+    # arrive from skill_templates/. Per-slug once-only; see the function.
+    skills_service.seed_default_skills()
     task_scheduler.start()
     await discord_channel.start()
     # Restores the remote listener across restarts if the user turned it on
