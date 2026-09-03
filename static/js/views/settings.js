@@ -899,14 +899,20 @@ async function renderRemotePanel(content) {
       return;
     }
 
-    // Live state first, when it's on.
+    // Live state first, when it's on. Fall back to composing the address
+    // from host+port rather than rendering a blank line, in case the URL
+    // wasn't captured (e.g. the listener was restored on startup).
+    if (s.running_now) {
+      s.url = s.url || (s.hostname ? `https://${s.hostname}:${s.port}` : null);
+    }
     if (s.running_now && s.url) {
       const urlRow = el("div", { class: "glass bracket card", style: "margin-bottom:14px;" }, [
         el("div", { class: "card-row" }, [
-          el("div", {}, [
+          el("div", { style: "flex:1;min-width:0;" }, [
             el("div", { class: "title", style: "color:var(--accent);", text: "Remote access is on" }),
-            el("div", { class: "meta", style: "margin-top:4px;", text: "Open this address from any device signed into your Tailscale account:" }),
-            el("div", { style: "margin-top:6px;font-size:13px;color:var(--text);word-break:break-all;", text: s.url }),
+            el("div", { class: "meta", style: "margin-top:4px;", text: "Open this exact address from any device signed into your Tailscale account. Include the port — the hostname on its own won't reach it." }),
+            el("div", { style: "margin-top:8px;font-size:14px;color:var(--text);word-break:break-all;", text: s.url }),
+            el("div", { class: "meta", style: "margin-top:6px;color:var(--text-faint);", text: `Host ${s.hostname || "—"} · port ${s.port}` }),
           ]),
           el("div", { class: "card-row", style: "gap:6px;" }, [
             el("button", { class: "btn", text: "Copy link", onclick: async () => {
@@ -936,8 +942,12 @@ async function renderRemotePanel(content) {
       {
         ok: s.logged_in,
         label: "Signed in to Tailscale",
+        // Deliberately does NOT print the bare hostname here. It used to,
+        // and it read like the address to visit — but without the scheme
+        // and port it doesn't work, which is exactly the confusion David
+        // hit (2026-09-03). The full address gets its own row below.
         hint: s.logged_in
-          ? `This machine is ${s.hostname || "on your tailnet"}.`
+          ? `Connected as ${s.hostname ? s.hostname.split(".")[0] : "this machine"}.`
           : "Open the Tailscale app and sign in, then refresh below.",
       },
       {
@@ -999,6 +1009,41 @@ async function renderRemotePanel(content) {
       ]));
     }
 
+    // The address, always visible once Tailscale knows this machine's name —
+    // not only after remote access is switched on. David hit this live
+    // (2026-09-03): the panel named the machine but never the port, so the
+    // address it implied didn't actually work. Port is editable here too,
+    // since it's part of the address you have to type.
+    const portInput = el("input", { type: "number", value: String(s.port), style: "width:100px;" });
+    const addressEl = el("div", {
+      style: "margin-top:6px;font-size:13px;color:var(--text);word-break:break-all;",
+    });
+    const syncAddress = () => {
+      const port = parseInt(portInput.value, 10) || s.port;
+      addressEl.textContent = s.hostname ? `https://${s.hostname}:${port}` : "—";
+    };
+    syncAddress();
+    portInput.addEventListener("input", syncAddress);
+
+    if (s.hostname) {
+      body.appendChild(el("div", { class: "glass card", style: "margin-top:16px;" }, [
+        el("div", { class: "card-row", style: "align-items:flex-start;" }, [
+          el("div", { style: "flex:1;min-width:0;" }, [
+            el("div", { class: "title", style: "font-size:12.5px;", text: "Address" }),
+            el("div", { class: "meta", style: "margin-top:4px;", text: "Open this from any device signed into your Tailscale account. The port is part of it — the hostname alone won't work." }),
+            addressEl,
+          ]),
+          el("div", { class: "card-row", style: "gap:6px;align-items:flex-end;" }, [
+            el("div", { class: "field field-sm" }, [el("label", { text: "Port" }), portInput]),
+            el("button", { class: "btn", text: "Copy", onclick: async () => {
+              await navigator.clipboard.writeText(addressEl.textContent);
+              toast("Address copied", "success");
+            }}),
+          ]),
+        ]),
+      ]));
+    }
+
     const allReady = s.installed && s.logged_in && s.auth_ready;
     const enableBtn = el("button", {
       class: "btn",
@@ -1010,7 +1055,8 @@ async function renderRemotePanel(content) {
       enableBtn.disabled = true;
       enableBtn.textContent = "Setting up…";
       try {
-        const res = await api("/api/remote/enable", { method: "POST", body: JSON.stringify({}) });
+        const port = parseInt(portInput.value, 10) || undefined;
+        await api("/api/remote/enable", { method: "POST", body: JSON.stringify({ port }) });
         toast("Remote access is on", "success");
         await refresh();
       } catch (e) {
