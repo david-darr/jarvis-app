@@ -1050,11 +1050,17 @@ async function renderRemotePanel(content) {
     portInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); portInput.blur(); } });
 
     if (s.hostname) {
+      // Explicitly marked as not-yet-live. Showing a real-looking address
+      // while nothing is listening is the same trap as printing a bare
+      // hostname: David set the port, saw the address, and reasonably
+      // assumed it was reachable — it wasn't, because remote access was
+      // still switched off (2026-09-03).
+      addressEl.style.opacity = "0.55";
       body.appendChild(el("div", { class: "glass card", style: "margin-top:16px;" }, [
         el("div", { class: "card-row", style: "align-items:flex-start;" }, [
           el("div", { style: "flex:1;min-width:0;" }, [
-            el("div", { class: "title", style: "font-size:12.5px;", text: "Address" }),
-            el("div", { class: "meta", style: "margin-top:4px;", text: "Open this from any device signed into your Tailscale account. The port is part of it — the hostname alone won't work." }),
+            el("div", { class: "title", style: "font-size:12.5px;", text: "Address — not live yet" }),
+            el("div", { class: "meta", style: "margin-top:4px;", text: "This is where JARVIS will be reachable once you turn remote access on below. Nothing is listening at it until then." }),
             addressEl,
           ]),
           el("div", { class: "card-row", style: "gap:6px;align-items:flex-end;" }, [
@@ -1093,9 +1099,23 @@ async function renderRemotePanel(content) {
       }
     });
 
-    body.appendChild(el("div", { class: "card-row", style: "margin-top:16px;gap:8px;" }, [
-      enableBtn,
-      el("button", { class: "btn", text: "Refresh", onclick: refresh }),
+    // The one action that actually starts the listener. Called out rather
+    // than sitting as a plain button in a row, because everything above it
+    // (checklist all green, address displayed) reads as "already working"
+    // and the final step is easy to skip.
+    body.appendChild(el("div", { class: "glass bracket card", style: "margin-top:16px;" }, [
+      el("div", { class: "card-row" }, [
+        el("div", { style: "flex:1;min-width:0;" }, [
+          el("div", { class: "title", style: "font-size:12.5px;", text: allReady ? "Last step — turn it on" : "Finish the steps above first" }),
+          el("div", { class: "meta", style: "margin-top:4px;", text: allReady
+            ? "Nothing is reachable until you do this. It stays on across restarts."
+            : "The button unlocks once Tailscale is signed in and you have a login." }),
+        ]),
+        el("div", { class: "card-row", style: "gap:8px;" }, [
+          el("button", { class: "btn", text: "Refresh", onclick: refresh }),
+          enableBtn,
+        ]),
+      ]),
     ]));
 
     body.appendChild(el("div", {
