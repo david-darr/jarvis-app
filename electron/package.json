@@ -1,6 +1,6 @@
 {
   "name": "jarvis-app",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "JARVIS — a self-hosted AI workspace and agent harness.",
   "//productName": "Top-level (not just under build) on purpose: Electron's app.getName() prefers productName over name, and that name decides app.getPath('userData') — i.e. where every user's data lives. Without this it resolved to %APPDATA%\\jarvis-app. Changing it after release would silently orphan existing installs' data, so it has to be right before the first public build.",
   "productName": "JARVIS",

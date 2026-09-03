@@ -32,9 +32,16 @@ const NAV = [
 const STUB_TABS = new Set();
 
 const modules = {};
+// Tabs the user built live in the data directory (so app updates can't wipe
+// them) and are served from /custom-views rather than the bundled
+// static/js/views/. The server tells us which is which via the manifest's
+// view_url; anything without one uses the built-in relative path.
+const customViewUrls = {};
+
 async function loadModule(tabId) {
   if (modules[tabId]) return modules[tabId];
-  const path = STUB_TABS.has(tabId) ? "./views/stub.js" : `./views/${tabId}.js`;
+  const custom = customViewUrls[tabId];
+  const path = custom || (STUB_TABS.has(tabId) ? "./views/stub.js" : `./views/${tabId}.js`);
   modules[tabId] = await import(path);
   return modules[tabId];
 }
@@ -125,6 +132,7 @@ async function buildSidebar() {
   // Best-effort: a fetch failure here shouldn't break the built-in nav.
   const customTabs = await api("/api/system/custom-tabs").catch(() => []);
   for (const item of customTabs) {
+    if (item.view_url) customViewUrls[item.id] = item.view_url;
     const navEl = document.createElement("div");
     navEl.className = "nav-item";
     navEl.dataset.tab = item.id;

@@ -92,9 +92,16 @@ app.include_router(remote_routes.router)
 # Developer Mode (David's ask 2026-09-01) — the only app.py edit a custom
 # tab ever needs. Every routes/tab_*.py found here gets mounted; adding a
 # new tab afterward is purely new files, see core/custom_tabs.py.
+# Tabs the user builds live in the data directory so app updates can't wipe
+# them (David's ask 2026-09-03). migrate_user_tabs() relocates any created by
+# an older build, before discovery runs.
+custom_tabs.migrate_user_tabs()
 custom_tabs.mount_all(app)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+# User-built tab views, served from the data directory. Same-origin, so the
+# `script-src 'self'` CSP in core/middleware.py covers the dynamic import().
+app.mount(custom_tabs.USER_VIEWS_URL, StaticFiles(directory=custom_tabs.USER_VIEWS_DIR), name="custom-views")
 
 
 @app.get("/")
