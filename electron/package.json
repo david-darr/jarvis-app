@@ -20,7 +20,7 @@
     "productName": "JARVIS",
     "copyright": "Copyright © 2026 David Darr",
     "directories": { "output": "../dist", "buildResources": "." },
-    "files": ["main.js", "preload.js", "icon.png"],
+    "files": ["main.js", "preload.js", "icon.png", "icon.ico"],
     "extraResources": [
       {
         "from": "..",
@@ -50,7 +50,7 @@
     ],
     "win": {
       "target": [{ "target": "nsis", "arch": ["x64"] }],
-      "icon": "icon.png",
+      "icon": "icon.ico",
       "artifactName": "JARVIS-Setup-${version}.${ext}"
     },
     "nsis": {
@@ -61,8 +61,8 @@
       "createStartMenuShortcut": true,
       "shortcutName": "JARVIS",
       "deleteAppDataOnUninstall": false,
-      "installerIcon": "icon.png",
-      "uninstallerIcon": "icon.png"
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico"
     },
     "mac": {
       "target": "dmg",
