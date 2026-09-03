@@ -65,11 +65,35 @@ def _parse(raw: str) -> dict:
             value = " ".join(p for p in collected if p)
         description = value
         break
-    return {"description": description, "body": body.strip()}
+    return {"description": description, "body": body.strip(), "frontmatter": frontmatter_text}
 
 
-def _render(description: str, body: str) -> str:
-    return f"---\ndescription: {description}\n---\n\n{body.strip()}\n"
+def _render(description: str, body: str, frontmatter: str = "") -> str:
+    """Rebuild a SKILL.md, keeping any frontmatter keys the app doesn't model.
+
+    This used to emit only `description`, which silently destroyed everything
+    else the moment a skill was saved or re-imported — `name`, `license`,
+    `version`, `allowed-tools` and anything else. Found live on the bundled
+    humanizer skill, whose MIT `license:` line disappeared after an edit.
+    The app understands one key; it has no business deleting the rest.
+    """
+    other = []
+    if frontmatter:
+        skipping_block = False
+        for line in frontmatter.splitlines():
+            is_continuation = line.startswith((" ", "\t")) or not line.strip()
+            if skipping_block and is_continuation:
+                continue  # a block-scalar description's indented lines
+            skipping_block = False
+            if line.startswith("description:"):
+                # Dropped here and re-emitted below with the new value.
+                if line.split(":", 1)[1].strip() in ("|", ">", "|-", ">-"):
+                    skipping_block = True
+                continue
+            other.append(line)
+
+    lines = [f"description: {description}"] + other
+    return "---\n" + "\n".join(lines) + "\n---\n\n" + body.strip() + "\n"
 
 
 def seed_default_skills() -> list[str]:
@@ -149,8 +173,12 @@ def update_skill(slug: str, description: str, body: str) -> dict:
     path = _skill_path(slug)
     if not os.path.exists(path):
         raise FileNotFoundError(f"no such skill: {slug}")
+    # Read the existing frontmatter first so keys the app doesn't model
+    # (name, license, version, ...) survive the write.
+    with open(path, "r", encoding="utf-8") as f:
+        existing = _parse(f.read())
     with open(path, "w", encoding="utf-8") as f:
-        f.write(_render(description, body))
+        f.write(_render(description, body, existing.get("frontmatter", "")))
     return {"slug": slug, "description": description, "body": body}
 
 
@@ -172,7 +200,7 @@ def import_skill(filename: str, raw_content: str) -> dict:
     path = _skill_path(slug)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        f.write(_render(parsed["description"], parsed["body"]))
+        f.write(_render(parsed["description"], parsed["body"], parsed.get("frontmatter", "")))
     return {"slug": slug, "description": parsed["description"], "body": parsed["body"]}
 
 
