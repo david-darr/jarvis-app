@@ -1018,12 +1018,36 @@ async function renderRemotePanel(content) {
     const addressEl = el("div", {
       style: "margin-top:6px;font-size:13px;color:var(--text);word-break:break-all;",
     });
+    const portStatus = el("span", { class: "meta" });
     const syncAddress = () => {
       const port = parseInt(portInput.value, 10) || s.port;
       addressEl.textContent = s.hostname ? `https://${s.hostname}:${port}` : "—";
     };
     syncAddress();
-    portInput.addEventListener("input", syncAddress);
+    portInput.addEventListener("input", () => { syncAddress(); portStatus.textContent = ""; });
+
+    // The port is a real setting, so editing it saves — it used to only take
+    // effect as a side effect of pressing Enable, so a change made on its own
+    // silently reverted on the next refresh (David hit this 2026-09-03).
+    // Saves on blur/Enter rather than per keystroke, so typing "8" of "8443"
+    // doesn't try to bind port 8.
+    const savePort = async () => {
+      const port = parseInt(portInput.value, 10);
+      if (!port || port === s.port) return;
+      portStatus.textContent = "Saving…";
+      try {
+        const r = await api("/api/remote/port", { method: "POST", body: JSON.stringify({ port }) });
+        s.port = port;
+        portStatus.textContent = r.restarted ? "Saved — listener moved" : "Saved";
+        toast(r.restarted ? `Remote access moved to port ${port}` : `Port set to ${port}`, "success");
+      } catch (e) {
+        portStatus.textContent = "";
+        portInput.value = String(s.port);  // failed to bind — show the port actually in use
+        syncAddress();
+      }
+    };
+    portInput.addEventListener("blur", savePort);
+    portInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); portInput.blur(); } });
 
     if (s.hostname) {
       body.appendChild(el("div", { class: "glass card", style: "margin-top:16px;" }, [
@@ -1034,7 +1058,9 @@ async function renderRemotePanel(content) {
             addressEl,
           ]),
           el("div", { class: "card-row", style: "gap:6px;align-items:flex-end;" }, [
-            el("div", { class: "field field-sm" }, [el("label", { text: "Port" }), portInput]),
+            el("div", { class: "field field-sm" }, [
+              el("label", { text: "Port" }), portInput, portStatus,
+            ]),
             el("button", { class: "btn", text: "Copy", onclick: async () => {
               await navigator.clipboard.writeText(addressEl.textContent);
               toast("Address copied", "success");

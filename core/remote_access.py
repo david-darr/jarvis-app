@@ -167,6 +167,21 @@ def provision_cert(hostname: str) -> tuple[Optional[str], Optional[str], Optiona
 
 # -- the listener ----------------------------------------------------------
 
+def _port_available(host: str, port: int) -> tuple[bool, str]:
+    """Can we actually bind here? Returns (ok, error_text)."""
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        # No SO_REUSEADDR: we want this to fail exactly when a real listener
+        # already holds the address, which is the condition we're testing.
+        sock.bind((host, port))
+        return True, ""
+    except OSError as e:
+        return False, str(e)
+    finally:
+        sock.close()
+
+
 def is_running() -> bool:
     return _server_task is not None and not _server_task.done()
 
@@ -195,12 +210,29 @@ async def start() -> dict:
     if err:
         return {"ok": False, "error": err}
 
+    port = int(settings_store.get_setting("remote_access_port") or 8422)
+
+    # Check the port ourselves before handing it to uvicorn. This is not
+    # belt-and-braces: on a bind failure uvicorn calls sys.exit(), which
+    # raises SystemExit — a BaseException, so it escapes the task and
+    # unwinds the event loop rather than being caught as a normal error.
+    # Enabling remote access on an occupied port would take the whole
+    # backend down with it. Testing the bind here keeps that path from
+    # ever being reached (found while testing against a port the dev
+    # script was holding, 2026-09-03).
+    available, bind_error = _port_available(info["ip"], port)
+    if not available:
+        return {"ok": False, "error": (
+            f"Port {port} is already in use on this machine — something else is bound to it "
+            f"(another JARVIS listener, or scripts/run_remote.py). Pick a different port below, "
+            f"or stop whatever is using it. ({bind_error})"
+        )}
+
     # Imported here, not at module scope: uvicorn is only needed when remote
     # access is actually switched on.
     import uvicorn
     from app import app as fastapi_app
 
-    port = int(settings_store.get_setting("remote_access_port") or 8422)
     config = uvicorn.Config(
         fastapi_app,
         host=info["ip"],
@@ -220,10 +252,17 @@ async def start() -> dict:
     # error in the UI, rather than silently in a background task.
     await asyncio.sleep(1.0)
     if _server_task.done():
-        exc = _server_task.exception()
+        # .exception() re-raises CancelledError and can itself surface a
+        # BaseException (uvicorn exits via sys.exit on startup failure), so
+        # it's read defensively — the pre-bind check above should mean we
+        # never get here for the common port-conflict case.
+        try:
+            exc = _server_task.exception()
+        except BaseException as e:  # noqa: BLE001 - deliberately broad
+            exc = e
         _server_task = None
         _server = None
-        return {"ok": False, "error": f"Couldn't start the listener: {exc}"}
+        return {"ok": False, "error": f"Couldn't start the listener on port {port}: {exc or 'startup failed'}"}
 
     _current_url = f"https://{info['hostname']}:{port}"
     events.emit("remote.enabled", f"Remote access on at {_current_url}")

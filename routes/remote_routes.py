@@ -61,6 +61,29 @@ class PortRequest(BaseModel):
     port: int | None = None
 
 
+@router.post("/port")
+async def set_port(body: PortRequest, user: str = Depends(require_admin)) -> dict:
+    """Persist the port on its own, rather than only as a side effect of
+    enabling (David's ask 2026-09-03: the field looked like a setting but the
+    edit vanished on refresh). If the listener is already running, it's
+    restarted on the new port so the address shown stays the real one."""
+    if not body.port or not (1024 <= body.port <= 65535):
+        raise HTTPException(status_code=400, detail="Pick a port between 1024 and 65535.")
+
+    settings_store.update_settings(remote_access_port=body.port)
+
+    restarted = False
+    if remote_access.is_running():
+        await remote_access.stop()
+        result = await remote_access.start()
+        restarted = True
+        if not result["ok"]:
+            # The port is saved either way; report why it couldn't rebind so
+            # the panel can show it rather than silently sitting there off.
+            raise HTTPException(status_code=400, detail=result["error"])
+    return {"ok": True, "port": body.port, "restarted": restarted}
+
+
 @router.post("/enable")
 async def enable(body: PortRequest | None = None, user: str = Depends(require_admin)) -> dict:
     if body and body.port:

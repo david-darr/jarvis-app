@@ -35,3 +35,6 @@ electron/runtime/
 
 # Logs
 *.log
+
+# Stray output from backgrounded launches during development
+nohup.out
