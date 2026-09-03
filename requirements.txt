@@ -1,0 +1,18 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+claude-agent-sdk
+pydantic>=2
+bcrypt>=4
+pyotp>=2.9
+cryptography>=42
+discord.py>=2.4
+httpx>=0.27
+
+# Cookbook's built-in local model engine (David's ask 2026-09-01 — a local
+# model option needing no separate app install, unlike Ollama). Real
+# prebuilt CPU wheels live on the project's own index, not plain PyPI's
+# source-only listing — verified live before adding this (a genuine
+# win_amd64 wheel, no C++ compiler required). GPU builds need a different
+# index/build flag and are a documented follow-up, not covered by this line.
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+llama-cpp-python[server]

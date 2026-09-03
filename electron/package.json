@@ -1,0 +1,43 @@
+{
+  "name": "jarvis-app",
+  "version": "0.0.1",
+  "description": "JARVIS desktop shell (Electron) — wraps the local FastAPI backend in a real window, no visible browser chrome.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.davidmichael.jarvis",
+    "productName": "JARVIS",
+    "directories": { "output": "../dist" },
+    "files": ["main.js", "preload.js", "icon.png"],
+    "extraResources": [
+      {
+        "from": "..",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!electron/**",
+          "!.venv/**",
+          "!data/**",
+          "!dist/**",
+          "!.git/**",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/*.log",
+          "!.env",
+          "!.env.*",
+          "!scripts/*.crt",
+          "!scripts/*.key",
+          "!scripts/*.pem"
+        ]
+      }
+    ],
+    "win": { "target": "nsis" }
+  }
+}

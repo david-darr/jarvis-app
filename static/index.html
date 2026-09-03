@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>JARVIS</title>
+<link rel="icon" type="image/png" href="/static/img/jarvis-logo.png">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Mobile-only (David's ask 2026-09-01, "similar UX/UI as Claude and
+         ChatGPT's mobile apps") — sidebar becomes a slide-out drawer below
+         the responsive breakpoint; this button + backdrop toggle it. Both
+         stay display:none above the breakpoint (see style.css), so they're
+         inert on desktop. -->
+    <button id="mobile-menu-btn" class="mobile-menu-btn" aria-label="Menu"></button>
+    <div id="mobile-backdrop" class="mobile-backdrop hidden"></div>
+    <div id="sidebar">
+      <div id="brand"></div>
+      <nav id="nav"></nav>
+      <!-- Populated by app.js's buildSidebarFooter(). Left empty on purpose:
+           it previously shipped literal "Phase 3 backend · v2 UI (early)"
+           placeholder text, which flashed on every cold load until auth and
+           the settings fetch resolved. -->
+      <div id="sidebar-footer"></div>
+    </div>
+    <div id="content">
+      <div class="view active" id="view-content"></div>
+    </div>
+  </div>
+
+  <div id="onboarding-overlay" class="onboarding-overlay hidden"></div>
+
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

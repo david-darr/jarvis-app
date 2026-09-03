@@ -1,0 +1,1236 @@
+/* JARVIS design system — "glossy and glassy," synthesized from David's
+   wireframe (structure), Odysseus (per-tab layout patterns), and The
+   Bridge's existing tactical-HUD skin (floating glass panels, bracket
+   corners, cyan accent). Dark mode only for now — light mode is a stated
+   future requirement (see JARVIS Plan), not built yet: colors live in CSS
+   variables specifically so a `[data-theme="light"]` override is a
+   contained follow-up, not a rewrite. */
+
+/* Tells Chromium/Electron every native form control (select's own open
+   option-list popup, checkbox/radio defaults not otherwise overridden,
+   scrollbars) should render in its dark variant instead of the OS default
+   light one — without this, a <select>'s popup list renders bright white
+   and clashes hard with the rest of the app (found live, 2026-08-31, on the
+   "Add API Models" provider dropdown). One declaration, fixes every native
+   control at once; anything overridden below (checkboxes, our own custom
+   select chevron) still wins over this baseline. */
+:root { color-scheme: dark; }
+
+:root {
+  --bg: #08090d;
+  --bg-panel: rgba(20, 25, 32, 0.6);
+  --bg-panel-solid: #12161c;
+  /* --accent-rgb drives every blue-tinted border/glow/shadow below via
+     rgba(var(--accent-rgb), X) — Developer Mode (David's ask 2026-09-01)
+     only needs to override this one value + --accent to flip the entire
+     theme red, since CSS custom properties resolve var() lazily against
+     whatever's active on the element, not at declaration time. */
+  --accent-rgb: 0, 212, 255;
+  --border: rgba(var(--accent-rgb), 0.18);
+  --border-strong: rgba(var(--accent-rgb), 0.4);
+  --accent: #00d4ff;
+  --accent-dim: rgba(var(--accent-rgb), 0.12);
+  --text: #d8f4ff;
+  --text-dim: #6b8a99;
+  --text-faint: #3d5560;
+  --danger: #ff5f5f;
+  --radius: 12px;
+  --sidebar-width: 220px;
+  /* Shared reading column for the Claude-style chat view (David's ask
+     2026-09-03) — messages, the attach strip, and the floating composer
+     all center on this same width so they line up as one column. */
+  --chat-column: 760px;
+  --glass-sheen: linear-gradient(165deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 22%, rgba(255, 255, 255, 0) 45%);
+  --shadow-elevated: 0 12px 40px rgba(0, 0, 0, 0.45), 0 1px 0 rgba(255, 255, 255, 0.05) inset;
+  --shadow-lifted: 0 18px 50px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--border-strong) inset, 0 1px 0 rgba(255, 255, 255, 0.08) inset;
+}
+
+/* Developer Mode (David's ask 2026-09-01) — flips the entire blue theme to
+   red. Only --accent-rgb and --accent need overriding here; --border,
+   --border-strong, --accent-dim, and every rgba(var(--accent-rgb), X) glow/
+   shadow throughout this file re-resolve automatically. */
+:root.dev-mode {
+  --accent-rgb: 255, 59, 59;
+  --accent: #ff3b3b;
+}
+
+* { box-sizing: border-box; }
+
+/* -- custom scrollbars everywhere (David's ask, 2026-08-31) -------------- */
+/* Electron/Chromium supports ::-webkit-scrollbar directly, so this applies
+   globally to every scrollable element (sidebar, chat sessions/messages,
+   any .view with overflow-y) without needing per-component wiring. */
+* {
+  scrollbar-width: thin; /* Firefox-shaped fallback, harmless in Chromium */
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: rgba(var(--accent-rgb), 0.25);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: rgba(var(--accent-rgb), 0.45); background-clip: padding-box; }
+*::-webkit-scrollbar-corner { background: transparent; }
+
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background:
+    radial-gradient(ellipse 900px 500px at 15% -10%, rgba(var(--accent-rgb), 0.05), transparent 60%),
+    radial-gradient(ellipse at top, #0d1117 0%, var(--bg) 60%);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  overflow: hidden;
+}
+
+#app { display: flex; height: 100%; }
+
+/* -- glass panel primitive, used everywhere: a translucent, blurred panel
+   with a soft diagonal sheen across the top-left (the "glossy" highlight)
+   and real elevation via layered shadow — David's ask, 2026-08-31, for a
+   very glossy/glassy look application-wide, not just the sidebar/HUD
+   brackets it started with. */
+.glass {
+  background: var(--glass-sheen), var(--bg-panel);
+  backdrop-filter: blur(20px) saturate(1.6);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-elevated);
+  position: relative;
+}
+
+.bracket { position: relative; }
+.bracket::before, .bracket::after {
+  content: ""; position: absolute; width: 10px; height: 10px;
+  border: 1px solid var(--border-strong); pointer-events: none;
+}
+.bracket::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+.bracket::after { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+
+/* -- sidebar ---------------------------------------------------------- */
+#sidebar {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 18%), rgba(10, 12, 16, 0.82);
+  backdrop-filter: blur(22px) saturate(1.5);
+  -webkit-backdrop-filter: blur(22px) saturate(1.5);
+  border-right: 1px solid var(--border);
+  box-shadow: 6px 0 30px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 10px;
+  position: relative;
+  z-index: 1;
+}
+
+#brand {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px 20px;
+  letter-spacing: 3px; font-weight: 300; color: var(--accent);
+  font-size: 15px;
+}
+#brand .brand-logo {
+  width: 34px; height: 34px; border-radius: 5px;
+  filter: drop-shadow(0 0 6px rgba(var(--accent-rgb), 0.5));
+}
+
+nav#nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; overflow-x: hidden; }
+
+.nav-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 12px; border-radius: 8px;
+  color: var(--text-dim); font-size: 13.5px; cursor: pointer;
+  border: 1px solid transparent;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  user-select: none;
+}
+.nav-item svg { width: 16px; height: 16px; flex-shrink: 0; opacity: 0.8; }
+.nav-item:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
+.nav-item.active {
+  color: var(--accent);
+  background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.18), rgba(var(--accent-rgb), 0.06));
+  border-color: var(--border-strong);
+  box-shadow: 0 0 16px rgba(var(--accent-rgb), 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.nav-item.active svg { opacity: 1; filter: drop-shadow(0 0 4px rgba(var(--accent-rgb), 0.6)); }
+.nav-divider { height: 1px; background: var(--border); margin: 10px 4px; opacity: 0.5; }
+
+#sidebar-footer { padding: 10px 6px 0; }
+
+/* -- sidebar footer: username card + separate Settings button (David's ask
+   2026-08-31, split from the original single combined card) — the
+   Odysseus-screenshot bottom-left avatar+username+gear layout, but the
+   gear is its own distinct click into Settings, while the username card
+   opens a Switch User/Log Out menu instead. */
+.sidebar-footer-row { display: flex; align-items: center; gap: 6px; }
+.sidebar-user-card {
+  display: flex; align-items: center; padding: 9px 10px; border-radius: 8px; cursor: pointer;
+  border: 1px solid transparent; color: var(--text-dim); min-width: 0;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.sidebar-user-card:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); border-color: var(--border); }
+.sidebar-user-name { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-settings-btn {
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 34px; height: 34px; border-radius: 8px; cursor: pointer;
+  background: none; border: 1px solid transparent; color: var(--text-dim);
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.sidebar-settings-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); border-color: var(--border); }
+.sidebar-settings-btn svg { width: 16px; height: 16px; opacity: 0.8; }
+
+/* -- Developer Mode toggle (David's ask 2026-09-01) — its own row, above
+   the user-card/settings row above. */
+.sidebar-devmode-row { margin-bottom: 6px; }
+.sidebar-devmode-btn {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 10px; border-radius: 8px; cursor: pointer;
+  background: none; border: 1px solid transparent; color: var(--text-dim); font-size: 12.5px;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.sidebar-devmode-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); border-color: var(--border); }
+.sidebar-devmode-btn svg { width: 16px; height: 16px; opacity: 0.8; flex-shrink: 0; }
+.sidebar-devmode-btn.active { color: var(--accent); background: var(--accent-dim); border-color: var(--border-strong); }
+.sidebar-devmode-btn.active svg { opacity: 1; }
+
+/* -- main content ------------------------------------------------------ */
+#content { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+
+/* overflow-x:hidden here is a real fix, not cosmetic (David's ask
+   2026-09-01: several pages had a horizontal scrollbar on mobile) — per the
+   CSS spec, overflow-y:auto with overflow-x left at its default "visible"
+   makes the browser silently compute overflow-x as "auto" too, so EVERY
+   tab (this is the shared base class) was quietly scrollable sideways
+   whenever any content ran even slightly wide, not just the pages it was
+   actually noticed on. */
+.view { display: none; flex: 1; flex-direction: column; min-height: 0; padding: 20px; overflow-y: auto; overflow-x: hidden; }
+/* Soft fade-slide on every tab switch (David's ask 2026-09-02, proper-app
+   polish) — animation triggers on the display:none → flex flip switchTab()
+   performs, so no JS wiring needed. Short and subtle on purpose. */
+.view.active { display: flex; animation: view-in 0.18s ease; }
+@keyframes view-in { from { opacity: 0; transform: translateY(6px); } }
+
+/* Readable content width (David's ask 2026-09-03) — without this, forms and
+   card lists stretched the full width of a wide monitor, which reads as
+   unfinished. Applied via a wrapper class rather than to .view itself so
+   full-bleed views (Home's 3D core, Chat's two-column layout, Calendar's
+   grid, Brain's vault graph) can opt out by simply not using it. */
+.view-constrained { width: 100%; max-width: 1080px; margin: 0 auto; }
+
+.view-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.view-header h2 { font-weight: 300; letter-spacing: 1px; margin: 0; font-size: 18px; color: var(--text); }
+.view-header .sub { color: var(--text-faint); font-size: 12px; margin-top: 2px; }
+
+.btn {
+  background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.24), rgba(var(--accent-rgb), 0.09));
+  border: 1px solid var(--border-strong); color: var(--accent);
+  border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 3px 10px rgba(var(--accent-rgb), 0.08);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+.btn:hover {
+  background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.34), rgba(var(--accent-rgb), 0.15));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 6px 18px rgba(var(--accent-rgb), 0.18);
+  transform: translateY(-1px);
+}
+.btn:active { transform: translateY(0); }
+.btn:disabled { opacity: 0.35; cursor: default; transform: none; box-shadow: none; }
+.btn.danger {
+  border-color: rgba(255, 95, 95, 0.4); color: var(--danger);
+  background: linear-gradient(180deg, rgba(255, 95, 95, 0.18), rgba(255, 95, 95, 0.06));
+}
+.btn.danger:hover { background: linear-gradient(180deg, rgba(255, 95, 95, 0.28), rgba(255, 95, 95, 0.1)); }
+
+input, textarea, select {
+  background: rgba(255, 255, 255, 0.035); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; color: var(--text); font-size: 13px; font-family: inherit;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+input:focus, textarea:focus, select:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25), 0 0 0 3px rgba(var(--accent-rgb), 0.12);
+}
+
+/* Keyboard focus ring (David's ask 2026-09-03) — only inputs had any focus
+   styling, so tabbing through the sidebar, cards, or buttons was invisible.
+   :focus-visible (not :focus) so a mouse click never paints a ring, only
+   real keyboard navigation does. */
+.btn:focus-visible,
+.nav-item:focus-visible,
+.row-action-btn:focus-visible,
+.segmented-tab:focus-visible,
+.sidebar-user-card:focus-visible,
+.sidebar-settings-btn:focus-visible,
+.sidebar-devmode-btn:focus-visible,
+.overflow-menu-item:focus-visible,
+.palette-item:focus-visible,
+.input-icon-btn:focus-visible,
+.msg-action-btn:focus-visible,
+.custom-select-btn:focus-visible,
+.modal-close-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+}
+
+/* Every <select> in the app (David's ask 2026-08-31: "fix the dropdown to
+   match the overall style, same for all dropdowns") — the shared
+   input/textarea/select rule above already matched panel/border/text color,
+   but a native <select> still renders the OS's own plain gray caret, which
+   breaks the glass/cyan look. Swap it for a hand-drawn cyan chevron (same
+   stroke-SVG style as every other icon in the app, e.g. .nav-item svg) via
+   a background-image, since `currentColor` doesn't apply inside one. Option
+   list styling (the dropdown's open menu) stays OS-native — not stylable
+   from CSS in Electron/Chromium, same limitation every browser has. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300d4ff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 12px;
+  padding-right: 30px;
+  cursor: pointer;
+}
+
+/* Custom dropdown (David's ask 2026-09-01, real screenshot showing a
+   native <select>'s open option-list still rendering bright white despite
+   `color-scheme: dark` above — that native popup is OS/Chromium chrome, not
+   real page CSS, and doesn't reliably honor it in Electron). Built as a real
+   styled DOM node instead, same visual language as .model-picker-menu /
+   .overflow-menu so it never happens again for any dropdown. See
+   customSelect() in api.js — every <select> in the app now goes through
+   this instead of a native element. */
+.custom-select { position: relative; display: inline-flex; min-width: 0; }
+.custom-select.disabled { opacity: 0.45; pointer-events: none; }
+.custom-select-btn {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;
+  background: rgba(255, 255, 255, 0.035); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; color: var(--text); font-size: 13px; font-family: inherit;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
+  cursor: pointer; text-align: left;
+}
+.custom-select-btn:hover { border-color: var(--border-strong); }
+.custom-select-btn:focus { outline: none; border-color: var(--accent); box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25), 0 0 0 3px rgba(var(--accent-rgb), 0.12); }
+.custom-select-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.custom-select-chevron {
+  flex-shrink: 0; width: 12px; height: 12px; background-repeat: no-repeat; background-position: center; background-size: 12px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300d4ff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+}
+.custom-select-menu {
+  /* `fixed`, positioned in JS from the button's real getBoundingClientRect()
+     and appended straight to <body> (see customSelect() in api.js) — not
+     `absolute` inside .custom-select. A real bug found live 2026-09-01: an
+     `absolute` menu can only paint above elements sharing its own stacking
+     context, and a sibling `.glass.bracket.card` further down the page (its
+     own stacking context via backdrop-filter) painted over it regardless of
+     z-index. z-index 2500 clears the Settings window's .modal-backdrop
+     (1500) and the onboarding overlay (2000). */
+  position: fixed; z-index: 2500; min-width: 160px;
+  max-height: 260px; overflow-y: auto; overflow-x: hidden; padding: 4px;
+  background: var(--glass-sheen), var(--bg-panel-solid);
+  backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-elevated);
+}
+.custom-select-menu.hidden { display: none; }
+.custom-select-item {
+  display: block; width: 100%; padding: 7px 10px; border-radius: 6px; font-size: 12.5px;
+  color: var(--text); cursor: pointer; text-align: left; background: none; border: none;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.custom-select-item:hover { background: var(--accent-dim); }
+.custom-select-item.active { color: var(--accent); }
+.custom-select-item.disabled { opacity: 0.4; cursor: default; }
+.custom-select-item.disabled:hover { background: none; }
+
+/* Custom checkmark checkbox (David's ask 2026-08-31) — every
+   <input type="checkbox"> in the app (onboarding's area picker, calendar
+   all-day/filter toggles, chat's file-attach picker, notes' task checkbox,
+   Settings' admin toggles) gets one shared look instead of the OS default
+   square. Still a real native checkbox underneath (appearance: none only
+   changes paint, not behavior/semantics), so every existing `.checked`
+   read/write in JS keeps working unchanged. */
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px; height: 16px; flex-shrink: 0;
+  margin: 0; padding: 0;
+  display: inline-block; vertical-align: middle;
+  position: relative;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+input[type="checkbox"]:hover { border-color: var(--accent); }
+input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25), 0 0 0 3px rgba(var(--accent-rgb), 0.12);
+}
+input[type="checkbox"]:checked {
+  background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.34), rgba(var(--accent-rgb), 0.15));
+  border-color: var(--accent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 0 8px rgba(var(--accent-rgb), 0.22);
+}
+input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute; left: 5px; top: 2px;
+  width: 4px; height: 8px;
+  border: solid var(--accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.card { padding: 12px 14px; margin-bottom: 8px; transition: box-shadow 0.15s ease, transform 0.15s ease; }
+.card:hover { box-shadow: var(--shadow-lifted); }
+.card .title { font-size: 13.5px; color: var(--text); }
+.card .meta { font-size: 11px; color: var(--text-faint); margin-top: 4px; }
+.card-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.empty-state { color: var(--text-faint); font-size: 13px; padding: 30px 0; text-align: center; letter-spacing: 0.4px; line-height: 1.6; }
+
+/* -- rich empty states (David's ask 2026-09-03) — icon + hint + optional
+   primary action, replacing bare one-line sentences. */
+.empty-state-rich { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 44px 20px; }
+.empty-state-icon { width: 40px; height: 40px; opacity: 0.3; margin-bottom: 8px; }
+.empty-state-icon svg { width: 100%; height: 100%; }
+.empty-state-title { font-size: 14px; color: var(--text-dim); letter-spacing: 0.5px; }
+.empty-state-hint { font-size: 12.5px; color: var(--text-faint); max-width: 380px; }
+
+/* -- row action icon buttons (David's ask 2026-09-03) — replaces repeated
+   full-text Delete/Remove buttons down a list. Hidden until the row is
+   hovered or something inside it has keyboard focus, same reveal idea as
+   chat's .msg-actions, so lists read as content first. */
+.row-actions { display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity 0.14s ease; }
+.has-row-actions:hover .row-actions,
+.has-row-actions:focus-within .row-actions { opacity: 1; }
+.row-action-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; padding: 0; border-radius: 7px; cursor: pointer;
+  background: none; border: 1px solid transparent; color: var(--text-dim);
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.row-action-btn svg { width: 15px; height: 15px; }
+.row-action-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); border-color: var(--border); }
+.row-action-btn.danger:hover { color: var(--danger); background: rgba(255, 95, 95, 0.1); border-color: rgba(255, 95, 95, 0.35); }
+/* Touch devices have no hover — always show the controls there rather than
+   leaving them permanently unreachable. */
+@media (hover: none) {
+  .row-actions { opacity: 1; }
+}
+
+/* -- confirm dialog (David's ask 2026-09-03) ---------------------------- */
+.confirm-panel { width: 400px; }
+.confirm-panel h4 { display: block; margin-bottom: 8px; }
+.confirm-panel .muted { margin-bottom: 18px; }
+
+/* -- labeled form fields (David's ask 2026-09-03) — the toolbar rows in
+   Email/Tasks/Calendar/Notes were bare placeholder-only inputs crammed into
+   one wrapping flex row, which reads as a debug form. .field pairs each
+   control with a real label; .form-grid lays them out responsively. */
+.form-grid { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.field > label {
+  font-size: 10.5px; letter-spacing: 0.6px; text-transform: uppercase;
+  color: var(--text-faint); font-weight: 500;
+}
+.field-grow { flex: 1 1 200px; }
+.field-sm { flex: 0 0 92px; }
+/* Keeps a bare button aligned with the input baseline in a .form-grid row,
+   since it has no label above it to take up that vertical space. */
+.form-grid .btn { margin-bottom: 1px; }
+
+.coming-soon { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 8px; }
+.coming-soon .icon-large { opacity: 0.3; }
+.coming-soon h3 { font-weight: 300; color: var(--text-dim); letter-spacing: 1px; }
+.coming-soon p { color: var(--text-faint); font-size: 12.5px; max-width: 380px; text-align: center; }
+
+/* Chat tab's default "no session open yet" state (David's ask 2026-09-01)
+   — landing on Chat, or a session getting deleted out from under you,
+   shows this instead of silently auto-opening the most recent
+   conversation. Nothing is created/persisted here; the session only gets
+   logged for real on the first actual message sent (see sendMessage()'s
+   lazy createSession() call). */
+.chat-welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 14px; }
+.chat-welcome img { width: 110px; height: 110px; filter: drop-shadow(0 0 26px rgba(var(--accent-rgb), 0.5)); }
+.chat-welcome h1 { font-weight: 200; letter-spacing: 8px; font-size: 30px; color: var(--accent); margin: 0; text-shadow: 0 0 24px rgba(var(--accent-rgb), 0.35); }
+.chat-welcome p { color: var(--text-faint); font-size: 13px; margin: 0; letter-spacing: 0.5px; }
+
+/* -- "+" New Tab builder (Developer Mode, David's ask 2026-09-01) — a
+   fill-in-the-blanks "title page" that hands off into a real chat
+   conversation (see chat.js's pending-handoff comment) rather than a
+   second bespoke chat renderer. */
+.new-tab-view { align-items: center; }
+.new-tab-header { text-align: center; margin-bottom: 20px; }
+.new-tab-header h1 { font-weight: 300; letter-spacing: 2px; font-size: 22px; color: var(--accent); margin: 0 0 6px; }
+.new-tab-header p { color: var(--text-faint); font-size: 13px; margin: 0; }
+.new-tab-form { width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 16px; }
+.new-tab-field { display: flex; flex-direction: column; gap: 6px; }
+.new-tab-field label { font-size: 12px; color: var(--text-dim); letter-spacing: 0.3px; }
+.new-tab-field textarea { resize: vertical; font-family: inherit; }
+.new-tab-checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; }
+.new-tab-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.new-tab-chip {
+  background: rgba(255, 255, 255, 0.035); border: 1px solid var(--border); color: var(--text-dim);
+  border-radius: 999px; padding: 6px 12px; font-size: 12px; cursor: pointer;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.new-tab-chip:hover { color: var(--text); border-color: var(--border-strong); }
+.new-tab-chip.active { color: var(--accent); background: var(--accent-dim); border-color: var(--border-strong); }
+.new-tab-error { color: var(--danger); font-size: 12.5px; }
+.new-tab-build-btn { align-self: flex-start; padding: 10px 20px; font-size: 13.5px; }
+
+/* -- onboarding ---------------------------------------------------------
+   Full-screen first-run wizard (David's ask, 2026-08-31) — shown in place
+   of the normal sidebar+view shell until settings.onboarding_complete is
+   true, then never again. */
+.onboarding-overlay {
+  position: fixed; inset: 0; z-index: 2000;
+  display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(ellipse at top, #0d1117 0%, var(--bg) 70%);
+}
+.onboarding-overlay.hidden { display: none; }
+.onboarding-card { width: 480px; max-width: 90vw; padding: 32px 30px; }
+.onboarding-card h2 { font-weight: 300; letter-spacing: 1px; margin-bottom: 6px; }
+.onboarding-card .sub { color: var(--text-dim); font-size: 13px; margin-bottom: 20px; }
+.onboarding-steps { display: flex; gap: 6px; margin-bottom: 22px; }
+.onboarding-steps .dot { flex: 1; height: 3px; border-radius: 2px; background: var(--border); }
+.onboarding-steps .dot.active { background: var(--accent); }
+.onboarding-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 24px; }
+
+/* -- chat -------------------------------------------------------------- */
+.chat-layout { flex-direction: row; padding: 0; }
+/* Home tab: the 3D core now fills the whole tab (David's ask 2026-09-01,
+   "have the container be the whole tab, but have the other stuff
+   overlap") instead of sitting in a fixed centered box with everything
+   else stacked below it in normal flow. `.home-overlay` floats the
+   title/stats/recent panels on top via absolute positioning + z-index. */
+.home-layout { position: relative; padding: 0; overflow: hidden; }
+.core3d-host { position: absolute; inset: 0; width: 100%; height: 100%; }
+.core3d-host::before {
+  content: ""; position: absolute; inset: 0; border-radius: 0;
+  background: radial-gradient(circle at center, rgba(var(--accent-rgb), 0.14) 0%, rgba(var(--accent-rgb), 0.04) 45%, transparent 70%);
+  pointer-events: none; z-index: -1;
+}
+.core3d-host canvas { display: block; }
+.home-overlay {
+  position: relative; z-index: 2;
+  display: flex; flex-direction: column; align-items: center;
+  height: 100%; padding: 28px 20px; box-sizing: border-box;
+  overflow-y: auto; overflow-x: hidden;
+}
+.home-overlay .home-title { margin-top: 0; }
+.home-stats { display: flex; gap: 14px; margin-top: 24px; flex-wrap: wrap; justify-content: center; }
+.stat-card {
+  padding: 14px 22px; text-align: center; min-width: 100px;
+}
+.stat-card .stat-value { font-size: 22px; color: var(--accent); text-shadow: 0 0 12px rgba(var(--accent-rgb), 0.35); }
+/* This Week / Recent Chats / AI Models, stacked down the right edge
+   (David's ask 2026-09-01: "one above the other", replacing the earlier
+   side-by-side .home-recent row). */
+/* Vertically centered against the screen's middle (David's ask 2026-09-01)
+   via top:50% + translateY, not top/bottom anchoring — the old top:28px;
+   bottom:28px pairing forced a fixed height shorter than the 3 cards'
+   natural stacked height on common window sizes, which is what triggered
+   the scrollbar David was seeing. Centering + sizing to content height
+   (with max-height as a true-overflow-only safety net, not the normal
+   case) fixes both asks in one change. */
+.home-side-panel {
+  position: absolute; top: 50%; right: 28px; transform: translateY(-50%); z-index: 2;
+  width: 340px; max-height: calc(100% - 56px);
+  display: flex; flex-direction: column; gap: 14px;
+  /* Real bug found live, 2026-09-01: per the CSS spec, setting only
+     overflow-y (leaving overflow-x at its default "visible") forces the
+     browser to silently compute overflow-x as "auto" too — so this was
+     showing both a vertical AND a horizontal scrollbar even though nothing
+     here was ever meant to scroll sideways. overflow-x:hidden here is the
+     actual fix, not cosmetic. */
+  overflow-y: auto; overflow-x: hidden;
+}
+.home-recent-panel { padding: 14px 16px; flex-shrink: 0; }
+/* Mission Control left column (David's ask 2026-09-02) — mirror of
+   .home-side-panel down the left edge: live system health + activity feed. */
+.home-left-panel { right: auto; left: 28px; }
+
+/* -- status rows + dots (System panel, and reused by the Activity feed) -- */
+.status-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 12.5px; }
+.status-row:first-of-type { border-top: none; }
+.status-label { color: var(--text-dim); }
+.status-detail { margin-left: auto; text-align: right; }
+.status-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+}
+.status-dot.ok { background: var(--accent); box-shadow: 0 0 6px rgba(var(--accent-rgb), 0.7); }
+.status-dot.warn { background: #ffb84d; box-shadow: 0 0 6px rgba(255, 184, 77, 0.6); }
+.status-dot.err { background: var(--danger); box-shadow: 0 0 6px rgba(255, 95, 95, 0.7); animation: status-pulse 1.6s ease-in-out infinite; }
+@keyframes status-pulse { 50% { opacity: 0.45; } }
+
+.activity-item { display: flex; align-items: baseline; gap: 8px; }
+.activity-item .status-dot { align-self: center; }
+.activity-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-time { flex-shrink: 0; }
+
+/* -- skeleton shimmer (loading placeholders, proper-app polish) ---------- */
+.skeleton {
+  border-radius: 6px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.04) 25%, rgba(255, 255, 255, 0.09) 50%, rgba(255, 255, 255, 0.04) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer { to { background-position: -200% 0; } }
+.skeleton-title { height: 13px; width: 40%; margin-bottom: 12px; }
+.skeleton-line { height: 11px; width: 100%; margin: 9px 0; }
+.skeleton-line:nth-child(odd) { width: 82%; }
+.home-recent-item {
+  font-size: 12.5px; color: var(--text-dim); padding: 6px 0;
+  border-top: 1px solid var(--border); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.home-recent-item:first-of-type { border-top: none; }
+.usage-bar { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.06); overflow: hidden; }
+.usage-bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent), rgba(var(--accent-rgb), 0.6)); border-radius: 2px; }
+#chat-sessions { width: 220px; flex-shrink: 0; border-right: 1px solid var(--border); padding: 14px 10px; overflow-y: auto; overflow-x: hidden; }
+#chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+/* Mobile-only header bar with the sessions-drawer toggle (David's ask
+   2026-09-01) — hidden by default, shown via the @media block below;
+   base rule lives here so it's never mistakenly visible above the
+   breakpoint even before that block loads/applies. */
+.chat-mobile-header {
+  display: none; align-items: center; gap: 10px; padding: 10px 14px;
+  border-bottom: 1px solid var(--border); color: var(--accent);
+  letter-spacing: 2px; font-size: 13px; font-weight: 300; flex-shrink: 0;
+}
+.chat-mobile-menu-btn { color: var(--text); }
+/* ======================================================================
+   Chat conversation — Claude-style (David's ask 2026-09-03: "look a lot
+   more like Claude's UI, floating bubble chat box, messages floating in
+   the middle of the screen, Claude's idle thinking design").
+
+   Replaces the previous Odysseus-style layout, where EVERY message was a
+   bordered card with a status-dot + role + timestamp header. Claude's
+   actual shape, which this now follows: one centered reading column; the
+   user's turn is a compact rounded bubble on the right; the assistant's
+   turn is plain unboxed text that just flows down the page (no card, no
+   border, no avatar row); per-message chrome only appears on hover.
+   ====================================================================== */
+#chat-messages {
+  flex: 1; overflow-y: auto; overflow-x: hidden;
+  padding: 32px 24px 12px;
+  display: flex; flex-direction: column; gap: 26px;
+}
+
+/* Bubble/alignment behavior lives on .msg itself (not scoped to
+   #chat-messages) so the School tab's own compact course-chat panel, which
+   reuses these same classes, gets the identical look for free. */
+.msg {
+  display: flex; flex-direction: column; align-items: flex-start;
+  line-height: 1.62; font-size: 14px;
+}
+.msg.user { align-items: flex-end; }
+
+/* The centered reading column — the "floating in the middle of the screen"
+   part. Scoped to the main chat only: School's panel lives in half a
+   column and should fill its container instead. */
+#chat-messages > .msg { width: 100%; max-width: var(--chat-column); margin: 0 auto; }
+
+.msg-body { word-wrap: break-word; white-space: pre-wrap; max-width: 100%; }
+
+/* User turn: compact rounded bubble, hugging its own content. */
+.msg.user .msg-body {
+  max-width: 82%;
+  padding: 11px 16px;
+  border-radius: 20px 20px 6px 20px;
+  background: var(--accent-dim);
+  border: 1px solid var(--border-strong);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+/* Assistant turn: no bubble at all — plain text in the column, Claude's
+   most recognizable trait. */
+.msg.assistant .msg-body { color: var(--text); }
+
+/* Streaming cursor + done marker (David's ask 2026-09-02) — a continuously
+   blinking cursor while a reply is still streaming (survives silent gaps
+   between chunks, e.g. a tool call between two text blocks), a small
+   checkmark once it's genuinely finished. */
+.msg-cursor {
+  display: inline-block; width: 2px; height: 15px; margin-left: 2px; vertical-align: text-bottom;
+  background: var(--accent); animation: msg-cursor-blink 1s step-start infinite;
+}
+@keyframes msg-cursor-blink { 50% { opacity: 0; } }
+.msg-done { display: inline-flex; color: var(--accent); opacity: 0.85; }
+
+/* -- idle "thinking" indicator, Claude-style ---------------------------
+   Replaces the old rotating "." / ".." / "..." driven by a JS setInterval.
+   Claude's is a shimmer: a highlight sweeping left-to-right across the
+   word, done purely in CSS via a moving gradient clipped to the text, so
+   there's no timer to leak and it keeps animating through silent gaps in
+   a long tool-using turn. */
+.msg-thinking-row { display: flex; align-items: center; gap: 9px; }
+.msg-thinking-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0;
+  animation: thinking-pulse 1.8s ease-in-out infinite;
+}
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1); }
+}
+.msg-thinking-text {
+  font-size: 13.5px; letter-spacing: 0.3px;
+  background: linear-gradient(90deg, var(--text-faint) 30%, var(--accent) 50%, var(--text-faint) 70%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent;
+  animation: thinking-shimmer 2s linear infinite;
+}
+@keyframes thinking-shimmer { to { background-position: -200% 0; } }
+
+/* An interrupted/failed reply reads as failed rather than just stopping
+   mid-sentence (David's ask 2026-09-03). Assistant turns have no border to
+   tint now, so this marks the text itself. */
+.msg.msg-failed .msg-body { color: var(--danger); }
+.msg.msg-failed.user .msg-body { border-color: rgba(255, 95, 95, 0.4); background: rgba(255, 95, 95, 0.05); }
+
+.msg-actions {
+  display: flex; align-items: center; gap: 4px; margin-top: 7px;
+  opacity: 0; transition: opacity 0.14s;
+}
+.msg:hover .msg-actions, .msg:focus-within .msg-actions { opacity: 1; }
+/* A finished reply keeps its row visible — the done checkmark is a status,
+   not a hover affordance. */
+.msg-actions.has-done { opacity: 1; }
+.msg.user .msg-actions { justify-content: flex-end; }
+.msg-actions .msg-time { font-size: 10.5px; color: var(--text-faint); letter-spacing: 0.3px; }
+.msg-action-btn {
+  background: none; border: none; color: var(--text-faint); cursor: pointer;
+  padding: 3px; display: flex; border-radius: 4px;
+}
+.msg-action-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+.session-item { padding: 8px 10px; border-radius: 7px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; margin-bottom: 2px; }
+.session-item:hover { background: rgba(255, 255, 255, 0.03); }
+.session-item.active { color: var(--accent); background: var(--accent-dim); }
+.session-rename-input {
+  width: 100%; background: rgba(var(--accent-rgb), 0.06); border: 1px solid var(--border-strong);
+  border-radius: 6px; padding: 4px 7px; font-size: 12.5px; color: var(--text);
+}
+
+/* -- calendar month grid ------------------------------------------------ */
+/* Row layout: grid on the left (sized down per David's ask, 2026-08-31,
+   to leave real room for the day-detail panel), detail panel on the right. */
+.cal-layout { flex-direction: row; gap: 16px; align-items: stretch; }
+.cal-left { flex: 0 0 62%; display: flex; flex-direction: column; min-width: 0; }
+.cal-day-panel { flex: 1; padding: 16px; overflow-y: auto; overflow-x: hidden; min-width: 220px; }
+.cal-day-panel-title { font-size: 14px; color: var(--accent); margin-bottom: 12px; }
+
+.cal-nav { display: flex; align-items: center; gap: 10px; margin: 4px 0 10px; }
+.cal-month-label { font-size: 14px; color: var(--text); min-width: 160px; text-align: center; }
+.cal-create-bar { margin-bottom: 14px; }
+.cal-checkbox-label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-dim); }
+.cal-grid {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px;
+  background: var(--border); overflow: hidden; flex: 1;
+}
+.cal-weekday {
+  background: rgba(255, 255, 255, 0.02); color: var(--text-faint); font-size: 11px;
+  text-align: center; padding: 4px 0; letter-spacing: 1px;
+}
+.cal-day {
+  background: var(--bg-panel-solid); min-height: 58px; padding: 5px; cursor: pointer;
+  display: flex; flex-direction: column; gap: 2px; overflow: hidden;
+}
+.cal-day:hover { background: rgba(var(--accent-rgb), 0.04); }
+.cal-day.other-month { opacity: 0.35; }
+.cal-day.today { box-shadow: inset 0 0 0 1px var(--border-strong); }
+.cal-day.selected { box-shadow: inset 0 0 0 2px var(--accent); background: rgba(var(--accent-rgb), 0.06); }
+.cal-day-num { font-size: 11px; color: var(--text-dim); }
+.cal-day.today .cal-day-num { color: var(--accent); font-weight: 600; }
+.cal-event-pill {
+  font-size: 10.5px; padding: 2px 6px; border-radius: 4px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.cal-event-pill.event { background: var(--accent-dim); color: var(--accent); }
+.cal-event-pill.note { background: rgba(255, 255, 255, 0.06); color: var(--text-dim); }
+.cal-event-pill.overflow { color: var(--text-faint); background: none; padding: 2px 6px 0; }
+.cal-event-pill.completed { text-decoration: line-through; opacity: 0.5; }
+.cal-item-completed .title, .cal-item-completed .meta { text-decoration: line-through; opacity: 0.5; }
+.cal-upcoming-day-label { font-size: 11px; color: var(--text-faint); letter-spacing: 0.5px; margin: 14px 0 6px; }
+.cal-upcoming-day-label:first-child { margin-top: 0; }
+
+/* -- context menu (session right-click) --------------------------------- */
+.context-menu {
+  position: fixed; z-index: 1000; min-width: 140px; padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.context-menu-item {
+  padding: 7px 10px; border-radius: 6px; font-size: 12.5px; color: var(--text);
+  cursor: pointer;
+}
+.context-menu-item:hover { background: var(--accent-dim); }
+.context-menu-item.danger { color: var(--danger); }
+.context-menu-item.danger:hover { background: rgba(255, 95, 95, 0.1); }
+.star-mark { color: var(--accent); }
+
+/* -- chat composer: floating rounded bubble, Claude-style (David's ask
+   2026-09-03). Was a full-width bar flush against the bottom edge of the
+   window; now it's a detached, heavily-rounded panel centered on the same
+   reading column as the messages, with real breathing room beneath it and
+   a lifted shadow so it reads as floating above the conversation.
+   Structure (two rows — textarea + inline model picker on top, icon strip
+   and send button below) is unchanged. */
+.chat-input-bar {
+  width: 100%; max-width: var(--chat-column);
+  margin: 0 auto 20px;
+  padding: 14px 16px 12px;
+  border-radius: 26px;
+  box-shadow: var(--shadow-lifted);
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+/* Focus lifts it further, the way Claude's composer responds when active. */
+.chat-input-bar:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-lifted), 0 0 0 4px rgba(var(--accent-rgb), 0.07);
+}
+.chat-input-top { position: relative; display: flex; }
+#chat-input {
+  flex: 1; resize: none; background: transparent; border: none; padding: 6px 100px 6px 8px;
+  font-size: 14.5px; line-height: 1.55; max-height: 200px;
+}
+#chat-input:focus { outline: none; box-shadow: none; }
+#chat-input::placeholder { color: var(--text-faint); }
+.model-picker-wrap { position: absolute; top: 2px; right: 2px; }
+.model-picker-btn {
+  display: flex; align-items: center; gap: 5px; background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border); border-radius: 7px; padding: 5px 9px; font-size: 11.5px;
+  color: var(--text-dim); cursor: pointer; white-space: nowrap; max-width: 220px;
+}
+.model-picker-btn span { overflow: hidden; text-overflow: ellipsis; }
+.model-picker-btn:hover { color: var(--text); border-color: var(--border-strong); }
+.model-picker-menu {
+  /* Opens upward from the button (David's ask 2026-09-01) — the model
+     picker sits at the top of the composer, so opening downward pushed the
+     menu awkwardly toward/under the send row instead of into open space. */
+  position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 50; min-width: 220px;
+  max-height: 260px; overflow-y: auto; overflow-x: hidden; padding: 4px;
+  background: var(--glass-sheen), var(--bg-panel-solid);
+  backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-elevated);
+}
+.model-picker-menu.hidden { display: none; }
+.model-picker-item { padding: 7px 10px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+.model-picker-item:hover { background: var(--accent-dim); }
+.model-picker-item.active { color: var(--accent); }
+
+.chat-input-bottom { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 10px; }
+/* Circular send button, matching the composer's rounded language. */
+#chat-send {
+  width: 34px; height: 34px; padding: 0; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
+.chat-input-left { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.input-icon-btn {
+  display: flex; align-items: center; gap: 5px; background: transparent; border: none;
+  color: var(--text-dim); padding: 6px 8px; border-radius: 7px; cursor: pointer; font-size: 11.5px;
+}
+.input-icon-btn:hover { background: rgba(255, 255, 255, 0.05); color: var(--text); }
+.input-icon-btn.active { color: var(--accent); background: var(--accent-dim); }
+
+.overflow-wrapper { position: relative; }
+.overflow-menu {
+  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 50; min-width: 180px; padding: 4px;
+  background: var(--glass-sheen), var(--bg-panel-solid);
+  backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-elevated);
+}
+.overflow-menu.hidden { display: none; }
+/* Opens downward from its anchor instead of the default upward-from-the-
+   chat-composer placement above — e.g. Settings > Integrations' "+ Add
+   Integration" button. Needs bottom/left reset to auto, not just top/right
+   added: the base rule already sets bottom+left, and a view previously
+   patched top/right in via an inline style without clearing those, which
+   left all four offsets set at once and stretched/misplaced the menu
+   (found live, 2026-08-31). Use this class instead of ad hoc inline
+   positioning for any future downward-opening menu. */
+.overflow-menu.below { top: calc(100% + 6px); right: 0; bottom: auto; left: auto; }
+.overflow-menu-item {
+  display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 6px;
+  font-size: 12.5px; color: var(--text); cursor: pointer; width: 100%; background: none; border: none; text-align: left;
+}
+.overflow-menu-item:hover { background: var(--accent-dim); }
+.overflow-menu-item[disabled] { opacity: 0.4; cursor: default; }
+.overflow-menu-item[disabled]:hover { background: none; }
+
+/* Brain tab's Vault graph (David's ask 2026-09-01, "kind of similar to the
+   VAULT tab in our original jarvis kiosk, however stylized to match our new
+   jarvis-app") — ported layout from the kiosk's own vault-graph CSS, but
+   restyled onto this app's actual design tokens/primitives (frontend-style.md)
+   instead of the kiosk's hand-rolled hex/rgba values, which happened to
+   already be nearly the same cyan hue. */
+.vault-graph-wrap { position: relative; flex: 1; min-height: 0; width: 100%; padding: 0; box-sizing: border-box; }
+#vault-graph-canvas { position: absolute; inset: 0; width: 100%; height: 100%; background: var(--bg); cursor: grab; touch-action: none; }
+#vault-graph-canvas.dragging { cursor: grabbing; }
+.vault-panel {
+  display: none;
+  position: absolute; top: 0; right: 0; bottom: 0;
+  width: 420px;
+  min-width: 260px; max-width: 800px;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 2;
+}
+.vault-panel.open { display: flex; }
+.vault-panel-resize-handle {
+  position: absolute; top: 0; left: -4px; bottom: 0; width: 8px;
+  cursor: ew-resize; z-index: 3;
+}
+.vault-panel-resize-handle:hover, .vault-panel-resize-handle.dragging { background: var(--accent); opacity: 0.3; }
+.vault-panel-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--text);
+}
+.vault-panel-actions { display: flex; gap: 6px; }
+.vault-panel-actions .btn { padding: 4px 8px; font-size: 10px; }
+.vault-panel-breadcrumb {
+  display: none; flex-wrap: wrap; gap: 2px; align-items: center;
+  padding: 6px 12px; border-bottom: 1px solid var(--border);
+  font-size: 11px; color: var(--text-dim);
+}
+.vault-panel-breadcrumb.show { display: flex; }
+.vault-breadcrumb-crumb { cursor: pointer; }
+.vault-breadcrumb-crumb:hover { color: var(--text); text-decoration: underline; }
+.vault-breadcrumb-crumb.current { color: var(--text); cursor: default; text-decoration: none; }
+.vault-breadcrumb-sep { opacity: 0.5; padding: 0 2px; }
+.vault-panel-body {
+  flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px;
+  font-size: 12px; line-height: 1.6; color: var(--text-dim);
+  white-space: pre-wrap; word-break: break-word;
+}
+.vault-child-row { cursor: pointer; padding: 4px 0; }
+.vault-child-row:hover { color: var(--text); }
+#vault-note-editor {
+  width: 100%; height: 100%; min-height: 300px;
+  font-size: 12px; line-height: 1.6; padding: 8px; resize: none;
+}
+
+/* Centered on the same column as the messages/composer (David's ask
+   2026-09-03) — it sits between them, so a full-width strip would break
+   the single-column alignment. */
+.attach-strip { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; max-width: var(--chat-column); margin: 0 auto; padding: 0 4px; }
+.attach-strip:not(:empty) { padding-bottom: 8px; }
+.attach-chip {
+  display: flex; align-items: center; gap: 6px; background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border); border-radius: 7px; padding: 4px 6px 4px 10px; font-size: 11.5px; color: var(--text-dim);
+}
+.attach-chip button { background: none; border: none; color: var(--text-faint); cursor: pointer; padding: 2px; display: flex; }
+.attach-chip button:hover { color: var(--danger); }
+
+.workspace-pill {
+  display: flex; align-items: center; gap: 6px; background: var(--accent-dim); border: 1px solid var(--border-strong);
+  border-radius: 7px; padding: 5px 8px; font-size: 11.5px; color: var(--accent); cursor: pointer;
+}
+.workspace-pill button { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; display: flex; opacity: 0.7; }
+.workspace-pill button:hover { opacity: 1; }
+
+/* -- generic modal, reused by the workspace picker ---------------------- */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 1500; display: flex; align-items: center; justify-content: center;
+  background: rgba(4, 6, 10, 0.6); backdrop-filter: blur(3px);
+}
+.modal-backdrop.hidden { display: none; }
+.modal-panel { width: 480px; max-width: 90vw; max-height: 80vh; display: flex; flex-direction: column; padding: 20px; }
+.modal-panel h4 { font-weight: 400; margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between; }
+.modal-panel .muted { color: var(--text-faint); font-size: 12px; margin-bottom: 12px; line-height: 1.5; }
+.modal-close-btn { background: none; border: none; color: var(--text-faint); cursor: pointer; font-size: 16px; }
+.workspace-path-input { margin-bottom: 10px; }
+.workspace-body { flex: 1; overflow-y: auto; overflow-x: hidden; border: 1px solid var(--border); border-radius: 8px; padding: 4px; margin-bottom: 14px; min-height: 160px; }
+.workspace-row { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+.workspace-row:hover { background: var(--accent-dim); }
+.workspace-empty { padding: 14px; color: var(--text-faint); font-size: 12px; text-align: center; }
+.modal-footer { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* -- Settings window (David's ask, 2026-08-31: "more of a popup that can be
+   closed or minimized, with a similar UI to Odysseus" — their own Settings
+   modal is a title-bar + left-nav-with-search + right-content-panel window,
+   not a full-page tab). Reuses .modal-backdrop for the dim/blur layer. */
+.settings-window {
+  width: 880px; max-width: 94vw; height: 640px; max-height: 88vh;
+  display: flex; flex-direction: column; padding: 0; overflow: hidden;
+}
+.settings-titlebar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.settings-titlebar .title { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--accent); font-weight: 400; }
+.settings-titlebar-actions { display: flex; gap: 4px; }
+.settings-titlebar-btn {
+  background: none; border: none; color: var(--text-faint); cursor: pointer;
+  width: 26px; height: 26px; border-radius: 6px; display: flex; align-items: center; justify-content: center;
+}
+.settings-titlebar-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+.settings-body { flex: 1; display: flex; min-height: 0; }
+.settings-nav { width: 210px; flex-shrink: 0; border-right: 1px solid var(--border); padding: 12px 8px; overflow-y: auto; overflow-x: hidden; }
+.settings-search { width: 100%; margin-bottom: 10px; font-size: 12.5px; }
+.settings-nav-group { font-size: 10px; letter-spacing: 1px; color: var(--text-faint); padding: 10px 8px 4px; }
+.settings-nav-item {
+  display: flex; align-items: center; gap: 8px; padding: 8px 9px; border-radius: 7px;
+  font-size: 12.5px; color: var(--text-dim); cursor: pointer;
+}
+.settings-nav-item:hover { background: rgba(255, 255, 255, 0.04); color: var(--text); }
+.settings-nav-item.active { color: var(--accent); background: var(--accent-dim); }
+.settings-content { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 18px 22px; min-width: 0; }
+
+/* Resize handles (David's ask 2026-09-01: "stretch and shrink the window in
+   any direction") — see makeResizable() in settings.js, which pins the
+   window to `position: fixed` with explicit left/top/width/height so each
+   handle can drag just its own edge, same feel as a real desktop window. */
+.resize-handle { position: absolute; z-index: 5; }
+.resize-n, .resize-s { left: 10px; right: 10px; height: 8px; cursor: ns-resize; }
+.resize-n { top: -4px; }
+.resize-s { bottom: -4px; }
+.resize-e, .resize-w { top: 10px; bottom: 10px; width: 8px; cursor: ew-resize; }
+.resize-e { right: -4px; }
+.resize-w { left: -4px; }
+.resize-ne, .resize-nw, .resize-se, .resize-sw { width: 16px; height: 16px; }
+.resize-ne { top: -6px; right: -6px; cursor: nesw-resize; }
+.resize-nw { top: -6px; left: -6px; cursor: nwse-resize; }
+.resize-se { bottom: -6px; right: -6px; cursor: nwse-resize; }
+.resize-sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
+
+/* -- Integrations table, Claude-Connectors-style (David's ask, 2026-08-31:
+   "UI somewhat similar to Claude's") — search + All/Connected/Not connected
+   filter tabs above a real table (icon/name · type · status), not just a
+   stacked card list. */
+.connectors-toolbar { display: flex; align-items: center; gap: 10px; margin: 14px 0 10px; }
+.connectors-search { flex: 1; }
+/* Generic segmented-tab toggle (originally Integrations' filter tabs,
+   generalized 2026-09-01 when Brain's Skills/Vault toggle needed the exact
+   same look — reuse, don't duplicate, per specs/frontend-style.md). */
+.segmented-tabs { display: flex; gap: 2px; background: rgba(255, 255, 255, 0.03); border-radius: 7px; padding: 2px; }
+.segmented-tab {
+  padding: 5px 10px; font-size: 11.5px; border-radius: 6px; cursor: pointer; color: var(--text-faint);
+  background: none; border: none;
+}
+.segmented-tab.active { background: var(--accent-dim); color: var(--accent); }
+.connectors-table { width: 100%; border-collapse: collapse; }
+.connectors-table th {
+  text-align: left; font-size: 10px; letter-spacing: 0.5px; color: var(--text-faint);
+  font-weight: 400; padding: 6px 8px; border-bottom: 1px solid var(--border);
+}
+.connectors-table td { padding: 9px 8px; border-bottom: 1px solid var(--border); font-size: 12.5px; vertical-align: middle; }
+.connectors-table tr:last-child td { border-bottom: none; }
+.connectors-name-cell { display: flex; align-items: center; gap: 9px; }
+.connectors-icon {
+  width: 26px; height: 26px; border-radius: 7px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent-dim); color: var(--accent);
+}
+.connectors-icon svg { width: 14px; height: 14px; }
+.connectors-status-ok { color: var(--accent); }
+.connectors-status-off { color: var(--text-faint); }
+
+/* -- command palette (Ctrl+K, David's ask 2026-09-02) ------------------- */
+.palette-backdrop {
+  position: fixed; inset: 0; z-index: 2600;
+  display: flex; align-items: flex-start; justify-content: center; padding-top: 14vh;
+  background: rgba(4, 6, 10, 0.55); backdrop-filter: blur(3px);
+}
+.palette-backdrop.hidden { display: none; }
+.palette-panel { width: 520px; max-width: 92vw; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.palette-input-row { display: flex; align-items: center; gap: 8px; }
+.palette-input { flex: 1; font-size: 14px; padding: 10px 12px; }
+.palette-hint {
+  flex-shrink: 0; font-size: 10px; letter-spacing: 1px; color: var(--text-faint);
+  border: 1px solid var(--border); border-radius: 5px; padding: 3px 6px;
+}
+.palette-list { max-height: 320px; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 1px; }
+.palette-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 12px; border-radius: 7px; font-size: 13px; color: var(--text);
+  background: none; border: none; cursor: pointer; text-align: left; width: 100%;
+}
+.palette-item.active { background: var(--accent-dim); color: var(--accent); }
+.palette-item-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-item-hint { flex-shrink: 0; font-size: 10px; letter-spacing: 0.5px; color: var(--text-faint); }
+
+/* -- toasts (David's ask 2026-09-02) — bottom-right glass cards, slide-up
+   + fade, click to dismiss. z-index above the Settings modal (1500) and the
+   custom-select menus (2500) so a confirmation is never buried. */
+#toast-host {
+  position: fixed; bottom: 20px; right: 20px; z-index: 3000;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto; cursor: pointer;
+  max-width: 340px; padding: 10px 14px; font-size: 12.5px; line-height: 1.45; color: var(--text);
+  background: var(--glass-sheen), var(--bg-panel-solid);
+  backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: var(--shadow-elevated);
+  border-left: 3px solid var(--accent);
+  opacity: 0; transform: translateY(10px);
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.success { border-left-color: var(--accent); }
+.toast.error { border-left-color: var(--danger); }
+.toast.info { border-left-color: rgba(var(--accent-rgb), 0.5); }
+
+.settings-minimized-pill {
+  position: fixed; bottom: 18px; right: 18px; z-index: 1500;
+  display: flex; align-items: center; gap: 7px; padding: 9px 14px; font-size: 12.5px; color: var(--text);
+  cursor: pointer;
+}
+
+/* ======================================================================
+   Mobile-responsive pass (David's ask 2026-09-01: "similar UX/UI and
+   functionality as Claude and ChatGPT's mobile apps"). Both apps share the
+   same core mobile pattern this section replicates: no persistent sidebar
+   — a hamburger opens a slide-out drawer over a dimmed backdrop; chat's
+   session history is its own separate slide-out drawer, not a fixed
+   always-visible column; everything else (Settings, Home) collapses to one
+   full-width scrollable column. 768px matches the common tablet/phone
+   breakpoint (roughly iPad-portrait-and-below).
+   ====================================================================== */
+.mobile-menu-btn { display: none; }
+.mobile-backdrop { display: none; }
+
+@media (max-width: 768px) {
+  .mobile-menu-btn {
+    display: flex; align-items: center; justify-content: center;
+    position: fixed; top: 12px; left: 12px; z-index: 60;
+    width: 38px; height: 38px; border-radius: 9px;
+    background: var(--glass-sheen), var(--bg-panel-solid);
+    backdrop-filter: blur(14px) saturate(1.5); -webkit-backdrop-filter: blur(14px) saturate(1.5);
+    border: 1px solid var(--border); color: var(--text); cursor: pointer;
+    box-shadow: var(--shadow-elevated);
+  }
+  .mobile-menu-btn svg { width: 18px; height: 18px; }
+
+  .mobile-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 55;
+    background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(2px);
+  }
+  .mobile-backdrop.hidden { display: none; }
+
+  /* Sidebar becomes a slide-out drawer instead of a permanent column. */
+  #app { position: relative; }
+  #sidebar {
+    position: fixed; inset: 0 auto 0 0; z-index: 56;
+    width: 78vw; max-width: 300px; height: 100%;
+    transform: translateX(-100%); transition: transform 0.22s ease;
+    box-shadow: 16px 0 50px rgba(0, 0, 0, 0.5);
+  }
+  #sidebar.open { transform: translateX(0); }
+  .nav-item { padding: 13px 14px; font-size: 14.5px; } /* bigger touch targets */
+
+  #content { width: 100%; }
+  .view { padding: 64px 14px 14px; } /* clears the fixed hamburger button */
+
+  /* Home: 3D core shrinks and stops being full-bleed; everything below it
+     stacks in normal flow instead of floating on top, since there's no
+     room to overlap text over the model on a phone-width screen. */
+  .home-layout { display: block; overflow-y: auto; overflow-x: hidden; padding: 64px 14px 14px; }
+  .core3d-host { position: relative; width: 100%; height: 44vh; }
+  .home-overlay { position: relative; height: auto; padding: 0; overflow: visible; }
+  /* Stat cards as a real centered 2-column grid (David's ask 2026-09-01:
+     "more centered and organized") instead of a ragged left-aligned wrap. */
+  .home-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: 100%; max-width: 360px; margin: 20px auto 0; }
+  .stat-card { min-width: 0; padding: 12px 10px; }
+  .home-side-panel {
+    position: relative; top: auto; right: auto; bottom: auto; left: auto; transform: none;
+    width: 100%; max-height: none; margin-top: 16px;
+  }
+
+  /* Chat: sessions list becomes its own slide-out drawer (Claude/ChatGPT's
+     "tap to see history" pattern) instead of a fixed 220px column
+     squeezing the conversation on a narrow screen. */
+  .chat-layout { flex-direction: column; }
+  .chat-mobile-header { display: flex; }
+  #chat-sessions {
+    position: fixed; inset: 0 auto 0 0; z-index: 56;
+    width: 82vw; max-width: 320px; height: 100%;
+    transform: translateX(-100%); transition: transform 0.22s ease;
+    box-shadow: 16px 0 50px rgba(0, 0, 0, 0.5);
+    background: var(--bg-panel-solid);
+  }
+  #chat-sessions.open { transform: translateX(0); }
+  .chat-sessions-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 55;
+    background: rgba(0, 0, 0, 0.55);
+  }
+  .chat-sessions-backdrop.hidden { display: none; }
+  #chat-main { width: 100%; }
+  /* Claude-style column collapses to full width on a phone — the centering
+     max-width would otherwise just add dead side margins on a narrow
+     screen. Composer stays floating but tightens its margins. */
+  #chat-messages { padding: 16px 12px 8px; gap: 20px; }
+  .model-picker-btn { max-width: 130px; }
+  .chat-input-bar {
+    margin: 0 10px 10px; width: auto; border-radius: 22px;
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+  .attach-strip { padding-left: 12px; padding-right: 12px; }
+  .msg.user .msg-body { max-width: 88%; }
+
+  /* Settings modal goes full-screen; its left nav becomes a horizontal
+     scroll strip above the content instead of a side column, same
+     restructuring Claude/ChatGPT apply to any desktop-shaped side-nav
+     panel on mobile. */
+  .settings-window { width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh; border-radius: 0; }
+  .settings-body { flex-direction: column; }
+  .settings-nav {
+    width: 100%; display: flex; gap: 4px; overflow-x: auto; white-space: nowrap;
+    border-right: none; border-bottom: 1px solid var(--border); padding: 8px;
+  }
+  .settings-nav-group { display: none; } /* group labels don't fit a horizontal strip */
+  .settings-nav-item { flex-shrink: 0; }
+
+  /* Settings as a real full-screen page instead of a popup on mobile
+     (David's ask 2026-09-01) — mounted directly into the tab's view
+     content (app.js's settings-gear handler branches on viewport), not
+     the floating modal-backdrop window desktop uses. Reuses the same
+     .settings-titlebar/.settings-body/.settings-nav/.settings-content
+     building blocks, just laid out as this tab's own content instead of
+     an overlay on top of whatever tab was active. */
+  .settings-mobile-page { display: flex; flex-direction: column; padding: 0; overflow: hidden; height: 100%; }
+
+  /* Toolbar rows (Notes/Library/Calendar/Tasks/Brain's "add new" bars) wrap
+     instead of forcing the page to scroll sideways — David's ask 2026-09-01
+     named these five pages specifically; all five build their toolbar with
+     the same shared .card-row class, so one rule fixes every one of them.
+     Combined with the overflow-x:hidden fixes above (the actual root cause
+     of the scrollbar itself), content now reflows instead of clipping or
+     scrolling off-screen. */
+  .card-row { flex-wrap: wrap; }
+  /* Real bug found live 2026-09-01: this rule was also matching
+     checkboxes, whose fixed 16x16px sizing (style.css's custom checkmark
+     rule) got overridden by flex-grow stretching their width while height
+     stayed fixed — the "elongated checkmarks" David saw. Excluded
+     checkboxes/radios explicitly rather than just text/date inputs. */
+  .card-row input:not([type="checkbox"]):not([type="radio"]), .card-row select, .card-row .custom-select { flex: 1 1 140px; min-width: 0; }
+
+  /* Calendar (David's ask 2026-09-01: "some of the stuff are hanging off
+     the page") — real bug: .cal-layout's two-column split (.cal-left at a
+     fixed 62% flex-basis + .cal-day-panel's own 220px min-width) never
+     stacked on mobile, so their combined minimum width exceeded a phone's
+     viewport and the whole row overflowed sideways instead of wrapping
+     (flex-direction:row doesn't wrap on its own). Stacked vertically
+     instead, both panels released back to natural full width, and the
+     month-nav row (prev/next/today + label) allowed to wrap too. */
+  .cal-layout { flex-direction: column; gap: 12px; }
+  .cal-left { flex: none; width: 100%; min-width: 0; }
+  /* Real bug found live, follow-up 2026-09-01 ("super small, can't see its
+     content"): .cal-day-panel kept its desktop flex:1 in the new stacked
+     column layout above — with .cal-left now claiming its own full natural
+     (and, at full mobile width, fairly tall) height, flex:1's flex-basis:0
+     squeezed the day panel down to whatever sliver of height was left
+     inside .view's bounded flex column, rather than growing to fit its
+     actual content. flex:none lets it take its real content height instead
+     of competing for space; overflow-y:visible hands scrolling back to the
+     page itself (.view already scrolls) instead of nesting a second,
+     tinier scroll box inside an already-too-short box. */
+  .cal-day-panel { flex: none; width: 100%; min-width: 0; overflow-y: visible; }
+  .cal-nav { flex-wrap: wrap; }
+  .cal-month-label { min-width: 0; }
+}

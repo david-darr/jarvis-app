@@ -1,0 +1,43 @@
+"""Generic key/value settings store — Phase 5's backing store for onboarding
+state, the chosen vault path, and channel config (Discord token/allowlist),
+matching Odysseus's own `src.settings` pattern (one JSON file, defaults
+merged underneath). Secret-shaped values (tokens, passwords) are expected to
+already be encrypted by the caller via core/secret_storage before they reach
+here — this module itself does no encryption/masking of its own.
+"""
+import os
+from typing import Any
+
+from core.atomic_io import read_json, write_json_atomic
+from core.constants import DATA_DIR
+
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
+
+DEFAULTS: dict[str, Any] = {
+    "onboarding_complete": False,
+    "vault_dir": None,  # None = use core/vault.py's default resolution
+    "discord_bot_token_encrypted": None,
+    "discord_allowed_user_id": None,
+    "disabled_tools": [],  # Settings > Admin > Agent Tools, David's ask 2026-08-31
+    "developer_mode_enabled": False,  # Sidebar toggle, David's ask 2026-09-01
+    "custom_tab_order": [],  # Settings > Admin > Custom Tabs, David's ask 2026-09-01
+}
+
+
+def load_settings() -> dict:
+    stored = read_json(SETTINGS_FILE, {})
+    return {**DEFAULTS, **stored}
+
+
+def get_setting(key: str) -> Any:
+    return load_settings().get(key)
+
+
+def update_settings(**fields) -> dict:
+    current = load_settings()
+    for key, value in fields.items():
+        if key not in DEFAULTS:
+            raise ValueError(f"unknown setting: {key}")
+        current[key] = value
+    write_json_atomic(SETTINGS_FILE, current)
+    return current

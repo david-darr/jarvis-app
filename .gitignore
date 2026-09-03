@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Runtime state: credentials, password hashes, session tokens, the
+# per-install secret key, chat history. Never committed, and also excluded
+# from the packaged build (see electron/package.json's extraResources).
+data/
+
+# Secrets
+.env
+.env.*
+# Tailscale-issued TLS cert + private key used by scripts/run_remote.py.
+# These are per-machine and must never be committed OR packaged — the
+# packaging filter excludes them too.
+scripts/*.crt
+scripts/*.key
+scripts/*.pem
+
+# Build output — electron-builder writes the packaged app here (see
+# electron/package.json's "directories.output": "../dist"). Regenerable,
+# ~260MB, and it embeds a copy of the backend source.
+dist/
+electron/dist/
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
