@@ -11,6 +11,7 @@ This is the real product (v2). [jarvis-starter-kit](https://github.com/david-dar
 - **Notes, Calendar, Email, Library** — one unified place for priorities and todos (due-dated notes render on the calendar), CalDAV/iCal calendar sync, IMAP/SMTP email accounts, and a searchable document library.
 - **Tasks** — scheduled automations, either your own prompts or built-in ones (Daily Brief, tidy-up jobs, skill audits). Output can be delivered to a connected channel rather than just sitting in the tab.
 - **Brain** — reusable `SKILL.md` procedures, plus a browsable graph of your Obsidian-style vault, which is where the assistant's long-term memory actually lives.
+- **One memory, not two** — checkbox items in your vault's `Active Priorities.md` are synced into Notes on every launch, grouped by their vault headings, so asking about your priorities returns what's actually written in your vault. Ticking one in the app ticks it in the vault file too.
 - **Channels** — reach the same assistant from Discord, with conversation state shared through the same sessions and vault.
 - **Cookbook** — download and run local models without a separate install.
 - **Remote access** — reach JARVIS from your phone or another computer over [Tailscale](https://tailscale.com), set up from Settings → Remote Access. Nothing is exposed to the public internet: the listener binds only to your Tailscale address, serves real HTTPS, and requires a login.
@@ -24,6 +25,8 @@ Download the installer, run it, open JARVIS. **Nothing else needs to be installe
 First launch walks you through onboarding: pick a vault folder and connect at least one model.
 
 Your data lives in `%APPDATA%\JARVIS\data` (Windows), separate from the program files, so updating or reinstalling never touches your chats, notes, or credentials.
+
+JARVIS updates itself: new versions download in the background and install when you quit, so an update never interrupts what you're doing.
 
 ## Developing
 

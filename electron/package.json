@@ -21,8 +21,17 @@
     "appId": "com.davidmichael.jarvis",
     "productName": "JARVIS",
     "copyright": "Copyright © 2026 David Darr",
-    "directories": { "output": "../dist", "buildResources": "." },
-    "files": ["main.js", "preload.js", "icon.png", "icon.ico"],
+    "directories": {
+      "output": "../dist",
+      "buildResources": "."
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "icon.png",
+      "icon.ico",
+      "node_modules/**/*"
+    ],
     "extraResources": [
       {
         "from": "..",
@@ -47,11 +56,29 @@
       {
         "from": "runtime",
         "to": "backend/runtime",
-        "filter": ["**/*", "!**/__pycache__/**", "!**/*.pyc"]
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "david-darr",
+        "repo": "jarvis-app"
       }
     ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "icon.ico",
       "artifactName": "JARVIS-Setup-${version}.${ext}"
     },
@@ -76,5 +103,8 @@
       "category": "Utility",
       "icon": "icon.png"
     }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

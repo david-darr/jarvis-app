@@ -24,6 +24,7 @@ const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { autoUpdater } = require("electron-updater");
 
 // In a packaged build, main.js runs from inside the app's asar archive, and
 // the backend source is bundled separately as an extraResource (see
@@ -168,8 +169,53 @@ ipcMain.handle("pick-vault-folder", async () => {
   return result.filePaths[0];
 });
 
+// -- auto-update (David's ask 2026-09-03: "work like any other mainstream
+// app"). Without this, whoever installs a build is stranded on it forever —
+// including for security fixes — and retrofitting updates later means
+// exactly those users never receive the update that adds updating. So it
+// ships in the first public build, not after.
+//
+// Downloads in the background and installs on quit, so an update never
+// interrupts what someone's in the middle of. The only prompt is an
+// optional "restart now" once a download has finished.
+function setupAutoUpdate() {
+  // In dev there's no published release to check against, and
+  // electron-updater throws rather than no-oping.
+  if (!app.isPackaged) return;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on("error", (err) => {
+    // Never surfaced to the user: being offline, or GitHub being briefly
+    // unreachable, is not something they need a dialog about.
+    console.log(`[updater] ${err == null ? "unknown error" : err.message}`);
+  });
+  autoUpdater.on("update-available", (info) => console.log(`[updater] downloading ${info.version}`));
+  autoUpdater.on("update-not-available", () => console.log("[updater] up to date"));
+
+  autoUpdater.on("update-downloaded", async (info) => {
+    const { response } = await dialog.showMessageBox({
+      type: "info",
+      buttons: ["Restart now", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+      title: "Update ready",
+      message: `JARVIS ${info.version} is ready to install.`,
+      detail: "It will be applied automatically the next time you quit, or you can restart now.",
+    });
+    if (response === 0) autoUpdater.quitAndInstall();
+  });
+
+  autoUpdater.checkForUpdates().catch(() => {});
+  // Long-running desktop app: check again periodically so someone who never
+  // quits still gets updates. Six hours is quiet enough to be invisible.
+  setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 6 * 60 * 60 * 1000);
+}
+
 app.whenReady().then(() => {
   createWindow();
+  setupAutoUpdate();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

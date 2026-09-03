@@ -830,10 +830,40 @@ async function renderVaultPanel(content) {
     await api("/api/settings/vault-dir", { method: "POST", body: JSON.stringify({ path: picked }) });
     await renderVaultPanel(content);
   });
+
+  // Vault <-> Notes sync (David's ask 2026-09-03 — the app answered "no
+  // priorities" while the connected vault was full of them). Runs
+  // automatically at launch; this is the manual re-run for when the vault
+  // has been edited in Obsidian while the app is open.
+  const syncStatus = el("div", { class: "meta", style: "margin-top:8px;" });
+  const syncBtn = el("button", { class: "btn", text: "Sync now" });
+  syncBtn.addEventListener("click", async () => {
+    syncBtn.disabled = true;
+    syncStatus.textContent = "Syncing…";
+    try {
+      const r = await api("/api/vault/sync", { method: "POST" });
+      const parts = [];
+      if (r.imported) parts.push(`${r.imported} added`);
+      if (r.updated) parts.push(`${r.updated} updated`);
+      if (r.removed) parts.push(`${r.removed} removed`);
+      syncStatus.textContent = parts.length ? `Synced — ${parts.join(", ")}.` : "Already up to date.";
+      toast(parts.length ? `Vault synced — ${parts.join(", ")}` : "Notes already match your vault", "success");
+    } catch (e) {
+      syncStatus.textContent = "";
+    } finally {
+      syncBtn.disabled = false;
+    }
+  });
+
   content.append(
     el("div", { class: "title", text: "Vault" }),
     el("div", { class: "card-row", style: "justify-content:space-between;align-items:center;margin-top:10px;" }, [vaultPathEl, pickBtn]),
     el("div", { class: "meta", style: "margin-top:10px;", text: "Point JARVIS at an existing vault on this device, or leave the default. Open chats keep using their old vault until reconnected." }),
+    el("div", { class: "glass card", style: "margin-top:16px;" }, [
+      el("div", { class: "title", style: "font-size:12.5px;", text: "Task list sync" }),
+      el("div", { class: "meta", style: "margin:4px 0 10px;line-height:1.6;", text: "Checkbox items in your vault's Active Priorities.md show up as Notes, so asking JARVIS about your priorities returns what's actually in your vault. Ticking one here ticks it there too. This runs automatically every time JARVIS starts." }),
+      el("div", { class: "card-row", style: "gap:8px;" }, [syncBtn, syncStatus]),
+    ]),
   );
 }
 

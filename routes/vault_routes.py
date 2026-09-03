@@ -3,10 +3,19 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from core import vault_graph
+from core import vault_graph, vault_sync
 from core.middleware import require_user
 
 router = APIRouter(prefix="/api/vault", tags=["vault"])
+
+
+@router.post("/sync")
+async def sync_vault(user: str = Depends(require_user)) -> dict:
+    """Pull the vault's task list into Notes (David's ask 2026-09-03 — the
+    app answered "no priorities" while the vault was full of them). Runs
+    automatically at startup; this is the manual re-run for when the vault
+    has been edited in Obsidian while the app is open."""
+    return vault_sync.sync_from_vault()
 
 
 class WriteNoteRequest(BaseModel):

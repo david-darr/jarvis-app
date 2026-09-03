@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 
 from core.constants import STATIC_DIR
 from core.middleware import SecurityHeadersMiddleware
-from core import custom_tabs, remote_access, task_scheduler
+from core import custom_tabs, remote_access, task_scheduler, vault_sync
 from core.channels import discord_channel
 from routes import (
     auth_routes,
@@ -41,6 +41,10 @@ async def lifespan(_app: FastAPI):
     # Replaces the deprecated @app.on_event("startup"/"shutdown") pair —
     # FastAPI's own docs mark those deprecated in favor of this single
     # context manager; identical behavior, one modern mechanism.
+    # Vault <-> Notes reconciliation before anything reads Notes (David's ask
+    # 2026-09-03: the app reported "no priorities" while the connected vault
+    # was full of them). See core/vault_sync.py.
+    vault_sync.sync_on_startup()
     task_scheduler.start()
     await discord_channel.start()
     # Restores the remote listener across restarts if the user turned it on
