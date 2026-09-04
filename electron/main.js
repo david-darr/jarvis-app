@@ -20,7 +20,7 @@
 // freeze (custom tabs are imported at runtime, so a frozen module graph
 // would break them).
 
-const { app, BrowserWindow, ipcMain, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, shell } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -39,6 +39,15 @@ const BACKEND_URL = process.env.JARVIS_BACKEND_URL || "http://127.0.0.1:8420";
 const SHOULD_SPAWN_BACKEND = !process.env.JARVIS_BACKEND_URL;
 
 let backendProcess = null;
+
+// Close-to-tray (David's ask 2026-09-03). Remote access is served by the
+// backend, which is a child of this process — so closing the window used to
+// kill the very thing you were trying to reach from your phone. Closing now
+// hides the window and leaves everything running, the way Discord and Slack
+// behave; the tray icon is how you get it back or genuinely quit.
+let tray = null;
+let mainWindow = null;
+let isQuitting = false;
 
 // Lookup order, most-specific first:
 //   1. The bundled runtime (scripts/build_runtime.py) — what every packaged
@@ -102,6 +111,35 @@ async function waitForBackend(timeoutMs = 25000) {
   return false;
 }
 
+function showWindow() {
+  if (!mainWindow) { createWindow(); return; }
+  if (!mainWindow.isVisible()) mainWindow.show();
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+}
+
+function buildTray() {
+  if (tray) return;
+  tray = new Tray(path.join(__dirname, "icon.ico"));
+  tray.setToolTip("JARVIS — running in the background");
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "Open JARVIS", click: showWindow },
+    {
+      label: "Open in browser",
+      click: () => shell.openExternal(BACKEND_URL),
+    },
+    { type: "separator" },
+    {
+      // The only way to actually stop it. Spelled out because the whole
+      // point of this feature is that closing the window does NOT do this.
+      label: "Quit JARVIS (stops remote access)",
+      click: () => { isQuitting = true; app.quit(); },
+    },
+  ]));
+  // Double-click is the convention people expect from a tray icon.
+  tray.on("double-click", showWindow);
+}
+
 async function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
@@ -119,6 +157,27 @@ async function createWindow() {
       preload: path.join(__dirname, "preload.js"),
     },
   });
+
+  mainWindow = win;
+  buildTray();
+
+  // Closing hides instead of quitting, so the backend — and therefore
+  // remote access — keeps running. Quit deliberately, from the tray menu.
+  win.on("close", (e) => {
+    if (isQuitting) return;
+    e.preventDefault();
+    win.hide();
+    // Said once, the first time, so it isn't a mystery where the app went.
+    if (tray && !win.__toldAboutTray) {
+      win.__toldAboutTray = true;
+      tray.displayBalloon({
+        title: "JARVIS is still running",
+        content: "Remote access stays available. Reopen or quit from the icon in the system tray.",
+      });
+    }
+  });
+
+  win.on("closed", () => { mainWindow = null; });
 
   win.loadURL(
     "data:text/html,<body style='background:%230a0a0f;color:%2300d4ff;font-family:sans-serif;" +
@@ -214,17 +273,34 @@ function setupAutoUpdate() {
   setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 6 * 60 * 60 * 1000);
 }
 
-app.whenReady().then(() => {
-  createWindow();
-  setupAutoUpdate();
+// Single-instance lock — mandatory now that closing only hides the window.
+// Without it, clicking the Start Menu shortcut while JARVIS sits in the tray
+// launches a SECOND copy, which then fails to bind port 8420 and shows the
+// "couldn't start" screen while the original is running fine. Instead, the
+// second launch hands off to the first, which simply reveals itself.
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on("second-instance", showWindow);
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  app.whenReady().then(() => {
+    createWindow();
+    setupAutoUpdate();
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      else showWindow();
+    });
   });
-});
+}
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
+// Deliberately does NOT quit when the window closes: the window is hidden,
+// not destroyed, and the backend must keep serving remote access. Quitting
+// happens only via the tray menu (which sets isQuitting first).
+app.on("window-all-closed", () => {});
 
-app.on("before-quit", stopBackend);
+app.on("before-quit", () => {
+  isQuitting = true;
+  stopBackend();
+});
