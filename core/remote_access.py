@@ -183,7 +183,12 @@ def provision_cert(hostname: str) -> tuple[Optional[str], Optional[str], Optiona
 # brand-new path, which has none, and no prompt ever appears because a
 # background console process binding a socket doesn't trigger one. Net effect:
 # everything looks correct and nothing connects.
-FIREWALL_RULE_NAME = "JARVIS Remote Access"
+# No spaces, deliberately. Start-Process -ArgumentList joins its array on
+# spaces, so a name like "JARVIS Remote Access" reached netsh as three
+# separate tokens — it created a rule called just "JARVIS" and silently
+# dropped the rest (found live 2026-09-03, after the log claimed success and
+# the rule turned out to be named something else).
+FIREWALL_RULE_NAME = "JARVIS-Remote-Access"
 
 
 def _current_python() -> str:
@@ -228,17 +233,21 @@ def add_firewall_rule() -> tuple[bool, str]:
     if os.name != "nt":
         return False, "Firewall setup is only automated on Windows."
     exe = _current_python()
-    inner = (
-        f'netsh advfirewall firewall add rule name="{FIREWALL_RULE_NAME}" '
-        f'dir=in action=allow program="{exe}" enable=yes profile=any'
-    )
     # Start-Process -Verb RunAs is what raises the UAC prompt; without it the
-    # netsh call fails silently for a non-elevated user.
-    ps = (
-        "Start-Process -FilePath netsh -Verb RunAs -Wait -WindowStyle Hidden "
-        "-ArgumentList 'advfirewall','firewall','add','rule',"
-        f"'name={FIREWALL_RULE_NAME}','dir=in','action=allow','program={exe}','enable=yes','profile=any'"
-    )
+    # netsh call fails silently for a non-elevated user. Each argument is a
+    # separate, individually-quoted array element — the program path contains
+    # spaces, and anything unquoted here gets word-split before netsh sees it.
+    def q(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    args = ",".join([
+        q("advfirewall"), q("firewall"), q("add"), q("rule"),
+        q(f"name={FIREWALL_RULE_NAME}"),
+        q("dir=in"), q("action=allow"),
+        q(f'program="{exe}"'),
+        q("enable=yes"), q("profile=any"),
+    ])
+    ps = f"Start-Process -FilePath netsh -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList {args}"
     try:
         result = subprocess.run(
             ["powershell", "-NoProfile", "-Command", ps],
