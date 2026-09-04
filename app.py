@@ -57,6 +57,36 @@ except Exception:  # never let logging setup stop the app from booting
     logging.getLogger(__name__).exception("couldn't set up file logging")
 
 
+class _ProactorResetNoiseFilter(logging.Filter):
+    """Drop a specific, non-actionable asyncio traceback on Windows.
+
+    Every local HTTP call (Ollama polling especially) tears down its
+    connection afterwards, and Windows' Proactor event loop raises
+    ConnectionResetError [WinError 10054] inside
+    _ProactorBasePipeTransport._call_connection_lost while doing so. The
+    request itself has already succeeded — this fires purely on cleanup —
+    but asyncio logs it at ERROR with a full traceback, dozens of times a
+    session. David spotted it in the logs and reasonably read it as a real
+    fault (2026-09-03); worse, the volume buries errors that do matter.
+
+    Scoped as tightly as possible so it can never hide a genuine problem:
+    only records from the asyncio logger, only when the exception really is
+    a ConnectionResetError, and only from that one transport callback.
+    Anything else — including any other ConnectionResetError — still logs.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name != "asyncio":
+            return True
+        exc = record.exc_info[1] if record.exc_info else None
+        if not isinstance(exc, ConnectionResetError):
+            return True
+        return "_call_connection_lost" not in str(record.getMessage())
+
+
+logging.getLogger("asyncio").addFilter(_ProactorResetNoiseFilter())
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # Replaces the deprecated @app.on_event("startup"/"shutdown") pair —
