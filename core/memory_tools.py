@@ -207,10 +207,12 @@ def delete_note(note_id: str) -> None:
 
 
 def create_task(name: str, prompt: str, schedule_kind: str, run_at: Optional[str] = None,
-                 interval_seconds: Optional[int] = None, deliver_to_channel: Optional[str] = None) -> dict:
+                 interval_seconds: Optional[int] = None, deliver_to_channel: Optional[str] = None,
+                 run_time: Optional[str] = None) -> dict:
     return task_service.create_task(
         name, prompt, schedule_kind, run_at=run_at,
         interval_seconds=interval_seconds, deliver_to_channel=deliver_to_channel,
+        run_time=run_time,
     )
 
 

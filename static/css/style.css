@@ -139,6 +139,15 @@ html, body {
   width: 46px; height: 46px; border-radius: 6px;
   filter: drop-shadow(0 0 8px rgba(var(--accent-rgb), 0.55));
 }
+/* Developer Mode (David's ask 2026-09-04): the logo is a PNG, so the red
+   theme can't reach it the way it reaches everything driven by --accent-rgb —
+   its glow went red while the mark itself stayed blue. 122deg is measured,
+   not guessed: the artwork's mean hue is 228, and CSS hue-rotate is a matrix
+   approximation rather than a true hue shift, so the rotation that actually
+   lands on red (~0) had to be found by sampling the filtered output. */
+:root.dev-mode #brand .brand-logo {
+  filter: hue-rotate(122deg) saturate(1.5) drop-shadow(0 0 8px rgba(var(--accent-rgb), 0.55));
+}
 
 nav#nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; overflow-x: hidden; }
 

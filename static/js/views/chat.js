@@ -503,7 +503,12 @@ async function refreshModelPicker(currentEndpointId) {
       text: opt.name,
       onclick: async () => {
         closeMenu(menu);
-        if (!activeSessionId) return;
+        // Landing on Chats without opening a chat leaves activeSessionId null,
+        // and this used to `return` — so the dropdown listed every model and
+        // silently ignored every click (David, 2026-09-04). Create the session
+        // the same way sendMessage() lazily does, then apply the choice.
+        if (!activeSessionId) await createSession();
+        if (!activeSessionId) return; // creation genuinely failed
         await api(`/api/sessions/${activeSessionId}/model`, { method: "POST", body: JSON.stringify({ model_endpoint_id: opt.id }) });
         label.textContent = opt.name;
       },
@@ -517,9 +522,12 @@ async function refreshModelPicker(currentEndpointId) {
 async function refreshSessions(sessionsList, messages) {
   const sessions = await api("/api/sessions");
   sessionsList.innerHTML = "";
+  // Deliberately no early return on an empty list: the "no active session"
+  // block at the bottom is what populates the model picker, and returning here
+  // meant a brand-new install opened the models dropdown to nothing at all
+  // (David, 2026-09-04). The loop below is simply a no-op when there are none.
   if (sessions.length === 0) {
     sessionsList.appendChild(el("div", { class: "empty-state", text: "No chats yet" }));
-    return;
   }
   for (const session of sessions) {
     const item = el("div", {

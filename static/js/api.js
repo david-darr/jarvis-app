@@ -242,11 +242,22 @@ export function customSelect(attrs = {}, optionEls = []) {
   // The menu is a detached body child, not a DOM descendant of wrap — clean
   // it up when wrap itself is removed (e.g. a Discord bot card re-rendered
   // after Save/Remove), otherwise it'd leak a hidden menu node per rebuild.
+  //
+  // `hasBeenMounted` is the whole point: "wrap isn't in the document" is true
+  // for a select that's been REMOVED, but equally true for one that hasn't
+  // been INSERTED yet — and every view here builds its form first and appends
+  // the container last. Without this guard the observer fired on an unrelated
+  // body mutation, deleted the menu of a select that was still being built,
+  // and disconnected. The button then opened a node that was no longer in the
+  // document, so the dropdown looked dead: it clicked, and nothing appeared.
+  // (David, 2026-09-04: the Tasks tab's Schedule dropdown — 6 selects on the
+  // page, 1 surviving menu.)
+  let hasBeenMounted = false;
   const cleanupObserver = new MutationObserver(() => {
-    if (!document.body.contains(wrap)) {
-      menu.remove();
-      cleanupObserver.disconnect();
-    }
+    if (wrap.isConnected) { hasBeenMounted = true; return; }
+    if (!hasBeenMounted) return; // built, not yet inserted — not garbage
+    menu.remove();
+    cleanupObserver.disconnect();
   });
   cleanupObserver.observe(document.body, { childList: true, subtree: true });
 

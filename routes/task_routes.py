@@ -15,10 +15,11 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 class CreateTaskRequest(BaseModel):
     name: str
     prompt: str
-    schedule_kind: str  # "once" | "interval"
+    schedule_kind: str  # "once" | "interval" | "daily"
     run_at: Optional[str] = None
     interval_seconds: Optional[int] = None
     deliver_to_channel: Optional[str] = None
+    run_time: Optional[str] = None  # "HH:MM" local, for schedule_kind="daily"
 
 
 class UpdateTaskRequest(BaseModel):
@@ -57,6 +58,19 @@ async def enable_builtin_task(action_id: str, body: Optional[EnableBuiltinReques
     if existing:
         return existing
     defn = BUILTIN_TASKS[action_id]
+    # A built-in with a default_daily_time wants a wall-clock slot, not a
+    # drifting 24h interval — the Daily Brief is only a "daily brief" if it
+    # lands in the morning (David, 2026-09-04).
+    daily_time = defn.get("default_daily_time")
+    if daily_time:
+        return task_service.create_task(
+            name=defn["label"],
+            prompt=f"(built-in: {defn['label']})",
+            schedule_kind="daily",
+            run_time=daily_time,
+            builtin_action=action_id,
+            deliver_to_channel=(body.deliver_to_channel if body else None),
+        )
     return task_service.create_task(
         name=defn["label"],
         prompt=f"(built-in: {defn['label']})",
@@ -80,7 +94,7 @@ async def create_task(body: CreateTaskRequest, user: str = Depends(require_user)
     try:
         return task_service.create_task(
             body.name, body.prompt, body.schedule_kind, body.run_at, body.interval_seconds,
-            deliver_to_channel=body.deliver_to_channel,
+            deliver_to_channel=body.deliver_to_channel, run_time=body.run_time,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

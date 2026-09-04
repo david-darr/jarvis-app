@@ -166,15 +166,17 @@ def get_hive_mind_server(exclude_session_id: str | None = None):
     @tool(
         "create_task",
         "Create a new scheduled/automated Task. schedule_kind is 'once' (needs run_at, an ISO "
-        "datetime) or 'interval' (needs interval_seconds).",
+        "datetime), 'interval' (needs interval_seconds), or 'daily' (needs run_time — use this "
+        "whenever the user names a time of day, e.g. 'every morning at 6am').",
         {
             "type": "object",
             "properties": {
                 "name": {"type": "string"},
                 "prompt": {"type": "string", "description": "What the task should do when it runs"},
-                "schedule_kind": {"type": "string", "enum": ["once", "interval"]},
+                "schedule_kind": {"type": "string", "enum": ["once", "interval", "daily"]},
                 "run_at": {"type": "string", "description": "ISO 8601 datetime, required for schedule_kind='once'"},
                 "interval_seconds": {"type": "integer", "description": "Required for schedule_kind='interval'"},
+                "run_time": {"type": "string", "description": "Local time of day as 'HH:MM' (24-hour), required for schedule_kind='daily'"},
                 "deliver_to_channel": {"type": "string", "description": "Optional comms channel key to post the result to"},
             },
             "required": ["name", "prompt", "schedule_kind"],
@@ -186,6 +188,7 @@ def get_hive_mind_server(exclude_session_id: str | None = None):
                 args["name"], args["prompt"], args["schedule_kind"],
                 run_at=args.get("run_at"), interval_seconds=args.get("interval_seconds"),
                 deliver_to_channel=args.get("deliver_to_channel"),
+                run_time=args.get("run_time"),
             )
             text = f"Created task {task['id']}: {task['name']}"
         except ValueError as e:

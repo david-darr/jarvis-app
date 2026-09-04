@@ -25,10 +25,15 @@ export async function render(container) {
   const promptInput = el("input", { placeholder: "e.g. Summarize my open notes" });
   const kindSelect = customSelect({}, [
     el("option", { value: "once", text: "Once, at a time" }),
+    el("option", { value: "daily", text: "Every day at…" }),
     el("option", { value: "interval", text: "Every N minutes" }),
   ]);
   const runAtInput = el("input", { type: "datetime-local" });
   const intervalInput = el("input", { type: "number", placeholder: "30" });
+  // "Every day at 6:00 am" (David's ask 2026-09-04) — an interval can't
+  // express it: its next run is computed from now at each run, so a 24h
+  // interval is anchored to whenever you created it and drifts from there.
+  const dailyInput = el("input", { type: "time", value: "06:00" });
   const channels = await api("/api/channels");
   const channelSelect = customSelect({ style: "font-size:12.5px;" }, [
     el("option", { value: "", text: "Tasks tab only" }),
@@ -40,12 +45,15 @@ export async function render(container) {
   // into one wrapping row (audit 2026-09-03).
   const runAtField = el("div", { class: "field" }, [el("label", { text: "Run at" }), runAtInput]);
   const intervalField = el("div", { class: "field field-sm" }, [el("label", { text: "Every (min)" }), intervalInput]);
+  const dailyField = el("div", { class: "field field-sm" }, [el("label", { text: "At (time)" }), dailyInput]);
   intervalField.style.display = "none";
+  dailyField.style.display = "none";
 
   kindSelect.addEventListener("change", () => {
-    const isOnce = kindSelect.value === "once";
-    runAtField.style.display = isOnce ? "" : "none";
-    intervalField.style.display = isOnce ? "none" : "";
+    const kind = kindSelect.value;
+    runAtField.style.display = kind === "once" ? "" : "none";
+    intervalField.style.display = kind === "interval" ? "" : "none";
+    dailyField.style.display = kind === "daily" ? "" : "none";
   });
 
   form.append(
@@ -55,6 +63,7 @@ export async function render(container) {
       el("div", { class: "field field-grow" }, [el("label", { text: "Prompt to run" }), promptInput]),
       el("div", { class: "field" }, [el("label", { text: "Schedule" }), kindSelect]),
       runAtField,
+      dailyField,
       intervalField,
       el("div", { class: "field" }, [el("label", { text: "Deliver to" }), channelSelect]),
       addBtn,
@@ -72,6 +81,9 @@ export async function render(container) {
     if (kindSelect.value === "once") {
       if (!runAtInput.value) return;
       body.run_at = new Date(runAtInput.value).toISOString();
+    } else if (kindSelect.value === "daily") {
+      if (!dailyInput.value) return;
+      body.run_time = dailyInput.value; // "HH:MM", local — the backend anchors to it
     } else {
       const minutes = parseInt(intervalInput.value, 10);
       if (!minutes) return;
@@ -83,6 +95,16 @@ export async function render(container) {
   });
 
   await refresh(list);
+}
+
+// "06:00" -> "6:00 AM", using the viewer's own locale conventions. The stored
+// value stays 24-hour "HH:MM" — this is display only.
+function formatTime(hhmm) {
+  if (!hhmm) return "";
+  const [h, m] = String(hhmm).split(":").map(Number);
+  const d = new Date();
+  d.setHours(h, m, 0, 0);
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 async function refreshBuiltins(card) {
@@ -127,7 +149,7 @@ async function refreshBuiltins(card) {
       el("div", {}, [
         el("div", { class: "title", style: "font-size:12.5px;", text: b.label }),
         el("div", { class: "meta", style: "margin-top:3px;", text: b.description }),
-        el("div", { class: "meta", style: "margin-top:3px;color:var(--text-faint);", text: `${b.kind === "action" ? "No model call" : "Uses model"} · every ${Math.round(b.default_interval_seconds / 3600)}h` }),
+        el("div", { class: "meta", style: "margin-top:3px;color:var(--text-faint);", text: `${b.kind === "action" ? "No model call" : "Uses model"} · ${b.default_daily_time ? `every day at ${formatTime(b.default_daily_time)}` : `every ${Math.round(b.default_interval_seconds / 3600)}h`}` }),
       ]),
       el("div", { style: "display:flex;flex-direction:column;gap:6px;align-items:stretch;" }, [channelSelect, toggleBtn]),
     ]));
@@ -149,7 +171,9 @@ async function refresh(list) {
   for (const task of tasks) {
     const schedText = task.schedule_kind === "once"
       ? `Once at ${task.next_run_at ? new Date(task.next_run_at).toLocaleString() : "(done)"}`
-      : `Every ${Math.round(task.interval_seconds / 60)}m — next ${new Date(task.next_run_at).toLocaleTimeString()}`;
+      : task.schedule_kind === "daily"
+        ? `Every day at ${formatTime(task.run_time)} — next ${new Date(task.next_run_at).toLocaleString()}`
+        : `Every ${Math.round(task.interval_seconds / 60)}m — next ${new Date(task.next_run_at).toLocaleTimeString()}`;
 
     const runBtn = el("button", { class: "btn", text: "Run now", onclick: async () => {
       runBtn.disabled = true;

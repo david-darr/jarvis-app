@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from core.constants import STATIC_DIR
 from core.middleware import SecurityHeadersMiddleware
 from core import custom_tabs, remote_access, task_scheduler, vault_sync
+from core.builtin_tasks import migrate_builtin_schedules
 from core.channels import discord_channel
 from routes import (
     auth_routes,
@@ -100,6 +101,12 @@ async def lifespan(_app: FastAPI):
     # skills folder on first run — data/ isn't packaged, so they can only
     # arrive from skill_templates/. Per-slug once-only; see the function.
     skills_service.seed_default_skills()
+    # Moves already-enabled built-ins onto a wall-clock schedule when their
+    # definition gained one (the Daily Brief, 2026-09-04). Without this, the
+    # new 6am default would only ever apply to people who enable it AFTER
+    # updating — anyone already running it would keep the drifting interval
+    # forever, which is precisely the group the fix is for.
+    migrate_builtin_schedules()
     task_scheduler.start()
     await discord_channel.start()
     # Restores the remote listener across restarts if the user turned it on

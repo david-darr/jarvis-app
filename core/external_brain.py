@@ -214,15 +214,16 @@ _MEMORY_TOOLS = [
         "type": "function",
         "function": {
             "name": "create_task",
-            "description": "Create a new scheduled/automated Task. schedule_kind is 'once' (needs run_at) or 'interval' (needs interval_seconds).",
+            "description": "Create a new scheduled/automated Task. schedule_kind is 'once' (needs run_at), 'interval' (needs interval_seconds), or 'daily' (needs run_time, e.g. every morning at 6am).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
                     "prompt": {"type": "string"},
-                    "schedule_kind": {"type": "string", "enum": ["once", "interval"]},
+                    "schedule_kind": {"type": "string", "enum": ["once", "interval", "daily"]},
                     "run_at": {"type": "string", "description": "ISO 8601 datetime, for schedule_kind='once'"},
                     "interval_seconds": {"type": "integer", "description": "For schedule_kind='interval'"},
+                    "run_time": {"type": "string", "description": "Local time of day as 'HH:MM' (24-hour), for schedule_kind='daily'. Prefer this over a 24h interval when the user names a time."},
                     "deliver_to_channel": {"type": "string"},
                 },
                 "required": ["name", "prompt", "schedule_kind"],
@@ -446,6 +447,7 @@ class ExternalBrain:
                     args["name"], args["prompt"], args["schedule_kind"],
                     run_at=args.get("run_at"), interval_seconds=args.get("interval_seconds"),
                     deliver_to_channel=args.get("deliver_to_channel"),
+                    run_time=args.get("run_time"),
                 )
                 return f"Created task {task['id']}: {task['name']}"
             if name == "update_task":

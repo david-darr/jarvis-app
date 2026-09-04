@@ -19,6 +19,7 @@ Two kinds, matching Odysseus's own real "action" vs "llm" task-type split:
   that through Brain — same as Odysseus's daily_brief/summarize_emails
   (their scheduler prepends a persona; ours just embeds real data directly).
 """
+import logging
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -28,6 +29,8 @@ from services.calendar_service import calendar_service
 from services.email_service import email_service
 from services.notes_service import notes_service
 from services.skills_service import list_skills, get_skill
+
+logger = logging.getLogger(__name__)
 
 EMPTY_SESSION_MAX_AGE_SECONDS = 24 * 60 * 60
 
@@ -178,6 +181,10 @@ BUILTIN_TASKS = {
         "kind": "llm",
         "build_prompt": _build_daily_brief_prompt,
         "default_interval_seconds": 24 * 60 * 60,
+        # Anchored to the morning rather than a 24h interval, which would fire
+        # at whatever time you happened to enable it and drift from there
+        # (David, 2026-09-04). Local time.
+        "default_daily_time": "06:00",
     },
     "audit_skills": {
         "label": "Audit Skills",
@@ -189,8 +196,36 @@ BUILTIN_TASKS = {
 }
 
 
+def migrate_builtin_schedules() -> int:
+    """Move already-enabled built-ins onto a wall-clock schedule.
+
+    Runs at startup. Only touches tasks that are (a) a built-in whose
+    definition now carries a default_daily_time, and (b) still on a plain
+    interval — so it converts the Daily Brief someone enabled last week, and
+    leaves everything else, including anything already daily, alone. There is
+    no UI for editing a task's schedule, so an interval here can only be the
+    old default, never a deliberate choice.
+    """
+    from services.task_service import task_service  # local: avoids an import cycle
+
+    migrated = 0
+    for task in task_service.list_tasks():
+        action_id = task.get("builtin_action")
+        if not action_id or action_id not in BUILTIN_TASKS:
+            continue
+        daily_time = BUILTIN_TASKS[action_id].get("default_daily_time")
+        if not daily_time or task.get("schedule_kind") != "interval":
+            continue
+        task_service.set_daily_schedule(task["id"], daily_time)
+        migrated += 1
+        logger.info("builtin_tasks: moved %r onto a daily %s schedule", task["name"], daily_time)
+    return migrated
+
+
 def list_builtin_tasks() -> list[dict]:
     return [
-        {"action_id": k, "label": v["label"], "description": v["description"], "kind": v["kind"], "default_interval_seconds": v["default_interval_seconds"]}
+        {"action_id": k, "label": v["label"], "description": v["description"], "kind": v["kind"],
+         "default_interval_seconds": v["default_interval_seconds"],
+         "default_daily_time": v.get("default_daily_time")}
         for k, v in BUILTIN_TASKS.items()
     ]
