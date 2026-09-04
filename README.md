@@ -31,7 +31,14 @@ Memory is a folder of markdown notes, not a database — so it stays readable, p
 
 ## Install
 
-Download the installer, run it, open JARVIS. **Nothing else needs to be installed** — a complete Python runtime with every dependency ships inside the app, so it works on a machine that has never had Python on it.
+| Platform | Download |
+|---|---|
+| Windows 10/11 | [`JARVIS-Setup.exe`](https://github.com/david-darr/jarvis-app/releases/latest) |
+| macOS (Apple Silicon) | [`JARVIS-arm64.dmg`](https://github.com/david-darr/jarvis-app/releases/latest) |
+
+Download it, run it, open JARVIS. **Nothing else needs to be installed** — a complete Python runtime with every dependency ships inside the app, so it works on a machine that has never had Python on it.
+
+Neither build is code-signed yet. Windows SmartScreen will warn on first run (**More info → Run anyway**); macOS Gatekeeper will block it (right-click the app → **Open**, or allow it under System Settings → Privacy & Security). Intel Macs aren't supported yet — the macOS build is Apple Silicon only.
 
 First launch walks you through onboarding: pick a vault folder and connect at least one model.
 
@@ -103,7 +110,9 @@ specs/         Living architecture docs
 
 Actively developed and used daily. The desktop shell, all tabs, auth, scheduling, and channels work, and the packaged build is self-contained — verified by running it against an empty data directory on a clean interpreter.
 
-Not yet done: the installer is unsigned, so Windows SmartScreen will warn on first run until it builds reputation (or a code-signing certificate is added). macOS and Linux targets are configured but untested.
+macOS builds are produced on GitHub's macOS runners (`.github/workflows/build-macos.yml`), since a DMG can't be built from Windows.
+
+Not yet done: neither build is code-signed, so Windows SmartScreen and macOS Gatekeeper both warn on first run. Intel Macs and Linux aren't built yet — the macOS runtime is fetched for the runner's own architecture, so shipping x86_64 needs a build matrix.
 
 ## License
 

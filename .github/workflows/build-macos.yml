@@ -71,4 +71,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
-        run: gh release upload "$TAG" dist/*.dmg --clobber
+        # latest-mac.yml matters as much as the DMG: it's the feed
+        # electron-updater reads to discover macOS updates. Attaching only the
+        # installer would give Mac users a download but never an update.
+        run: gh release upload "$TAG" dist/*.dmg dist/latest-mac.yml --clobber
