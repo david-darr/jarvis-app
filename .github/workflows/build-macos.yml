@@ -62,7 +62,9 @@ jobs:
         # and confirm it can import the app and serve a health check.
         run: |
           set -euo pipefail
-          APP="dist/mac-arm64/JARVIS.app"
+          # Absolute paths throughout: the checks below cd into the backend
+          # directory, which would break a relative interpreter path.
+          APP="$PWD/dist/mac-arm64/JARVIS.app"
           BACKEND="$APP/Contents/Resources/backend"
           PY="$BACKEND/runtime/bin/python3"
 
