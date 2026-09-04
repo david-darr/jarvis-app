@@ -99,14 +99,21 @@ function stopBackend() {
   }
 }
 
-async function waitForBackend(timeoutMs = 25000) {
+// 25s was too tight for a real first launch: the OS scans a ~240MB bundle,
+// and the backend seeds skills and syncs the vault before it answers. Two
+// minutes costs nothing when startup is fast and avoids declaring failure on
+// a machine that was merely busy.
+const BACKEND_TIMEOUT_MS = 120000;
+
+async function waitForBackend(timeoutMs = BACKEND_TIMEOUT_MS, onProgress) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     try {
       const res = await fetch(`${BACKEND_URL}/api/health`);
       if (res.ok) return true;
     } catch (_) { /* not up yet */ }
-    await new Promise((r) => setTimeout(r, 300));
+    if (onProgress) onProgress(Date.now() - started);
+    await new Promise((r) => setTimeout(r, 500));
   }
   return false;
 }
@@ -179,27 +186,41 @@ async function createWindow() {
 
   win.on("closed", () => { mainWindow = null; });
 
-  win.loadURL(
-    "data:text/html,<body style='background:%230a0a0f;color:%2300d4ff;font-family:sans-serif;" +
-    "display:flex;align-items:center;justify-content:center;height:100vh;margin:0;'>Starting JARVIS...</body>",
-  );
+  // A real file, not a data: URL. Newer Electron restricts top-level data:
+  // navigation, so the old splash and error screens silently failed to render
+  // and left only the window's black background — which is exactly what a
+  // slow first launch on macOS looked like: a blank window with no
+  // explanation (David, 2026-09-03).
+  await win.loadFile(path.join(__dirname, "splash.html"));
 
-  if (SHOULD_SPAWN_BACKEND) startBackend();
-  const ok = await waitForBackend();
+  const say = (msg, detail, isError) => {
+    win.webContents
+      .executeJavaScript(
+        `window.setStatus(${JSON.stringify(msg)}, ${JSON.stringify(detail || "")}, ${!!isError})`,
+      )
+      .catch(() => {});
+  };
+
+  if (SHOULD_SPAWN_BACKEND) {
+    say("Starting the local engine…", "First launch takes longer while your system checks the app.");
+    startBackend();
+  }
+
+  const ok = await waitForBackend(BACKEND_TIMEOUT_MS, (elapsed) => {
+    if (elapsed > 15000) {
+      say("Still starting…", `Waiting for the local engine (${Math.round(elapsed / 1000)}s). ` +
+          "First launch can take a minute or two.");
+    }
+  });
+
   if (!ok) {
-    // No longer tells the user to go install Python — the runtime ships with
-    // the app now, so if this screen appears it's a genuine fault (port 8420
-    // already taken, antivirus quarantining the runtime, a corrupt install),
-    // not something they forgot to set up.
-    win.loadURL(
-      "data:text/html,<body style='background:%230a0a0f;color:%23d8f4ff;font-family:system-ui,sans-serif;" +
-      "display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;" +
-      "text-align:center;padding:0 40px;gap:10px;'>" +
-      "<h2 style='color:%23ff5f5f;font-weight:400;margin:0;'>JARVIS couldn't start</h2>" +
-      "<p style='color:%236b8a99;font-size:14px;max-width:460px;line-height:1.6;margin:0;'>" +
-      "The backend didn't come up. The most common cause is another program already using port 8420. " +
-      "Restarting your computer usually clears it. If it keeps happening, reinstalling JARVIS will " +
-      "replace anything damaged &mdash; your data is stored separately and won't be lost.</p></body>",
+    say(
+      "JARVIS couldn't start",
+      "The local engine didn't come up in time.\n\n" +
+      "Most often this is another program already using port 8420, or the app still being " +
+      "scanned by your system on first launch — try opening it again.\n\n" +
+      `Details are logged to:\n${path.join(app.getPath("userData"), "data", "logs", "backend.log")}`,
+      true,
     );
     return;
   }

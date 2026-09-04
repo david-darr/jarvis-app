@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html,body{height:100%;margin:0}
+  body{
+    background:radial-gradient(ellipse at top,#0d1117 0%,#08090d 60%);
+    color:#d8f4ff;font-family:-apple-system,"Segoe UI",system-ui,sans-serif;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+    text-align:center;padding:0 48px;
+  }
+  h1{margin:0;font-weight:200;letter-spacing:10px;font-size:26px;color:#00d4ff;
+     text-shadow:0 0 26px rgba(0,212,255,.35)}
+  #msg{color:#6b8a99;font-size:14px;max-width:520px;line-height:1.6;margin:0}
+  #detail{color:#3d5560;font-size:12px;max-width:560px;line-height:1.6;margin:0;
+          white-space:pre-wrap;word-break:break-word}
+  .bar{width:200px;height:2px;border-radius:2px;background:rgba(0,212,255,.15);overflow:hidden}
+  .bar i{display:block;height:100%;width:40%;background:#00d4ff;border-radius:2px;
+         animation:slide 1.3s ease-in-out infinite}
+  @keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(350%)}}
+  .err h1{color:#ff5f5f;text-shadow:none}
+  .err .bar{display:none}
+</style>
+</head>
+<body>
+  <h1>JARVIS</h1>
+  <div class="bar"><i></i></div>
+  <p id="msg">Starting up…</p>
+  <p id="detail"></p>
+<script>
+  // Driven from the main process via executeJavaScript. A real file rather
+  // than a data: URL — newer Electron restricts top-level data: navigation,
+  // which silently left the window blank instead of showing this.
+  window.setStatus = (msg, detail, isError) => {
+    document.getElementById('msg').textContent = msg;
+    document.getElementById('detail').textContent = detail || '';
+    document.body.classList.toggle('err', !!isError);
+  };
+</script>
+</body>
+</html>
