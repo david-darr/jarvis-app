@@ -1,0 +1,74 @@
+name: Build macOS
+
+# macOS builds can't be produced on Windows — electron-builder needs macOS
+# itself to make a DMG — so this uses GitHub's free macOS runners. Run it
+# manually, or let it fire automatically when a release is published.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach the DMG to (leave blank to only upload a build artifact)"
+        required: false
+        default: ""
+  release:
+    types: [published]
+
+permissions:
+  contents: write        # needed to attach the DMG to a release
+
+jobs:
+  build:
+    # macos-latest is Apple Silicon, so this produces an arm64 build.
+    # build_runtime.py fetches a runtime matching the host architecture.
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the bundled Python runtime
+        # Run explicitly rather than via npm's predist hook: that hook calls
+        # `python`, which on macOS is often absent (only `python3` exists).
+        # Running it here means predist finds the runtime already present and
+        # just verifies it.
+        run: python3 scripts/build_runtime.py
+
+      - name: Install Electron build deps
+        working-directory: electron
+        run: npm ci
+
+      - name: Build the DMG
+        working-directory: electron
+        # No signing identity configured, so electron-builder must not try to
+        # sign or notarize — it would fail the build rather than skip.
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --mac --publish never
+
+      - name: Show what was produced
+        run: ls -lh dist/*.dmg dist/*.yml 2>/dev/null || ls -lh dist
+
+      - name: Upload as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-macos-arm64
+          path: |
+            dist/*.dmg
+            dist/*.yml
+          if-no-files-found: error
+
+      - name: Attach to the release
+        # Fires for a published release, or a manual run that named a tag.
+        if: github.event_name == 'release' || inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+        run: gh release upload "$TAG" dist/*.dmg --clobber

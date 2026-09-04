@@ -94,9 +94,19 @@
       "uninstallerIcon": "icon.ico"
     },
     "mac": {
-      "target": "dmg",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
       "category": "public.app-category.productivity",
-      "icon": "icon.png"
+      "icon": "icon.png",
+      "artifactName": "JARVIS-${version}-${arch}.${ext}",
+      "identity": null,
+      "darkModeSupport": true
     },
     "linux": {
       "target": "AppImage",

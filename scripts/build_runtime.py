@@ -7,8 +7,15 @@ to be on the user's PATH — so on a clean machine the packaged app just
 showed "backend didn't start." This produces a real interpreter with every
 dependency preinstalled, bundled into the installer as an extraResource.
 
-Approach: the official Windows *embeddable* Python distribution, not a
-PyInstaller freeze. Two concrete reasons, both specific to this codebase:
+Per platform:
+  - Windows: python.org's *embeddable* distribution, a relocatable
+    interpreter intended for exactly this.
+  - macOS: python.org ships no embeddable build, so this uses
+    python-build-standalone (maintained by Astral) — relocatable CPython
+    with pip already included. Built for the host architecture, so an
+    arm64 machine (or runner) produces an arm64 runtime.
+
+Not a PyInstaller freeze, for two reasons specific to this codebase:
 
   1. core/custom_tabs.py discovers routes/tab_*.py by scanning the directory
      at runtime and importlib-importing what it finds — and Developer Mode
@@ -32,14 +39,37 @@ Usage:
 import argparse
 import io
 import os
+import platform
 import shutil
 import subprocess
 import sys
+import tarfile
 import urllib.request
 import zipfile
 
+IS_WINDOWS = os.name == "nt"
+IS_MACOS = sys.platform == "darwin"
+
+# Windows: python.org's "embeddable" zip — a relocatable interpreter meant
+# for exactly this.
 PYTHON_VERSION = "3.12.10"
 EMBED_URL = f"https://www.python.org/ftp/python/{PYTHON_VERSION}/python-{PYTHON_VERSION}-embed-amd64.zip"
+
+# macOS: python.org ships no embeddable build, so use python-build-standalone
+# (maintained by Astral) — relocatable CPython with pip already inside. The
+# "install_only" tarball is the runtime-only variant, no build artefacts.
+PBS_RELEASE = "20260901"
+PBS_VERSION = "3.12.14"
+
+
+def _pbs_url() -> str:
+    arch = "aarch64" if platform.machine().lower() in ("arm64", "aarch64") else "x86_64"
+    return (
+        f"https://github.com/astral-sh/python-build-standalone/releases/download/"
+        f"{PBS_RELEASE}/cpython-{PBS_VERSION}+{PBS_RELEASE}-{arch}-apple-darwin-install_only.tar.gz"
+    )
+
+
 GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -115,7 +145,9 @@ def main() -> int:
     parser.add_argument("--force", action="store_true", help="rebuild even if a runtime already exists")
     args = parser.parse_args()
 
-    python_exe = os.path.join(RUNTIME_DIR, "python.exe")
+    # electron/main.js's resolveBackendPython() looks in these exact places.
+    python_exe = (os.path.join(RUNTIME_DIR, "python.exe") if IS_WINDOWS
+                  else os.path.join(RUNTIME_DIR, "bin", "python3"))
 
     if os.path.exists(python_exe) and not args.force:
         log("runtime already present — verifying it instead of rebuilding (use --force to rebuild)")
@@ -123,24 +155,45 @@ def main() -> int:
         log("runtime OK")
         return 0
 
+    if not (IS_WINDOWS or IS_MACOS):
+        raise RuntimeError(f"no runtime recipe for this platform ({sys.platform})")
+
     if os.path.exists(RUNTIME_DIR):
         log("removing existing runtime")
         shutil.rmtree(RUNTIME_DIR)
     os.makedirs(RUNTIME_DIR, exist_ok=True)
 
-    zip_bytes = download(EMBED_URL)
-    log(f"extracting embeddable Python {PYTHON_VERSION}")
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-        zf.extractall(RUNTIME_DIR)
+    if IS_WINDOWS:
+        zip_bytes = download(EMBED_URL)
+        log(f"extracting embeddable Python {PYTHON_VERSION}")
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            zf.extractall(RUNTIME_DIR)
 
-    enable_site_packages(RUNTIME_DIR)
+        # Windows-only: the embeddable build ships site-packages disabled.
+        enable_site_packages(RUNTIME_DIR)
 
-    get_pip = os.path.join(RUNTIME_DIR, "get-pip.py")
-    with open(get_pip, "wb") as f:
-        f.write(download(GET_PIP_URL))
-    log("bootstrapping pip")
-    run(python_exe, [get_pip, "--no-warn-script-location"])
-    os.remove(get_pip)
+        get_pip = os.path.join(RUNTIME_DIR, "get-pip.py")
+        with open(get_pip, "wb") as f:
+            f.write(download(GET_PIP_URL))
+        log("bootstrapping pip")
+        run(python_exe, [get_pip, "--no-warn-script-location"])
+        os.remove(get_pip)
+    else:
+        url = _pbs_url()
+        tar_bytes = download(url)
+        log(f"extracting standalone CPython {PBS_VERSION} ({platform.machine()})")
+        with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tf:
+            tf.extractall(RUNTIME_DIR)
+        # The tarball contains a top-level "python/" directory; hoist its
+        # contents so the layout matches what main.js expects (runtime/bin/python3).
+        inner = os.path.join(RUNTIME_DIR, "python")
+        if os.path.isdir(inner):
+            for entry in os.listdir(inner):
+                shutil.move(os.path.join(inner, entry), os.path.join(RUNTIME_DIR, entry))
+            os.rmdir(inner)
+        if not os.path.exists(python_exe):
+            raise RuntimeError(f"expected an interpreter at {python_exe} after extraction")
+        # This build already includes pip — no bootstrap needed.
 
     log("installing requirements (this takes a few minutes)")
     run(python_exe, ["-m", "pip", "install", "--no-warn-script-location", "-r", REQUIREMENTS])
