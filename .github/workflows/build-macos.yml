@@ -53,6 +53,43 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npx electron-builder --mac --publish never
 
+      - name: Verify the packaged app can actually run its backend
+        # A DMG that builds is not a DMG that works. v1.4.2 opened to a blank
+        # window because the UI never loaded, and nothing in the build output
+        # would have shown that. This exercises the packaged bundle the same
+        # way electron/main.js does at runtime: find the bundled interpreter
+        # where resolveBackendPython() looks for it, confirm it's executable,
+        # and confirm it can import the app and serve a health check.
+        run: |
+          set -euo pipefail
+          APP="dist/mac-arm64/JARVIS.app"
+          BACKEND="$APP/Contents/Resources/backend"
+          PY="$BACKEND/runtime/bin/python3"
+
+          echo "--- bundle layout ---"
+          ls -la "$BACKEND" | head -15
+
+          test -x "$PY" || { echo "FAIL: no executable interpreter at $PY"; ls -la "$BACKEND/runtime/bin" || true; exit 1; }
+          echo "--- interpreter ---"
+          "$PY" --version
+
+          echo "--- can it import the app? ---"
+          (cd "$BACKEND" && "$PY" -c "import app; print('app imports OK')")
+
+          echo "--- does it actually serve? ---"
+          (cd "$BACKEND" && JARVIS_DATA_DIR="$RUNNER_TEMP/jarvis-verify" \
+            "$PY" -m uvicorn app:app --host 127.0.0.1 --port 8477 &)
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8477/api/health >/dev/null 2>&1; then
+              echo "backend healthy: $(curl -fsS http://127.0.0.1:8477/api/health)"
+              curl -fsS http://127.0.0.1:8477/ -o /dev/null && echo "UI served OK"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "FAIL: bundled backend never became healthy"
+          exit 1
+
       - name: Show what was produced
         run: ls -lh dist/*.dmg dist/*.yml 2>/dev/null || ls -lh dist
 
