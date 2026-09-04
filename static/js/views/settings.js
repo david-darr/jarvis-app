@@ -951,6 +951,21 @@ async function renderRemotePanel(content) {
           : "Open the Tailscale app and sign in, then refresh below.",
       },
       {
+        // The step that makes a "correctly configured" setup actually
+        // reachable. Binding needs no permission, so without this everything
+        // looks right and no other device can connect.
+        ok: s.firewall_ok,
+        label: "Allowed through Windows Firewall",
+        hint: s.firewall_ok
+          ? "Incoming connections to JARVIS are allowed."
+          : "Windows is blocking incoming connections to JARVIS. Without this it starts normally but no other device can reach it. Adding the rule needs your permission — Windows will ask.",
+        action: s.firewall_ok ? null : { label: "Allow", handler: async () => {
+          await api("/api/remote/firewall", { method: "POST" });
+          toast("Firewall rule added", "success");
+          await refresh();
+        }},
+      },
+      {
         ok: s.auth_ready,
         label: "JARVIS account created",
         hint: s.auth_ready
@@ -969,7 +984,20 @@ async function renderRemotePanel(content) {
           ]),
         ]),
         step.action
-          ? el("a", { href: step.action.href, target: "_blank", rel: "noopener", class: "btn", style: "text-decoration:none;flex-shrink:0;", text: step.action.label })
+          ? (step.action.href
+              // External link (e.g. "Get Tailscale").
+              ? el("a", { href: step.action.href, target: "_blank", rel: "noopener", class: "btn", style: "text-decoration:none;flex-shrink:0;", text: step.action.label })
+              // In-app action (e.g. "Allow" through the firewall).
+              : (() => {
+                  const b = el("button", { class: "btn", style: "flex-shrink:0;", text: step.action.label });
+                  b.addEventListener("click", async () => {
+                    b.disabled = true;
+                    b.textContent = "Working…";
+                    try { await step.action.handler(); }
+                    catch (e) { b.disabled = false; b.textContent = step.action.label; }
+                  });
+                  return b;
+                })())
           : el("div"),
       ]);
       body.appendChild(row);

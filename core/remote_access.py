@@ -35,6 +35,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 from typing import Optional
 
 from core import events, settings as settings_store
@@ -106,6 +107,10 @@ def detect() -> dict:
         "running_now": is_running(),
         "url": _current_url,
         "port": settings_store.get_setting("remote_access_port") or 8422,
+        # Without this rule the listener starts fine and stays unreachable
+        # from every other device — the failure mode that looks like
+        # "everything is configured and nothing connects".
+        "firewall_ok": firewall_rule_exists(),
     }
     if not exe:
         return info
@@ -166,6 +171,96 @@ def provision_cert(hostname: str) -> tuple[Optional[str], Optional[str], Optiona
 
 
 # -- the listener ----------------------------------------------------------
+
+# -- Windows Firewall ------------------------------------------------------
+# Found live 2026-09-03, and it's the thing that actually blocks a working
+# setup: binding a socket needs no permission, so the listener starts happily
+# and localhost reaches it — but Windows Firewall drops *inbound* connections
+# from other devices unless the listening executable has an allow rule.
+#
+# David's old scripts/run_remote.py worked because it ran under a Python that
+# already had a rule. The packaged app runs its own bundled interpreter at a
+# brand-new path, which has none, and no prompt ever appears because a
+# background console process binding a socket doesn't trigger one. Net effect:
+# everything looks correct and nothing connects.
+FIREWALL_RULE_NAME = "JARVIS Remote Access"
+
+
+def _current_python() -> str:
+    return os.path.abspath(sys.executable)
+
+
+def firewall_rule_exists() -> bool:
+    """True if an inbound allow rule already covers this interpreter. Only
+    meaningful on Windows; other platforms return True so the UI doesn't show
+    a step that doesn't apply."""
+    if os.name != "nt":
+        return True
+    exe = _current_python()
+    ps = (
+        "$ErrorActionPreference='SilentlyContinue';"
+        "Get-NetFirewallApplicationFilter | Where-Object { $_.Program -ieq '"
+        + exe.replace("'", "''")
+        + "' } | ForEach-Object { $r = $_ | Get-NetFirewallRule; "
+        "if ($r.Direction -eq 'Inbound' -and $r.Action -eq 'Allow' -and $r.Enabled -eq 'True') { 'FOUND' } }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps],
+            capture_output=True, text=True, timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return "FOUND" in (result.stdout or "")
+    except (OSError, subprocess.TimeoutExpired):
+        # Can't tell — don't block the user or nag them about a step we
+        # failed to check.
+        return True
+
+
+def add_firewall_rule() -> tuple[bool, str]:
+    """Add the inbound allow rule for this interpreter, via an elevated
+    prompt. Returns (ok, message).
+
+    Deliberately user-initiated and UAC-gated: this opens a port on the
+    machine to the tailnet, which is exactly the kind of change that should
+    require an explicit, visible consent step rather than happening quietly.
+    """
+    if os.name != "nt":
+        return False, "Firewall setup is only automated on Windows."
+    exe = _current_python()
+    inner = (
+        f'netsh advfirewall firewall add rule name="{FIREWALL_RULE_NAME}" '
+        f'dir=in action=allow program="{exe}" enable=yes profile=any'
+    )
+    # Start-Process -Verb RunAs is what raises the UAC prompt; without it the
+    # netsh call fails silently for a non-elevated user.
+    ps = (
+        "Start-Process -FilePath netsh -Verb RunAs -Wait -WindowStyle Hidden "
+        "-ArgumentList 'advfirewall','firewall','add','rule',"
+        f"'name={FIREWALL_RULE_NAME}','dir=in','action=allow','program={exe}','enable=yes','profile=any'"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps],
+            capture_output=True, text=True, timeout=120,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, f"Couldn't run the firewall command: {e}"
+
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip()
+        if "canceled" in detail.lower() or "cancelled" in detail.lower():
+            return False, "The permission prompt was declined, so the rule wasn't added."
+        return False, detail or "Windows refused to add the firewall rule."
+
+    if firewall_rule_exists():
+        logger.info("remote_access: firewall rule added for %s", exe)
+        return True, "Firewall rule added."
+    return False, "The rule didn't appear — you may have declined the permission prompt."
+    # (Deliberately re-checks rather than trusting the exit code: the elevated
+    #  process is a separate one, and a declined UAC still exits cleanly here.)
+
 
 def _port_available(host: str, port: int) -> tuple[bool, str]:
     """Can we actually bind here? Returns (ok, error_text)."""

@@ -1,5 +1,6 @@
 # app.py — slim orchestrator (Odysseus-style: wiring only, no business logic here)
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -34,6 +35,26 @@ from core import llamacpp_engine
 from services import chat_service, skills_service
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+# Also log to a file in the data directory. In a packaged install the backend
+# is a child process of Electron and its output goes to Electron's own stdout
+# — i.e. nowhere a user or a support session can see it. Diagnosing anything
+# meant reproducing it outside the app (which is exactly what the 2026-09-03
+# remote-access investigation had to do). Rotating, capped, and in the data
+# directory so it survives updates and never grows unbounded.
+try:
+    from logging.handlers import RotatingFileHandler
+    from core.constants import DATA_DIR
+
+    _log_dir = os.path.join(DATA_DIR, "logs")
+    os.makedirs(_log_dir, exist_ok=True)
+    _file_handler = RotatingFileHandler(
+        os.path.join(_log_dir, "backend.log"), maxBytes=2_000_000, backupCount=3, encoding="utf-8",
+    )
+    _file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+    logging.getLogger().addHandler(_file_handler)
+except Exception:  # never let logging setup stop the app from booting
+    logging.getLogger(__name__).exception("couldn't set up file logging")
 
 
 @asynccontextmanager

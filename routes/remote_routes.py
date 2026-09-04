@@ -102,6 +102,21 @@ async def enable(body: PortRequest | None = None, user: str = Depends(require_ad
     return {"ok": True, "url": result["url"]}
 
 
+@router.post("/firewall")
+async def add_firewall_rule(user: str = Depends(require_admin)) -> dict:
+    """Add the Windows Firewall inbound rule for this interpreter.
+
+    Without it the listener binds and runs but every connection from another
+    device is dropped, which looks exactly like a working setup that won't
+    connect (David hit this 2026-09-03). Triggers a UAC prompt — opening a
+    port to the tailnet should require visible consent, not happen quietly.
+    """
+    ok, message = remote_access.add_firewall_rule()
+    if not ok:
+        raise HTTPException(status_code=400, detail=message)
+    return {"ok": True, "message": message}
+
+
 @router.post("/disable")
 async def disable(user: str = Depends(require_admin)) -> dict:
     await remote_access.stop()
