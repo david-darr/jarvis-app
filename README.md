@@ -4,6 +4,10 @@ An open-source, self-hosted AI workspace and agent harness. Everything runs on y
 
 This is the real product (v2). [jarvis-starter-kit](https://github.com/david-darr/jarvis-starter-kit) is the earlier clone-and-wizard v1, kept as a separate working reference.
 
+**[Website](https://david-darr.github.io/jarvis-app/)** · **[Download the latest release](https://github.com/david-darr/jarvis-app/releases/latest)**
+
+![JARVIS Mission Control](docs/img/home.png)
+
 ## What it does
 
 - **Chat** with any model you connect — Claude via the Agent SDK, any OpenAI-compatible endpoint, or a local model (Ollama, or the built-in llama.cpp engine). Per-conversation model choice, file attachments, folder-scoped workspaces, and slash commands.
@@ -17,6 +21,13 @@ This is the real product (v2). [jarvis-starter-kit](https://github.com/david-dar
 - **Remote access** — reach JARVIS from your phone or another computer over [Tailscale](https://tailscale.com), set up from Settings → Remote Access. Nothing is exposed to the public internet: the listener binds only to your Tailscale address, serves real HTTPS, and requires a login.
 
 Memory is a folder of markdown notes, not a database — so it stays readable, portable, and editable by you or any other tool.
+
+| | |
+|---|---|
+| ![Chat](docs/img/chat.png) | ![Tasks](docs/img/tasks.png) |
+| **Chat** — per-conversation model choice, attachments, folder-scoped workspaces | **Tasks** — built-in and custom automations, delivered where you want them |
+| ![Vault graph](docs/img/vault.png) | ![Settings](docs/img/settings.png) |
+| **Brain** — your vault rendered as the linked graph it already is | **Models** — Claude, local servers, or any API provider |
 
 ## Install
 

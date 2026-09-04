@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS — a self-hosted AI workspace</title>
+<meta name="description" content="A downloadable AI workspace and agent harness. Bring your own model, keep your memory in your own vault, and run it entirely on your own machine.">
+<link rel="icon" type="image/png" href="img/favicon.png">
+<meta property="og:title" content="JARVIS — a self-hosted AI workspace">
+<meta property="og:description" content="Bring your own model. Keep your memory. Run it on your own machine.">
+<meta property="og:image" content="img/home.png">
+<style>
+  :root{
+    --bg:#08090d; --panel:rgba(20,25,32,.6); --panel-solid:#12161c;
+    --accent:#00d4ff; --accent-rgb:0,212,255;
+    --border:rgba(0,212,255,.18); --border-strong:rgba(0,212,255,.4);
+    --text:#d8f4ff; --dim:#6b8a99; --faint:#3d5560;
+    --sheen:linear-gradient(165deg,rgba(255,255,255,.09) 0%,rgba(255,255,255,.02) 22%,rgba(255,255,255,0) 45%);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:
+      radial-gradient(ellipse 1200px 700px at 50% -20%, rgba(var(--accent-rgb),.07), transparent 60%),
+      radial-gradient(ellipse at top,#0d1117 0%,var(--bg) 60%);
+    background-attachment:fixed; color:var(--text);
+    font-family:"Segoe UI",system-ui,-apple-system,sans-serif; line-height:1.65;
+  }
+  a{color:var(--accent);text-decoration:none}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+
+  nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(18px);
+      background:rgba(8,9,13,.78);border-bottom:1px solid var(--border)}
+  nav .wrap{display:flex;align-items:center;gap:28px;height:64px}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:300;letter-spacing:3px;
+         font-size:15px;color:var(--accent);margin-right:auto}
+  .brand img{width:32px;height:32px;filter:drop-shadow(0 0 6px rgba(var(--accent-rgb),.5))}
+  nav a.link{color:var(--dim);font-size:13.5px}
+  nav a.link:hover{color:var(--text)}
+  @media(max-width:760px){nav a.link{display:none}}
+
+  .btn{display:inline-block;padding:11px 22px;border-radius:9px;font-size:14px;cursor:pointer;
+       background:linear-gradient(180deg,rgba(var(--accent-rgb),.24),rgba(var(--accent-rgb),.09));
+       border:1px solid var(--border-strong);color:var(--accent);
+       box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 3px 14px rgba(var(--accent-rgb),.1);
+       transition:transform .12s,box-shadow .12s,background .12s}
+  .btn:hover{transform:translateY(-1px);
+       background:linear-gradient(180deg,rgba(var(--accent-rgb),.34),rgba(var(--accent-rgb),.15));
+       box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 8px 22px rgba(var(--accent-rgb),.18)}
+  .btn.ghost{background:none;color:var(--dim);border-color:var(--border)}
+  .btn.ghost:hover{color:var(--text);background:rgba(255,255,255,.04)}
+
+  header{padding:86px 0 56px;text-align:center}
+  h1{font-size:clamp(38px,6vw,62px);font-weight:200;letter-spacing:-.5px;margin:0 0 18px}
+  h1 .g{background:linear-gradient(100deg,var(--accent),#8fe9ff 60%,var(--accent));
+        -webkit-background-clip:text;background-clip:text;color:transparent}
+  .tag{font-size:clamp(16px,2vw,19px);color:var(--dim);max-width:660px;margin:0 auto 34px}
+  .cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .sub{margin-top:16px;font-size:12.5px;color:var(--faint)}
+
+  .shot{margin:52px auto 0;max-width:1120px;border-radius:14px;overflow:hidden;
+        border:1px solid var(--border);box-shadow:0 30px 90px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.03) inset}
+  .shot img{display:block;width:100%}
+
+  section{padding:76px 0}
+  h2{font-size:clamp(26px,3.4vw,36px);font-weight:300;letter-spacing:-.3px;margin:0 0 10px;text-align:center}
+  .lede{text-align:center;color:var(--dim);max-width:640px;margin:0 auto 46px}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+  .card{background:var(--sheen),var(--panel);backdrop-filter:blur(20px) saturate(1.6);
+        border:1px solid var(--border);border-radius:13px;padding:22px 22px 24px;position:relative}
+  .card::before,.card::after{content:"";position:absolute;width:10px;height:10px;
+        border:1px solid var(--border-strong);pointer-events:none}
+  .card::before{top:-1px;left:-1px;border-right:none;border-bottom:none}
+  .card::after{bottom:-1px;right:-1px;border-left:none;border-top:none}
+  .card h3{margin:0 0 8px;font-size:16px;font-weight:500;color:var(--text)}
+  .card p{margin:0;font-size:14px;color:var(--dim)}
+  .card .ic{width:26px;height:26px;margin-bottom:12px;color:var(--accent);opacity:.9}
+
+  .tour{display:flex;flex-direction:column;gap:64px;margin-top:48px}
+  .row{display:grid;grid-template-columns:1fr 1.45fr;gap:38px;align-items:center}
+  .row.rev{grid-template-columns:1.45fr 1fr}
+  .row.rev .txt{order:2}
+  @media(max-width:860px){.row,.row.rev{grid-template-columns:1fr}.row.rev .txt{order:0}}
+  .row h3{font-size:22px;font-weight:400;margin:0 0 10px}
+  .row p{color:var(--dim);margin:0;font-size:15px}
+  .row .pic{border-radius:12px;overflow:hidden;border:1px solid var(--border);
+            box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .row .pic img{display:block;width:100%}
+
+  .steps{counter-reset:s;display:grid;gap:14px;max-width:720px;margin:0 auto}
+  .step{display:flex;gap:16px;align-items:flex-start;background:var(--sheen),var(--panel);
+        border:1px solid var(--border);border-radius:11px;padding:18px 20px}
+  .step::before{counter-increment:s;content:counter(s);flex:0 0 30px;height:30px;border-radius:50%;
+        display:grid;place-items:center;font-size:13px;color:var(--accent);
+        background:rgba(var(--accent-rgb),.12);border:1px solid var(--border-strong)}
+  .step b{display:block;font-weight:500;margin-bottom:3px}
+  .step span{color:var(--dim);font-size:14px}
+
+  .note{max-width:720px;margin:26px auto 0;padding:14px 18px;border-radius:10px;font-size:13.5px;
+        color:var(--dim);border:1px solid rgba(255,184,77,.28);background:rgba(255,184,77,.05)}
+
+  footer{border-top:1px solid var(--border);padding:38px 0 54px;text-align:center;color:var(--faint);font-size:13px}
+  footer a{color:var(--dim)}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap">
+  <span class="brand"><img src="img/favicon.png" alt="">JARVIS</span>
+  <a class="link" href="#features">Features</a>
+  <a class="link" href="#tour">Tour</a>
+  <a class="link" href="#install">Install</a>
+  <a class="link" href="https://github.com/david-darr/jarvis-app">GitHub</a>
+</div></nav>
+
+<header><div class="wrap">
+  <h1>Your own <span class="g">AI workspace</span>.<br>On your own machine.</h1>
+  <p class="tag">JARVIS is a downloadable AI workspace and agent harness. Bring whichever model you
+     want, keep its memory in a folder of markdown you own, and run the whole thing locally.</p>
+  <div class="cta">
+    <a class="btn" href="https://github.com/david-darr/jarvis-app/releases/latest">Download for Windows</a>
+    <a class="btn ghost" href="https://github.com/david-darr/jarvis-app">View source</a>
+  </div>
+  <div class="sub">Free and MIT licensed · No account, no cloud, no telemetry</div>
+  <div class="shot"><img src="img/home.png" alt="JARVIS Mission Control home screen"></div>
+</div></header>
+
+<section id="features"><div class="wrap">
+  <h2>What it does</h2>
+  <p class="lede">Everything runs on your machine. Your conversations, notes and credentials never
+     leave it unless you point a model at a cloud provider yourself.</p>
+  <div class="grid">
+    <div class="card">
+      <h3>Bring your own model</h3>
+      <p>Claude via the Agent SDK, any OpenAI-compatible endpoint, Ollama, or the built-in local
+         engine. Choose per conversation — no default, no lock-in.</p>
+    </div>
+    <div class="card">
+      <h3>Memory you can read</h3>
+      <p>Long-term memory is a folder of markdown notes, not a database. Open it in Obsidian, edit
+         it by hand, keep it in your own backups.</p>
+    </div>
+    <div class="card">
+      <h3>One memory, not two</h3>
+      <p>Checkbox items in your vault's task list sync into Notes on every launch. Tick one in the
+         app and it ticks in the file.</p>
+    </div>
+    <div class="card">
+      <h3>Mission control</h3>
+      <p>Live system health, what's scheduled next, and a real activity feed of what the system has
+         actually been doing.</p>
+    </div>
+    <div class="card">
+      <h3>Scheduled automations</h3>
+      <p>Run your own prompts on a timer, or built-ins like a Daily Brief that folds in your calendar,
+         unread mail and stale items. Deliver the output to Discord.</p>
+    </div>
+    <div class="card">
+      <h3>Skills</h3>
+      <p>Reusable <code>SKILL.md</code> procedures the model follows. Portable files — write your own,
+         or import someone else's.</p>
+    </div>
+    <div class="card">
+      <h3>Reach it anywhere</h3>
+      <p>Optional remote access over Tailscale with real HTTPS and a required login. Nothing is
+         exposed to the public internet.</p>
+    </div>
+    <div class="card">
+      <h3>Extend it yourself</h3>
+      <p>Describe a tab you want and JARVIS builds it, using the same file conventions the built-in
+         tabs use. Ready-made tabs are one click.</p>
+    </div>
+    <div class="card">
+      <h3>Stays out of the way</h3>
+      <p>Closing the window keeps it running in the tray, so scheduled tasks and remote access keep
+         working. Updates install themselves on quit.</p>
+    </div>
+  </div>
+</div></section>
+
+<section id="tour"><div class="wrap">
+  <h2>A look around</h2>
+  <p class="lede">Screenshots from a real install, not mockups.</p>
+  <div class="tour">
+    <div class="row">
+      <div class="txt">
+        <h3>Chat</h3>
+        <p>A focused conversation column with a floating composer. Attach files, scope a chat to a
+           folder on disk, pull in a saved document or skill, and switch model mid-thread.</p>
+      </div>
+      <div class="pic"><img src="img/chat.png" alt="The chat view"></div>
+    </div>
+    <div class="row rev">
+      <div class="pic"><img src="img/tasks.png" alt="The tasks view"></div>
+      <div class="txt">
+        <h3>Tasks</h3>
+        <p>Turn on a built-in automation with one click, or schedule your own prompt. Each run's
+           output is kept, and can be delivered straight to a channel instead of sitting in a tab.</p>
+      </div>
+    </div>
+    <div class="row">
+      <div class="txt">
+        <h3>Your vault, mapped</h3>
+        <p>Memory lives as linked markdown. The Brain tab renders it as a graph you can browse, and
+           the same notes are what the model searches when you ask it something.</p>
+      </div>
+      <div class="pic"><img src="img/vault.png" alt="The vault graph"></div>
+    </div>
+    <div class="row rev">
+      <div class="pic"><img src="img/calendar.png" alt="The calendar view"></div>
+      <div class="txt">
+        <h3>Calendar &amp; Notes</h3>
+        <p>Due-dated notes render alongside real events, with CalDAV and iCal sync for the calendars
+           you already keep.</p>
+      </div>
+    </div>
+    <div class="row">
+      <div class="txt">
+        <h3>Connect your models</h3>
+        <p>Add a Claude CLI, a local server, or any API provider. Per-conversation choice means you
+           can keep cheap local models for routine work and reach for a bigger one when it matters.</p>
+      </div>
+      <div class="pic"><img src="img/settings.png" alt="The settings window"></div>
+    </div>
+  </div>
+</div></section>
+
+<section id="install"><div class="wrap">
+  <h2>Getting started</h2>
+  <p class="lede">One installer. Nothing else to set up — a complete Python runtime ships inside the
+     app, so it works on a machine that has never had Python on it.</p>
+  <div class="steps">
+    <div class="step"><div><b>Download and run the installer</b>
+      <span>Grab <code>JARVIS-Setup.exe</code> from the latest release and run it. It installs for
+      your user only, so no admin rights are needed.</span></div></div>
+    <div class="step"><div><b>Point it at a vault</b>
+      <span>Use the one it creates, choose an Obsidian vault you already have, or answer a few
+      questions and let it build one shaped around you.</span></div></div>
+    <div class="step"><div><b>Add a model</b>
+      <span>Settings → Add Models. JARVIS ships with none on purpose — connect Claude, a local
+      model, or an API provider, then pick it above the chat box.</span></div></div>
+  </div>
+  <div class="note"><b>Heads up:</b> the installer isn't code-signed yet, so Windows SmartScreen
+    will warn on first run. Choose <b>More info → Run anyway</b>. macOS and Linux builds are
+    configured but not yet tested.</div>
+  <div class="cta" style="margin-top:34px">
+    <a class="btn" href="https://github.com/david-darr/jarvis-app/releases/latest">Get the latest release</a>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  Free and open source under the MIT licence ·
+  <a href="https://github.com/david-darr/jarvis-app">github.com/david-darr/jarvis-app</a><br>
+  <span style="opacity:.7">Your machine, your models, your memory.</span>
+</div></footer>
+
+</body>
+</html>
