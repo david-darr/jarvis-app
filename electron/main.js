@@ -108,10 +108,11 @@ async function createWindow() {
     height: 900,
     backgroundColor: "#0a0a0f",
     autoHideMenuBar: true,
-    // David's real logo (2026-08-31) — a proper multi-resolution .ico is
-    // real icon-design work for the actual packaging pass; a single PNG
-    // works fine for the window/taskbar icon in the meantime.
-    icon: path.join(__dirname, "icon.png"),
+    // The .ico, not the .png: it carries 16/24/32/48/64/128/256px variants,
+    // so Windows picks the right one for the taskbar, Alt-Tab, and the
+    // window corner instead of downscaling one large bitmap for all of them
+    // (David's ask 2026-09-03 — the taskbar icon looked small and soft).
+    icon: path.join(__dirname, "icon.ico"),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

@@ -133,8 +133,11 @@ html, body {
   font-size: 15px;
 }
 #brand .brand-logo {
-  width: 34px; height: 34px; border-radius: 5px;
-  filter: drop-shadow(0 0 6px rgba(var(--accent-rgb), 0.5));
+  /* Bumped from 34px (David's ask 2026-09-03 — it read as small next to the
+     wordmark). The sidebar is 220px, so 46px + gap + "JARVIS" still fits on
+     one line with room to spare. */
+  width: 46px; height: 46px; border-radius: 6px;
+  filter: drop-shadow(0 0 8px rgba(var(--accent-rgb), 0.55));
 }
 
 nav#nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; overflow-x: hidden; }
