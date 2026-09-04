@@ -20,7 +20,7 @@
 // freeze (custom tabs are imported at runtime, so a frozen module graph
 // would break them).
 
-const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, shell, nativeImage } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -118,16 +118,72 @@ async function waitForBackend(timeoutMs = BACKEND_TIMEOUT_MS, onProgress) {
   return false;
 }
 
+// createWindow() is async, so anything it throws becomes a rejected promise.
+// Left unhandled that is *silent*: the app keeps running, the window stays on
+// its background colour, and nothing anywhere says why. That is precisely how
+// an unloadable tray icon turned into a black window on macOS. Every call goes
+// through here so a failure is always reported — on the splash if it managed
+// to load, in a native dialog if it didn't.
+async function launch() {
+  try {
+    await createWindow();
+  } catch (err) {
+    const detail = (err && (err.stack || err.message)) || String(err);
+    console.error(`[startup] ${detail}`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents
+        .executeJavaScript(
+          `window.setStatus("JARVIS couldn't start", ${JSON.stringify(detail)}, true)`,
+        )
+        .catch(() => {
+          // The splash itself never loaded, so there's nowhere on screen to
+          // put this. A native dialog is the last channel left.
+          dialog.showErrorBox("JARVIS couldn't start", detail);
+        });
+    } else {
+      dialog.showErrorBox("JARVIS couldn't start", detail);
+    }
+  }
+}
+
 function showWindow() {
-  if (!mainWindow) { createWindow(); return; }
+  if (!mainWindow) { launch(); return; }
   if (!mainWindow.isVisible()) mainWindow.show();
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.focus();
 }
 
+// .ico is a Windows-only format: macOS and Linux can't decode it, and
+// new Tray() with an unloadable image THROWS. That killed the whole macOS
+// app — buildTray() runs before the window loads anything, so the throw
+// unwound createWindow(), the backend never started, and all you saw was the
+// window's black backgroundColor (David's Mac, 2026-09-04).
+function trayIcon() {
+  if (process.platform === "win32") return path.join(__dirname, "icon.ico");
+
+  // The menu bar wants ~18px, not the 1024px app icon. Resizing here rather
+  // than letting the OS do it keeps the mark sharp, and the 2x representation
+  // keeps it sharp on a Retina display too.
+  const full = nativeImage.createFromPath(path.join(__dirname, "icon.png"));
+  const small = full.resize({ width: 18, height: 18, quality: "best" });
+  small.addRepresentation({
+    scaleFactor: 2,
+    buffer: full.resize({ width: 36, height: 36, quality: "best" }).toPNG(),
+  });
+  return small;
+}
+
+// Windows' taskbar and window corner want the .ico (it carries 16–256px
+// variants so each context picks its own size, rather than downscaling one
+// big bitmap for all of them — David's ask 2026-09-03). macOS ignores this
+// entirely and uses the icon compiled into the .app bundle.
+function windowIcon() {
+  return path.join(__dirname, process.platform === "win32" ? "icon.ico" : "icon.png");
+}
+
 function buildTray() {
   if (tray) return;
-  tray = new Tray(path.join(__dirname, "icon.ico"));
+  tray = new Tray(trayIcon());
   tray.setToolTip("JARVIS — running in the background");
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "Open JARVIS", click: showWindow },
@@ -153,11 +209,7 @@ async function createWindow() {
     height: 900,
     backgroundColor: "#0a0a0f",
     autoHideMenuBar: true,
-    // The .ico, not the .png: it carries 16/24/32/48/64/128/256px variants,
-    // so Windows picks the right one for the taskbar, Alt-Tab, and the
-    // window corner instead of downscaling one large bitmap for all of them
-    // (David's ask 2026-09-03 — the taskbar icon looked small and soft).
-    icon: path.join(__dirname, "icon.ico"),
+    icon: windowIcon(),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -166,31 +218,13 @@ async function createWindow() {
   });
 
   mainWindow = win;
-  buildTray();
 
-  // Closing hides instead of quitting, so the backend — and therefore
-  // remote access — keeps running. Quit deliberately, from the tray menu.
-  win.on("close", (e) => {
-    if (isQuitting) return;
-    e.preventDefault();
-    win.hide();
-    // Said once, the first time, so it isn't a mystery where the app went.
-    if (tray && !win.__toldAboutTray) {
-      win.__toldAboutTray = true;
-      tray.displayBalloon({
-        title: "JARVIS is still running",
-        content: "Remote access stays available. Reopen or quit from the icon in the system tray.",
-      });
-    }
-  });
-
-  win.on("closed", () => { mainWindow = null; });
-
+  // Load the splash BEFORE anything that can fail. It is the only channel for
+  // telling you what went wrong, so it has to be on screen first — otherwise a
+  // failure during setup leaves the bare backgroundColor and no explanation.
+  //
   // A real file, not a data: URL. Newer Electron restricts top-level data:
-  // navigation, so the old splash and error screens silently failed to render
-  // and left only the window's black background — which is exactly what a
-  // slow first launch on macOS looked like: a blank window with no
-  // explanation (David, 2026-09-03).
+  // navigation, so the old splash and error screens silently failed to render.
   await win.loadFile(path.join(__dirname, "splash.html"));
 
   const say = (msg, detail, isError) => {
@@ -200,6 +234,36 @@ async function createWindow() {
       )
       .catch(() => {});
   };
+
+  // A tray icon is a convenience; the app is not. Losing the tray must never
+  // cost you the window, the backend, or the error screen that would explain
+  // what went wrong — which is exactly what happened when this threw.
+  try {
+    buildTray();
+  } catch (err) {
+    console.error(`[tray] unavailable: ${err && err.message}`);
+  }
+
+  // Closing hides instead of quitting, so the backend — and therefore
+  // remote access — keeps running. Quit deliberately, from the tray menu.
+  win.on("close", (e) => {
+    if (isQuitting) return;
+    e.preventDefault();
+    win.hide();
+    // Said once, the first time, so it isn't a mystery where the app went.
+    // displayBalloon is Windows-only — calling it on macOS throws, inside an
+    // event handler, on the very first close. Same failure mode as the tray
+    // icon above, one step further along.
+    if (tray && process.platform === "win32" && !win.__toldAboutTray) {
+      win.__toldAboutTray = true;
+      tray.displayBalloon({
+        title: "JARVIS is still running",
+        content: "Remote access stays available. Reopen or quit from the icon in the system tray.",
+      });
+    }
+  });
+
+  win.on("closed", () => { mainWindow = null; });
 
   if (SHOULD_SPAWN_BACKEND) {
     say("Starting the local engine…", "First launch takes longer while your system checks the app.");
@@ -306,11 +370,11 @@ if (!gotTheLock) {
   app.on("second-instance", showWindow);
 
   app.whenReady().then(() => {
-    createWindow();
+    launch();
     setupAutoUpdate();
 
     app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      if (BrowserWindow.getAllWindows().length === 0) launch();
       else showWindow();
     });
   });

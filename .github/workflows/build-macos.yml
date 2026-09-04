@@ -92,6 +92,56 @@ jobs:
           echo "FAIL: bundled backend never became healthy"
           exit 1
 
+      - name: Verify the packaged app actually launches
+        # The step above proves the BACKEND works. It cannot prove the app
+        # does — and in 1.4.3 the backend was perfectly healthy while the app
+        # showed a black window, because electron/main.js threw on a Windows
+        # .ico tray icon before it ever started the backend. Nothing in a
+        # backend-only check could have seen that.
+        #
+        # So: launch the real bundle and require it to reach its own backend,
+        # which only happens if main.js gets all the way through createWindow().
+        run: |
+          set -uo pipefail
+          APP="$PWD/dist/mac-arm64/JARVIS.app/Contents/MacOS/JARVIS"
+          LOG="$RUNNER_TEMP/launch.log"
+
+          test -x "$APP" || { echo "FAIL: no executable at $APP"; exit 1; }
+
+          ELECTRON_ENABLE_LOGGING=1 "$APP" > "$LOG" 2>&1 &
+          APP_PID=$!
+
+          healthy=0
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8420/api/health >/dev/null 2>&1; then
+              healthy=1; break
+            fi
+            kill -0 "$APP_PID" 2>/dev/null || { echo "app process exited early"; break; }
+            sleep 2
+          done
+
+          kill "$APP_PID" 2>/dev/null || true
+          # The app is close-to-tray: killing the parent may leave the backend
+          # it spawned behind, which would hold port 8420 for any later step.
+          pkill -f "uvicorn app:app" 2>/dev/null || true
+
+          echo "--- app output ---"
+          cat "$LOG" || true
+
+          # Startup errors in Electron's main process surface as unhandled
+          # rejections and are otherwise SILENT — the app keeps running and
+          # shows nothing. Treat them as build failures, not warnings.
+          if grep -qE "UnhandledPromiseRejection|Failed to load image|\[tray\] unavailable|\[startup\]" "$LOG"; then
+            echo "FAIL: the app reported a startup error (see output above)"
+            exit 1
+          fi
+
+          if [ "$healthy" -ne 1 ]; then
+            echo "FAIL: the packaged app never reached its own backend"
+            exit 1
+          fi
+          echo "PASS: packaged app launched and served its UI"
+
       - name: Show what was produced
         run: ls -lh dist/*.dmg dist/*.yml 2>/dev/null || ls -lh dist
 
