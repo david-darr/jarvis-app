@@ -15,4 +15,13 @@ httpx>=0.27
 # win_amd64 wheel, no C++ compiler required). GPU builds need a different
 # index/build flag and are a documented follow-up, not covered by this line.
 --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-llama-cpp-python[server]
+llama-cpp-python[server]; sys_platform != "darwin"
+
+# macOS is pinned because the current release's macOS arm64 wheel is
+# genuinely corrupt upstream: llama_cpp_python-0.3.35-py3-none-macosx_11_0_arm64.whl
+# fails CRC on lib/libggml-base.0.20.0.dylib. Confirmed by downloading and
+# unpacking it directly, not inferred from a CI failure — it breaks the same
+# way twice on a runner and once locally. 0.3.19 is the newest macOS wheel
+# that unpacks cleanly. Windows is unaffected and stays on the latest;
+# revisit when a fixed macOS wheel ships.
+llama-cpp-python[server]==0.3.19; sys_platform == "darwin"
