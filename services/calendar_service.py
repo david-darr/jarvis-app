@@ -17,6 +17,27 @@ from services.notes_service import notes_service
 EVENTS_FILE = os.path.join(DATA_DIR, "calendar_events.json")
 
 
+def _overlaps(ev_start: str, ev_end: str, start_iso: str, end_iso: str) -> bool:
+    """Does an event intersect [start_iso, end_iso)?
+
+    Bounds are compared as plain strings, which is fine while both sides have
+    the same shape — but all-day events store a bare date ("2026-09-06")
+    while range bounds are full ISO datetimes ("2026-09-06T00:00:00+00:00").
+    A bare date sorts BEFORE the same date with a time, so `ev_end >=
+    start_iso` came out False for an all-day event on the very day being
+    queried: an all-day event could never match its own day. Every Canvas and
+    iCal deadline is all-day, so the Daily Brief's Calendar section was
+    structurally blind to exactly the events it existed to report, and the
+    Calendar tab's single-day view had the same hole (David, 2026-09-06).
+
+    Expanding a date-only bound to that day's last instant fixes the
+    comparison without changing how anything is stored.
+    """
+    if len(ev_end) == 10:
+        ev_end = ev_end + "T23:59:59.999999"
+    return ev_start < end_iso and ev_end >= start_iso
+
+
 class CalendarService:
     def __init__(self) -> None:
         self._events: dict = read_json(EVENTS_FILE, {})
@@ -108,6 +129,31 @@ class CalendarService:
         events = [{**e, "source": "calendar"} for e in self._events.values() if e.get("completed")]
         return sorted(events, key=lambda e: e["updated_at"], reverse=True)
 
+    def list_for_dates(self, first_date: str, last_date: str) -> list[dict]:
+        """Events touching the inclusive local date span, both "YYYY-MM-DD".
+
+        Day-granularity on purpose, and separate from list_range() rather than
+        layered on it: list_range compares instants, and an instant range
+        derived from a LOCAL day is offset from UTC midnight (4h for Eastern),
+        so a bare-date all-day event for tomorrow lexically falls inside
+        today's UTC-shifted window. Comparing dates to dates has no such
+        boundary to get wrong, which is what a daily brief actually wants.
+        """
+        events = [
+            {**e, "source": "calendar"}
+            for e in self._events.values()
+            if e["start"][:10] <= last_date and e["end"][:10] >= first_date
+        ]
+        note_events = [
+            {
+                "id": n["id"], "title": n["text"], "start": n["due_date"], "end": n["due_date"],
+                "all_day": True, "location": "", "description": "", "source": "note", "completed": False,
+            }
+            for n in notes_service.list_notes(include_completed=False)
+            if n.get("due_date") and first_date <= str(n["due_date"])[:10] <= last_date
+        ]
+        return sorted(events + note_events, key=lambda e: str(e["start"]))
+
     def list_range(self, start_iso: str, end_iso: str) -> list[dict]:
         """Real events plus due-dated Notes in range, tagged by source so the
         UI can render/link them differently while Notes stays authoritative
@@ -115,7 +161,7 @@ class CalendarService:
         events = [
             {**e, "source": "calendar"}
             for e in self._events.values()
-            if e["start"] < end_iso and e["end"] >= start_iso
+            if _overlaps(e["start"], e["end"], start_iso, end_iso)
         ]
         note_events = [
             {

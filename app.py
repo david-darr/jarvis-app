@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from core.constants import STATIC_DIR
 from core.middleware import SecurityHeadersMiddleware
 from core import custom_tabs, remote_access, task_scheduler, vault_sync
-from core.builtin_tasks import migrate_builtin_schedules
+from core.builtin_tasks import autoenable_builtins, migrate_builtin_schedules
 from core.channels import discord_channel
 from routes import (
     auth_routes,
@@ -107,6 +107,10 @@ async def lifespan(_app: FastAPI):
     # updating — anyone already running it would keep the drifting interval
     # forever, which is precisely the group the fix is for.
     migrate_builtin_schedules()
+    # Switches on automations that are meant to just run (daily sync, email
+    # triage). Once per install — see autoenable_builtins() for why it can't
+    # resurrect something the user turned off.
+    autoenable_builtins()
     task_scheduler.start()
     await discord_channel.start()
     # Restores the remote listener across restarts if the user turned it on

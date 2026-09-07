@@ -39,8 +39,10 @@ export async function render(container) {
   ]);
 
   const list = el("div", { id: "email-accounts-list", style: "margin-top:14px;" });
-  wrap.append(header, form, list);
+  const triage = el("div", { id: "email-triage", style: "margin-top:14px;" });
+  wrap.append(header, form, list, triage);
   container.append(wrap);
+  refreshTriage(triage);
 
   addBtn.addEventListener("click", async () => {
     // Was a silent `return` on incomplete input — the button just did
@@ -66,6 +68,66 @@ export async function render(container) {
   });
 
   await refresh(list, emailInput);
+}
+
+// "Show the messages it deems important, daily" (David's ask 2026-09-06).
+// Reads the stored result of the 05:50 Triage Email task rather than scoring
+// on every tab open — that keeps a model call off the page load, and "daily"
+// is what was asked for. The button forces a fresh pass when you want one.
+async function refreshTriage(host) {
+  host.innerHTML = "";
+  let data;
+  try {
+    data = await api("/api/email/triage");
+  } catch (_) {
+    return; // triage is additive; never let it break the accounts view
+  }
+
+  const runBtn = el("button", { class: "btn", text: "Refresh now", onclick: async () => {
+    runBtn.disabled = true;
+    runBtn.textContent = "Reading your inbox…";
+    try {
+      const res = await api("/api/email/triage/run", { method: "POST" });
+      toast(res.summary || "Triage complete", "success");
+      await refreshTriage(host);
+    } catch (e) {
+      toast(`Triage failed: ${e.message}`, "error");
+      runBtn.disabled = false;
+      runBtn.textContent = "Refresh now";
+    }
+  }});
+
+  const when = data.generated_at
+    ? `Last checked ${new Date(data.generated_at * 1000).toLocaleString()} · ${data.scanned} unread scanned`
+    : "Runs automatically each morning at 5:50. Nothing checked yet.";
+
+  const body = [];
+  if (data.error) {
+    body.push(el("div", { class: "meta", style: "color:var(--danger);", text: data.error }));
+  }
+  if (!data.items || data.items.length === 0) {
+    body.push(el("div", { class: "meta", style: "margin-top:8px;", text:
+      data.generated_at ? "Nothing important in the last day." : "No results yet — run it to see what's worth your attention." }));
+  } else {
+    for (const it of data.items) {
+      body.push(el("div", { style: "padding:9px 0;border-top:1px solid var(--border);" }, [
+        el("div", { class: "title", style: "font-size:12.5px;", text: it.subject || "(no subject)" }),
+        el("div", { class: "meta", style: "margin-top:2px;", text: `${it.from || ""}${it.date ? " · " + it.date : ""}` }),
+        el("div", { class: "meta", style: "margin-top:3px;color:var(--accent);", text: it.reason || "" }),
+      ]));
+    }
+  }
+
+  host.appendChild(el("div", { class: "glass bracket card" }, [
+    el("div", { class: "card-row", style: "justify-content:space-between;align-items:flex-start;" }, [
+      el("div", {}, [
+        el("div", { class: "title", text: "Important today" }),
+        el("div", { class: "meta", style: "margin-top:3px;", text: when }),
+      ]),
+      runBtn,
+    ]),
+    ...body,
+  ]));
 }
 
 async function refresh(list, focusTarget) {

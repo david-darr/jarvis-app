@@ -9,10 +9,18 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from core import sync_engine
 from core.middleware import require_user
 from services.school_service import school_service
 
 router = APIRouter(prefix="/api/tab-school", tags=["school"])
+
+# Joins the nightly Sync All pass (David's ask 2026-09-06 — Canvas should
+# refresh itself rather than waiting for someone to press Sync). Registering
+# at import means it only participates when this tab is actually mounted, and
+# it's the pattern any user-authored tab can copy to get its own API synced
+# daily: import core.sync_engine and register one async callable.
+sync_engine.register_provider("School (Canvas)", school_service.sync)
 
 TAB_MANIFEST = {
     "id": "school",

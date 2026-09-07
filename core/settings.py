@@ -41,6 +41,12 @@ DEFAULTS: dict[str, Any] = {
     # so a download doesn't arrive carrying someone else's workflow. See
     # core/custom_tabs.py's TAB_TEMPLATES.
     "enabled_tab_templates": [],
+    # Built-ins this install has already switched on automatically. Tracked
+    # per-action, once ever, so an upgrade can turn on a newly-shipped
+    # automation without ever resurrecting one the user deliberately turned
+    # off (David's ask 2026-09-06: syncing should happen "so a user doesn't
+    # have to press it themselves"). See core/builtin_tasks.py.
+    "auto_enabled_builtins": [],
 }
 
 

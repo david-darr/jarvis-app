@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from core import builtin_tasks, email_triage
 from core.middleware import require_user
 from services.email_service import email_service
 
@@ -27,6 +28,25 @@ class SendRequest(BaseModel):
 @router.get("/accounts")
 async def list_accounts(user: str = Depends(require_user)) -> list[dict]:
     return email_service.list_accounts()
+
+
+# Daily importance triage (David's ask 2026-09-06). Registered before the
+# /accounts/{account_id} routes below so "triage" can't be captured as an
+# account id by the dynamic path.
+@router.get("/triage")
+async def get_triage(user: str = Depends(require_user)) -> dict:
+    return email_triage.load()
+
+
+@router.post("/triage/run")
+async def run_triage(user: str = Depends(require_user)) -> dict:
+    """Run the triage pass now instead of waiting for the 05:50 task — the
+    same code the scheduled task runs, so the button can't drift from it."""
+    try:
+        summary = await builtin_tasks.BUILTIN_TASKS["triage_email"]["run"]()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"triage failed: {str(e)[:300]}")
+    return {"summary": summary, **email_triage.load()}
 
 
 @router.post("/accounts")

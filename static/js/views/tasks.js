@@ -149,7 +149,7 @@ async function refreshBuiltins(card) {
       el("div", {}, [
         el("div", { class: "title", style: "font-size:12.5px;", text: b.label }),
         el("div", { class: "meta", style: "margin-top:3px;", text: b.description }),
-        el("div", { class: "meta", style: "margin-top:3px;color:var(--text-faint);", text: `${b.kind === "action" ? "No model call" : "Uses model"} · ${b.default_daily_time ? `every day at ${formatTime(b.default_daily_time)}` : `every ${Math.round(b.default_interval_seconds / 3600)}h`}` }),
+        el("div", { class: "meta", style: "margin-top:3px;color:var(--text-faint);", text: `${b.uses_model ? "Uses model" : "No model call"} · ${b.default_daily_time ? `every day at ${formatTime(b.default_daily_time)}` : `every ${Math.round(b.default_interval_seconds / 3600)}h`}` }),
       ]),
       el("div", { style: "display:flex;flex-direction:column;gap:6px;align-items:stretch;" }, [channelSelect, toggleBtn]),
     ]));

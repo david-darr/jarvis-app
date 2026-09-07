@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from core import contacts_store, dav_client, integrations
+from core import contacts_store, dav_client, integrations, sync_engine
 from core.middleware import require_admin
 from services.calendar_service import calendar_service
 
@@ -79,20 +79,14 @@ async def create_carddav(body: CreateDavRequest, user: str = Depends(require_adm
     return integrations.get_integration_masked(item["id"])
 
 
+# Thin aliases: the real implementations moved to core/sync_engine so the
+# daily task and these first-sync-on-create paths share one code path.
 async def _sync_caldav(item_id: str) -> int:
-    url, username, password = integrations.get_dav_credentials(item_id)
-    events = await dav_client.sync_calendar(url, username, password)
-    count = calendar_service.replace_synced_events(item_id, events)
-    integrations.record_sync_count(item_id, count)
-    return count
+    return await sync_engine.sync_integration(item_id)
 
 
 async def _sync_carddav(item_id: str) -> int:
-    url, username, password = integrations.get_dav_credentials(item_id)
-    contacts = await dav_client.sync_contacts(url, username, password)
-    count = contacts_store.replace_synced_contacts(item_id, contacts)
-    integrations.record_sync_count(item_id, count)
-    return count
+    return await sync_engine.sync_integration(item_id)
 
 
 class CreateIcalFeedRequest(BaseModel):
@@ -118,30 +112,32 @@ async def create_ical_feed(body: CreateIcalFeedRequest, user: str = Depends(requ
 
 
 async def _sync_ical_feed(item_id: str) -> int:
-    url, username, password = integrations.get_ical_credentials(item_id)
-    events = await dav_client.sync_ical_feed(url, username, password)
-    count = calendar_service.replace_synced_events(item_id, events)
-    integrations.record_sync_count(item_id, count)
-    return count
+    return await sync_engine.sync_integration(item_id)
 
 
 @router.post("/{item_id}/sync")
 async def sync_integration(item_id: str, user: str = Depends(require_admin)) -> dict:
-    item = integrations.get_integration(item_id)
-    if item is None:
-        raise HTTPException(status_code=404, detail="integration not found")
+    # Delegates to core/sync_engine so this button and the nightly Sync All
+    # task run identical code. They used to be able to drift apart, which is
+    # the kind of difference nobody notices until the unattended path breaks.
     try:
-        if item["kind"] == "caldav_calendar":
-            count = await _sync_caldav(item_id)
-        elif item["kind"] == "carddav_contacts":
-            count = await _sync_carddav(item_id)
-        elif item["kind"] == "ical_feed":
-            count = await _sync_ical_feed(item_id)
-        else:
-            raise HTTPException(status_code=400, detail="this integration type has no sync action")
+        count = await sync_engine.sync_integration(item_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="integration not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"sync failed: {str(e)[:300]}")
     return {"ok": True, "count": count}
+
+
+@router.post("/sync-all")
+async def sync_all_now(user: str = Depends(require_admin)) -> dict:
+    """Manual trigger for the same pass the daily task runs (David's ask
+    2026-09-06) — useful right after adding a feed, and for confirming the
+    nightly job would work without waiting until morning."""
+    results = await sync_engine.sync_all()
+    return {"results": results, "summary": sync_engine.format_results(results)}
 
 
 @router.get("/contacts")
