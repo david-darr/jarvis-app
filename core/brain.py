@@ -158,6 +158,16 @@ class Brain:
             # Claude can do real dev work on jarvis-app itself. data/ is
             # deliberately not in this list — see REPO_CODE_DIRS' comment.
             add_dirs=REPO_CODE_DIRS,
+            # Found live 2026-09-08: the SDK's own default here is 1MB, and
+            # a handful of real photos read back through a file tool (see
+            # core/attachments.py) easily produces one JSON message from the
+            # CLI bigger than that, which is a fatal transport error, not a
+            # per-turn one — see services/chat_service.py's brain-eviction
+            # comment for what that cascaded into. 10MB comfortably covers
+            # several normal images with real headroom left; not raised
+            # further than that so one truly runaway response still hits a
+            # real ceiling instead of growing memory unbounded.
+            max_buffer_size=10 * 1024 * 1024,
             permission_mode="acceptEdits",
             disallowed_tools=disabled,
             mcp_servers=mcp_servers,

@@ -32,22 +32,24 @@ NO_MODEL_MESSAGE = (
 
 # Found live 2026-09-08: a big-enough attachment (6 images in one Discord
 # message) produces a single reply message from the Claude Code CLI larger
-# than the SDK transport's hard 1MB per-JSON-line cap, which raises
-# CLIJSONDecodeError from deep inside the SDK's background reader — a fatal,
-# connection-level failure, not a per-turn one. The brain stayed cached in
-# _brains with its reader already dead, so every message afterward hit the
-# same broken connection, got an immediate empty reply (StopAsyncIteration
-# on the first read), and both send_message/stream_message's callers ended
-# up trying to send that empty string — Discord rejects it outright, and it
-# looked like the bot had gone silent. Any turn-level exception now evicts
-# the session's brain so the next message reconnects instead of reusing a
-# dead client, and this specific one gets an actionable reply pointing at
-# the actual cause instead of the generic fallback.
+# than the SDK transport's per-JSON-line buffer cap (core/brain.py sets this
+# to 10MB — see its own comment for why; the SDK's own default is 1MB),
+# which raises CLIJSONDecodeError from deep inside the SDK's background
+# reader — a fatal, connection-level failure, not a per-turn one. The brain
+# stayed cached in _brains with its reader already dead, so every message
+# afterward hit the same broken connection, got an immediate empty reply
+# (StopAsyncIteration on the first read), and both send_message/
+# stream_message's callers ended up trying to send that empty string —
+# Discord rejects it outright, and it looked like the bot had gone silent.
+# Any turn-level exception now evicts the session's brain so the next
+# message reconnects instead of reusing a dead client, and this specific
+# one gets an actionable reply pointing at the actual cause instead of the
+# generic fallback.
 ATTACHMENT_TOO_LARGE_MESSAGE = (
-    "One of the attachments in that message was too large for Claude Code to "
-    "process in a single response — there's a hard 1MB limit per reply from "
-    "the model, and enough images/large files in one message can blow past "
-    "it. Try again with fewer or smaller files."
+    "One of the attachments in that message produced a response too large for "
+    "Claude Code to process in one go — enough images or large files in a "
+    "single message can still blow past the buffer, even with real headroom. "
+    "Try again with fewer or smaller files."
 )
 
 
