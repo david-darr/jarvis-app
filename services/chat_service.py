@@ -12,6 +12,8 @@ them to go add one, instead of silently spending a real Claude turn.
 """
 from typing import AsyncIterator, Optional, Union
 
+from claude_agent_sdk import CLIJSONDecodeError
+
 from core import attachments, model_endpoints, token_usage
 from core.brain import Brain
 from core.external_brain import ExternalBrain
@@ -26,6 +28,26 @@ NO_MODEL_MESSAGE = (
     "You haven't added a model yet. Go to Settings → Add Models to connect "
     "Claude Code CLI, a local model (Ollama, llama.cpp, vLLM), or an API "
     "provider — then pick it from the model menu above the chat box."
+)
+
+# Found live 2026-09-08: a big-enough attachment (6 images in one Discord
+# message) produces a single reply message from the Claude Code CLI larger
+# than the SDK transport's hard 1MB per-JSON-line cap, which raises
+# CLIJSONDecodeError from deep inside the SDK's background reader — a fatal,
+# connection-level failure, not a per-turn one. The brain stayed cached in
+# _brains with its reader already dead, so every message afterward hit the
+# same broken connection, got an immediate empty reply (StopAsyncIteration
+# on the first read), and both send_message/stream_message's callers ended
+# up trying to send that empty string — Discord rejects it outright, and it
+# looked like the bot had gone silent. Any turn-level exception now evicts
+# the session's brain so the next message reconnects instead of reusing a
+# dead client, and this specific one gets an actionable reply pointing at
+# the actual cause instead of the generic fallback.
+ATTACHMENT_TOO_LARGE_MESSAGE = (
+    "One of the attachments in that message was too large for Claude Code to "
+    "process in a single response — there's a hard 1MB limit per reply from "
+    "the model, and enough images/large files in one message can blow past "
+    "it. Try again with fewer or smaller files."
 )
 
 
@@ -119,7 +141,14 @@ async def send_message(session_id: str, text: str, attachment_ids: list[str] | N
     full_text = _apply_attachments(session_id, text, attachment_ids)
     brain, just_created = await _get_brain(session_id, endpoint, is_admin)
     full_text = _prime_with_history(session_id, just_created, endpoint, full_text)
-    reply = await brain.run_turn(full_text)
+    try:
+        reply = await brain.run_turn(full_text)
+    except CLIJSONDecodeError:
+        await close_session_brain(session_id)
+        reply = ATTACHMENT_TOO_LARGE_MESSAGE
+    except Exception:
+        await close_session_brain(session_id)
+        raise
     token_usage.record_usage(endpoint["id"], getattr(brain, "last_usage", None))
     session_manager.append_message(session_id, "assistant", reply)
     return reply
@@ -138,9 +167,17 @@ async def stream_message(session_id: str, text: str, attachment_ids: list[str] |
     full_text = _prime_with_history(session_id, just_created, endpoint, full_text)
 
     reply_parts: list[str] = []
-    async for chunk in brain.run_turn_stream(full_text):
-        reply_parts.append(chunk)
-        yield chunk
+    try:
+        async for chunk in brain.run_turn_stream(full_text):
+            reply_parts.append(chunk)
+            yield chunk
+    except CLIJSONDecodeError:
+        await close_session_brain(session_id)
+        reply_parts.append(ATTACHMENT_TOO_LARGE_MESSAGE)
+        yield ATTACHMENT_TOO_LARGE_MESSAGE
+    except Exception:
+        await close_session_brain(session_id)
+        raise
 
     token_usage.record_usage(endpoint["id"], getattr(brain, "last_usage", None))
     session_manager.append_message(session_id, "assistant", "".join(reply_parts))
