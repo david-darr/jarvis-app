@@ -22,17 +22,33 @@ David hit messaging a connected bot with nothing configured.
 
 Degrades gracefully: with no bots configured, start() is a no-op — matches
 the "only wire what's configured" principle from the v1 wizard.
+
+File attachments (added 2026-09-08, David's ask, porting voice-line's
+discord_bot.py capability): any file type dropped into an allowed channel
+gets staged via core/attachments.py's stage_file()/resolve_for_turn() —
+the same pipeline the web Chat composer's own upload button uses — so a
+Discord upload lands the model in the exact same place a browser upload
+does: copied into the session's cwd, read with its normal file tools.
+Unlike voice-line's version, this doesn't keep a separate
+discord_attachments/ folder or write its own path-listing message — it
+reuses chat_service.py's existing attachment handling instead of a second
+implementation of the same idea. Outbound stays text-only, matching
+voice-line's own bot — nothing here sends a file back.
 """
 import asyncio
 import logging
 
-from core import discord_bots_store, events
+from core import attachments, discord_bots_store, events
 from core.session_manager import session_manager
 from services import chat_service
 
 logger = logging.getLogger(__name__)
 
 DISCORD_MESSAGE_LIMIT = 2000
+# Same cap the web Chat composer's upload button enforces
+# (routes/chat_routes.py's _MAX_ATTACHMENT_BYTES) — one shared limit for
+# both entry points into core/attachments.py's staging pipeline.
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 # Found live 2026-09-01: a bare fire-and-forget client.start() task has
 # nowhere to send an exception, so one bad turn or a transient Discord
 # hiccup killed the bot for good with zero visibility. Backing off between
@@ -98,13 +114,39 @@ def _build_client(discord, bot: dict):
             return
         if allowed_user_id and str(message.author.id) != allowed_user_id:
             return
+        # A message can be attachments with no text — Discord allows that.
+        # Without this, an empty message.content still reached
+        # chat_service.send_message() as a blank turn.
+        if not message.content.strip() and not message.attachments:
+            return
+
+        # Any file type, matching The Bridge's discord_bot.py convention —
+        # this bot's job is only to get the bytes staged, not to parse them.
+        # stage_file()/resolve_for_turn() is the same pipeline the web Chat
+        # composer's own attach-files button uses (see core/attachments.py),
+        # so a Discord upload and a browser upload land the model in the
+        # exact same place: copied into the session's cwd, read with its
+        # normal file tools.
+        attachment_ids: list[str] = []
+        if message.attachments:
+            for att in message.attachments:
+                if att.size > MAX_ATTACHMENT_BYTES:
+                    await message.channel.send(f"Couldn't attach {att.filename}: file too large (25MB max)")
+                    continue
+                try:
+                    content = await att.read()
+                    staged = attachments.stage_file(att.filename, content)
+                    attachment_ids.append(staged["id"])
+                except Exception as e:
+                    logger.exception("discord_channel: %s failed to download an attachment", bot["name"])
+                    await message.channel.send(f"Couldn't download {att.filename}: {e}")
 
         session_id = session_manager.get_or_create_channel_session(
             channel_key, bot["name"], model_endpoint_id=model_endpoint_id,
         )
         async with message.channel.typing():
             try:
-                reply = await chat_service.send_message(session_id, message.content)
+                reply = await chat_service.send_message(session_id, message.content, attachment_ids)
             except Exception:
                 logger.exception("discord_channel: %s failed to process message", bot["name"])
                 reply = "Something went wrong on my end handling that — check the app logs."
