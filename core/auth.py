@@ -27,9 +27,19 @@ from core.constants import DATA_DIR
 
 AUTH_FILE = os.path.join(DATA_DIR, "auth.json")
 SESSIONS_FILE = os.path.join(DATA_DIR, "sessions.json")
+PASSWORD_RESETS_FILE = os.path.join(DATA_DIR, "password_resets.json")
 
 SESSION_COOKIE_NAME = "jarvis_session"
 SESSION_TTL_SECONDS = 7 * 24 * 60 * 60  # 7 days, matches Odysseus
+
+# Forgot-password (David's ask 2026-09-10): a 6-digit code emailed through
+# whichever configured Email-tab account matches the address the user typed
+# in, since there's no per-user email field to check against instead. Short
+# TTL and a request cooldown, matching TOTP-code UX rather than a long-lived
+# magic link.
+RESET_CODE_TTL_SECONDS = 15 * 60
+RESET_REQUEST_COOLDOWN_SECONDS = 60
+RESET_MAX_ATTEMPTS = 5
 
 RESERVED_USERNAMES = {"internal-tool", "api"}
 
@@ -69,6 +79,7 @@ class AuthManager:
     def __init__(self) -> None:
         self._users: dict = read_json(AUTH_FILE, {"users": {}})
         self._sessions: dict = read_json(SESSIONS_FILE, {})
+        self._resets: dict = read_json(PASSWORD_RESETS_FILE, {})
 
     # -- users --------------------------------------------------------
 
@@ -209,6 +220,64 @@ class AuthManager:
         if token in self._sessions:
             del self._sessions[token]
             write_json_atomic(SESSIONS_FILE, self._sessions)
+
+    # -- password reset (forgot password, David's ask 2026-09-10) ---------
+    # Callers (routes/auth_routes.py) MUST return an identical response
+    # whether create_password_reset returns a real code or None (unknown
+    # user, or a request already outstanding) - the whole point of a
+    # constant-shape response is that this method's return value never
+    # leaks whether a username or email exists.
+
+    def create_password_reset(self, username: str) -> Optional[str]:
+        user = self._users["users"].get(username)
+        if not user:
+            return None
+        existing = self._resets.get(username)
+        if existing and existing["requested_at"] + RESET_REQUEST_COOLDOWN_SECONDS > time.time():
+            return None
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        self._resets[username] = {
+            "code": code,
+            "requested_at": time.time(),
+            "expires_at": time.time() + RESET_CODE_TTL_SECONDS,
+            "attempts": 0,
+        }
+        write_json_atomic(PASSWORD_RESETS_FILE, self._resets)
+        return code
+
+    def redeem_password_reset(self, username: str, code: str, new_password: str) -> bool:
+        entry = self._resets.get(username)
+        if not entry:
+            return False
+        if entry["expires_at"] < time.time():
+            del self._resets[username]
+            write_json_atomic(PASSWORD_RESETS_FILE, self._resets)
+            return False
+        entry["attempts"] = entry.get("attempts", 0) + 1
+        # Checked and persisted before the compare so a script hammering
+        # guesses burns its budget even if it never sends the right code -
+        # a 6-digit space is only ~1e6, worth capping hard.
+        if entry["attempts"] > RESET_MAX_ATTEMPTS:
+            del self._resets[username]
+            write_json_atomic(PASSWORD_RESETS_FILE, self._resets)
+            return False
+        if not secrets.compare_digest(entry["code"], code.strip()):
+            write_json_atomic(PASSWORD_RESETS_FILE, self._resets)
+            return False
+        self.change_password(username, new_password)
+        del self._resets[username]
+        write_json_atomic(PASSWORD_RESETS_FILE, self._resets)
+        # A password reset is exactly the moment to assume the account may
+        # have been compromised or the old password forgotten under
+        # duress - drop every existing session so a stale/leaked cookie
+        # elsewhere stops working immediately rather than outliving the
+        # password it was issued under.
+        stale = [t for t, s in self._sessions.items() if s.get("username") == username]
+        for t in stale:
+            del self._sessions[t]
+        if stale:
+            write_json_atomic(SESSIONS_FILE, self._sessions)
+        return True
 
 
 auth_manager = AuthManager()

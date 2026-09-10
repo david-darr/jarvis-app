@@ -3,11 +3,16 @@
 Only relevant when AUTH_ENABLED=true — see core/auth.py for the single-user
 default that skips all of this.
 """
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Response, Request
 from pydantic import BaseModel
 
 from core.auth import auth_manager, auth_enabled, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS
 from core.middleware import get_current_user, require_admin, require_user
+from services.email_service import email_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -64,6 +69,77 @@ async def login(body: LoginRequest, response: Response) -> dict:
     token = auth_manager.create_session(body.username)
     response.set_cookie(SESSION_COOKIE_NAME, token, httponly=True, samesite="lax", max_age=SESSION_TTL_SECONDS)
     return {"username": body.username, "is_admin": auth_manager.is_admin(body.username)}
+
+
+class ForgotPasswordRequest(BaseModel):
+    username: str
+    email: str
+
+
+# Same wording every time, on every branch below (unknown username, email
+# that doesn't match any configured account, real send failure, or a
+# genuine success) - a forgot-password endpoint that returns different
+# responses for "no such user" vs "wrong email" is a free username/email
+# enumeration oracle. Logged-out by design, so it can't be require_user-gated.
+_FORGOT_PASSWORD_GENERIC_RESPONSE = {
+    "ok": True,
+    "message": "If that username and email are both recognized, a reset code has been sent.",
+}
+
+
+@router.post("/forgot-password")
+async def forgot_password(body: ForgotPasswordRequest) -> dict:
+    if not auth_enabled():
+        raise HTTPException(status_code=400, detail="AUTH_ENABLED is false — no accounts to reset")
+
+    entered_email = body.email.strip().lower()
+    account = next(
+        (a for a in email_service.list_accounts() if a.get("email", "").strip().lower() == entered_email),
+        None,
+    )
+    if account is None:
+        return _FORGOT_PASSWORD_GENERIC_RESPONSE
+
+    code = auth_manager.create_password_reset(body.username.strip())
+    if not code:
+        return _FORGOT_PASSWORD_GENERIC_RESPONSE
+
+    try:
+        email_service.send_message(
+            account["id"],
+            to=account["email"],
+            subject="JARVIS password reset code",
+            body=(
+                f"Your JARVIS password reset code is: {code}\n\n"
+                "This code expires in 15 minutes and can only be used once. "
+                "If you didn't request this, you can safely ignore this email."
+            ),
+        )
+    except Exception:
+        # Still the generic response - a real send failure (bad SMTP creds,
+        # network blip) shouldn't tell an attacker their guess was closer
+        # than a genuinely unknown username/email would have been.
+        logger.exception("forgot_password: failed to send reset code via account %s", account["id"])
+
+    return _FORGOT_PASSWORD_GENERIC_RESPONSE
+
+
+class ResetPasswordRequest(BaseModel):
+    username: str
+    code: str
+    new_password: str
+
+
+@router.post("/reset-password")
+async def reset_password(body: ResetPasswordRequest) -> dict:
+    if not auth_enabled():
+        raise HTTPException(status_code=400, detail="AUTH_ENABLED is false — no accounts to reset")
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Use a password of at least 8 characters.")
+    ok = auth_manager.redeem_password_reset(body.username.strip(), body.code.strip(), body.new_password)
+    if not ok:
+        raise HTTPException(status_code=400, detail="That code is invalid, expired, or already used.")
+    return {"ok": True}
 
 
 @router.post("/logout")
