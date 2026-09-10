@@ -44,9 +44,22 @@ async def create_account(body: EnableAccountRequest, user: str = Depends(require
 
     Only ever creates the FIRST account: once any user exists, further
     accounts go through Settings > Admin > Users, which has its own gating.
+
+    Bug found live 2026-09-10: if a user already existed but auth_enabled
+    had gone back off (e.g. flipped off after being turned on, or a user
+    created some other way), this endpoint's only response was "sign in
+    with it instead" — but nothing anywhere else in the app could actually
+    turn auth_enabled back on, so that was a real dead end blocking remote
+    access entirely. Fixed: an existing account with auth already off just
+    gets auth turned on here, no new account, no password touched. It's
+    still a hard error if an account exists AND auth is already on — that
+    case really is "you meant to sign in, not sign up."
     """
     if auth_manager.has_any_users():
-        raise HTTPException(status_code=400, detail="An account already exists — sign in with it instead.")
+        if auth_enabled():
+            raise HTTPException(status_code=400, detail="An account already exists — sign in with it instead.")
+        settings_store.update_settings(auth_enabled=True)
+        return {"ok": True, "auth_enabled": True, "existing_account": True}
     if len(body.password) < 8:
         raise HTTPException(status_code=400, detail="Use a password of at least 8 characters.")
     try:

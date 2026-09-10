@@ -970,7 +970,9 @@ async function renderRemotePanel(content) {
         label: "JARVIS account created",
         hint: s.auth_ready
           ? "A login is set up."
-          : "Remote access needs a real login — without one, anyone reaching this machine on your network would get straight in.",
+          : s.has_any_users
+            ? "An account already exists, but login enforcement is off — turn it on below."
+            : "Remote access needs a real login — without one, anyone reaching this machine on your network would get straight in.",
       },
     ];
 
@@ -1004,8 +1006,31 @@ async function renderRemotePanel(content) {
     }
 
     // Inline first-account creation, so the user doesn't have to go find
-    // two unrelated settings before the toggle will work.
-    if (!s.auth_ready) {
+    // two unrelated settings before the toggle will work. Two distinct
+    // cases as of 2026-09-10 — collapsing them into one form was the dead
+    // end found live: an account can already exist with auth just switched
+    // off, and that needs a one-click fix, not a second signup form that
+    // the backend was always going to reject.
+    if (!s.auth_ready && s.has_any_users) {
+      const enableAuthBtn = el("button", { class: "btn", text: "Turn on account login" });
+      enableAuthBtn.addEventListener("click", async () => {
+        enableAuthBtn.disabled = true;
+        enableAuthBtn.textContent = "Working…";
+        try {
+          await api("/api/remote/create-account", { method: "POST", body: JSON.stringify({ username: "", password: "" }) });
+          toast("Login enforcement is on — sign in with your existing account", "success");
+          await refresh();
+        } finally {
+          enableAuthBtn.disabled = false;
+          enableAuthBtn.textContent = "Turn on account login";
+        }
+      });
+      body.appendChild(el("div", { class: "glass card", style: "margin-top:14px;" }, [
+        el("div", { class: "title", style: "font-size:12.5px;", text: "Turn on your existing login" }),
+        el("div", { class: "meta", style: "margin:4px 0 10px;line-height:1.5;", text: "An account already exists on this machine, but login enforcement is currently off. Remote access needs it on — this won't create a new account or change your password." }),
+        enableAuthBtn,
+      ]));
+    } else if (!s.auth_ready) {
       const userInput = el("input", { placeholder: "Username", autocomplete: "off" });
       const passInput = el("input", { type: "password", placeholder: "Password (8+ characters)", autocomplete: "new-password" });
       const createBtn = el("button", { class: "btn", text: "Create account" });

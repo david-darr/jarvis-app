@@ -103,6 +103,12 @@ def detect() -> dict:
         "hostname": None,
         "has_cert": False,
         "auth_ready": auth_enabled() and auth_manager.has_any_users(),
+        # Distinct from auth_ready: lets the UI tell "no account yet" apart
+        # from "an account exists but login enforcement is off" — the two
+        # need different fixes (create one vs. just flip the setting) and
+        # collapsing them into one flag was the dead end found live
+        # 2026-09-10 (see routes/remote_routes.py::create_account).
+        "has_any_users": auth_manager.has_any_users(),
         "enabled": bool(settings_store.get_setting("remote_access_enabled")),
         "running_now": is_running(),
         "url": _current_url,
