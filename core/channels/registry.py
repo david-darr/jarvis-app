@@ -11,13 +11,26 @@ from core.channels import discord_channel
 
 
 def list_channels() -> list[dict]:
-    return [
+    channels = [
         {
             "id": "discord",
             "label": "Discord",
             "configured": len(discord_bots_store.list_bots()) > 0,
         },
     ]
+    # Named per-channel targets (David's ask 2026-09-10: always deliver to a
+    # specific channel, not just DM the allowed user) — one selectable entry
+    # per configured named channel, across every bot. "discord" above still
+    # means "DM the allowed user" and keeps working for any task already
+    # pointed at it.
+    for bot in discord_bots_store.list_bots():
+        for entry in bot.get("channels", []):
+            channels.append({
+                "id": f"discord:{bot['id']}:{entry['id']}",
+                "label": f"Discord — #{entry['label']} ({bot['name']})",
+                "configured": True,
+            })
+    return channels
 
 
 async def send_to_channel(channel_id: str, text: str) -> bool:
@@ -26,4 +39,9 @@ async def send_to_channel(channel_id: str, text: str) -> bool:
     delivery miss shouldn't fail whatever produced the text."""
     if channel_id == "discord":
         return await discord_channel.send_direct_message(text)
+    if channel_id.startswith("discord:"):
+        parts = channel_id.split(":", 2)
+        if len(parts) == 3:
+            _, bot_id, entry_id = parts
+            return await discord_channel.send_to_named_channel(bot_id, entry_id, text)
     return False

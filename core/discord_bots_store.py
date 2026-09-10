@@ -59,6 +59,9 @@ def _load() -> dict:
     return data
 
 
+CHANNEL_MODES = {"normal", "open", "silent"}
+
+
 def _masked(bot: dict) -> dict:
     return {
         "id": bot["id"],
@@ -66,6 +69,16 @@ def _masked(bot: dict) -> dict:
         "allowed_user_id": bot.get("allowed_user_id"),
         "model_endpoint_id": bot.get("model_endpoint_id"),
         "has_token": bool(bot.get("token_encrypted")),
+        # Per-Discord-channel overrides (David's ask 2026-09-10): "open"
+        # answers anyone in that channel regardless of allowed_user_id;
+        # "silent" never answers there at all, no matter who; anything not
+        # listed here keeps today's default (DMs and any other channel are
+        # gated by allowed_user_id, same as before this existed). Any entry
+        # here — including a silent one — also becomes a selectable
+        # scheduled-task delivery target (core/channels/registry.py), so one
+        # entry can be both "never talks back" and "where the daily brief
+        # gets posted."
+        "channels": bot.get("channels", []),
     }
 
 
@@ -114,6 +127,56 @@ def delete_bot(bot_id: str) -> None:
     data = _load()
     data.pop(bot_id, None)
     write_json_atomic(BOTS_FILE, data)
+
+
+def add_channel(bot_id: str, discord_channel_id: str, label: str, mode: str) -> dict:
+    if mode not in CHANNEL_MODES:
+        raise ValueError(f"mode must be one of {sorted(CHANNEL_MODES)}, got {mode!r}")
+    data = _load()
+    bot = data.get(bot_id)
+    if bot is None:
+        raise KeyError(f"no such bot: {bot_id}")
+    entry = {
+        "id": uuid.uuid4().hex[:8],
+        "discord_channel_id": discord_channel_id.strip(),
+        "label": label.strip() or discord_channel_id.strip(),
+        "mode": mode,
+    }
+    bot.setdefault("channels", []).append(entry)
+    write_json_atomic(BOTS_FILE, data)
+    return _masked(bot)
+
+
+def update_channel(bot_id: str, entry_id: str, label: Optional[str] = None,
+                    mode: Optional[str] = None) -> dict:
+    if mode is not None and mode not in CHANNEL_MODES:
+        raise ValueError(f"mode must be one of {sorted(CHANNEL_MODES)}, got {mode!r}")
+    data = _load()
+    bot = data.get(bot_id)
+    if bot is None:
+        raise KeyError(f"no such bot: {bot_id}")
+    entry = next((c for c in bot.get("channels", []) if c["id"] == entry_id), None)
+    if entry is None:
+        raise KeyError(f"no such channel entry: {entry_id}")
+    if label is not None:
+        entry["label"] = label.strip() or entry["discord_channel_id"]
+    if mode is not None:
+        entry["mode"] = mode
+    write_json_atomic(BOTS_FILE, data)
+    return _masked(bot)
+
+
+def remove_channel(bot_id: str, entry_id: str) -> dict:
+    data = _load()
+    bot = data.get(bot_id)
+    if bot is None:
+        raise KeyError(f"no such bot: {bot_id}")
+    before = len(bot.get("channels", []))
+    bot["channels"] = [c for c in bot.get("channels", []) if c["id"] != entry_id]
+    if len(bot["channels"]) == before:
+        raise KeyError(f"no such channel entry: {entry_id}")
+    write_json_atomic(BOTS_FILE, data)
+    return _masked(bot)
 
 
 def resolve_token(bot_id: str) -> Optional[str]:

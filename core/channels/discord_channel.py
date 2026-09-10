@@ -94,10 +94,26 @@ async def start() -> None:
         await _start_one(discord, bot)
 
 
+def _should_respond(channel_id: str, author_id: str, channel_modes: dict, allowed_user_id) -> bool:
+    """Pure so it's testable without a real discord.Client. channel_modes is
+    {discord_channel_id: mode}, mode one of discord_bots_store.CHANNEL_MODES.
+    A channel not in the dict (including every DM) keeps the original
+    behavior: gated by allowed_user_id if one is set, open to anyone
+    otherwise. "silent" always wins over "open" if a channel were ever
+    misconfigured as both — checked first, unconditionally."""
+    mode = channel_modes.get(channel_id, "normal")
+    if mode == "silent":
+        return False
+    if mode == "open":
+        return True
+    return not allowed_user_id or author_id == allowed_user_id
+
+
 def _build_client(discord, bot: dict):
     channel_key = f"discord:{bot['id']}"
     allowed_user_id = bot.get("allowed_user_id")
     model_endpoint_id = bot.get("model_endpoint_id")
+    channel_modes = {c["discord_channel_id"]: c["mode"] for c in bot.get("channels", [])}
 
     intents = discord.Intents.default()
     intents.message_content = True
@@ -112,7 +128,7 @@ def _build_client(discord, bot: dict):
     async def on_message(message):
         if message.author == client.user:
             return
-        if allowed_user_id and str(message.author.id) != allowed_user_id:
+        if not _should_respond(str(message.channel.id), str(message.author.id), channel_modes, allowed_user_id):
             return
         # A message can be attachments with no text — Discord allows that.
         # Without this, an empty message.content still reached
@@ -214,6 +230,32 @@ async def send_direct_message(text: str) -> bool:
         except Exception:
             logger.exception("discord_channel: send_direct_message failed for %s", bot["name"])
     return False
+
+
+async def send_to_named_channel(bot_id: str, entry_id: str, text: str) -> bool:
+    """Proactive send to one of a bot's configured named channels (David's
+    ask 2026-09-10: always post the daily brief to a specific channel, not
+    just DM the allowed user). Returns False on any failure or unknown
+    bot/channel/client, same "delivery miss shouldn't take the caller down"
+    contract as send_direct_message."""
+    client = _clients.get(bot_id)
+    if not client:
+        return False
+    bot = discord_bots_store.get_bot(bot_id)
+    if not bot:
+        return False
+    entry = next((c for c in bot.get("channels", []) if c["id"] == entry_id), None)
+    if not entry:
+        return False
+    try:
+        channel_id = int(entry["discord_channel_id"])
+        channel = client.get_channel(channel_id) or await client.fetch_channel(channel_id)
+        for chunk in _chunk_message(text):
+            await channel.send(chunk)
+        return True
+    except Exception:
+        logger.exception("discord_channel: send_to_named_channel failed for bot %s channel entry %s", bot_id, entry_id)
+        return False
 
 
 def connected_bots() -> list[str]:

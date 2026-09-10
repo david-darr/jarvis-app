@@ -1203,6 +1203,8 @@ async function renderChannelsPanel(content) {
         "3. Under Privileged Gateway Intents, enable Message Content Intent (JARVIS needs this to read messages).",
         el("br"),
         "4. Under OAuth2 > URL Generator, check \"bot\", give it Send Messages + Read Message History, then open the generated URL to invite it to your server.",
+        el("br"),
+        "5. To set a channel override below, turn on Developer Mode in your own Discord client (Settings > Advanced), then right-click any channel and choose Copy Channel ID.",
       ]),
     ]),
   );
@@ -1248,6 +1250,71 @@ async function renderChannelsPanel(content) {
         await refresh();
         toast("Bot removed", "success");
       });
+      // -- Named channels (David's ask 2026-09-10: per-channel behavior —
+      // "open" answers anyone there regardless of the allowlist above,
+      // "silent" never answers there at all, and either way it becomes a
+      // selectable delivery target on the Tasks tab, e.g. always posting
+      // the Daily Brief to one specific channel).
+      const MODE_LABEL = { normal: "Normal (allowlist applies)", open: "Open — anyone can talk", silent: "Silent — never responds" };
+      const channelsList = el("div", { style: "margin-top:10px;" });
+      for (const entry of (bot.channels || [])) {
+        const modeSelect = customSelect({ style: "flex:1;" }, Object.entries(MODE_LABEL).map(([v, t]) =>
+          el("option", { value: v, ...(v === entry.mode ? { selected: "" } : {}) }, t)));
+        const entrySaveBtn = el("button", { class: "btn", text: "Save" });
+        const entryDelBtn = el("button", { class: "btn danger", text: "Remove" });
+        entrySaveBtn.addEventListener("click", async () => {
+          await api(`/api/settings/discord-bots/${bot.id}/channels/${entry.id}`, {
+            method: "PATCH", body: JSON.stringify({ mode: modeSelect.value }),
+          });
+          toast("Channel updated", "success");
+          await refresh();
+        });
+        entryDelBtn.addEventListener("click", async () => {
+          const ok = await confirmDialog({
+            title: "Remove this channel override?",
+            message: `"#${entry.label}" goes back to normal (allowlist-gated) behavior, and stops being a task delivery target.`,
+            confirmLabel: "Remove",
+          });
+          if (!ok) return;
+          await api(`/api/settings/discord-bots/${bot.id}/channels/${entry.id}`, { method: "DELETE" });
+          await refresh();
+          toast("Channel removed", "success");
+        });
+        channelsList.appendChild(
+          el("div", { class: "card-row", style: "gap:8px;padding:6px 0;border-top:1px solid var(--border);" }, [
+            el("div", { style: "flex:1;min-width:0;" }, [
+              el("div", { style: "font-size:13px;color:var(--text);", text: `#${entry.label}` }),
+              el("div", { class: "meta", style: "font-size:11px;", text: `Channel ID ${entry.discord_channel_id}` }),
+            ]),
+            modeSelect, entrySaveBtn, entryDelBtn,
+          ]),
+        );
+      }
+
+      const newChanIdInput = el("input", { placeholder: "Discord channel ID", style: "flex:1;" });
+      const newChanLabelInput = el("input", { placeholder: "Label (e.g. announcements)", style: "flex:1;" });
+      const newChanModeSelect = customSelect({ style: "flex:1;" },
+        Object.entries(MODE_LABEL).map(([v, t]) => el("option", { value: v }, t)));
+      const newChanErr = el("div", { class: "meta", style: "color:var(--danger);" });
+      const addChanBtn = el("button", { class: "btn", text: "+ Add channel" });
+      addChanBtn.addEventListener("click", async () => {
+        newChanErr.textContent = "";
+        if (!newChanIdInput.value.trim()) { newChanErr.textContent = "Channel ID is required."; return; }
+        try {
+          await api(`/api/settings/discord-bots/${bot.id}/channels`, {
+            method: "POST",
+            body: JSON.stringify({
+              discord_channel_id: newChanIdInput.value.trim(),
+              label: newChanLabelInput.value.trim(),
+              mode: newChanModeSelect.value || "normal",
+            }),
+          });
+          newChanIdInput.value = ""; newChanLabelInput.value = "";
+          await refresh();
+          toast("Channel added", "success");
+        } catch (e) { newChanErr.textContent = e.message.replace(/^\d+: /, ""); }
+      });
+
       botsSection.appendChild(
         el("div", { class: "glass bracket card", style: "margin-bottom:8px;" }, [
           el("div", { class: "card-row" }, [
@@ -1261,6 +1328,12 @@ async function renderChannelsPanel(content) {
             el("div", { class: "meta", style: "flex-shrink:0;", text: "Default model:" }),
             modelSelect, saveBtn,
           ]),
+          el("div", { class: "meta", style: "margin-top:12px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;", text: "Channel overrides" }),
+          channelsList,
+          el("div", { class: "card-row", style: "flex-wrap:wrap;gap:6px;margin-top:8px;" }, [
+            newChanIdInput, newChanLabelInput, newChanModeSelect, addChanBtn,
+          ]),
+          newChanErr,
         ]),
       );
     }
@@ -1307,7 +1380,7 @@ async function renderChannelsPanel(content) {
       el("div", { class: "title", style: "font-size:12.5px;", text: "Add a Discord bot" }),
       el("div", { class: "card-row", style: "flex-wrap:wrap;gap:8px;margin-top:10px;" }, [nameInput, tokenInput, allowedInput, addModelSelect, addBtn]),
       addErr,
-      el("div", { class: "meta", style: "margin-top:10px;", text: "Adding/editing/removing a bot restarts the Discord connection immediately. Task delivery DMs the allowed user ID of whichever bot has one set." }),
+      el("div", { class: "meta", style: "margin-top:10px;", text: "Adding/editing/removing a bot or a channel override restarts the Discord connection immediately. The plain \"Discord\" delivery target DMs the allowed user ID; a named channel below is its own separate delivery target on the Tasks tab." }),
     ]),
   );
 }

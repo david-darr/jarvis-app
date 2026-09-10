@@ -5,7 +5,7 @@ no-op (SINGLE_USER is always admin), it only matters once AUTH_ENABLED=true.
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from core import discord_bots_store, settings as settings_store
@@ -33,6 +33,17 @@ class UpdateDiscordBotRequest(BaseModel):
     token: Optional[str] = None  # blank/omitted = keep the existing token
     allowed_user_id: Optional[str] = None
     model_endpoint_id: Optional[str] = None
+
+
+class AddDiscordChannelRequest(BaseModel):
+    discord_channel_id: str
+    label: str = ""
+    mode: str = "normal"  # "normal" | "open" | "silent" — see discord_bots_store.CHANNEL_MODES
+
+
+class UpdateDiscordChannelRequest(BaseModel):
+    label: Optional[str] = None
+    mode: Optional[str] = None
 
 
 class VaultSetupRequest(BaseModel):
@@ -147,6 +158,49 @@ async def delete_discord_bot(bot_id: str, user: str = Depends(require_admin)) ->
     discord_bots_store.delete_bot(bot_id)
     await discord_channel.restart()
     return {"ok": True}
+
+
+# -- Per-bot named channels (David's ask 2026-09-10: open/silent/broadcast
+# behavior scoped to a specific Discord channel, not just the whole bot) --
+
+@router.post("/discord-bots/{bot_id}/channels")
+async def add_discord_channel(bot_id: str, body: AddDiscordChannelRequest, user: str = Depends(require_admin)) -> dict:
+    if not body.discord_channel_id.strip().isdigit():
+        raise HTTPException(status_code=400, detail=(
+            "That doesn't look like a Discord channel ID (numbers only). "
+            "Turn on Developer Mode in Discord (Settings > Advanced), then right-click "
+            "the channel and choose Copy Channel ID."
+        ))
+    try:
+        bot = discord_bots_store.add_channel(bot_id, body.discord_channel_id, body.label, body.mode)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="bot not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await discord_channel.restart()
+    return bot
+
+
+@router.patch("/discord-bots/{bot_id}/channels/{entry_id}")
+async def update_discord_channel(bot_id: str, entry_id: str, body: UpdateDiscordChannelRequest, user: str = Depends(require_admin)) -> dict:
+    try:
+        bot = discord_bots_store.update_channel(bot_id, entry_id, label=body.label, mode=body.mode)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await discord_channel.restart()
+    return bot
+
+
+@router.delete("/discord-bots/{bot_id}/channels/{entry_id}")
+async def delete_discord_channel(bot_id: str, entry_id: str, user: str = Depends(require_admin)) -> dict:
+    try:
+        bot = discord_bots_store.remove_channel(bot_id, entry_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    await discord_channel.restart()
+    return bot
 
 
 @router.get("/agent-tools")
