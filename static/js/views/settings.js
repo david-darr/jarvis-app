@@ -1497,8 +1497,32 @@ async function renderAgentToolsPanel(content) {
   saveBtn.addEventListener("click", async () => {
     const disabled_tools = Object.entries(checks).filter(([, cb]) => !cb.checked).map(([tool]) => tool);
     await api("/api/settings/agent-tools", { method: "POST", body: JSON.stringify({ disabled_tools }) });
+    toast("Saved", "success");
   });
   content.append(list, saveBtn);
+
+  // Extra allowed MCP tools (David's ask 2026-09-10) — an escape hatch for
+  // whatever core/brain.py's hardcoded Canva allowlist doesn't cover. The
+  // Claude Agent SDK only matches exact tool names, no wildcards, so a
+  // real Canva design/export flow reaching for one more tool than
+  // anticipated hits a permission wall with no one able to answer it in a
+  // non-interactive session (Discord, a scheduled Task) - the turn just
+  // never resolves. This is how to add that tool without a code release.
+  content.append(
+    el("div", { class: "title", style: "font-size:13px;margin-top:24px;", text: "Extra allowed tools" }),
+    el("div", { class: "meta", style: "margin-top:6px;line-height:1.5;", text: "Exact MCP tool names to pre-approve beyond the built-in list — for example a Canva tool that got blocked mid-conversation (the error names the exact tool). One per line." }),
+  );
+  const extraTextarea = el("textarea", {
+    style: "width:100%;min-height:90px;margin-top:8px;font-family:monospace;font-size:12px;",
+    text: (data.extra_allowed || []).join("\n"),
+  });
+  const extraSaveBtn = el("button", { class: "btn", text: "Save extra tools", style: "margin-top:8px;" });
+  extraSaveBtn.addEventListener("click", async () => {
+    const extra_allowed_tools = extraTextarea.value.split("\n").map((s) => s.trim()).filter(Boolean);
+    await api("/api/settings/extra-allowed-tools", { method: "POST", body: JSON.stringify({ extra_allowed_tools }) });
+    toast("Saved — takes effect on the next new or reconnected session", "success");
+  });
+  content.append(extraTextarea, extraSaveBtn);
 }
 
 // -- Admin: Users -------------------------------------------------------------

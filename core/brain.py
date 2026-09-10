@@ -144,8 +144,33 @@ class Brain:
             "mcp__hive_mind__create_event",
             "mcp__hive_mind__update_event",
             "mcp__hive_mind__delete_event",
-            "mcp__hive_mind__generate_image",
+            "mcp__hive_mind__save_generated_image",
+            "mcp__hive_mind__save_generated_file",
+            # Canva image/design generation (David's ask 2026-09-10, "have
+            # their claude code use Canva"). Pre-approves only the
+            # generate-and-export surface actually needed for "create an
+            # image" - not Canva's full tool set (nothing that edits/deletes
+            # existing designs, comments, brand templates, etc.). This is
+            # the account's own Canva connector, entirely outside jarvis-app's
+            # control - if it isn't connected, these calls fail naturally and
+            # Claude reports that; nothing here can detect or force it.
+            # Both the current live tool (generate-design, deprecated but
+            # still what this account's connector actually serves) and its
+            # documented replacement (create-design) are pre-approved so
+            # this doesn't silently break whenever Canva finishes that
+            # rollout.
+            "mcp__claude_ai_Canva__generate-design",
+            "mcp__claude_ai_Canva__create-design",
+            "mcp__claude_ai_Canva__get-design-candidates",
+            "mcp__claude_ai_Canva__create-design-from-candidate",
+            "mcp__claude_ai_Canva__get-export-formats",
+            "mcp__claude_ai_Canva__export-design",
+            "mcp__claude_ai_Canva__list-brand-kits",
+            "mcp__claude_ai_Canva__get-assets",
         ]
+        # Escape hatch for whatever this hardcoded baseline doesn't cover —
+        # see core/settings.py's extra_allowed_tools for why this exists.
+        allowed_tools.extend(settings_store.get_setting("extra_allowed_tools") or [])
         if self.is_admin:
             allowed_tools.append("Bash")
         else:

@@ -358,33 +358,62 @@ def get_hive_mind_server(exclude_session_id: str | None = None):
         return {"content": [{"type": "text", "text": text}]}
 
     @tool(
-        "generate_image",
-        "Generate an image from a text description, free (Pollinations.ai, built on Flux/Stable "
-        "Diffusion — no API key involved). Use whenever the user asks to create, draw, generate, "
-        "paint, or make an image/picture/artwork of something. The result comes back as a markdown "
-        "image link — you MUST include that exact markdown verbatim in your reply, on its own line, "
-        "so the image actually renders. Do not just describe the image in words instead of including "
-        "the link, and do not alter the URL.",
+        "save_generated_image",
+        "The FINAL step after generating an image/poster/design in Canva. When the user asks to "
+        "create, draw, generate, design, or make an image/picture/poster/flyer of something: first "
+        "use Canva's own design tools (create/generate a design of the appropriate design_type, then "
+        "get-export-formats + export-design to get a real image file) to actually produce it — this "
+        "tool does not generate anything itself. Once export-design returns a download URL, call this "
+        "tool with that URL to bring the image into this conversation. The result comes back as a "
+        "markdown image link — you MUST include that exact markdown verbatim in your reply, on its "
+        "own line, so it actually renders. If Canva isn't available in this session (no tool access, "
+        "or a real error from Canva itself), say so plainly — do not fall back to describing an image "
+        "in words instead, and do not invent a URL.",
         {
             "type": "object",
             "properties": {
-                "prompt": {"type": "string", "description": "A detailed description of the image to generate"},
-                "width": {"type": "integer", "description": "Pixels, defaults to 1024"},
-                "height": {"type": "integer", "description": "Pixels, defaults to 1024"},
+                "url": {"type": "string", "description": "The real download URL returned by Canva's export-design tool"},
+                "description": {"type": "string", "description": "Short description of the image, used as the alt text"},
             },
-            "required": ["prompt"],
+            "required": ["url", "description"],
         },
     )
-    async def _generate_image(args: dict) -> dict:
+    async def _save_generated_image(args: dict) -> dict:
         try:
-            result = await image_gen.generate_image(
-                args["prompt"], width=args.get("width", 1024), height=args.get("height", 1024),
-            )
+            result = await image_gen.import_image_from_url(args["url"])
         except Exception as e:
-            return {"content": [{"type": "text", "text": f"Image generation failed: {e}"}]}
-        alt = args["prompt"][:80].replace("[", "").replace("]", "")
+            return {"content": [{"type": "text", "text": f"Couldn't fetch that image: {e}"}]}
+        alt = args["description"][:80].replace("[", "").replace("]", "")
         markdown = f"![{alt}]({result['url']})"
-        return {"content": [{"type": "text", "text": f"Image generated successfully. Include this exact markdown in your reply so it renders: {markdown}"}]}
+        return {"content": [{"type": "text", "text": f"Image saved. Include this exact markdown in your reply so it renders: {markdown}"}]}
+
+    @tool(
+        "save_generated_file",
+        "Bring a locally-created file into this conversation as a real downloadable attachment. Use "
+        "this after actually writing a file to disk with a Bash-run script — for example a poster, "
+        "flyer, or presentation built with python-pptx, a Word doc with python-docx, a spreadsheet "
+        "with openpyxl, or a PDF with reportlab. This tool does not create anything itself, only "
+        "the write-then-call-this-tool pattern works, not calling this on a file that doesn't exist. "
+        "The result comes back as a markdown link — you MUST include that exact markdown verbatim in "
+        "your reply, on its own line, so the user gets a real download link (in Discord it is sent as "
+        "a real file attachment automatically).",
+        {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Local filesystem path to the file that was just created"},
+                "description": {"type": "string", "description": "Short description of the file, used as the link text"},
+            },
+            "required": ["path", "description"],
+        },
+    )
+    async def _save_generated_file(args: dict) -> dict:
+        try:
+            result = image_gen.register_generated_file(args["path"])
+        except Exception as e:
+            return {"content": [{"type": "text", "text": f"Couldn't save that file: {e}"}]}
+        desc = args["description"][:80].replace("[", "").replace("]", "")
+        markdown = f"[{desc}]({result['url']})"
+        return {"content": [{"type": "text", "text": f"File saved. Include this exact markdown link in your reply so it renders as a download: {markdown}"}]}
 
     return create_sdk_mcp_server(name="hive_mind", tools=[
         _search, _list_skills, _read_skill,
@@ -393,5 +422,5 @@ def get_hive_mind_server(exclude_session_id: str | None = None):
         _create_note, _update_note, _delete_note,
         _create_task, _update_task, _delete_task,
         _create_event, _update_event, _delete_event,
-        _generate_image,
+        _save_generated_image, _save_generated_file,
     ])

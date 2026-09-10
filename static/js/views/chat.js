@@ -42,22 +42,33 @@ const ICON_DONE = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" s
 //
 // ts is a unix-seconds float (session_manager.append_message) or omitted
 // for a card being built live during streaming (uses "now").
-// Generated-image rendering (David's ask 2026-09-10: image generation in
-// chat). Messages render as plain textContent everywhere in this file —
-// there's no markdown renderer in the app at all — so this is a narrow,
-// targeted parser for exactly one pattern (our own generate_image tool's
-// output), not a general markdown implementation. The tool is instructed
-// to always emit this exact ![alt](/generated-images/<file>) shape.
-const GENERATED_IMAGE_RE = /!\[([^\]]*)\]\((\/generated-images\/[^\s)]+)\)/g;
+// Generated-image/file rendering (David's ask 2026-09-10: image generation,
+// then Office/PDF file generation, in chat). Messages render as plain
+// textContent everywhere in this file — there's no markdown renderer in the
+// app at all — so this is a narrow, targeted parser for exactly two
+// patterns (our own save_generated_image/save_generated_file tools' output),
+// not a general markdown implementation. Both tools are instructed to
+// always emit one of these two exact shapes.
+// One combined pass so a reply mixing an image and a file link (or several
+// of either) still renders left-to-right in the order they actually appear,
+// rather than all images first regardless of position.
+const GENERATED_ANY_RE = /(!)?\[([^\]]*)\]\((\/generated-(?:images|files)\/[^\s)]+)\)/g;
 
 function renderMessageBody(body, text) {
   body.innerHTML = "";
-  GENERATED_IMAGE_RE.lastIndex = 0;
+  GENERATED_ANY_RE.lastIndex = 0;
   let lastIndex = 0;
   let match;
-  while ((match = GENERATED_IMAGE_RE.exec(text)) !== null) {
+  while ((match = GENERATED_ANY_RE.exec(text)) !== null) {
     if (match.index > lastIndex) body.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
-    body.appendChild(el("img", { src: match[2], alt: match[1] || "Generated image", class: "msg-generated-image", loading: "lazy" }));
+    const isImage = match[1] === "!";
+    const label = match[2];
+    const url = match[3];
+    if (isImage) {
+      body.appendChild(el("img", { src: url, alt: label || "Generated image", class: "msg-generated-image", loading: "lazy" }));
+    } else {
+      body.appendChild(el("a", { href: url, download: "", class: "msg-generated-file", target: "_blank", rel: "noopener", text: `⬇ ${label || "Download"}` }));
+    }
     lastIndex = match.index + match[0].length;
   }
   if (lastIndex < text.length || lastIndex === 0) body.appendChild(document.createTextNode(text.slice(lastIndex)));

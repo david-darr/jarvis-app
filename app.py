@@ -169,6 +169,11 @@ app.mount(custom_tabs.USER_VIEWS_URL, StaticFiles(directory=custom_tabs.USER_VIE
 # reason custom_tabs.ensure_user_tab_dirs() runs before its own mount above.
 os.makedirs(image_gen.GENERATED_DIR, exist_ok=True)
 app.mount(image_gen.GENERATED_URL_PREFIX, StaticFiles(directory=image_gen.GENERATED_DIR), name="generated-images")
+# Generated Office/PDF files (David's ask 2026-09-10, same session — a
+# pptx/docx/xlsx/pdf a skill builds locally via Bash, not an image pulled
+# from a URL). See core/image_gen.py's GENERATED_FILES_DIR comment.
+os.makedirs(image_gen.GENERATED_FILES_DIR, exist_ok=True)
+app.mount(image_gen.GENERATED_FILES_URL_PREFIX, StaticFiles(directory=image_gen.GENERATED_FILES_DIR), name="generated-files")
 
 
 @app.get("/")

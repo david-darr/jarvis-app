@@ -206,7 +206,8 @@ async def delete_discord_channel(bot_id: str, entry_id: str, user: str = Depends
 @router.get("/agent-tools")
 async def list_agent_tools(user: str = Depends(require_admin)) -> dict:
     disabled = settings_store.get_setting("disabled_tools") or []
-    return {"available": AGENT_TOOLS, "disabled": disabled}
+    extra_allowed = settings_store.get_setting("extra_allowed_tools") or []
+    return {"available": AGENT_TOOLS, "disabled": disabled, "extra_allowed": extra_allowed}
 
 
 @router.post("/agent-tools")
@@ -220,4 +221,23 @@ async def set_disabled_tools(body: SetDisabledToolsRequest, user: str = Depends(
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"unknown tool(s): {', '.join(unknown)}")
     settings_store.update_settings(disabled_tools=body.disabled_tools)
+    return {"ok": True}
+
+
+class SetExtraAllowedToolsRequest(BaseModel):
+    extra_allowed_tools: list[str]
+
+
+@router.post("/extra-allowed-tools")
+async def set_extra_allowed_tools(body: SetExtraAllowedToolsRequest, user: str = Depends(require_admin)) -> dict:
+    """Escape hatch for MCP tools core/brain.py's hardcoded allowed_tools
+    baseline doesn't cover (David's ask 2026-09-10, hit live with Canva's
+    real design/export flow reaching for a tool the baseline hadn't
+    anticipated) — see core/settings.py's extra_allowed_tools for the full
+    story. No validation against a known-tools list here, unlike
+    disabled_tools above: this exists specifically to cover MCP tools
+    jarvis-app doesn't know about ahead of time (Canva's own surface,
+    which isn't enumerated anywhere in this codebase)."""
+    cleaned = [t.strip() for t in body.extra_allowed_tools if t.strip()]
+    settings_store.update_settings(extra_allowed_tools=cleaned)
     return {"ok": True}

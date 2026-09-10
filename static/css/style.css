@@ -665,6 +665,8 @@ input[type="checkbox"]:checked::after {
    most recognizable trait. */
 .msg.assistant .msg-body { color: var(--text); }
 .msg-generated-image { display: block; max-width: 420px; width: 100%; border-radius: 10px; margin: 8px 0; border: 1px solid var(--border); }
+.msg-generated-file { display: inline-flex; align-items: center; gap: 6px; margin: 6px 0; padding: 8px 12px; border-radius: 8px; background: var(--surface-2, rgba(255,255,255,0.05)); border: 1px solid var(--border); color: var(--accent); text-decoration: none; font-size: 13px; }
+.msg-generated-file:hover { border-color: var(--accent); }
 
 /* Streaming cursor + done marker (David's ask 2026-09-02) — a continuously
    blinking cursor while a reply is still streaming (survives silent gaps
