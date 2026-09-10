@@ -42,9 +42,31 @@ const ICON_DONE = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" s
 //
 // ts is a unix-seconds float (session_manager.append_message) or omitted
 // for a card being built live during streaming (uses "now").
+// Generated-image rendering (David's ask 2026-09-10: image generation in
+// chat). Messages render as plain textContent everywhere in this file —
+// there's no markdown renderer in the app at all — so this is a narrow,
+// targeted parser for exactly one pattern (our own generate_image tool's
+// output), not a general markdown implementation. The tool is instructed
+// to always emit this exact ![alt](/generated-images/<file>) shape.
+const GENERATED_IMAGE_RE = /!\[([^\]]*)\]\((\/generated-images\/[^\s)]+)\)/g;
+
+function renderMessageBody(body, text) {
+  body.innerHTML = "";
+  GENERATED_IMAGE_RE.lastIndex = 0;
+  let lastIndex = 0;
+  let match;
+  while ((match = GENERATED_IMAGE_RE.exec(text)) !== null) {
+    if (match.index > lastIndex) body.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+    body.appendChild(el("img", { src: match[2], alt: match[1] || "Generated image", class: "msg-generated-image", loading: "lazy" }));
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length || lastIndex === 0) body.appendChild(document.createTextNode(text.slice(lastIndex)));
+}
+
 function messageCard(role, text, ts) {
   const time = new Date((ts || Date.now() / 1000) * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  const body = el("div", { class: "msg-body", text });
+  const body = el("div", { class: "msg-body" });
+  renderMessageBody(body, text);
   const copyBtn = el("button", { type: "button", class: "msg-action-btn", title: "Copy" });
   copyBtn.insertAdjacentHTML("beforeend", ICON_COPY);
   copyBtn.addEventListener("click", async () => {
@@ -795,6 +817,11 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
   // when they're rendered. Skipped on failure: a checkmark on an
   // interrupted reply would claim it completed successfully.
   if (!failed) {
+    // Image markdown only gets parsed once the full reply is in hand —
+    // mid-stream the pattern would be half-formed. Skipped when nothing was
+    // ever streamed (gotFirstChunk false) since there's no real text to
+    // re-parse in that case.
+    if (gotFirstChunk) renderMessageBody(replyBody, replyBody.textContent);
     const doneIcon = el("span", { class: "msg-done" });
     doneIcon.insertAdjacentHTML("beforeend", ICON_DONE);
     // Lives in the hover action row now that the per-message header is

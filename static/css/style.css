@@ -664,6 +664,7 @@ input[type="checkbox"]:checked::after {
 /* Assistant turn: no bubble at all — plain text in the column, Claude's
    most recognizable trait. */
 .msg.assistant .msg-body { color: var(--text); }
+.msg-generated-image { display: block; max-width: 420px; width: 100%; border-radius: 10px; margin: 8px 0; border: 1px solid var(--border); }
 
 /* Streaming cursor + done marker (David's ask 2026-09-02) — a continuously
    blinking cursor while a reply is still streaming (survives silent gaps

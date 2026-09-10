@@ -144,6 +144,7 @@ class Brain:
             "mcp__hive_mind__create_event",
             "mcp__hive_mind__update_event",
             "mcp__hive_mind__delete_event",
+            "mcp__hive_mind__generate_image",
         ]
         if self.is_admin:
             allowed_tools.append("Bash")

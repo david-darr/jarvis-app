@@ -27,7 +27,7 @@ skills, vault, calendar_events.json, contacts.json...").
 """
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from core import memory_tools
+from core import image_gen, memory_tools
 
 
 def get_hive_mind_server(exclude_session_id: str | None = None):
@@ -357,6 +357,35 @@ def get_hive_mind_server(exclude_session_id: str | None = None):
         text = "\n\n".join(f"[{r['task_name']}]: {r['output'] or r.get('error') or '(no output)'}" for r in runs) or "No task runs recorded yet."
         return {"content": [{"type": "text", "text": text}]}
 
+    @tool(
+        "generate_image",
+        "Generate an image from a text description, free (Pollinations.ai, built on Flux/Stable "
+        "Diffusion — no API key involved). Use whenever the user asks to create, draw, generate, "
+        "paint, or make an image/picture/artwork of something. The result comes back as a markdown "
+        "image link — you MUST include that exact markdown verbatim in your reply, on its own line, "
+        "so the image actually renders. Do not just describe the image in words instead of including "
+        "the link, and do not alter the URL.",
+        {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "A detailed description of the image to generate"},
+                "width": {"type": "integer", "description": "Pixels, defaults to 1024"},
+                "height": {"type": "integer", "description": "Pixels, defaults to 1024"},
+            },
+            "required": ["prompt"],
+        },
+    )
+    async def _generate_image(args: dict) -> dict:
+        try:
+            result = await image_gen.generate_image(
+                args["prompt"], width=args.get("width", 1024), height=args.get("height", 1024),
+            )
+        except Exception as e:
+            return {"content": [{"type": "text", "text": f"Image generation failed: {e}"}]}
+        alt = args["prompt"][:80].replace("[", "").replace("]", "")
+        markdown = f"![{alt}]({result['url']})"
+        return {"content": [{"type": "text", "text": f"Image generated successfully. Include this exact markdown in your reply so it renders: {markdown}"}]}
+
     return create_sdk_mcp_server(name="hive_mind", tools=[
         _search, _list_skills, _read_skill,
         _list_notes, _list_tasks, _list_events, _list_specs, _read_spec,
@@ -364,4 +393,5 @@ def get_hive_mind_server(exclude_session_id: str | None = None):
         _create_note, _update_note, _delete_note,
         _create_task, _update_task, _delete_task,
         _create_event, _update_event, _delete_event,
+        _generate_image,
     ])

@@ -32,19 +32,52 @@ does: copied into the session's cwd, read with its normal file tools.
 Unlike voice-line's version, this doesn't keep a separate
 discord_attachments/ folder or write its own path-listing message — it
 reuses chat_service.py's existing attachment handling instead of a second
-implementation of the same idea. Outbound stays text-only, matching
-voice-line's own bot — nothing here sends a file back.
+implementation of the same idea.
+
+Outbound file sending added 2026-09-10 (David's ask: image generation for
+both Discord and chat) — see _extract_generated_images(). Still scoped
+narrowly: only the app's own generate_image tool output gets attached back;
+nothing else about outbound sending changed.
 """
 import asyncio
 import logging
+import os
+import re
 
-from core import attachments, discord_bots_store, events
+from core import attachments, discord_bots_store, events, image_gen
 from core.session_manager import session_manager
 from services import chat_service
 
 logger = logging.getLogger(__name__)
 
 DISCORD_MESSAGE_LIMIT = 2000
+
+# Same pattern chat.js parses client-side (David's ask 2026-09-10: image
+# generation for chat and Discord) — the generate_image tool always emits
+# this exact markdown shape. Discord has no way to fetch a
+# /generated-images/... path itself (it isn't a public URL), so this bot has
+# to pull the real bytes off disk and attach them as a genuine file.
+GENERATED_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\((/generated-images/[^\s)]+)\)")
+
+
+def _extract_generated_images(text: str) -> tuple[str, list[str]]:
+    """Returns (text with the markdown stripped out, [local file paths]).
+    Missing files are skipped rather than raising — a file that somehow
+    isn't on disk shouldn't break the rest of the reply."""
+    paths = []
+
+    def _strip(match: "re.Match") -> str:
+        filename = os.path.basename(match.group(2))
+        candidate = os.path.join(image_gen.GENERATED_DIR, filename)
+        if os.path.isfile(candidate):
+            paths.append(candidate)
+        return ""
+
+    # Collapse the whitespace a stripped-out inline image leaves behind
+    # ("Two:  and" from "Two: ![x](...) and") into something that reads
+    # naturally, without touching intentional paragraph breaks.
+    cleaned = re.sub(r"[ \t]+", " ", GENERATED_IMAGE_RE.sub(_strip, text)).strip()
+    return cleaned, paths
 # Same cap the web Chat composer's upload button enforces
 # (routes/chat_routes.py's _MAX_ATTACHMENT_BYTES) — one shared limit for
 # both entry points into core/attachments.py's staging pipeline.
@@ -172,8 +205,20 @@ def _build_client(discord, bot: dict):
         # API error) after a long-running turn silently dropped the reply
         # with no trace anywhere.
         try:
-            for chunk in _chunk_message(reply):
-                await message.channel.send(chunk)
+            text, image_paths = _extract_generated_images(reply)
+            # A reply that's nothing but the image markdown leaves text
+            # empty after stripping it - Discord rejects a genuinely empty
+            # message (no content, no embed, no attachment yet at this
+            # point), so only send if there's real text left.
+            if text:
+                for chunk in _chunk_message(text):
+                    await message.channel.send(chunk)
+            # Real attachments, not a link to a local path Discord could
+            # never fetch itself (see GENERATED_IMAGE_RE's comment) - each
+            # sent as its own message so multiple images in one reply don't
+            # get silently dropped by Discord's per-message attachment cap.
+            for path in image_paths:
+                await message.channel.send(file=discord.File(path))
         except Exception:
             logger.exception("discord_channel: %s failed to send its reply", bot["name"])
 

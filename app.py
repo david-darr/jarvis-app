@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 
 from core.constants import STATIC_DIR
 from core.middleware import SecurityHeadersMiddleware
-from core import custom_tabs, remote_access, task_scheduler, vault_sync
+from core import custom_tabs, image_gen, remote_access, task_scheduler, vault_sync
 from core.builtin_tasks import autoenable_builtins, migrate_builtin_schedules
 from core.channels import discord_channel
 from routes import (
@@ -164,6 +164,11 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 # User-built tab views, served from the data directory. Same-origin, so the
 # `script-src 'self'` CSP in core/middleware.py covers the dynamic import().
 app.mount(custom_tabs.USER_VIEWS_URL, StaticFiles(directory=custom_tabs.USER_VIEWS_DIR), name="custom-views")
+# Generated images (David's ask 2026-09-10 — image generation for chat and
+# Discord). StaticFiles needs the directory to exist before mounting, same
+# reason custom_tabs.ensure_user_tab_dirs() runs before its own mount above.
+os.makedirs(image_gen.GENERATED_DIR, exist_ok=True)
+app.mount(image_gen.GENERATED_URL_PREFIX, StaticFiles(directory=image_gen.GENERATED_DIR), name="generated-images")
 
 
 @app.get("/")
