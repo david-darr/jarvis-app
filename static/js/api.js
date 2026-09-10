@@ -61,6 +61,23 @@ export function el(tag, attrs = {}, children = []) {
   for (const [key, value] of Object.entries(attrs)) {
     if (key === "text") node.textContent = value;
     else if (key.startsWith("on") && typeof value === "function") node.addEventListener(key.slice(2), value);
+    else if (typeof value === "boolean") {
+      // Found live 2026-09-10: boolean HTML attributes (disabled, checked,
+      // required, ...) are governed by the attribute's PRESENCE, not its
+      // string content -- setAttribute("disabled", false) still writes
+      // disabled="false", which every browser treats as disabled. That
+      // silently made `disabled: !allReady`-style props permanently true
+      // regardless of the actual condition (Settings > Remote Access'
+      // "Turn on remote access" button, found stuck grayed-out on a fully
+      // ready install; cookbook.js's "Use in Chat" button has the same
+      // pattern and was very likely broken the same way, just unnoticed).
+      // Assign the real IDL property when one exists on the node (the
+      // normal case for every genuine boolean attribute -- correctly
+      // coerces true/false), otherwise fall back to real presence/absence.
+      if (key in node) node[key] = value;
+      else if (value) node.setAttribute(key, "");
+      else node.removeAttribute(key);
+    }
     else node.setAttribute(key, value);
   }
   for (const child of [].concat(children)) {
