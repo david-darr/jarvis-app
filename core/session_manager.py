@@ -51,6 +51,12 @@ class SessionManager:
             # <thread_id>` gives real cross-restart conversation continuity,
             # so this is persisted here rather than only held in memory.
             "codex_thread_id": None,
+            # Projects (David's ask 2026-09-12) — None = not in a project.
+            # See core/projects.py's project_addendum(): every brain kind
+            # appends the assigned project's instructions/documents to its
+            # landing-zone prompt, so a chat keeps this regardless of which
+            # model it's pinned to.
+            "project_id": None,
             # Which Settings > Integrations MCP Tool Servers this chat can
             # reference (David's ask 2026-08-31, matching Claude's per-
             # conversation connector toggle) — None = all registered ones
@@ -66,6 +72,10 @@ class SessionManager:
             "updated_at": now,
             "message_count": 0,
             "model_endpoint_id": None,
+            # Carried in the index (not just the full session file) so the
+            # sidebar can group sessions by project without a per-session
+            # fetch — same reasoning model_endpoint_id is already indexed.
+            "project_id": None,
         }
         self._save_index()
         return session
@@ -137,6 +147,21 @@ class SessionManager:
         session = self.get_session(session_id)
         session["codex_thread_id"] = thread_id
         write_json_atomic(_session_path(session_id), session)
+        return session
+
+    def set_project(self, session_id: str, project_id: Optional[str]) -> dict:
+        """Assigns a session to a project (core/projects.py), or clears it
+        back to None. Caller (routes/session_routes.py) is responsible for
+        closing any live brain afterward — same pattern as set_model_endpoint/
+        set_workspace, since the project's instructions/documents are only
+        injected at connection time."""
+        if session_id not in self._index:
+            raise KeyError(f"no such session: {session_id}")
+        session = self.get_session(session_id)
+        session["project_id"] = project_id
+        write_json_atomic(_session_path(session_id), session)
+        self._index[session_id]["project_id"] = project_id
+        self._save_index()
         return session
 
     def set_workspace(self, session_id: str, workspace_dir: Optional[str]) -> dict:

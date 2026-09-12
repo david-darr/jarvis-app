@@ -78,16 +78,21 @@ async def _get_brain(session_id: str, endpoint: dict, is_admin: bool = False) ->
     session = session_manager.get_session(session_id)
     workspace_dir = (session or {}).get("workspace_dir")
     integration_ids = (session or {}).get("enabled_integration_ids")
+    # Projects (David's ask 2026-09-12) — read once here rather than in each
+    # Brain subclass, so every model kind picks it up the same way. See
+    # core/projects.py's project_addendum() for what actually gets injected.
+    project_id = (session or {}).get("project_id")
     if endpoint["kind"] == "claude_cli":
         brain = Brain(cwd_override=workspace_dir, integration_ids=integration_ids,
-                       session_id=session_id, model=endpoint.get("model") or None, is_admin=is_admin)
+                       session_id=session_id, model=endpoint.get("model") or None, is_admin=is_admin,
+                       project_id=project_id)
     elif endpoint["kind"] == "codex_cli":
         brain = CodexBrain(cwd_override=workspace_dir, session_id=session_id,
-                            model=endpoint.get("model") or None, is_admin=is_admin)
+                            model=endpoint.get("model") or None, is_admin=is_admin, project_id=project_id)
     else:
         base_url, model, api_key, num_ctx = model_endpoints.resolve_runtime(endpoint["id"])
         brain = ExternalBrain(base_url, model, api_key, history=(session or {}).get("messages", []),
-                               session_id=session_id, num_ctx=num_ctx, is_admin=is_admin)
+                               session_id=session_id, num_ctx=num_ctx, is_admin=is_admin, project_id=project_id)
 
     await brain.connect()
     _brains[session_id] = brain

@@ -1,5 +1,6 @@
 import { api, el, toast, confirmDialog } from "../api.js";
 import { runSlashCommand } from "../slashCommands.js";
+import * as chatStream from "../chatStream.js";
 
 // Composer rebuilt to match Odysseus's actual chat-input-bar structure
 // (David's ask 2026-08-31, cross-checked against the real repo at
@@ -31,6 +32,9 @@ const ICON_CHATS = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" 
 // "Done" marker (David's ask 2026-09-02: a clear indicator for when a reply
 // has fully finished, distinct from mid-turn pauses that can look frozen).
 const ICON_DONE = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+// Projects (David's ask 2026-09-12).
+const ICON_FOLDER = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>';
+const ICON_GEAR = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
 
 // Message, Claude-style (David's ask 2026-09-03) — replaced the previous
 // Odysseus-style bordered card that carried a status-dot + role + timestamp
@@ -105,7 +109,79 @@ function thinkingIndicator() {
 }
 
 let activeSessionId = null;
+let activeProjectFilter = null; // David's ask 2026-09-12 — null = "All Chats"
 let stagedAttachments = []; // [{id, filename}]
+// chatStream subscriptions made by whatever's currently mounted, unwound by
+// render()'s returned unmount function (David's ask 2026-09-12 — see
+// chatStream.js's docstring) — without this, leaving Chat mid-reattachment
+// would keep a listener alive pointing at DOM this view already discarded.
+let activeUnsubscribers = [];
+
+// Drives a reply card's DOM from chatStream's shared state instead of a
+// local fetch loop (David's ask 2026-09-12) — used both right after
+// sending a message and when reopening a chat that's still generating, so
+// the two cases render identically and a listener never has to care which
+// one it started as. Returns the unsubscribe function; callers push it
+// onto activeUnsubscribers so render()'s unmount can clean it up.
+function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
+  const cursor = el("span", { class: "msg-cursor" });
+  const initial = chatStream.getInFlight(sessionId);
+  let thinkingEl = null;
+  if (initial && !initial.text) {
+    thinkingEl = thinkingIndicator();
+    replyBody.appendChild(thinkingEl);
+  }
+  if (sendBtn) sendBtn.disabled = true;
+
+  const paint = (entry) => {
+    if (entry.text) {
+      if (thinkingEl && thinkingEl.isConnected) thinkingEl.remove();
+      replyBody.textContent = entry.text;
+      if (entry.status === "processing") replyBody.appendChild(cursor);
+    }
+    if (entry.status === "done") {
+      cursor.remove();
+      if (entry.text) renderMessageBody(replyBody, entry.text);
+      const actionRow = replyCard.querySelector(".msg-actions");
+      if (!actionRow.classList.contains("has-done")) {
+        const doneIcon = el("span", { class: "msg-done" });
+        doneIcon.insertAdjacentHTML("beforeend", ICON_DONE);
+        actionRow.appendChild(doneIcon);
+        actionRow.classList.add("has-done");
+      }
+      if (sendBtn) sendBtn.disabled = false;
+      unsubscribe();
+    } else if (entry.status === "failed") {
+      cursor.remove();
+      if (thinkingEl && thinkingEl.isConnected) thinkingEl.remove();
+      replyBody.textContent = entry.text
+        ? entry.text + "\n\n[Reply interrupted — the connection dropped before it finished.]"
+        : "[Couldn't reach JARVIS. The backend may be restarting — try again.]";
+      replyCard.classList.add("msg-failed");
+      toast(`Message failed: ${entry.error || "connection dropped"}`, "error");
+      if (sendBtn) sendBtn.disabled = false;
+      unsubscribe();
+    }
+    // Guarded on still-being-the-active-session: this callback keeps firing
+    // for as long as the turn runs even if the user has since switched to a
+    // different chat (a live replyCard for a session that's no longer on
+    // screen just goes quietly stale, which is correct — the floating
+    // overlay is what surfaces its progress elsewhere, not this DOM).
+    // Without the guard, a background turn finishing would scroll/refresh
+    // whatever chat happens to be visible right now, not its own.
+    if (sessionId === activeSessionId) {
+      messages.scrollTop = messages.scrollHeight;
+      if (entry.status === "done" || entry.status === "failed") {
+        const sessionsList = document.getElementById("sessions-list");
+        if (sessionsList) refreshSessions(sessionsList, messages);
+      }
+    }
+  };
+
+  const unsubscribe = chatStream.subscribe(sessionId, paint);
+  if (initial) paint(initial); // reattach case: render whatever's already there, don't wait for the next chunk
+  return unsubscribe;
+}
 
 // Chat tab's default landing state (David's ask 2026-09-01) — a large
 // JARVIS wordmark + prompt, not an auto-opened conversation. Nothing here
@@ -126,6 +202,13 @@ export async function render(container) {
   container.innerHTML = "";
   container.classList.add("chat-layout");
   stagedAttachments = [];
+  // Belt-and-suspenders reset (David's ask 2026-09-12): app.js's switchTab()
+  // already calls the previous mount's returned unmount — see the bottom of
+  // this function — which drains this same array before a fresh render()
+  // ever runs, so this should always already be empty. Resetting explicitly
+  // anyway means a future bug in that call order fails safe (no leaked
+  // listeners) instead of silently accumulating one per tab visit.
+  activeUnsubscribers = [];
   // Every fresh landing on the Chat tab starts at the welcome state, even
   // if a session was open the last time this tab was visited — matches a
   // typical chat app's "new chat by default" convention rather than
@@ -133,9 +216,34 @@ export async function render(container) {
   activeSessionId = null;
 
   const sessionsPanel = el("div", { id: "chat-sessions" });
+
+  // Projects (David's ask 2026-09-12) — a filter above the chat list,
+  // matching Claude/ChatGPT's own "you're inside a project" framing:
+  // picking one narrows the list to that project's chats and any new chat
+  // created while it's active is assigned to it automatically (see
+  // createSession() below). Gear only shows once a specific project is
+  // selected — "All Chats" has no settings of its own to edit.
+  activeProjectFilter = null;
+  const projectPickerBtn = el("button", { type: "button", class: "model-picker-btn", id: "project-picker-btn" }, [
+    el("span", { id: "project-picker-label", text: "All Chats" }),
+  ]);
+  projectPickerBtn.insertAdjacentHTML("beforeend", ICON_CHEVRON);
+  const projectPickerMenu = el("div", { class: "overflow-menu below hidden", id: "project-picker-menu" });
+  projectPickerBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleMenu(projectPickerMenu);
+    refreshProjectPicker(sessionsList, messages);
+  });
+  const projectSettingsBtn = el("button", {
+    type: "button", class: "input-icon-btn", id: "project-settings-btn", title: "Project settings", style: "display:none;",
+    onclick: async () => { if (activeProjectFilter) openProjectModal(await api(`/api/projects/${activeProjectFilter}`)); },
+  });
+  projectSettingsBtn.insertAdjacentHTML("beforeend", ICON_GEAR);
+  const projectPickerWrap = el("div", { class: "project-picker-wrap" }, [projectPickerBtn, projectSettingsBtn, projectPickerMenu]);
+
   const newBtn = el("button", { class: "btn", style: "width:100%;margin-bottom:12px;", text: "+ New Chat", onclick: createSession });
   const sessionsList = el("div", { id: "sessions-list" });
-  sessionsPanel.append(newBtn, sessionsList);
+  sessionsPanel.append(projectPickerWrap, newBtn, sessionsList);
 
   // Mobile-only (David's ask 2026-09-01) — sessions become a slide-out
   // drawer below the responsive breakpoint (style.css's @media block),
@@ -214,9 +322,10 @@ export async function render(container) {
     input.style.height = Math.min(input.scrollHeight, 200) + "px";
   });
 
-  document.addEventListener("click", () => { closeMenu(overflowMenu); closeMenu(modelMenu); });
+  document.addEventListener("click", () => { closeMenu(overflowMenu); closeMenu(modelMenu); closeMenu(projectPickerMenu); });
 
   await refreshSessions(sessionsList, messages);
+  await refreshProjectPicker(sessionsList, messages);
 
   // New Tab builder handoff (Developer Mode, David's ask 2026-09-01) — the
   // one deliberate exception to "Chat always lands on the welcome screen"
@@ -237,6 +346,16 @@ export async function render(container) {
       console.error("chat: pending handoff failed", e);
     }
   }
+
+  // Unmount (David's ask 2026-09-12): app.js's switchTab() calls this
+  // before tearing down the DOM for whichever tab comes next, same
+  // convention home.js already uses for its WebGL scene. Without it, a
+  // reattached chatStream listener from this mount would keep firing
+  // against DOM this view no longer owns.
+  return () => {
+    activeUnsubscribers.forEach((unsub) => unsub());
+    activeUnsubscribers = [];
+  };
 }
 
 function menuItem(iconSvg, label, onclick) {
@@ -552,19 +671,179 @@ async function refreshModelPicker(currentEndpointId) {
   label.textContent = active ? active.name : NO_MODEL_LABEL;
 }
 
+// -- projects (David's ask 2026-09-12, "similar to how Claude and ChatGPT
+// have projects") — a filter above the chat list rather than a per-session
+// setting like the model picker above: picking one narrows sessionsList to
+// that project and any chat created while it's active joins automatically
+// (see createSession()). Independent of model choice entirely — a project's
+// chats can each be pinned to whatever model they want, same as any other
+// chat; the project only ever affects what gets appended to the landing-
+// zone prompt (core/projects.py's project_addendum()).
+async function refreshProjectPicker(sessionsList, messages) {
+  const label = document.getElementById("project-picker-label");
+  const menu = document.getElementById("project-picker-menu");
+  const gearBtn = document.getElementById("project-settings-btn");
+  if (!label || !menu) return;
+  const allProjects = await api("/api/projects").catch(() => []);
+  menu.innerHTML = "";
+
+  menu.appendChild(el("div", {
+    class: "overflow-menu-item" + (activeProjectFilter === null ? " active" : ""),
+    text: "All Chats",
+    onclick: () => {
+      closeMenu(menu);
+      activeProjectFilter = null;
+      label.textContent = "All Chats";
+      if (gearBtn) gearBtn.style.display = "none";
+      refreshSessions(sessionsList, messages);
+    },
+  }));
+  for (const project of allProjects) {
+    const item = el("div", { class: "overflow-menu-item" + (activeProjectFilter === project.id ? " active" : "") });
+    item.insertAdjacentHTML("afterbegin", ICON_FOLDER);
+    item.appendChild(el("span", { text: project.name }));
+    item.addEventListener("click", () => {
+      closeMenu(menu);
+      activeProjectFilter = project.id;
+      label.textContent = project.name;
+      if (gearBtn) gearBtn.style.display = "";
+      refreshSessions(sessionsList, messages);
+    });
+    menu.appendChild(item);
+  }
+  menu.appendChild(el("div", { class: "overflow-menu-divider" }));
+  menu.appendChild(menuItem(ICON_PLUS, "New Project", () => { closeMenu(menu); openProjectModal(null); }));
+
+  const active = allProjects.find((p) => p.id === activeProjectFilter);
+  label.textContent = active ? active.name : "All Chats";
+  if (gearBtn) gearBtn.style.display = active ? "" : "none";
+}
+
+// -- project settings modal (create/edit/delete + Library document picker,
+// matching getWorkspaceModal/getIntegrationsModal's shape above) ----------
+let projectModal = null;
+
+function getProjectModal() {
+  if (projectModal) return projectModal;
+  const nameInput = el("input", { class: "workspace-path-input", placeholder: "Project name" });
+  const instructionsInput = el("textarea", { class: "workspace-path-input", rows: "3", placeholder: "Custom instructions every chat in this project should follow (optional)" });
+  const docsBody = el("div", { class: "workspace-body" });
+  const deleteBtn = el("button", { class: "btn danger", text: "Delete Project" });
+  const saveBtn = el("button", { class: "btn", text: "Save" });
+  const closeBtn = el("button", { class: "modal-close-btn" });
+  closeBtn.insertAdjacentHTML("beforeend", ICON_X);
+
+  const panel = el("div", { class: "glass modal-panel" }, [
+    el("h4", { text: "Project" }, [closeBtn]),
+    nameInput,
+    instructionsInput,
+    el("div", { class: "muted", style: "margin-top:8px;", text: "Knowledge — Library documents every chat in this project can read on demand:" }),
+    docsBody,
+    el("div", { class: "modal-footer" }, [deleteBtn, saveBtn]),
+  ]);
+  const backdrop = el("div", { class: "modal-backdrop hidden" }, [panel]);
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeProjectModal(); });
+  panel.addEventListener("click", (e) => e.stopPropagation());
+  document.body.appendChild(backdrop);
+  closeBtn.addEventListener("click", closeProjectModal);
+
+  projectModal = { backdrop, nameInput, instructionsInput, docsBody, deleteBtn, saveBtn };
+  return projectModal;
+}
+
+function closeProjectModal() {
+  if (projectModal) projectModal.backdrop.classList.add("hidden");
+}
+
+// project === null means "create" — everything else here handles both
+// modes with the same panel rather than a separate creation form.
+async function openProjectModal(project) {
+  const modal = getProjectModal();
+  modal.backdrop.classList.remove("hidden");
+  modal.nameInput.value = project ? project.name : "";
+  modal.instructionsInput.value = project ? project.instructions : "";
+  modal.deleteBtn.style.display = project ? "" : "none";
+
+  const [allDocs] = await Promise.all([api("/api/documents").catch(() => [])]);
+  modal.docsBody.innerHTML = "";
+  const checks = {};
+  if (allDocs.length === 0) {
+    modal.docsBody.appendChild(el("div", { class: "workspace-empty", text: "No documents yet — add some in the Library tab." }));
+  }
+  for (const doc of allDocs) {
+    const cb = el("input", { type: "checkbox" });
+    cb.checked = !!(project && project.document_ids.includes(doc.id));
+    checks[doc.id] = cb;
+    modal.docsBody.appendChild(el("label", { class: "workspace-row", style: "cursor:pointer;" }, [cb, el("span", { text: doc.title })]));
+  }
+
+  modal.saveBtn.onclick = async () => {
+    const name = modal.nameInput.value.trim();
+    if (!name) { toast("Project name is required", "error"); return; }
+    const instructions = modal.instructionsInput.value.trim();
+    const saved = project
+      ? await api(`/api/projects/${project.id}`, { method: "PATCH", body: JSON.stringify({ name, instructions }) })
+      : await api("/api/projects", { method: "POST", body: JSON.stringify({ name, instructions }) });
+
+    // Reconcile document membership against whatever was checked — cheap
+    // enough to just diff against the saved state rather than track dirty
+    // checkboxes individually.
+    const wantedIds = Object.entries(checks).filter(([, cb]) => cb.checked).map(([id]) => id);
+    const hadIds = project ? project.document_ids : [];
+    await Promise.all([
+      ...wantedIds.filter((id) => !hadIds.includes(id)).map((id) => api(`/api/projects/${saved.id}/documents/${id}`, { method: "POST" })),
+      ...hadIds.filter((id) => !wantedIds.includes(id)).map((id) => api(`/api/projects/${saved.id}/documents/${id}`, { method: "DELETE" })),
+    ]);
+
+    closeProjectModal();
+    const sessionsList = document.getElementById("sessions-list");
+    const messages = document.getElementById("chat-messages");
+    if (sessionsList && messages) {
+      if (!project) { activeProjectFilter = saved.id; } // land inside the project you just created, matching Claude/ChatGPT
+      await refreshProjectPicker(sessionsList, messages);
+      await refreshSessions(sessionsList, messages);
+    }
+  };
+
+  modal.deleteBtn.onclick = async () => {
+    if (!project) return;
+    const ok = await confirmDialog({
+      title: "Delete this project?",
+      message: `"${project.name}" will be deleted. Chats currently in it are not deleted — they just become unassigned.`,
+      confirmLabel: "Delete project",
+    });
+    if (!ok) return;
+    await api(`/api/projects/${project.id}`, { method: "DELETE" });
+    closeProjectModal();
+    activeProjectFilter = null;
+    const sessionsList = document.getElementById("sessions-list");
+    const messages = document.getElementById("chat-messages");
+    if (sessionsList && messages) {
+      await refreshProjectPicker(sessionsList, messages);
+      await refreshSessions(sessionsList, messages);
+    }
+  };
+}
+
 async function refreshSessions(sessionsList, messages) {
-  const sessions = await api("/api/sessions");
+  const allSessions = await api("/api/sessions");
+  // Projects (David's ask 2026-09-12) — narrows the list to whatever
+  // project is currently selected in the picker above; null (the default,
+  // "All Chats") shows everything, unchanged from before this feature.
+  const sessions = activeProjectFilter === null ? allSessions : allSessions.filter((s) => s.project_id === activeProjectFilter);
   sessionsList.innerHTML = "";
   // Deliberately no early return on an empty list: the "no active session"
   // block at the bottom is what populates the model picker, and returning here
   // meant a brand-new install opened the models dropdown to nothing at all
   // (David, 2026-09-04). The loop below is simply a no-op when there are none.
   if (sessions.length === 0) {
-    sessionsList.appendChild(el("div", { class: "empty-state", text: "No chats yet" }));
+    sessionsList.appendChild(el("div", { class: "empty-state", text: activeProjectFilter === null ? "No chats yet" : "No chats in this project yet" }));
   }
   for (const session of sessions) {
     const item = el("div", {
       class: "session-item" + (session.id === activeSessionId ? " active" : ""),
+      "data-session-id": session.id,
+      "data-title": session.title,
       onclick: () => openSession(session.id, sessionsList, messages),
       oncontextmenu: (e) => {
         e.preventDefault();
@@ -613,6 +892,38 @@ function showSessionMenu(x, y, session, item, sessionsList, messages) {
       await refreshSessions(sessionsList, messages);
     },
   });
+  const moveItem = el("div", {
+    class: "context-menu-item",
+    text: "Move to Project",
+    onclick: async (e) => {
+      e.stopPropagation();
+      const allProjects = await api("/api/projects").catch(() => []);
+      menu.innerHTML = "";
+      menu.appendChild(el("div", {
+        class: "context-menu-item",
+        text: "No Project",
+        onclick: async () => {
+          closeSessionMenu();
+          await api(`/api/sessions/${session.id}/project`, { method: "POST", body: JSON.stringify({ project_id: null }) });
+          await refreshSessions(sessionsList, messages);
+        },
+      }));
+      if (allProjects.length === 0) {
+        menu.appendChild(el("div", { class: "context-menu-item", text: "(no projects yet)" }));
+      }
+      for (const project of allProjects) {
+        menu.appendChild(el("div", {
+          class: "context-menu-item" + (session.project_id === project.id ? " active" : ""),
+          text: project.name,
+          onclick: async () => {
+            closeSessionMenu();
+            await api(`/api/sessions/${session.id}/project`, { method: "POST", body: JSON.stringify({ project_id: project.id }) });
+            await refreshSessions(sessionsList, messages);
+          },
+        }));
+      }
+    },
+  });
   const deleteItem = el("div", {
     class: "context-menu-item danger",
     text: "Delete",
@@ -637,7 +948,7 @@ function showSessionMenu(x, y, session, item, sessionsList, messages) {
     },
   });
 
-  menu.append(renameItem, starItem, deleteItem);
+  menu.append(renameItem, starItem, moveItem, deleteItem);
   document.body.appendChild(menu);
   openMenu = menu;
   // Deferred so the click that opened the menu doesn't immediately close it.
@@ -674,6 +985,13 @@ function startRename(item, session, sessionsList, messages) {
 async function createSession() {
   const session = await api("/api/sessions", { method: "POST", body: JSON.stringify({}) });
   activeSessionId = session.id;
+  // A chat created while a project is selected joins it automatically
+  // (David's ask 2026-09-12, matching Claude/ChatGPT's "new chat inside
+  // this project" behavior) rather than landing unassigned and needing a
+  // separate move-to-project step every time.
+  if (activeProjectFilter) {
+    await api(`/api/sessions/${session.id}/project`, { method: "POST", body: JSON.stringify({ project_id: activeProjectFilter }) });
+  }
   const sessionsList = document.getElementById("sessions-list");
   const messages = document.getElementById("chat-messages");
   await refreshSessions(sessionsList, messages);
@@ -691,10 +1009,31 @@ async function openSession(sessionId, sessionsList, messages) {
   for (const msg of session.messages) {
     messages.appendChild(messageCard(msg.role, msg.content, msg.ts));
   }
+  // Reattach to a turn still generating (David's ask 2026-09-12) — its
+  // reply isn't in session.messages yet (the backend only persists it once
+  // the full turn completes), so it renders as one extra live card on top
+  // of the real history rather than something openSession would otherwise
+  // know about.
+  if (chatStream.getInFlight(sessionId)) {
+    const replyCard = messageCard("assistant", "");
+    const replyBody = replyCard.querySelector(".msg-body");
+    messages.appendChild(replyCard);
+    activeUnsubscribers.push(attachToInFlight(sessionId, messages, replyCard, replyBody, null));
+  }
   messages.scrollTop = messages.scrollHeight;
   await refreshModelPicker(session.model_endpoint_id);
   syncWorkspacePill(session.workspace_dir);
   await refreshSessions(sessionsList, messages);
+}
+
+// Overlay's click-to-jump entry point (David's ask 2026-09-12) — app.js's
+// switchTab("chat") has already run and rebuilt this view's DOM by the
+// time floatingProgress.js calls this, so the ids below are guaranteed
+// fresh, same assumption createSession() above already makes.
+export function openSessionById(sessionId) {
+  const sessionsList = document.getElementById("sessions-list");
+  const messages = document.getElementById("chat-messages");
+  if (sessionsList && messages) return openSession(sessionId, sessionsList, messages);
 }
 
 async function sendMessage(messages, input, sendBtn, attachStrip) {
@@ -737,114 +1076,23 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
 
   input.value = "";
   input.style.height = "auto";
-  sendBtn.disabled = true;
   messages.appendChild(messageCard("user", text || "(attachment)"));
   const replyCard = messageCard("assistant", "");
   const replyBody = replyCard.querySelector(".msg-body");
   messages.appendChild(replyCard);
   messages.scrollTop = messages.scrollHeight;
 
-  // Idle "thinking" state (David's ask 2026-09-02 for the indicator itself,
-  // redesigned Claude-style 2026-09-03) — shown until the first real text
-  // chunk arrives, so a long tool-using turn doesn't look frozen. Now a CSS
-  // shimmer instead of a JS-driven dot rotation, so there's no interval to
-  // leak if an exit path is ever missed.
-  const thinkingEl = thinkingIndicator();
-  replyBody.appendChild(thinkingEl);
-  let gotFirstChunk = false;
-  const clearThinking = () => { if (thinkingEl.isConnected) thinkingEl.remove(); };
-
-  // Streaming cursor (David's ask 2026-09-02) — separate from the thinking
-  // dots above: once real text starts, a mid-turn pause (e.g. a tool call
-  // between two text blocks — brain.py's run_turn_stream yields once per
-  // completed TextBlock, so a multi-step turn genuinely goes silent between
-  // them) used to look identical to "finished." This blinks continuously
-  // (CSS animation, not tied to chunk arrival) for as long as the request
-  // is open, so a silent gap still visibly reads as "still working."
-  // Re-appended after every textContent update below since setting
-  // .textContent wipes all child nodes, cursor included.
-  const cursor = el("span", { class: "msg-cursor" });
-
-  // Real bug found by audit 2026-09-03: this whole block was unguarded.
-  // sendBtn.disabled was set true above, so ANY failure here (backend
-  // restart mid-turn, a 500, a dropped connection, malformed SSE) threw out
-  // of sendMessage() and never re-enabled it — the composer stayed
-  // permanently dead and the thinking dots animated forever on a stuck
-  // card, with tab-switching the only recovery. The finally block below is
-  // the actual fix; the catch turns a silent brick into a visible error.
-  let failed = false;
-  try {
-    const res = await fetch("/api/chat/stream", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: activeSessionId, message: text, attachment_ids: attachmentIds }),
-    });
-    if (!res.ok || !res.body) throw new Error(`stream failed (${res.status})`);
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n\n");
-      buffer = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        let payload;
-        // One malformed frame shouldn't abort an otherwise-good reply.
-        try { payload = JSON.parse(line.slice(6)); } catch (_) { continue; }
-        if (payload.chunk) {
-          if (!gotFirstChunk) {
-            gotFirstChunk = true;
-            clearThinking();
-            replyBody.textContent = "";
-          }
-          replyBody.textContent += payload.chunk;
-          replyBody.appendChild(cursor);
-          messages.scrollTop = messages.scrollHeight;
-        }
-      }
-    }
-  } catch (e) {
-    failed = true;
-    clearThinking();
-    replyBody.textContent = gotFirstChunk
-      ? replyBody.textContent + "\n\n[Reply interrupted — the connection dropped before it finished.]"
-      : "[Couldn't reach JARVIS. The backend may be restarting — try again.]";
-    replyCard.classList.add("msg-failed");
-    toast(`Message failed: ${e.message}`, "error");
-  } finally {
-    clearThinking();
-    cursor.remove();
-    sendBtn.disabled = false;
-  }
-
-  // "Done" marker (David's ask 2026-09-02) — a small checkmark next to the
-  // timestamp, permanent once added. Only the live-streamed reply gets
-  // this, not messages replayed from history on openSession() — those are
-  // never ambiguous about being finished, nothing is actively streaming
-  // when they're rendered. Skipped on failure: a checkmark on an
-  // interrupted reply would claim it completed successfully.
-  if (!failed) {
-    // Image markdown only gets parsed once the full reply is in hand —
-    // mid-stream the pattern would be half-formed. Skipped when nothing was
-    // ever streamed (gotFirstChunk false) since there's no real text to
-    // re-parse in that case.
-    if (gotFirstChunk) renderMessageBody(replyBody, replyBody.textContent);
-    const doneIcon = el("span", { class: "msg-done" });
-    doneIcon.insertAdjacentHTML("beforeend", ICON_DONE);
-    // Lives in the hover action row now that the per-message header is
-    // gone (Claude-style redesign, 2026-09-03). `.has-done` keeps that row
-    // permanently visible on this one message — the checkmark is a status,
-    // not a hover affordance.
-    const actionRow = replyCard.querySelector(".msg-actions");
-    actionRow.appendChild(doneIcon);
-    actionRow.classList.add("has-done");
-  }
+  // The actual request now lives in chatStream.js, one level above this
+  // view (David's ask 2026-09-12 — see its module docstring): it survives
+  // switching tabs away from Chat entirely, and the floating overlay
+  // (floatingProgress.js) picks it up independently of whatever's on
+  // screen here. attachToInFlight just wires this specific card's DOM up
+  // to that shared state — same rendering whether a turn was just started
+  // or is being reattached to on reopen.
+  const sessionItem = document.querySelector(`.session-item[data-session-id="${activeSessionId}"]`);
+  const sessionTitle = sessionItem?.dataset.title || "Chat";
+  chatStream.startTurn(activeSessionId, sessionTitle, text, attachmentIds);
+  activeUnsubscribers.push(attachToInFlight(activeSessionId, messages, replyCard, replyBody, sendBtn));
 
   input.focus();
-  const sessionsList = document.getElementById("sessions-list");
-  await refreshSessions(sessionsList, messages);
 }

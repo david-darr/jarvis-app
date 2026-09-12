@@ -25,7 +25,7 @@ hive mind") — same reasoning, same shared engine (core/memory_tools.py).
 """
 from typing import AsyncIterator
 
-from core import memory_tools, system_prompt
+from core import memory_tools, projects, system_prompt
 from core.providers import openai_compatible
 
 _MEMORY_TOOLS = [
@@ -363,7 +363,8 @@ _SHELL_TOOL = {
 
 class ExternalBrain:
     def __init__(self, base_url: str, model: str, api_key: str | None, history: list[dict] | None = None,
-                 session_id: str | None = None, num_ctx: int | None = None, is_admin: bool = False):
+                 session_id: str | None = None, num_ctx: int | None = None, is_admin: bool = False,
+                 project_id: str | None = None):
         self.base_url = base_url
         self.model = model
         self.api_key = api_key
@@ -380,7 +381,10 @@ class ExternalBrain:
         # from when it was first created.
         seeded = [{"role": m["role"], "content": m["content"]} for m in (history or [])]
         if not seeded or seeded[0].get("role") != "system":
-            seeded.insert(0, {"role": "system", "content": system_prompt.for_external(is_admin)})
+            # Projects (David's ask 2026-09-12) appended the same way as
+            # core/brain.py/core/codex_brain.py — see core/projects.py's
+            # project_addendum().
+            seeded.insert(0, {"role": "system", "content": system_prompt.for_external(is_admin) + projects.project_addendum(project_id)})
         self._messages: list[dict] = seeded
         # Set on every completed turn that reported usage (David's ask
         # 2026-09-01, per-model token usage on Home) — best-effort, since

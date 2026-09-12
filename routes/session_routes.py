@@ -39,6 +39,10 @@ class SetIntegrationsRequest(BaseModel):
     enabled_integration_ids: list[str] | None = None
 
 
+class SetProjectRequest(BaseModel):
+    project_id: str | None = None
+
+
 @router.get("")
 async def list_sessions(user: str = Depends(require_user)) -> list[dict]:
     return session_manager.list_sessions()
@@ -105,6 +109,20 @@ async def set_session_workspace(session_id: str, body: SetWorkspaceRequest, user
         raise HTTPException(status_code=404, detail="session not found")
     await chat_service.close_session_brain(session_id)
     return {"workspace_dir": resolved}
+
+
+@router.post("/{session_id}/project")
+async def set_session_project(session_id: str, body: SetProjectRequest, user: str = Depends(require_user)) -> dict:
+    """Assigns/clears this chat's project (core/projects.py) — its
+    instructions/documents are injected into the landing-zone prompt at
+    connection time, so any live brain has to reconnect to pick up the
+    change, same pattern as /model and /workspace above."""
+    try:
+        session_manager.set_project(session_id, body.project_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="session not found")
+    await chat_service.close_session_brain(session_id)
+    return {"ok": True}
 
 
 @router.post("/{session_id}/integrations")

@@ -785,6 +785,7 @@ input[type="checkbox"]:checked::after {
   cursor: pointer;
 }
 .context-menu-item:hover { background: var(--accent-dim); }
+.context-menu-item.active { color: var(--accent); }
 .context-menu-item.danger { color: var(--danger); }
 .context-menu-item.danger:hover { background: rgba(255, 95, 95, 0.1); }
 .star-mark { color: var(--accent); }
@@ -824,6 +825,15 @@ input[type="checkbox"]:checked::after {
 }
 .model-picker-btn span { overflow: hidden; text-overflow: ellipsis; }
 .model-picker-btn:hover { color: var(--text); border-color: var(--border-strong); }
+
+/* -- project picker (David's ask 2026-09-12) — sits above the chat list
+   itself, not the composer, so it's a normal in-flow flex row rather than
+   .model-picker-wrap's absolutely-positioned corner placement; reuses
+   .model-picker-btn's own look unchanged. */
+.project-picker-wrap { position: relative; display: flex; gap: 6px; margin-bottom: 10px; }
+.project-picker-wrap .model-picker-btn { flex: 1; max-width: none; justify-content: space-between; }
+#project-settings-btn { flex-shrink: 0; }
+.overflow-menu-divider { height: 1px; margin: 4px 6px; background: var(--border); }
 .model-picker-menu {
   /* Opens upward from the button (David's ask 2026-09-01) — the model
      picker sits at the top of the composer, so opening downward pushed the
@@ -875,6 +885,7 @@ input[type="checkbox"]:checked::after {
   font-size: 12.5px; color: var(--text); cursor: pointer; width: 100%; background: none; border: none; text-align: left;
 }
 .overflow-menu-item:hover { background: var(--accent-dim); }
+.overflow-menu-item.active { color: var(--accent); }
 .overflow-menu-item[disabled] { opacity: 0.4; cursor: default; }
 .overflow-menu-item[disabled]:hover { background: none; }
 
@@ -1093,6 +1104,41 @@ input[type="checkbox"]:checked::after {
 .toast.success { border-left-color: var(--accent); }
 .toast.error { border-left-color: var(--danger); }
 .toast.info { border-left-color: rgba(var(--accent-rgb), 0.5); }
+
+/* -- chat progress overlay (David's ask 2026-09-12) — top-right glass
+   cards, one per chat session currently generating a reply, so leaving the
+   Chat tab to do something else doesn't lose track of it. Mirrors the
+   toast pattern above (same lazy host-creation, same slide+fade) in the
+   opposite corner so the two never collide; the pulsing dot reuses
+   .msg-thinking-dot's own keyframe for a consistent "still working" look
+   between the chat view itself and this overlay. */
+#chat-progress-host {
+  position: fixed; top: 20px; right: 20px; z-index: 3000;
+  display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none;
+}
+.chat-progress-card {
+  pointer-events: auto; cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+  max-width: 280px; padding: 9px 13px; font-size: 12.5px; color: var(--text);
+  background: var(--glass-sheen), var(--bg-panel-solid);
+  backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: var(--shadow-elevated);
+  border-left: 3px solid var(--accent);
+  opacity: 0; transform: translateY(-10px);
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+.chat-progress-card.show { opacity: 1; transform: translateY(0); }
+.chat-progress-card.done { border-left-color: var(--accent); }
+.chat-progress-card.failed { border-left-color: var(--danger); }
+.chat-progress-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-progress-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0;
+  animation: thinking-pulse 1.8s ease-in-out infinite;
+}
+.chat-progress-card.done .chat-progress-dot,
+.chat-progress-card.failed .chat-progress-dot { animation: none; opacity: 1; }
+.chat-progress-card.failed .chat-progress-dot { background: var(--danger); }
 
 .settings-minimized-pill {
   position: fixed; bottom: 18px; right: 18px; z-index: 1500;

@@ -24,7 +24,7 @@ from claude_agent_sdk import (
     TextBlock,
 )
 
-from core import hive_mind_server, integrations, settings as settings_store, system_prompt
+from core import hive_mind_server, integrations, projects, settings as settings_store, system_prompt
 from core.constants import REPO_CODE_DIRS
 from core.vault import resolve_vault_dir
 
@@ -44,7 +44,7 @@ class Brain:
 
     def __init__(self, vault_dir: str | None = None, cwd_override: str | None = None,
                  integration_ids: list[str] | None = None, session_id: str | None = None,
-                 model: str | None = None, is_admin: bool = False):
+                 model: str | None = None, is_admin: bool = False, project_id: str | None = None):
         self.vault_dir = vault_dir or resolve_vault_dir()
         # Optional model override for a "Claude Code CLI" endpoint added in
         # Settings > Add Models (David's ask 2026-08-31 — Claude is no
@@ -80,6 +80,11 @@ class Brain:
         # single_user()): the ONLY gate, no command blocklist, matching
         # their actual safety model. See _options() below.
         self.is_admin = is_admin
+        # Projects (David's ask 2026-09-12) — appended to the landing-zone
+        # system prompt below, same mechanism regardless of which model a
+        # given chat in the project is actually pinned to (see
+        # core/projects.py's project_addendum()).
+        self.project_id = project_id
         self._client: ClaudeSDKClient | None = None
 
     def _options(self) -> ClaudeAgentOptions:
@@ -206,7 +211,7 @@ class Brain:
             # conventions aren't lost) rather than relying purely on tool
             # *descriptions* to imply a model should proactively check
             # memory.
-            system_prompt={"type": "preset", "preset": "claude_code", "append": system_prompt.for_claude(self.is_admin)},
+            system_prompt={"type": "preset", "preset": "claude_code", "append": system_prompt.for_claude(self.is_admin) + projects.project_addendum(self.project_id)},
         )
 
     async def connect(self) -> None:

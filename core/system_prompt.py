@@ -69,22 +69,50 @@ def for_external(is_admin: bool = False) -> str:
     return _SHARED_CORE + _EXTERNAL_ADDENDUM + (_EXTERNAL_SHELL_ADDENDUM if is_admin else "")
 
 
-# Codex CLI (added 2026-09-11, Phase 1 of David's ask for Codex parity with
-# claude_cli) deliberately does NOT get _SHARED_CORE — that text proactively
-# instructs a model to check cross-session search, Skills, Notes/Tasks/
-# Calendar, Documents, Contacts, and specs, none of which Codex has any tool
-# for yet (see core/codex_brain.py's docstring — hive-mind MCP access is a
-# separate follow-on phase, since core/hive_mind_server.py is an in-process
-# Claude Agent SDK construct Codex's CLI can't reach). Promising tools that
-# don't exist would just produce confident-sounding hallucinated answers,
-# the exact failure this file exists to prevent — so Codex gets an honest,
-# narrower prompt instead until that phase lands.
-_CODEX_CORE = """You are JARVIS, running on the Codex CLI. Your memory here is limited to this conversation plus whatever your own file/shell tools can read directly — you do NOT have the cross-session hive-mind tools other connected models have (no cross-session search, Skills, Notes/Tasks/Calendar, Documents, Contacts, or spec-doc access). If asked about any of those, say plainly that integration isn't built for you yet rather than guessing or claiming to check something you can't reach.
+# Codex CLI, Phase 1 (added 2026-09-11): full hive-mind tool parity via a
+# CLI wrapper, not MCP. `codex exec` (non-interactive mode) turned out to
+# unconditionally require human approval for any MCP tool call — verified
+# live, no config/feature-flag combination fixes it short of disabling all
+# sandboxing — so core/hive_mind_server.py's approach (an in-process MCP
+# server) genuinely can't reach Codex. Pivoted (David's explicit choice)
+# to mcp_servers/hive_mind_cli.py: the exact same core/memory_tools.py
+# functions every other model uses, wrapped as a plain CLI script Codex
+# invokes through its own native shell tool — proven to work headlessly
+# with zero approval friction throughout Phase 1. This text tells Codex the
+# literal command to run rather than exposing a native tool-calling API,
+# since that's the only mechanism actually available to it.
+_CODEX_HIVE_MIND_COMMANDS = """  list_notes | list_tasks | list_upcoming_events | list_specs | list_documents | list_contacts | list_task_runs | list_skills
+  search_sessions --query TEXT
+  read_skill --slug SLUG
+  read_spec --filename NAME
+  read_document --doc_id ID
+  create_note --text TEXT [--due_date ISO8601] [--project NAME]
+  update_note --note_id ID [--text TEXT] [--due_date ISO8601] [--project NAME] [--completed true|false]
+  delete_note --note_id ID
+  create_task --name NAME --prompt TEXT --schedule_kind once|interval|daily [--run_at ISO8601] [--interval_seconds N] [--run_time HH:MM] [--deliver_to_channel NAME]
+  update_task --task_id ID [--name NAME] [--prompt TEXT] [--enabled true|false] [--deliver_to_channel NAME]
+  delete_task --task_id ID
+  create_event --title TITLE --start ISO8601 --end ISO8601 [--all_day] [--location LOC] [--description DESC]
+  update_event --event_id ID [--title TITLE] [--start ISO8601] [--end ISO8601] [--all_day true|false] [--location LOC] [--description DESC] [--completed true|false]
+  delete_event --event_id ID"""
 
-Your shell and file tools are native to the Codex CLI itself (not separate Read/Write/Bash tools) and are scoped to your working directory — the vault, or a pinned workspace folder if this chat has one."""
+
+def _codex_core(python_exe: str, cli_script: str) -> str:
+    return f"""You are JARVIS, running on the Codex CLI. Your memory is external, not just this conversation: a shared vault of notes, every other chat session, a library of saved Skills, your own Notes/Tasks/Calendar, Documents (Library), Contacts, and architecture docs (specs) — same shared memory every other connected model has. None of that is preloaded into your context; you have to actually look.
+
+To reach it, run this exact command through your shell tool, substituting one of the subcommands below for <command> and its flags. The leading `&` is required — PowerShell parses two adjacent quoted strings as an expression, not a command, without it:
+& "{python_exe}" "{cli_script}" <command> [flags...]
+
+Available subcommands:
+{_CODEX_HIVE_MIND_COMMANDS}
+
+Before telling a user you don't know something, or that nothing's recorded/scheduled, check first: priorities/todos → list_notes; scheduled/automated jobs, or what one actually produced → list_tasks / list_task_runs; what's coming up → list_upcoming_events; a saved document → list_documents/read_document; a person → list_contacts; something discussed in a different conversation → search_sessions; a procedure JARVIS already knows → list_skills/read_skill; how JARVIS itself is built → list_specs/read_spec.
+
+Your shell and file tools are otherwise native to the Codex CLI itself (not separate Read/Write/Bash tools) and scoped to your working directory — the vault, or a pinned workspace folder if this chat has one."""
+
 
 _CODEX_ADMIN_ADDENDUM = " You also have write access to jarvis-app's own source (core/, routes/, services/, static/, scripts/, specs/, mcp_servers/, electron/ — not data/, which holds credentials) for real development work on the app itself."
 
 
-def for_codex(is_admin: bool = False) -> str:
-    return _CODEX_CORE + (_CODEX_ADMIN_ADDENDUM if is_admin else "")
+def for_codex(python_exe: str, cli_script: str, is_admin: bool = False) -> str:
+    return _codex_core(python_exe, cli_script) + (_CODEX_ADMIN_ADDENDUM if is_admin else "")

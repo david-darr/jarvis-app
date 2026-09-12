@@ -3,6 +3,7 @@ import { api } from "./api.js";
 import * as onboarding from "./onboarding.js";
 import * as auth from "./auth.js";
 import * as commandPalette from "./commandPalette.js";
+import * as floatingProgress from "./floatingProgress.js";
 
 // Nav order matches David's Figma wireframe, minus "New Chat" and "Search"
 // as separate items (David's call, 2026-08-31) — both live inside the Chats
@@ -60,7 +61,7 @@ let activeUnmount = null; // set by a view's render() if it needs teardown (e.g.
 // lookup-by-id can never go stale in the first place.
 const view = document.getElementById("view-content");
 
-async function switchTab(tabId) {
+export async function switchTab(tabId) {
   // Views that own real resources (currently just home.js's WebGL scene)
   // return a cleanup function from render(). Without calling it here before
   // wiping the DOM, a canvas's animation loop and GPU buffers would keep
@@ -341,6 +342,7 @@ async function startApp() {
   // appears immediately instead of after a reload.
   document.addEventListener("jarvis:tabs-changed", () => { buildSidebar(); });
   commandPalette.init({ nav: NAV, customTabs: customTabs || [], switchTab, openSettings });
+  floatingProgress.init({ switchTab });
   await switchTab("home");
 }
 
