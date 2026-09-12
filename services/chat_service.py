@@ -16,18 +16,19 @@ from claude_agent_sdk import CLIJSONDecodeError
 
 from core import attachments, model_endpoints, token_usage
 from core.brain import Brain
+from core.codex_brain import CodexBrain
 from core.external_brain import ExternalBrain
 from core.session_manager import session_manager
 from core.vault import resolve_vault_dir
 
-AnyBrain = Union[Brain, ExternalBrain]
+AnyBrain = Union[Brain, ExternalBrain, CodexBrain]
 
 _brains: dict[str, AnyBrain] = {}
 
 NO_MODEL_MESSAGE = (
     "You haven't added a model yet. Go to Settings → Add Models to connect "
-    "Claude Code CLI, a local model (Ollama, llama.cpp, vLLM), or an API "
-    "provider — then pick it from the model menu above the chat box."
+    "Claude Code CLI, Codex CLI, a local model (Ollama, llama.cpp, vLLM), or "
+    "an API provider — then pick it from the model menu above the chat box."
 )
 
 # Found live 2026-09-08: a big-enough attachment (6 images in one Discord
@@ -80,6 +81,9 @@ async def _get_brain(session_id: str, endpoint: dict, is_admin: bool = False) ->
     if endpoint["kind"] == "claude_cli":
         brain = Brain(cwd_override=workspace_dir, integration_ids=integration_ids,
                        session_id=session_id, model=endpoint.get("model") or None, is_admin=is_admin)
+    elif endpoint["kind"] == "codex_cli":
+        brain = CodexBrain(cwd_override=workspace_dir, session_id=session_id,
+                            model=endpoint.get("model") or None, is_admin=is_admin)
     else:
         base_url, model, api_key, num_ctx = model_endpoints.resolve_runtime(endpoint["id"])
         brain = ExternalBrain(base_url, model, api_key, history=(session or {}).get("messages", []),

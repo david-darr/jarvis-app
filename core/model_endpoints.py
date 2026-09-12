@@ -14,6 +14,11 @@ no base_url or api_key needed, since that auth lives outside this app
 entirely. A chat session with no endpoint chosen at all gets a canned
 "add a model first" reply instead of silently falling back to any one of
 these (see services/chat_service.py).
+
+`codex_cli` (added 2026-09-11, David's ask for Codex parity with `claude_cli`)
+is the same shape as `claude_cli`: no base_url/api_key, wraps a CLI already
+authenticated on the machine (`codex` — see core/codex_brain.py), `model` is
+an optional override rather than a required field.
 """
 import os
 import uuid
@@ -73,9 +78,9 @@ def get_endpoint(endpoint_id: str) -> Optional[dict]:
 
 def create_endpoint(name: str, base_url: str = "", model: str = "", api_key: Optional[str] = None,
                      kind: str = "api", num_ctx: Optional[int] = None) -> dict:
-    if kind not in ("local", "api", "claude_cli"):
-        raise ValueError("kind must be 'local', 'api', or 'claude_cli'")
-    if kind != "claude_cli" and not base_url:
+    if kind not in ("local", "api", "claude_cli", "codex_cli"):
+        raise ValueError("kind must be 'local', 'api', 'claude_cli', or 'codex_cli'")
+    if kind not in ("claude_cli", "codex_cli") and not base_url:
         raise ValueError("base_url is required for local/api endpoints")
     data = _load()
     endpoint_id = uuid.uuid4().hex[:12]
@@ -83,9 +88,10 @@ def create_endpoint(name: str, base_url: str = "", model: str = "", api_key: Opt
         "id": endpoint_id,
         "name": name,
         "base_url": base_url.rstrip("/") if base_url else "",
-        # For claude_cli, `model` is an optional override passed straight to
-        # ClaudeAgentOptions(model=...) — blank means "whatever the `claude`
-        # CLI itself defaults to" (frontend displays that as "CLI default").
+        # For claude_cli/codex_cli, `model` is an optional override (passed
+        # to ClaudeAgentOptions(model=...) or codex's `-m` flag respectively)
+        # — blank means "whatever the CLI itself defaults to" (frontend
+        # displays that as "CLI default").
         "model": model,
         "api_key_encrypted": encrypt(api_key) if api_key else None,
         "kind": kind,

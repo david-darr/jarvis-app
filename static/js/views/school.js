@@ -351,7 +351,7 @@ async function refreshCourseModelPicker(sessionId, label, menu) {
     menu.appendChild(el("div", { class: "model-picker-item", text: "No models added yet — see Settings" }));
   }
   for (const ep of endpoints) {
-    const name = ep.kind === "claude_cli" ? `${ep.name} (${ep.model || "CLI default"})` : `${ep.name} (${ep.model})`;
+    const name = ep.kind === "claude_cli" || ep.kind === "codex_cli" ? `${ep.name} (${ep.model || "CLI default"})` : `${ep.name} (${ep.model})`;
     menu.appendChild(el("div", {
       class: "model-picker-item" + (ep.id === session.model_endpoint_id ? " active" : ""),
       text: name,
@@ -364,5 +364,5 @@ async function refreshCourseModelPicker(sessionId, label, menu) {
     }));
   }
   const active = endpoints.find((e) => e.id === session.model_endpoint_id);
-  label.textContent = active ? (active.kind === "claude_cli" ? `${active.name} (${active.model || "CLI default"})` : `${active.name} (${active.model})`) : "No model — add one in Settings";
+  label.textContent = active ? (active.kind === "claude_cli" || active.kind === "codex_cli" ? `${active.name} (${active.model || "CLI default"})` : `${active.name} (${active.model})`) : "No model — add one in Settings";
 }

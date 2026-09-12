@@ -67,3 +67,24 @@ def for_claude(is_admin: bool = False) -> str:
 
 def for_external(is_admin: bool = False) -> str:
     return _SHARED_CORE + _EXTERNAL_ADDENDUM + (_EXTERNAL_SHELL_ADDENDUM if is_admin else "")
+
+
+# Codex CLI (added 2026-09-11, Phase 1 of David's ask for Codex parity with
+# claude_cli) deliberately does NOT get _SHARED_CORE — that text proactively
+# instructs a model to check cross-session search, Skills, Notes/Tasks/
+# Calendar, Documents, Contacts, and specs, none of which Codex has any tool
+# for yet (see core/codex_brain.py's docstring — hive-mind MCP access is a
+# separate follow-on phase, since core/hive_mind_server.py is an in-process
+# Claude Agent SDK construct Codex's CLI can't reach). Promising tools that
+# don't exist would just produce confident-sounding hallucinated answers,
+# the exact failure this file exists to prevent — so Codex gets an honest,
+# narrower prompt instead until that phase lands.
+_CODEX_CORE = """You are JARVIS, running on the Codex CLI. Your memory here is limited to this conversation plus whatever your own file/shell tools can read directly — you do NOT have the cross-session hive-mind tools other connected models have (no cross-session search, Skills, Notes/Tasks/Calendar, Documents, Contacts, or spec-doc access). If asked about any of those, say plainly that integration isn't built for you yet rather than guessing or claiming to check something you can't reach.
+
+Your shell and file tools are native to the Codex CLI itself (not separate Read/Write/Bash tools) and are scoped to your working directory — the vault, or a pinned workspace folder if this chat has one."""
+
+_CODEX_ADMIN_ADDENDUM = " You also have write access to jarvis-app's own source (core/, routes/, services/, static/, scripts/, specs/, mcp_servers/, electron/ — not data/, which holds credentials) for real development work on the app itself."
+
+
+def for_codex(is_admin: bool = False) -> str:
+    return _CODEX_CORE + (_CODEX_ADMIN_ADDENDUM if is_admin else "")

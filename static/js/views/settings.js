@@ -4,7 +4,7 @@ import { api, el, customSelect, toast, confirmDialog } from "../api.js";
 // model, CLI-aware) — duplicated rather than shared since the two modules
 // build their pickers with different components (native menu vs. customSelect).
 function modelLabel(ep) {
-  return ep.kind === "claude_cli" ? `${ep.name} (${ep.model || "CLI default"})` : `${ep.name} (${ep.model})`;
+  return ep.kind === "claude_cli" || ep.kind === "codex_cli" ? `${ep.name} (${ep.model || "CLI default"})` : `${ep.name} (${ep.model})`;
 }
 
 // Settings as a real floating window (David's ask, 2026-08-31: "more of a
@@ -294,10 +294,11 @@ const KNOWN_API_PROVIDERS = [
 // kind added 2026-08-31 follow-up — JARVIS ships with no default model, so
 // Claude itself has to be added here like anything else, not assumed) -----
 function modelCard(title, subtitle, kind, onAdded) {
-  const nameInput = el("input", { placeholder: "Name (e.g. \"" + (kind === "local" ? "Local Ollama" : kind === "claude_cli" ? "Claude" : "OpenRouter") + "\")", style: "flex:1;" });
+  const isCliKind = kind === "claude_cli" || kind === "codex_cli";
+  const nameInput = el("input", { placeholder: "Name (e.g. \"" + (kind === "local" ? "Local Ollama" : kind === "claude_cli" ? "Claude" : kind === "codex_cli" ? "Codex" : "OpenRouter") + "\")", style: "flex:1;" });
   const urlInput = el("input", { placeholder: kind === "local" ? "http://localhost:11434/v1" : "https://api.openrouter.ai/v1", style: "flex:1;" });
   const modelInput = el("input", {
-    placeholder: kind === "claude_cli" ? "Model override (optional, e.g. claude-sonnet-4-5)" : "Model id",
+    placeholder: isCliKind ? `Model override (optional, e.g. ${kind === "claude_cli" ? "claude-sonnet-4-5" : "gpt-5-codex"})` : "Model id",
     style: "flex:1;",
   });
   const keyInput = el("input", { type: "password", placeholder: "API key" + (kind === "local" ? " (optional)" : ""), style: "flex:1;" });
@@ -331,7 +332,7 @@ function modelCard(title, subtitle, kind, onAdded) {
 
   addBtn.addEventListener("click", async () => {
     err.textContent = "";
-    if (kind === "claude_cli") {
+    if (isCliKind) {
       if (!nameInput.value.trim()) { err.textContent = "Name is required."; return; }
     } else if (!nameInput.value.trim() || !urlInput.value.trim() || !modelInput.value.trim()) {
       err.textContent = "Name, URL, and model id are required.";
@@ -357,7 +358,7 @@ function modelCard(title, subtitle, kind, onAdded) {
 
   const fields = kind === "local"
     ? [nameInput, urlInput, modelInput, ctxInput]
-    : kind === "claude_cli"
+    : isCliKind
       ? [nameInput, modelInput]
       : [providerSelect, nameInput, urlInput, modelInput, keyInput];
   return el("div", { class: "glass bracket card", style: "margin-bottom:14px;" }, [
@@ -374,6 +375,7 @@ function renderAddModelsPanel(content) {
     el("div", { class: "title", text: "Add Models" }),
     el("div", { class: "meta", style: "margin:6px 0 14px;", text: "JARVIS ships with no default model — add at least one below, then pick it from the model menu above the chat box." }),
     modelCard("Add Claude Code CLI", "Uses the claude CLI already installed and logged in on this machine — no key needed here.", "claude_cli", () => selectSection("added-models")),
+    modelCard("Add Codex CLI", "Uses the codex CLI already installed and logged in on this machine — no key needed here.", "codex_cli", () => selectSection("added-models")),
     modelCard("Add Local Models", "A local model server (Ollama, llama.cpp, vLLM).", "local", () => selectSection("added-models")),
     modelCard("Add API Models", "Connect a cloud provider (OpenAI, Anthropic, OpenRouter, etc.).", "api", () => selectSection("added-models")),
   );
@@ -393,6 +395,7 @@ async function renderAddedModelsPanel(content) {
   );
 
   const claudeEps = endpoints.filter((e) => e.kind === "claude_cli");
+  const codexEps = endpoints.filter((e) => e.kind === "codex_cli");
   const local = endpoints.filter((e) => e.kind === "local");
   const apiEps = endpoints.filter((e) => e.kind === "api");
   const rowsByEndpoint = {};
@@ -418,7 +421,7 @@ async function renderAddedModelsPanel(content) {
       await renderAddedModelsPanel(content);
       toast("Model removed", "success");
     });
-    const metaText = ep.kind === "claude_cli"
+    const metaText = ep.kind === "claude_cli" || ep.kind === "codex_cli"
       ? `Model: ${ep.model || "CLI default"}`
       : `${ep.model} · ${ep.base_url}${ep.has_api_key ? " · key saved" : ""}${ep.kind === "local" && ep.num_ctx ? ` · ctx ${ep.num_ctx}` : ""}`;
     const row = el("div", { class: "card-row", style: "justify-content:space-between;align-items:center;margin-top:8px;" }, [
@@ -434,6 +437,8 @@ async function renderAddedModelsPanel(content) {
 
   content.append(el("div", { class: "meta", style: "margin-top:12px;color:var(--text-faint);letter-spacing:1px;font-size:10px;", text: "CLAUDE CODE CLI" }));
   content.append(claudeEps.length === 0 ? el("div", { class: "meta", text: "None" }) : el("div", {}, claudeEps.map(endpointRow)));
+  content.append(el("div", { class: "meta", style: "margin-top:16px;color:var(--text-faint);letter-spacing:1px;font-size:10px;", text: "CODEX CLI" }));
+  content.append(codexEps.length === 0 ? el("div", { class: "meta", text: "None" }) : el("div", {}, codexEps.map(endpointRow)));
   content.append(el("div", { class: "meta", style: "margin-top:16px;color:var(--text-faint);letter-spacing:1px;font-size:10px;", text: "LOCAL" }));
   content.append(local.length === 0 ? el("div", { class: "meta", text: "None" }) : el("div", {}, local.map(endpointRow)));
   content.append(el("div", { class: "meta", style: "margin-top:16px;color:var(--text-faint);letter-spacing:1px;font-size:10px;", text: "API" }));

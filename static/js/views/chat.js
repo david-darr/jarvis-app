@@ -525,7 +525,7 @@ async function refreshModelPicker(currentEndpointId) {
 
   const options = endpoints.map((ep) => ({
     id: ep.id,
-    name: ep.kind === "claude_cli" ? `${ep.name} (${ep.model || "CLI default"})` : `${ep.name} (${ep.model})`,
+    name: ep.kind === "claude_cli" || ep.kind === "codex_cli" ? `${ep.name} (${ep.model || "CLI default"})` : `${ep.name} (${ep.model})`,
   }));
   if (options.length === 0) {
     menu.appendChild(el("div", { class: "model-picker-item", text: "No models added yet — see Settings" }));

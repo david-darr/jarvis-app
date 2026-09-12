@@ -22,14 +22,15 @@ class CreateEndpointRequest(BaseModel):
     base_url: str = ""
     model: str = ""
     api_key: Optional[str] = None
-    kind: str = "api"  # "local", "api", or "claude_cli" — David's ask
-    # 2026-08-31, matching Odysseus's Settings > Add Models split between
+    kind: str = "api"  # "local", "api", "claude_cli", or "codex_cli" — David's
+    # ask 2026-08-31, matching Odysseus's Settings > Add Models split between
     # local model servers (Ollama/llama.cpp/vLLM) and hosted API providers,
     # plus a third kind (2026-08-31 follow-up: "the user has to add their
     # own models first... claude code cli" — Claude is no longer a free
     # default, it's just another addable connection). local/api still share
     # one OpenAI-compatible client; claude_cli routes through core/brain.py
-    # instead and needs neither base_url nor api_key.
+    # instead and needs neither base_url nor api_key. codex_cli (2026-09-11)
+    # is the same shape, routing through core/codex_brain.py instead.
     num_ctx: Optional[int] = None  # local only — see model_endpoints.DEFAULT_LOCAL_NUM_CTX
 
 
@@ -79,6 +80,21 @@ async def test_endpoint(endpoint_id: str, user: str = Depends(require_admin)) ->
         # a chat would use, not a fake "always ok" response.
         from core.brain import Brain
         brain = Brain(model=ep.get("model") or None)
+        try:
+            await brain.connect()
+            await brain.run_turn("ping")
+            return {"ok": True, "latency_ms": round((time.monotonic() - started) * 1000)}
+        except Exception as e:
+            return {"ok": False, "detail": str(e)[:300]}
+        finally:
+            await brain.disconnect()
+    if ep.get("kind") == "codex_cli":
+        # Same honest-test posture as claude_cli above: the real question is
+        # whether the `codex` CLI is installed and logged in on this
+        # machine, so run one real minimal turn through the actual path a
+        # chat would use rather than faking an "always ok" response.
+        from core.codex_brain import CodexBrain
+        brain = CodexBrain(model=ep.get("model") or None)
         try:
             await brain.connect()
             await brain.run_turn("ping")

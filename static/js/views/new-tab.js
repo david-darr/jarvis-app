@@ -9,7 +9,7 @@
 import { api, el, customSelect, toast } from "../api.js";
 
 function modelLabel(ep) {
-  return ep.kind === "claude_cli" ? `${ep.name} (${ep.model || "CLI default"})` : `${ep.name} (${ep.model})`;
+  return ep.kind === "claude_cli" || ep.kind === "codex_cli" ? `${ep.name} (${ep.model || "CLI default"})` : `${ep.name} (${ep.model})`;
 }
 
 const DATA_SOURCES = ["Gmail", "Calendar", "Canvas / School", "Custom API"];

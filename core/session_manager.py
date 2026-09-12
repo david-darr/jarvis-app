@@ -45,6 +45,12 @@ class SessionManager:
             "messages": [],
             "model_endpoint_id": None,  # None = no model chosen yet (David's ask 2026-08-31: no default model — see services/chat_service.py's NO_MODEL_MESSAGE)
             "workspace_dir": None,  # None = agent's tools stay scoped to the vault
+            # Codex CLI's own server-side thread id (see core/codex_brain.py) —
+            # None until this session's first turn through a codex_cli
+            # endpoint. Unlike the Claude Agent SDK, `codex exec resume
+            # <thread_id>` gives real cross-restart conversation continuity,
+            # so this is persisted here rather than only held in memory.
+            "codex_thread_id": None,
             # Which Settings > Integrations MCP Tool Servers this chat can
             # reference (David's ask 2026-08-31, matching Claude's per-
             # conversation connector toggle) — None = all registered ones
@@ -118,6 +124,19 @@ class SessionManager:
         write_json_atomic(_session_path(session_id), session)
         self._index[session_id]["model_endpoint_id"] = model_endpoint_id
         self._save_index()
+        return session
+
+    def set_codex_thread_id(self, session_id: str, thread_id: Optional[str]) -> dict:
+        """Records the Codex CLI thread id a session's first codex_cli turn
+        created, so every later turn (including after a server restart)
+        resumes the same server-side thread instead of starting a blank one.
+        Not surfaced in the index — internal bookkeeping only, not something
+        the UI lists sessions by."""
+        if session_id not in self._index:
+            raise KeyError(f"no such session: {session_id}")
+        session = self.get_session(session_id)
+        session["codex_thread_id"] = thread_id
+        write_json_atomic(_session_path(session_id), session)
         return session
 
     def set_workspace(self, session_id: str, workspace_dir: Optional[str]) -> dict:
