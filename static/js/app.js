@@ -4,6 +4,9 @@ import * as onboarding from "./onboarding.js";
 import * as auth from "./auth.js";
 import * as commandPalette from "./commandPalette.js";
 import * as floatingProgress from "./floatingProgress.js";
+import { setupSidebar, restoreSidebar } from "./sidebar.js";
+
+restoreSidebar();
 
 // Nav order matches David's Figma wireframe, minus "New Chat" and "Search"
 // as separate items (David's call, 2026-08-31) — both live inside the Chats
@@ -50,18 +53,14 @@ async function loadModule(tabId) {
 let activeTab = null;
 let activeUnmount = null; // set by a view's render() if it needs teardown (e.g. home.js's WebGL scene)
 
-// Captured once, never re-queried by id. The first fix attempt looked up
-// `document.getElementById("view-content")` fresh on every switchTab() call
-// — but chat.js used to change the container's own `id` attribute for its
-// layout, so after visiting Chat once, that id no longer existed on the
-// page and every later lookup silently returned null, leaving Chat's old
-// content on screen with no error. Root fix: never let a view module mutate
-// this element's id at all (chat.js now uses a CSS class instead — see
-// .chat-layout in style.css), and hold one stable reference here so a
-// lookup-by-id can never go stale in the first place.
-const view = document.getElementById("view-content");
+// Each navigation owns a fresh root. A late response from a previous view
+// can only update its detached root, never overwrite the current screen.
+// View modules must preserve this id and use classes for their layouts.
+let view = document.getElementById("view-content");
+let navigationVersion = 0;
 
-export async function switchTab(tabId) {
+export async function switchTab(tabId, options = {}) {
+  const version = ++navigationVersion;
   // Views that own real resources (currently just home.js's WebGL scene)
   // return a cleanup function from render(). Without calling it here before
   // wiping the DOM, a canvas's animation loop and GPU buffers would keep
@@ -72,13 +71,37 @@ export async function switchTab(tabId) {
   activeTab = tabId;
   document.querySelectorAll(".nav-item").forEach((item) => {
     item.classList.toggle("active", item.dataset.tab === tabId);
+    if (item.dataset.tab === tabId) item.setAttribute("aria-current", "page");
+    else item.removeAttribute("aria-current");
   });
-  view.className = "view active";
-  view.removeAttribute("style");
-  view.innerHTML = `<div class="empty-state">Loading...</div>`;
-  const mod = await loadModule(tabId);
-  const result = await mod.render(view, tabId);
-  if (typeof result === "function") activeUnmount = result;
+  const nextView = document.createElement("div");
+  nextView.id = "view-content";
+  nextView.className = "view active";
+  nextView.dataset.view = tabId;
+  view.replaceWith(nextView);
+  view = nextView;
+  nextView.innerHTML = `<div class="empty-state" role="status">Loading...</div>`;
+  try {
+    const mod = await loadModule(tabId);
+    if (version !== navigationVersion) return;
+    const result = await mod.render(nextView, tabId, { ...options, registerCleanup(cleanup) {
+      if (version === navigationVersion) activeUnmount = cleanup;
+      else cleanup();
+    } });
+    if (typeof result === "function") {
+      if (version === navigationVersion) activeUnmount = result;
+      else result();
+    }
+  } catch (error) {
+    if (version !== navigationVersion) return;
+    if (activeUnmount) { activeUnmount(); activeUnmount = null; }
+    nextView.replaceChildren();
+    const message = document.createElement("div");
+    message.className = "empty-state";
+    message.textContent = "This view couldn't load. Try opening it again.";
+    nextView.appendChild(message);
+    console.error("View failed to load", tabId, error);
+  }
   closeMobileMenu();
 }
 
@@ -107,7 +130,7 @@ function setupMobileMenu() {
 
 async function buildSidebar() {
   const brand = document.getElementById("brand");
-  brand.innerHTML = `<img src="/static/img/jarvis-logo.png" alt="" class="brand-logo">JARVIS`;
+  brand.innerHTML = `<img src="/static/img/jarvis-logo.png" alt="" class="brand-logo"><span>JARVIS</span>`;
 
   const nav = document.getElementById("nav");
   // Cleared before rebuilding — buildSidebar() now also runs whenever
@@ -117,9 +140,17 @@ async function buildSidebar() {
   // bug, 2026-09-01).
   nav.innerHTML = "";
   for (const item of NAV) {
-    const navEl = document.createElement("div");
+    if (item.id === "notes" || item.id === "brain") {
+      const label = document.createElement("div");
+      label.className = "nav-group-label";
+      label.textContent = item.id === "notes" ? "Workspace" : "Intelligence";
+      nav.appendChild(label);
+    }
+    const navEl = document.createElement("button");
+    navEl.type = "button";
     navEl.className = "nav-item";
     navEl.dataset.tab = item.id;
+    navEl.setAttribute("aria-label", item.label);
     navEl.innerHTML = `${ICONS[item.icon] || ""}<span>${item.label}</span>`;
     navEl.addEventListener("click", () => switchTab(item.id));
     nav.appendChild(navEl);
@@ -134,10 +165,13 @@ async function buildSidebar() {
   const customTabs = await api("/api/system/custom-tabs").catch(() => []);
   for (const item of customTabs) {
     if (item.view_url) customViewUrls[item.id] = item.view_url;
-    const navEl = document.createElement("div");
+    const navEl = document.createElement("button");
+    navEl.type = "button";
     navEl.className = "nav-item";
     navEl.dataset.tab = item.id;
-    navEl.innerHTML = `${item.icon_svg || ""}<span>${item.label}</span>`;
+    navEl.setAttribute("aria-label", item.label);
+    navEl.innerHTML = `${item.icon_svg || ICONS.library}<span></span>`;
+    navEl.querySelector("span").textContent = item.label;
     navEl.addEventListener("click", () => switchTab(item.id));
     nav.appendChild(navEl);
   }
@@ -148,14 +182,20 @@ async function buildSidebar() {
   // buildDeveloperModeRow()'s toggle handler so it appears/disappears
   // immediately without a page reload.
   if (document.documentElement.classList.contains("dev-mode")) {
-    const newTabEl = document.createElement("div");
+    const newTabEl = document.createElement("button");
+    newTabEl.type = "button";
     newTabEl.className = "nav-item nav-item-new-tab";
     newTabEl.dataset.tab = "new-tab";
+    newTabEl.setAttribute("aria-label", "New Tab");
     newTabEl.innerHTML = `${ICONS.plus || ""}<span>New Tab</span>`;
     newTabEl.addEventListener("click", () => switchTab("new-tab"));
     nav.appendChild(newTabEl);
   }
 
+  nav.querySelectorAll(".nav-item").forEach((item) => {
+    item.classList.toggle("active", item.dataset.tab === activeTab);
+    if (item.dataset.tab === activeTab) item.setAttribute("aria-current", "page");
+  });
   buildSidebarFooter();
   return customTabs;
 }
@@ -178,9 +218,11 @@ function buildDeveloperModeRow() {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "sidebar-devmode-btn";
+  btn.setAttribute("aria-label", "Developer Mode");
   const sync = () => {
     const on = document.documentElement.classList.contains("dev-mode");
     btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", String(on));
     btn.title = on ? "Developer Mode is on — click to turn off" : "Turn on Developer Mode";
   };
   btn.innerHTML = `${ICONS.devMode || ""}<span>Developer Mode</span>`;
@@ -212,14 +254,22 @@ async function buildSidebarFooter() {
   footer.appendChild(buildDeveloperModeRow());
 
   const status = await api("/api/auth/status").catch(() => null);
-  const displayName = !status ? "…" : status.username === "local" ? "Local User" : status.username;
+  const displayName = !status ? "…" : status.username === "local" ? "Local User" : status.username || "Local User";
 
   const row = document.createElement("div");
   row.className = "sidebar-footer-row";
 
-  const card = document.createElement("div");
+  const card = document.createElement("button");
+  card.type = "button";
   card.className = "sidebar-user-card";
-  card.innerHTML = `<span class="sidebar-user-name">${displayName}</span>`;
+  card.setAttribute("aria-label", displayName + " · Account menu");
+  const avatar = document.createElement("span");
+  avatar.className = "sidebar-avatar";
+  avatar.textContent = displayName.slice(0, 1).toUpperCase();
+  const userName = document.createElement("span");
+  userName.className = "sidebar-user-name";
+  userName.textContent = displayName;
+  card.append(avatar, userName);
 
   const menu = document.createElement("div");
   menu.className = "overflow-menu hidden";
@@ -276,6 +326,7 @@ async function buildSidebarFooter() {
   settingsBtn.type = "button";
   settingsBtn.className = "sidebar-settings-btn";
   settingsBtn.title = "Settings";
+  settingsBtn.setAttribute("aria-label", "Settings");
   settingsBtn.innerHTML = ICONS.settings || "";
   settingsBtn.addEventListener("click", openSettings);
 
@@ -292,10 +343,16 @@ async function openSettings() {
   // view container) since this bypasses switchTab() itself to avoid
   // settings.render()'s hardcoded desktop-modal behavior.
   if (window.matchMedia("(max-width: 768px)").matches) {
+    ++navigationVersion;
     if (activeUnmount) { activeUnmount(); activeUnmount = null; }
     activeTab = null;
-    document.querySelectorAll(".nav-item").forEach((item) => item.classList.remove("active"));
-    view.className = "view active settings-mobile-page";
+    document.querySelectorAll(".nav-item").forEach((item) => { item.classList.remove("active"); item.removeAttribute("aria-current"); });
+    const settingsView = document.createElement("div");
+    settingsView.id = "view-content";
+    settingsView.className = "view active settings-mobile-page";
+    settingsView.dataset.view = "settings";
+    view.replaceWith(settingsView);
+    view = settingsView;
     closeMobileMenu();
     await settings.renderMobilePage(view);
     return;
@@ -337,7 +394,15 @@ async function boot() {
 
 async function startApp() {
   const customTabs = await buildSidebar();
+  setupSidebar();
   setupMobileMenu();
+  document.addEventListener("jarvis:navigate", (event) => {
+    const { tab, ...options } = event.detail;
+    tab === "settings" ? openSettings() : switchTab(tab, options);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeMobileMenu();
+  });
   // Adding/removing a premade tab (views/new-tab.js) rebuilds the nav so it
   // appears immediately instead of after a reload.
   document.addEventListener("jarvis:tabs-changed", () => { buildSidebar(); });

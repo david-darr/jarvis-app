@@ -226,20 +226,21 @@ function attachResizeHandles(panel) {
 function buildNav() {
   const nav = document.getElementById("settings-nav");
   nav.innerHTML = "";
-  const search = el("input", { class: "settings-search", placeholder: "Find settings..." });
-  nav.appendChild(search);
+  const search = el("input", { class: "settings-search", placeholder: "Find settings...", "aria-label": "Find settings" });
+  const navList = el("div", { class: "settings-nav-list" });
+  nav.append(search, navList);
 
   const allItems = [];
   const renderGroup = (sections) => {
     for (const sec of sections) {
-      const item = el("div", { class: "settings-nav-item" + (sec.id === activeSectionId ? " active" : ""), text: sec.label, onclick: () => selectSection(sec.id) });
+      const item = el("button", { type: "button", class: "settings-nav-item" + (sec.id === activeSectionId ? " active" : ""), text: sec.label, onclick: () => selectSection(sec.id) });
       allItems.push({ item, label: sec.label });
-      nav.appendChild(item);
+      navList.appendChild(item);
     }
   };
   renderGroup(NAV_SECTIONS);
   if (cachedStatus.is_admin) {
-    nav.appendChild(el("div", { class: "settings-nav-group", text: "ADMIN" }));
+    navList.appendChild(el("div", { class: "settings-nav-group", text: "ADMIN" }));
     const devMode = document.documentElement.classList.contains("dev-mode");
     renderGroup(ADMIN_SECTIONS.filter((s) => s.id !== "custom-tabs" || devMode));
   }

@@ -9,13 +9,13 @@ export async function render(container) {
   const header = el("div", { class: "view-header" }, [
     el("div", {}, [
       el("h2", { text: "Notes" }),
-      el("div", { class: "sub", text: "Active Priorities, todos, and reminders — one unified list" }),
+      el("div", { class: "sub", text: "Capture a thought. Remember the important things." }),
     ]),
   ]);
 
   const textInput = el("input", { placeholder: "e.g. Finish the CS 571 lab writeup" });
   const dueInput = el("input", { type: "datetime-local" });
-  const addBtn = el("button", { class: "btn", text: "Add Note" });
+  const addBtn = el("button", { class: "btn primary", text: "Add note" });
 
   const form = el("div", { class: "glass card" }, [
     el("div", { class: "form-grid" }, [
@@ -59,7 +59,7 @@ async function refresh(list, focusTarget) {
     return;
   }
   for (const note of notes) {
-    const checkbox = el("input", { type: "checkbox" });
+    const checkbox = el("input", { type: "checkbox", "aria-label": "Complete: " + note.text });
     checkbox.checked = note.completed;
     checkbox.addEventListener("change", async () => {
       await api(`/api/notes/${note.id}`, { method: "PATCH", body: JSON.stringify({ completed: checkbox.checked }) });

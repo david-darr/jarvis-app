@@ -17,7 +17,10 @@
     <button id="mobile-menu-btn" class="mobile-menu-btn" aria-label="Menu"></button>
     <div id="mobile-backdrop" class="mobile-backdrop hidden"></div>
     <div id="sidebar">
-      <div id="brand"></div>
+      <div class="sidebar-header">
+        <div id="brand"></div>
+        <button id="sidebar-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true" aria-controls="nav"></button>
+      </div>
       <nav id="nav"></nav>
       <!-- Populated by app.js's buildSidebarFooter(). Left empty on purpose:
            it previously shipped literal "Phase 3 backend · v2 UI (early)"

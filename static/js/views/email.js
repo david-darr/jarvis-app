@@ -9,7 +9,7 @@ export async function render(container) {
   const header = el("div", { class: "view-header" }, [
     el("div", {}, [
       el("h2", { text: "Email" }),
-      el("div", { class: "sub", text: "IMAP/SMTP accounts — credentials encrypted at rest, never shown again" }),
+      el("div", { class: "sub", text: "The messages worth your attention, in one place." }),
     ]),
   ]);
 
@@ -23,8 +23,8 @@ export async function render(container) {
 
   // Was six placeholder-only inputs crammed into one wrapping flex row
   // (audit 2026-09-03) — now real labeled fields grouped into rows.
-  const form = el("div", { class: "glass card" }, [
-    el("div", { class: "title", style: "margin-bottom:12px;", text: "Connect an account" }),
+  const form = el("details", { class: "disclosure-panel" }, [
+    el("summary", { text: "+ Connect an account" }),
     el("div", { class: "form-grid", style: "margin-bottom:12px;" }, [
       el("div", { class: "field field-grow" }, [el("label", { text: "Email address" }), emailInput]),
       el("div", { class: "field field-grow" }, [el("label", { text: "Password" }), passInput]),
@@ -40,7 +40,7 @@ export async function render(container) {
 
   const list = el("div", { id: "email-accounts-list", style: "margin-top:14px;" });
   const triage = el("div", { id: "email-triage", style: "margin-top:14px;" });
-  wrap.append(header, form, list, triage);
+  wrap.append(header, triage, form, list);
   container.append(wrap);
   refreshTriage(triage);
 
@@ -139,7 +139,7 @@ async function refresh(list, focusTarget) {
       title: "No accounts connected",
       hint: "Connect an IMAP/SMTP account above. Once connected, your Daily Brief can summarize unread mail and flag anything important.",
       actionLabel: "Connect an account",
-      onAction: () => focusTarget && focusTarget.focus(),
+      onAction: () => { if (focusTarget) { focusTarget.closest("details").open = true; focusTarget.focus(); } },
     }));
     return;
   }

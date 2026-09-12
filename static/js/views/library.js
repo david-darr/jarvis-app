@@ -17,12 +17,12 @@ async function renderList(container) {
   const header = el("div", { class: "view-header" }, [
     el("div", {}, [
       el("h2", { text: "Library" }),
-      el("div", { class: "sub", text: "Documents you keep, not just chat history — plain markdown/text, with keyword search." }),
+      el("div", { class: "sub", text: "A home for your references, drafts, and ideas worth keeping." }),
     ]),
   ]);
 
   const searchInput = el("input", { placeholder: "Search documents...", style: "flex:1;" });
-  const newBtn = el("button", { class: "btn", text: "+ New Document" });
+  const newBtn = el("button", { class: "btn primary", text: "+ New document" });
   // Plain file input + FileReader (David's ask 2026-09-01) — works
   // identically in the Electron shell and the plain-HTTP web-access path,
   // so import is no longer gated behind window.jarvis (see brain.js's
@@ -36,7 +36,7 @@ async function renderList(container) {
     el("div", { style: "margin-top:6px;" }, [importStatus]),
   ]);
 
-  const grid = el("div", { id: "library-grid", style: "margin-top:14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;" });
+  const grid = el("div", { id: "library-grid", class: "document-grid" });
 
   const wrap = el("div", { class: "view-constrained" }, [header, toolbar, grid]);
   container.append(wrap);
@@ -102,11 +102,11 @@ async function refreshGrid(grid, container, query) {
     const meta = query
       ? (item.snippet || "Title match")
       : `Updated ${new Date(item.updated_at * 1000).toLocaleDateString()}`;
-    const card = el("div", {
-      class: "glass bracket card",
-      style: "cursor:pointer;",
+    const card = el("button", {
+      type: "button", class: "glass card document-card",
       onclick: () => renderEditor(container, item.id),
     }, [
+      el("span", { class: "document-glyph", text: "◇", "aria-hidden": "true" }),
       el("div", { class: "title", text: item.title }),
       el("div", { class: "meta", style: "margin-top:6px;", text: meta }),
     ]);

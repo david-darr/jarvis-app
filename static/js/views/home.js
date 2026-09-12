@@ -1,238 +1,169 @@
 import { api, el } from "../api.js";
+import { ICONS } from "../icons.js";
 import { mount as mountCore } from "../core3d.js";
+import { listInFlight, subscribeAll } from "../chatStream.js";
 
-// Mission Control Home (David's ask 2026-09-02: "best possible mission
-// control") — the 3D core stays the centerpiece; a left status column now
-// shows live system health (/api/system/status: scheduler, Discord gateway,
-// vault, models), a next-scheduled-run countdown, and a real activity feed
-// (core/events.py via /api/system/events). Right column keeps This Week /
-// Recent Chats / AI Models. Health + feed refresh every 30s while the tab
-// is open; the countdown ticks every second — both cleaned up by the
-// dispose function render() returns (same contract app.js already relies
-// on for the WebGL scene).
-//
-// Dashboard summaries still pull cheap, already-loaded-elsewhere data only —
-// email summary is account count, not a live IMAP fetch, and /status is
-// documented as in-memory/local-file reads, so Home never blocks on a real
-// network call just to render.
-
-const STATUS_REFRESH_MS = 30_000;
-
-export async function render(container) {
-  container.innerHTML = "";
-  container.classList.add("home-layout");
-
-  const coreHost = el("div", { class: "core3d-host" });
-  const title = el("div", { class: "home-title", style: "letter-spacing: 6px; color: var(--accent); font-weight: 300; margin: 10px 0 6px;", text: "JARVIS" });
-  const sub = el("div", { class: "sub", text: "Mission Control" });
-  const stats = el("div", { class: "home-stats" });
-  const overlay = el("div", { class: "home-overlay" }, [title, sub, stats]);
-  const sidePanel = el("div", { class: "home-side-panel" });
-  const leftPanel = el("div", { class: "home-side-panel home-left-panel" });
-
-  container.append(coreHost, overlay, leftPanel, sidePanel);
-
-  const dispose3d = mountCore(coreHost);
-
-  // Skeletons while everything loads (proper-app polish, task F).
-  leftPanel.append(skeletonPanel(4), skeletonPanel(5));
-  sidePanel.append(skeletonPanel(3), skeletonPanel(3), skeletonPanel(3));
-
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const weekEnd = new Date(todayStart);
-  weekEnd.setDate(weekEnd.getDate() + 7);
-
-  const [sessions, notes, tasks, events, emailAccounts, models, usage] = await Promise.all([
-    api("/api/sessions").catch(() => []),
-    api("/api/notes?include_completed=false").catch(() => []),
-    api("/api/tasks").catch(() => []),
-    api(`/api/calendar/events?start=${todayStart.toISOString()}&end=${weekEnd.toISOString()}`).catch(() => []),
-    api("/api/email/accounts").catch(() => []),
-    api("/api/models").catch(() => []),
-    api("/api/models/usage").catch(() => ({})),
+const navigate = (tab, options = {}) => document.dispatchEvent(new CustomEvent("jarvis:navigate", { detail: { tab, ...options } }));
+function icon(name) {
+  const node = el("span", { class: "dashboard-icon", "aria-hidden": "true" });
+  node.innerHTML = ICONS[name] || ICONS.notes;
+  return node;
+}
+function action(label, tab, primary = false, options = {}) {
+  return el("button", { type: "button", class: primary ? "btn primary" : "btn quiet", text: label, onclick: () => navigate(tab, options) });
+}
+function section(title, link, tab) {
+  const body = el("div", { class: "dashboard-section-body" });
+  const panel = el("section", { class: "dashboard-section" }, [
+    el("div", { class: "dashboard-section-header" }, [el("h2", { text: title }), action(link, tab)]), body,
   ]);
-
-  const todayEnd = new Date(todayStart);
-  todayEnd.setDate(todayEnd.getDate() + 1);
-  const todaysEvents = events.filter((e) => {
-    const start = new Date(e.start);
-    return start >= todayStart && start < todayEnd;
-  });
-
-  stats.append(
-    statCard("Chats", sessions.length),
-    statCard("Open Notes", notes.length),
-    statCard("Scheduled Tasks", tasks.filter((t) => t.enabled).length),
-    statCard("Today's Events", todaysEvents.length),
-    statCard("Email Accounts", emailAccounts.length),
-  );
-
-  const upcoming = events
-    .filter((e) => new Date(e.start) >= todayStart)
-    .sort((a, b) => new Date(a.start) - new Date(b.start))
-    .slice(0, 4);
-
-  const recentSessions = [...sessions]
-    .sort((a, b) => b.updated_at - a.updated_at)
-    .slice(0, 4);
-
-  sidePanel.innerHTML = "";
-  sidePanel.append(
-    recentPanel("This Week", upcoming, (e) => `${e.title} — ${new Date(e.start).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`),
-    recentPanel("Recent Chats", recentSessions, (s) => s.title),
-    modelsUsagePanel(models, usage),
-  );
-
-  // -- live left column: system health + activity feed ------------------
-  let countdownTimer = null;
-  let refreshTimer = null;
-
-  async function refreshLive() {
-    const [status, feed] = await Promise.all([
-      api("/api/system/status").catch(() => null),
-      api("/api/system/events?limit=8").catch(() => []),
-    ]);
-    leftPanel.innerHTML = "";
-    if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
-    const sys = systemPanel(status);
-    leftPanel.append(sys.panel, activityPanel(feed));
-    countdownTimer = sys.timer;
-  }
-
-  await refreshLive();
-  refreshTimer = setInterval(refreshLive, STATUS_REFRESH_MS);
-
-  return () => {
-    dispose3d();
-    if (refreshTimer) clearInterval(refreshTimer);
-    if (countdownTimer) clearInterval(countdownTimer);
-  };
+  return { panel, body };
+}
+function empty(body, message, failed = false) {
+  body.replaceChildren(el("div", { class: "dashboard-empty", text: failed ? "Couldn't load this section. Try opening it again." : message }));
+}
+function row(title, detail, iconName, onclick) {
+  return el(onclick ? "button" : "div", { class: "dashboard-row", ...(onclick ? { type: "button", onclick } : {}) }, [
+    icon(iconName), el("span", { class: "dashboard-row-copy" }, [
+      el("span", { class: "dashboard-row-title", text: title }),
+      el("span", { class: "dashboard-row-detail", text: detail }),
+    ]), ...(onclick ? [el("span", { class: "dashboard-row-arrow", text: "↗", "aria-hidden": "true" })] : []),
+  ]);
+}
+function relativeTime(timestamp) {
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp * 1000) / 60000));
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return minutes + "m ago";
+  if (minutes < 1440) return Math.floor(minutes / 60) + "h ago";
+  return Math.floor(minutes / 1440) + "d ago";
+}
+// Date-only calendar entries are local days, not UTC instants.
+function eventDate(value) {
+  return new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? value + "T00:00:00" : value);
 }
 
-function systemPanel(status) {
-  const panel = el("div", { class: "glass bracket home-recent-panel" });
-  panel.append(el("div", { class: "title", style: "margin-bottom:8px;", text: "System" }));
-  if (!status) {
-    panel.append(el("div", { class: "empty-state", style: "padding:10px 0;", text: "Status unavailable" }));
-    return { panel, timer: null };
+// Return cleanup synchronously: navigating away during a pending request
+// releases the scene immediately. Home reads cheap summary APIs only.
+export function render(container) {
+  container.replaceChildren();
+  container.classList.add("dashboard");
+  let disposed = false, refreshing = false, systemStatus = null, nextTask = null;
+  const statusLabel = el("span", { text: "Checking system" });
+  const statusDot = el("span", { class: "status-dot" });
+  const coreHost = el("div", { class: "core-stage", "aria-label": "JARVIS particle core" });
+  const coreState = el("span", { class: "core-state", text: "Connecting" });
+  const coreToggle = el("button", { class: "core-motion-toggle", type: "button", text: "Pause motion", "aria-pressed": "false" });
+  const nextTaskLabel = el("span", { class: "dashboard-next", text: "Checking schedule…" });
+  const content = el("div", { class: "dashboard-content" });
+  const header = el("header", { class: "dashboard-header" }, [
+    el("div", {}, [el("div", { class: "eyebrow", text: "Overview" }), el("p", { text: new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" }) })]),
+    el("div", { class: "dashboard-system-pill", role: "status" }, [statusDot, statusLabel]),
+  ]);
+  const hero = el("section", { class: "dashboard-hero" }, [
+    el("div", { class: "dashboard-intro" }, [
+      el("div", { class: "eyebrow", text: "A little space to think" }),
+      el("h1", { text: "Your day, in focus." }),
+      el("p", { text: "Your conversations, knowledge, and next steps. All connected, right here." }),
+      el("div", { class: "dashboard-actions" }, [action("Start a conversation", "chat", true), action("Explore your vault ↗", "brain", false, { section: "vault" })]),
+      nextTaskLabel,
+    ]),
+    el("div", { class: "dashboard-core" }, [coreHost, el("div", { class: "core-caption" }, [coreState, coreToggle])]),
+  ]);
+  const stats = el("div", { class: "dashboard-stats" });
+  const chats = section("Pick up where you left off", "All chats ↗", "chat");
+  const schedule = section("On the horizon", "Calendar ↗", "calendar");
+  const projects = section("Your projects", "Open projects ↗", "chat");
+  const activity = section("Recent activity", "Tasks ↗", "tasks");
+  const system = section("Connected systems", "Settings ↗", "settings");
+  const models = section("Your models", "Manage ↗", "settings");
+  content.append(header, hero, stats, el("div", { class: "dashboard-grid" }, [chats.panel, schedule.panel, projects.panel, models.panel, activity.panel, system.panel]));
+  container.appendChild(content);
+  const disposeCore = mountCore(coreHost);
+  let paused = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function updateMotion() {
+    coreToggle.textContent = paused ? "Resume motion" : "Pause motion";
+    coreToggle.setAttribute("aria-pressed", String(paused));
+    disposeCore.setPaused?.(paused);
   }
-
-  const discordUp = status.discord_connected_bots.length > 0;
-  panel.append(
-    statusRow(status.scheduler_running ? "ok" : "err", "Scheduler",
-      status.scheduler_running ? `running · ${status.enabled_task_count} task${status.enabled_task_count === 1 ? "" : "s"}` : "stopped"),
-    statusRow(discordUp ? "ok" : "warn", "Discord",
-      discordUp ? `${status.discord_connected_bots.join(", ")} connected` : "no bots connected"),
-    statusRow(status.vault_ok ? "ok" : "err", "Vault", status.vault_ok ? "reachable" : "missing"),
-    statusRow(status.model_endpoint_count > 0 ? "ok" : "warn", "Models",
-      status.model_endpoint_count > 0 ? `${status.model_endpoint_count} endpoint${status.model_endpoint_count === 1 ? "" : "s"}` : "none added"),
-  );
-
-  let timer = null;
-  if (status.next_task) {
-    const value = el("span", { class: "meta" });
-    const tick = () => {
-      const ms = new Date(status.next_task.next_run_at) - Date.now();
-      value.textContent = ms <= 0 ? "due now" : `in ${formatDuration(ms)}`;
-    };
-    tick();
-    timer = setInterval(tick, 1000);
-    panel.append(el("div", { class: "home-recent-item", style: "display:flex;justify-content:space-between;gap:8px;" }, [
-      el("span", { text: `Next: ${status.next_task.name}` }),
-      value,
+  coreToggle.addEventListener("click", () => { paused = !paused; updateMotion(); });
+  updateMotion();
+  function updateCoreState() {
+    if (disposed) return;
+    const running = listInFlight().filter((entry) => entry.status === "processing").length;
+    const attention = systemStatus && (!systemStatus.vault_ok || !systemStatus.scheduler_running);
+    const state = running ? "working" : attention ? "attention" : systemStatus ? "ready" : "offline";
+    coreState.textContent = running ? running + " conversation" + (running === 1 ? "" : "s") + " in progress" : attention ? "System needs attention" : systemStatus ? "Ready when you are" : "Status unavailable";
+    disposeCore.setState?.(state);
+    coreHost.dataset.state = state;
+  }
+  const unsubscribe = subscribeAll(updateCoreState);
+  for (const item of [chats, schedule, projects, activity, system, models]) {
+    item.body.append(el("div", { class: "skeleton skeleton-line" }), el("div", { class: "skeleton skeleton-line" }));
+  }
+  function updateCountdown() {
+    if (!nextTask) return;
+    const minutes = Math.ceil((new Date(nextTask.next_run_at) - Date.now()) / 60000);
+    const time = minutes <= 0 ? "due now" : minutes < 60 ? "in " + minutes + "m" : minutes < 1440 ? "in " + Math.floor(minutes / 60) + "h " + minutes % 60 + "m" : "in " + Math.floor(minutes / 1440) + "d";
+    nextTaskLabel.textContent = "Next up: " + nextTask.name + " · " + time;
+  }
+  async function refresh() {
+    if (disposed || refreshing) return;
+    refreshing = true;
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    const end = new Date(start); end.setDate(end.getDate() + 7);
+    const paths = ["/api/sessions", "/api/notes?include_completed=false", "/api/tasks", "/api/calendar/events?start=" + start.toISOString() + "&end=" + end.toISOString(), "/api/projects", "/api/models", "/api/models/usage", "/api/system/status", "/api/system/events?limit=5"];
+    const results = await Promise.allSettled(paths.map((path) => api(path)));
+    refreshing = false;
+    if (disposed) return;
+    const [sessions, notes, tasks, events, projectList, endpoints, usage, status, feed] = results.map((result) => result.status === "fulfilled" ? result.value : null);
+    systemStatus = status;
+    statusDot.className = "status-dot " + (!status ? "warn" : !status.vault_ok || !status.scheduler_running ? "err" : "ok");
+    statusLabel.textContent = !status ? "Status unavailable" : !status.vault_ok || !status.scheduler_running ? "Needs attention" : "Systems operational";
+    nextTask = status?.next_task;
+    nextTaskLabel.textContent = !status ? "Schedule unavailable" : nextTask ? "" : "No scheduled runs ahead";
+    updateCountdown(); updateCoreState();
+    stats.replaceChildren();
+    for (const [label, value, tab, name] of [
+      ["Conversations", sessions?.length, "chat", "chats"], ["Open notes", notes?.length, "notes", "notes"],
+      ["Active automations", tasks?.filter((t) => t.enabled).length, "tasks", "tasks"], ["This week", events?.length, "calendar", "calendar"],
+    ]) stats.append(el("button", { type: "button", class: "dashboard-stat", onclick: () => navigate(tab) }, [
+      icon(name), el("span", { class: "dashboard-stat-value", text: value == null ? "—" : String(value) }), el("span", { class: "dashboard-stat-label", text: label }),
     ]));
+    chats.body.replaceChildren();
+    if (!sessions?.length) empty(chats.body, "Your next conversation starts here.", sessions === null);
+    else [...sessions].sort((a, b) => b.updated_at - a.updated_at).slice(0, 4).forEach((s) => chats.body.append(row(s.title || "Untitled conversation", relativeTime(s.updated_at), "chats", () => navigate("chat", { sessionId: s.id }))));
+    schedule.body.replaceChildren();
+    const upcoming = events?.filter((e) => !e.completed && eventDate(e.end || e.start) >= (e.all_day ? start : new Date())).sort((a, b) => eventDate(a.start) - eventDate(b.start)).slice(0, 4);
+    if (!upcoming?.length) empty(schedule.body, "A little breathing room. No upcoming events this week.", events === null);
+    else upcoming.forEach((event) => schedule.body.append(row(event.title, eventDate(event.start).toLocaleString([], { weekday: "short", month: "short", day: "numeric", ...(event.all_day ? {} : { hour: "numeric", minute: "2-digit" }) }), "calendar", () => navigate("calendar"))));
+    projects.body.replaceChildren();
+    if (!projectList?.length) empty(projects.body, "Group your chats and shared knowledge into a project.", projectList === null);
+    else projectList.slice(0, 3).forEach((p) => projects.body.append(row(p.name, (p.document_ids?.length || 0) + " shared documents", "library", () => navigate("chat", { projectId: p.id }))));
+    models.body.replaceChildren();
+    if (!endpoints?.length) empty(models.body, "Connect a model in Settings to get started.", endpoints === null);
+    else endpoints.forEach((endpoint) => {
+      const pct = usage?.[endpoint.id]?.percentage;
+      const modelRow = row(endpoint.name, endpoint.model || endpoint.kind.replaceAll("_", " "), "brain", () => navigate("settings"));
+      if (typeof pct === "number" && Number.isFinite(pct)) modelRow.append(el("span", { class: "dashboard-model-usage", text: Math.round(pct) + "% used" }));
+      models.body.append(modelRow);
+    });
+    activity.body.replaceChildren();
+    if (!feed?.length) empty(activity.body, "Task runs and channel activity will appear here.", feed === null);
+    else feed.forEach((event) => activity.body.append(el("div", { class: "dashboard-activity" }, [
+      el("span", { class: "status-dot " + (event.level === "error" ? "err" : event.level === "warn" ? "warn" : "ok") }),
+      el("span", { text: event.message }), el("time", { text: relativeTime(event.ts) }),
+    ])));
+    system.body.replaceChildren();
+    if (!status) empty(system.body, "", true);
+    else for (const [label, detail, state] of [
+      ["Memory vault", status.vault_ok ? "Connected" : "Unavailable", status.vault_ok ? "ok" : "err"],
+      ["Scheduler", status.scheduler_running ? status.enabled_task_count + " active tasks" : "Stopped", status.scheduler_running ? "ok" : "err"],
+      ["Discord", status.discord_connected_bots.length ? status.discord_connected_bots.length + " connected" : "Not connected", status.discord_connected_bots.length ? "ok" : "warn"],
+      ["Model endpoints", status.model_endpoint_count + " configured", status.model_endpoint_count ? "ok" : "warn"],
+    ]) system.body.append(el("div", { class: "dashboard-system-row" }, [el("span", { class: "status-dot " + state }), el("span", { text: label }), el("span", { class: "meta", text: detail })]));
   }
-  return { panel, timer };
-}
-
-function statusRow(state, label, detail) {
-  return el("div", { class: "status-row" }, [
-    el("span", { class: `status-dot ${state}` }),
-    el("span", { class: "status-label", text: label }),
-    el("span", { class: "meta status-detail", text: detail }),
-  ]);
-}
-
-function activityPanel(feed) {
-  const panel = el("div", { class: "glass bracket home-recent-panel" });
-  panel.append(el("div", { class: "title", style: "margin-bottom:8px;", text: "Activity" }));
-  if (!feed.length) {
-    panel.append(el("div", { class: "empty-state", style: "padding:10px 0;", text: "Nothing yet — task runs and channel events will show here" }));
-    return panel;
-  }
-  for (const ev of feed) {
-    panel.append(el("div", { class: "home-recent-item activity-item" }, [
-      el("span", { class: `status-dot ${ev.level === "error" ? "err" : ev.level === "warn" ? "warn" : "ok"}` }),
-      el("span", { class: "activity-msg", text: ev.message }),
-      el("span", { class: "meta activity-time", text: relativeTime(ev.ts * 1000) }),
-    ]));
-  }
-  return panel;
-}
-
-function formatDuration(ms) {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ${m % 60}m`;
-  return `${Math.floor(h / 24)}d ${h % 24}h`;
-}
-
-function relativeTime(tsMs) {
-  const s = Math.floor((Date.now() - tsMs) / 1000);
-  if (s < 60) return "now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
-}
-
-function skeletonPanel(rows) {
-  const panel = el("div", { class: "glass bracket home-recent-panel" });
-  panel.append(el("div", { class: "skeleton skeleton-title" }));
-  for (let i = 0; i < rows; i++) panel.append(el("div", { class: "skeleton skeleton-line" }));
-  return panel;
-}
-
-function modelsUsagePanel(models, usage) {
-  const panel = el("div", { class: "glass bracket home-recent-panel" });
-  panel.append(el("div", { class: "title", style: "margin-bottom:8px;", text: "AI Models" }));
-  if (models.length === 0) {
-    panel.append(el("div", { class: "empty-state", style: "padding:10px 0;", text: "None added — see Settings" }));
-    return panel;
-  }
-  for (const m of models) {
-    const pct = usage[m.id]?.percentage;
-    const row = el("div", { class: "home-recent-item", style: "display:flex;flex-direction:column;gap:4px;" }, [
-      el("div", { style: "display:flex;justify-content:space-between;gap:8px;" }, [
-        el("span", { text: m.name }),
-        el("span", { class: "meta", text: pct != null ? `${pct}%` : "—" }),
-      ]),
-      el("div", { class: "usage-bar" }, [el("div", { class: "usage-bar-fill", style: `width:${pct || 0}%;` })]),
-    ]);
-    panel.appendChild(row);
-  }
-  return panel;
-}
-
-function statCard(label, value) {
-  return el("div", { class: "glass stat-card" }, [
-    el("div", { class: "stat-value", text: String(value) }),
-    el("div", { class: "meta", text: label }),
-  ]);
-}
-
-function recentPanel(title, items, formatItem) {
-  const panel = el("div", { class: "glass bracket home-recent-panel" });
-  panel.append(el("div", { class: "title", style: "margin-bottom:8px;", text: title }));
-  if (items.length === 0) {
-    panel.append(el("div", { class: "empty-state", style: "padding:10px 0;", text: "Nothing here yet" }));
-  } else {
-    for (const item of items) {
-      panel.append(el("div", { class: "home-recent-item", text: formatItem(item) }));
-    }
-  }
-  return panel;
+  refresh();
+  const refreshTimer = setInterval(() => { if (!document.hidden) refresh(); }, 30000);
+  const countdownTimer = setInterval(updateCountdown, 1000);
+  return () => { disposed = true; disposeCore(); unsubscribe(); clearInterval(refreshTimer); clearInterval(countdownTimer); };
 }

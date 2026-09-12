@@ -6,12 +6,15 @@ This is the real product (v2). [jarvis-starter-kit](https://github.com/david-dar
 
 **[Website](https://david-darr.github.io/jarvis-app/)** · **[Download the latest release](https://github.com/david-darr/jarvis-app/releases/latest)**
 
-![JARVIS Mission Control](docs/img/home.png)
+![JARVIS Home dashboard with its particle core and connected workspace](docs/img/home.png)
+
+*Development UI preview with sample data. The latest packaged release may differ.*
 
 ## What it does
 
 - **Chat** with any model you connect — Claude via the Agent SDK, any OpenAI-compatible endpoint, or a local model (Ollama, or the built-in llama.cpp engine). Per-conversation model choice, file attachments, folder-scoped workspaces, and slash commands.
-- **Mission Control home** — live system health, what's scheduled next, and a real activity feed of what the system has been doing.
+- **Home dashboard**: recent conversations, projects, upcoming events, connected systems, and a live activity feed around a responsive particle core.
+- **A focused workspace**: a minimal dark interface, an animated chat composer, and a sidebar that collapses to an icon rail. Your layout preference is remembered; mobile keeps its full navigation drawer.
 - **Notes, Calendar, Email, Library** — one unified place for priorities and todos (due-dated notes render on the calendar), CalDAV/iCal calendar sync, IMAP/SMTP email accounts, and a searchable document library.
 - **Tasks** — scheduled automations, either your own prompts or built-in ones (Daily Brief, tidy-up jobs, skill audits). Output can be delivered to a connected channel rather than just sitting in the tab.
 - **Brain** — reusable `SKILL.md` procedures, plus a browsable graph of your Obsidian-style vault, which is where the assistant's long-term memory actually lives.
@@ -28,6 +31,15 @@ Memory is a folder of markdown notes, not a database — so it stays readable, p
 | **Chat** — per-conversation model choice, attachments, folder-scoped workspaces | **Tasks** — built-in and custom automations, delivered where you want them |
 | ![Vault graph](docs/img/vault.png) | ![Settings](docs/img/settings.png) |
 | **Brain** — your vault rendered as the linked graph it already is | **Models** — Claude, local servers, or any API provider |
+
+<details>
+<summary>See the compact sidebar</summary>
+
+![Home with the sidebar collapsed to an icon-only rail](docs/img/sidebar-collapsed.png)
+
+The same workspace, with more room for your content. Demo data shown.
+
+</details>
 
 ## Install
 

@@ -1,4 +1,4 @@
-import { api, el } from "./api.js";
+import { api, el, toast } from "./api.js";
 
 // Brain tab's Vault view (David's ask 2026-09-01) — force-directed graph of
 // the vault's folders/notes, ported from the original JARVIS kiosk
@@ -8,9 +8,8 @@ import { api, el } from "./api.js";
 // from-scratch reinvention, since the original was already live-tuned.
 
 const PALETTE = [
-  "rgba(0, 212, 255, 0.9)", "rgba(190, 150, 255, 0.9)", "rgba(255, 150, 190, 0.9)",
-  "rgba(140, 235, 180, 0.9)", "rgba(255, 195, 120, 0.9)", "rgba(130, 230, 230, 0.9)",
-  "rgba(255, 140, 140, 0.9)", "rgba(190, 230, 130, 0.9)",
+  "#a894eb", "#7e9ed0", "#ce91b7", "#83b8a4",
+  "#d7b27c", "#84b9c5", "#bd8d92", "#b7b38a",
 ];
 const RING = 95;
 
@@ -20,9 +19,9 @@ function colorForFolder(name) {
   for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
   return PALETTE[hash % PALETTE.length];
 }
-function nodeRadius(node) { return node.type === "folder" ? (node.id === "" ? 14 : 9) : 5; }
+function nodeRadius(node) { return node.type === "folder" ? (node.id === "" ? 11 : 7) : 4; }
 function nodeColor(node) {
-  if (node.type === "folder") return node.id === "" ? "rgba(255, 195, 120, 0.9)" : "rgba(255, 195, 120, 0.6)";
+  if (node.type === "folder") return node.id === "" ? "#e2d9f3" : "#d7b27c";
   return colorForFolder(topFolder(node));
 }
 
@@ -79,8 +78,14 @@ export function createVaultGraph(container) {
   let drag = null;
   let pointerDown = null;
   let selectedId = null;
+  let hoveredId = null;
+  let disposed = false;
+  let settledTicks = 0;
+  let autoFit = true;
+  let viewportWidth = 0, viewportHeight = 0;
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
-  const canvas = el("canvas", { id: "vault-graph-canvas" });
+  const canvas = el("canvas", { id: "vault-graph-canvas", "aria-label": "Vault constellation. Use search or Browse vault to open notes." });
   const panelHeader = el("div", { class: "vault-panel-header" });
   const panelTitle = el("span", { text: "Select a note" });
   const editBtn = el("button", { class: "btn", text: "Edit", style: "display:none;" });
@@ -111,10 +116,36 @@ export function createVaultGraph(container) {
   });
 
   const wrap = el("div", { class: "vault-graph-wrap" }, [canvas, panel]);
+  const search = el("input", { class: "vault-search", placeholder: "Find a note or folder…", "aria-label": "Search vault" });
+  const searchResults = el("div", { class: "vault-search-results" });
+  const counts = el("span", { text: "Loading your constellation…" });
+  const toolbar = el("div", { class: "vault-toolbar" }, [
+    search,
+    el("button", { class: "btn", type: "button", text: "Fit view", onclick: () => { autoFit = true; fitToView(); redraw(); } }),
+    el("button", { class: "btn", type: "button", text: "Browse vault", onclick: () => { if (nodeById[""]) selectNode(nodeById[""]); } }),
+  ]);
+  wrap.append(toolbar, searchResults, el("div", { class: "vault-caption" }, [
+    counts, el("span", { text: "Drag to explore · Scroll to zoom · Select to read" }),
+  ]));
   container.appendChild(wrap);
+  search.addEventListener("input", () => {
+    searchResults.replaceChildren();
+    const query = search.value.trim().toLowerCase();
+    if (!query || !graph) return;
+    const matches = graph.nodes.filter((node) => node.name.toLowerCase().includes(query)).slice(0, 20);
+    if (!matches.length) searchResults.append(el("div", { class: "dashboard-empty", text: "No matching notes or folders" }));
+    for (const node of matches) searchResults.append(el("button", {
+      type: "button", class: "vault-search-result", text: node.name,
+      onclick: () => { autoFit = false; searchResults.replaceChildren(); transform.x = -node.x * transform.scale; transform.y = -node.y * transform.scale; selectNode(node); },
+    }));
+  });
+  search.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { search.value = ""; searchResults.replaceChildren(); }
+    if (event.key === "Enter") searchResults.querySelector("button")?.click();
+  });
 
   function fitToView() {
-    if (!graph || !graph.nodes.length || !canvas.width || !canvas.height) return;
+    if (!graph || !graph.nodes.length || !viewportWidth || !viewportHeight) return;
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     graph.nodes.forEach((n) => {
       if (n.x < minX) minX = n.x;
@@ -123,7 +154,7 @@ export function createVaultGraph(container) {
       if (n.y > maxY) maxY = n.y;
     });
     const w = Math.max(maxX - minX, 1), h = Math.max(maxY - minY, 1);
-    const scale = Math.min(canvas.width / (w + 160), canvas.height / (h + 160));
+    const scale = Math.min(viewportWidth / (w + 160), viewportHeight / (h + 190));
     transform.scale = Math.min(1.4, Math.max(0.2, scale));
     transform.x = -((minX + maxX) / 2) * transform.scale;
     transform.y = -((minY + maxY) / 2) * transform.scale;
@@ -164,8 +195,11 @@ export function createVaultGraph(container) {
   }
 
   function draw() {
+    if (!graph || disposed) return;
     const ctx = canvas.getContext("2d");
-    const w = canvas.width, h = canvas.height;
+    const w = viewportWidth, h = viewportHeight;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     ctx.save();
     ctx.translate(w / 2 + transform.x, h / 2 + transform.y);
@@ -177,7 +211,8 @@ export function createVaultGraph(container) {
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
-      ctx.strokeStyle = e.kind === "link" ? "rgba(160, 210, 255, 0.3)" : "rgba(255, 195, 120, 0.12)";
+      const connected = selectedId !== null && (e.source === selectedId || e.target === selectedId);
+      ctx.strokeStyle = connected ? "rgba(193,173,242,.65)" : e.kind === "link" ? "rgba(167,148,211,.18)" : "rgba(191,174,147,.09)";
       ctx.lineWidth = (e.kind === "link" ? 0.9 : 0.6) / transform.scale;
       ctx.stroke();
     });
@@ -185,19 +220,28 @@ export function createVaultGraph(container) {
     graph.nodes.forEach((n) => {
       const r = nodeRadius(n);
       ctx.beginPath();
-      ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+      if (n.type === "folder") ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+      else {
+        ctx.moveTo(n.x, n.y - r);
+        ctx.lineTo(n.x + r * .866, n.y + r * .5);
+        ctx.lineTo(n.x - r * .866, n.y + r * .5);
+        ctx.closePath();
+      }
       ctx.fillStyle = nodeColor(n);
-      ctx.fill();
-      if (n.id === selectedId) {
+      ctx.globalAlpha = selectedId === null || n.id === selectedId || n.id === hoveredId ? .85 : .4;
+      if (n.type === "folder") ctx.fill();
+      else { ctx.strokeStyle = nodeColor(n); ctx.lineWidth = 1 / transform.scale; ctx.stroke(); }
+      ctx.globalAlpha = 1;
+      if (n.id === selectedId || n.id === hoveredId) {
         ctx.lineWidth = 2 / transform.scale;
         ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
         ctx.stroke();
       }
       const showLabel = n.id === selectedId
-        || (n.type === "folder" ? transform.scale > 0.35 : transform.scale > 0.9);
+        || n.id === hoveredId || (n.type === "folder" ? transform.scale > 0.35 : transform.scale > 1.6);
       if (showLabel) {
-        ctx.font = (n.type === "folder" ? 11 : 10) / transform.scale + "px Consolas, monospace";
-        ctx.fillStyle = n.id === selectedId ? "rgba(255, 255, 255, 0.95)" : "rgba(216, 244, 255, 0.8)";
+        ctx.font = (n.type === "folder" ? 11 : 10) / transform.scale + "px Segoe UI, sans-serif";
+        ctx.fillStyle = n.id === selectedId ? "#eeedf0" : "#aaa5b5";
         ctx.fillText(n.name, n.x + r + 3, n.y + 3);
       }
     });
@@ -205,22 +249,28 @@ export function createVaultGraph(container) {
   }
 
   function animate() {
-    if (!simRunning) return;
-    tick();
+    raf = null;
+    if (!simRunning || disposed || document.hidden) return;
+    if (settledTicks < 240 && !reducedMotion.matches) { tick(); settledTicks++; }
+    if (autoFit) fitToView();
     draw();
-    raf = requestAnimationFrame(animate);
+    if (drag || (settledTicks < 240 && !reducedMotion.matches)) raf = requestAnimationFrame(animate);
   }
+  function redraw() { if (!disposed && graph && raf === null && !document.hidden) raf = requestAnimationFrame(animate); }
 
   function resizeCanvas() {
     const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width;
-    canvas.height = rect.height;
+    viewportWidth = rect.width; viewportHeight = rect.height;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+    redraw();
   }
 
   function screenToWorld(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
-    const x = clientX - rect.left - canvas.width / 2 - transform.x;
-    const y = clientY - rect.top - canvas.height / 2 - transform.y;
+    const x = clientX - rect.left - viewportWidth / 2 - transform.x;
+    const y = clientY - rect.top - viewportHeight / 2 - transform.y;
     return { x: x / transform.scale, y: y / transform.scale };
   }
 
@@ -228,7 +278,7 @@ export function createVaultGraph(container) {
     const p = screenToWorld(clientX, clientY);
     let best = null, bestDist = Infinity;
     graph.nodes.forEach((n) => {
-      const r = nodeRadius(n) + 4;
+      const r = Math.max(nodeRadius(n) + 4, 12 / transform.scale);
       const dx = n.x - p.x, dy = n.y - p.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist <= r && dist < bestDist) { best = n; bestDist = dist; }
@@ -251,13 +301,15 @@ export function createVaultGraph(container) {
       const isCurrent = isLast && !allClickable;
       const attrs = { class: "vault-breadcrumb-crumb" + (isCurrent ? " current" : ""), text: crumb.label };
       if (!isCurrent) attrs.onclick = () => { const n = nodeById[crumb.id]; if (n) selectNode(n); };
-      panelBreadcrumb.appendChild(el("span", attrs));
+      if (!isCurrent) attrs.type = "button";
+      panelBreadcrumb.appendChild(el(isCurrent ? "span" : "button", attrs));
       if (!isLast) panelBreadcrumb.appendChild(el("span", { class: "vault-breadcrumb-sep", text: "/" }));
     });
   }
 
   function selectNode(node) {
     selectedId = node.id;
+    redraw();
     panel.classList.add("open");
     editBtn.style.display = "none";
     saveBtn.style.display = "none";
@@ -277,9 +329,10 @@ export function createVaultGraph(container) {
         return;
       }
       children.forEach((child) => {
-        const row = el("div", {
+        const row = el("button", {
+          type: "button",
           class: "vault-child-row",
-          text: (child.type === "folder" ? "📁 " : "📄 ") + child.name,
+          text: (child.type === "folder" ? "▸  " : "◇  ") + child.name,
           onclick: () => selectNode(child),
         });
         panelBody.appendChild(row);
@@ -291,12 +344,12 @@ export function createVaultGraph(container) {
     panelTitle.textContent = node.name;
     panelBody.innerHTML = "";
     panelBody.appendChild(el("div", { class: "meta", text: "Loading..." }));
-    editBtn.style.display = "";
     api(`/api/vault/note?path=${encodeURIComponent(node.id)}`)
       .then((data) => {
         if (selectedId !== node.id) return;
         panelBody.textContent = data.content;
         panelRawContent = data.content;
+        editBtn.style.display = "";
       })
       .catch(() => {
         if (selectedId !== node.id) return;
@@ -331,6 +384,8 @@ export function createVaultGraph(container) {
       panelRawContent = content;
       const node = nodeById[selectedId];
       if (node) selectNode(node);
+    } catch (error) {
+      toast("Couldn't save this note: " + error.message, "error");
     } finally {
       saveBtn.disabled = false;
       saveBtn.textContent = "Save";
@@ -340,10 +395,14 @@ export function createVaultGraph(container) {
   closeBtn.addEventListener("click", () => {
     panel.classList.remove("open");
     selectedId = null;
+    redraw();
   });
 
   canvas.addEventListener("pointerdown", (e) => {
+    autoFit = false;
     canvas.setPointerCapture(e.pointerId);
+    settledTicks = 180;
+    redraw();
     pointerDown = { x: e.clientX, y: e.clientY, moved: false };
     const hit = graph ? hitTest(e.clientX, e.clientY) : null;
     if (hit) {
@@ -355,7 +414,12 @@ export function createVaultGraph(container) {
     }
   });
   canvas.addEventListener("pointermove", (e) => {
-    if (!drag) return;
+    if (!drag) {
+      const hit = graph ? hitTest(e.clientX, e.clientY) : null;
+      if ((hit?.id ?? null) !== hoveredId) { hoveredId = hit?.id ?? null; redraw(); }
+      canvas.style.cursor = hit ? "pointer" : "grab";
+      return;
+    }
     if (pointerDown) {
       const dx0 = e.clientX - pointerDown.x, dy0 = e.clientY - pointerDown.y;
       if (Math.abs(dx0) > 3 || Math.abs(dy0) > 3) pointerDown.moved = true;
@@ -380,32 +444,46 @@ export function createVaultGraph(container) {
     drag = null;
     pointerDown = null;
     canvas.classList.remove("dragging");
+    redraw();
+  });
+  canvas.addEventListener("pointercancel", () => {
+    if (drag?.node) drag.node.fixed = false;
+    drag = null; pointerDown = null; canvas.classList.remove("dragging"); redraw();
   });
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
+    autoFit = false;
     const factor = e.deltaY < 0 ? 1.1 : 0.9;
     transform.scale = Math.min(3, Math.max(0.15, transform.scale * factor));
+    redraw();
   }, { passive: false });
 
-  const onResize = () => resizeCanvas();
-  window.addEventListener("resize", onResize);
+  const observer = new ResizeObserver(resizeCanvas);
+  observer.observe(wrap);
+  document.addEventListener("visibilitychange", redraw);
+  reducedMotion.addEventListener("change", redraw);
 
   async function load() {
     const data = await api("/api/vault/graph");
+    if (disposed) return;
     graph = data;
     resizeCanvas();
     nodeById = layout(data);
     fitToView();
+    counts.textContent = data.nodes.filter((node) => node.type !== "folder").length + " notes · " + data.edges.filter((edge) => edge.kind === "link").length + " connections";
     if (!simRunning) {
       simRunning = true;
       animate();
     }
   }
-  load();
+  load().catch(() => { if (!disposed) counts.textContent = "Couldn't load the vault. Reopen this view to retry."; });
 
   return function destroy() {
     simRunning = false;
+    disposed = true;
     if (raf) cancelAnimationFrame(raf);
-    window.removeEventListener("resize", onResize);
+    observer.disconnect();
+    document.removeEventListener("visibilitychange", redraw);
+    reducedMotion.removeEventListener("change", redraw);
   };
 }

@@ -54,7 +54,7 @@ export async function render(container) {
     else await renderEngineSection(body);
   }
 
-  container.append(header, tabs, body);
+  container.append(el("div", { class: "view-constrained" }, [header, tabs, body]));
   await switchSection(activeSection);
 
   return clearPolls;

@@ -192,13 +192,27 @@ function renderWelcome(messages) {
   messages.appendChild(
     el("div", { class: "chat-welcome" }, [
       el("img", { src: "/static/img/jarvis-logo.png", alt: "" }),
-      el("h1", { text: "JARVIS" }),
-      el("p", { text: "Begin a chat with JARVIS" }),
+      el("h1", { text: "What's on your mind?" }),
+      el("p", { text: "A thought, a plan, a place to start." }),
+      el("div", { class: "chat-suggestions" }, [
+        ["Plan my day", "Help me plan today around my calendar and open priorities."],
+        ["Find in my vault", "Help me find something in my vault: "],
+        ["Think it through", "I'd like to think through an idea with you: "],
+      ].map(([label, prompt]) => el("button", {
+        type: "button", class: "suggestion-chip", text: label,
+        onclick: () => {
+          const input = document.getElementById("chat-input");
+          if (!input) return;
+          input.value = prompt;
+          input.dispatchEvent(new Event("input"));
+          input.focus();
+        },
+      }))),
     ]),
   );
 }
 
-export async function render(container) {
+export async function render(container, tabId, options = {}) {
   container.innerHTML = "";
   container.classList.add("chat-layout");
   stagedAttachments = [];
@@ -209,6 +223,7 @@ export async function render(container) {
   // anyway means a future bug in that call order fails safe (no leaked
   // listeners) instead of silently accumulating one per tab visit.
   activeUnsubscribers = [];
+  const mountSubscriptions = activeUnsubscribers;
   // Every fresh landing on the Chat tab starts at the welcome state, even
   // if a session was open the last time this tab was visited — matches a
   // typical chat app's "new chat by default" convention rather than
@@ -223,7 +238,7 @@ export async function render(container) {
   // created while it's active is assigned to it automatically (see
   // createSession() below). Gear only shows once a specific project is
   // selected — "All Chats" has no settings of its own to edit.
-  activeProjectFilter = null;
+  activeProjectFilter = options.projectId || null;
   const projectPickerBtn = el("button", { type: "button", class: "model-picker-btn", id: "project-picker-btn" }, [
     el("span", { id: "project-picker-label", text: "All Chats" }),
   ]);
@@ -241,7 +256,7 @@ export async function render(container) {
   projectSettingsBtn.insertAdjacentHTML("beforeend", ICON_GEAR);
   const projectPickerWrap = el("div", { class: "project-picker-wrap" }, [projectPickerBtn, projectSettingsBtn, projectPickerMenu]);
 
-  const newBtn = el("button", { class: "btn", style: "width:100%;margin-bottom:12px;", text: "+ New Chat", onclick: createSession });
+  const newBtn = el("button", { class: "btn chat-new-btn", text: "+ New chat", onclick: createSession });
   const sessionsList = el("div", { id: "sessions-list" });
   sessionsPanel.append(projectPickerWrap, newBtn, sessionsList);
 
@@ -264,7 +279,7 @@ export async function render(container) {
   const attachStrip = el("div", { id: "attach-strip", class: "attach-strip" });
 
   // -- composer: top row (textarea + model picker) --------------------
-  const input = el("textarea", { id: "chat-input", rows: "1", placeholder: "Message JARVIS..." });
+  const input = el("textarea", { id: "chat-input", rows: "2", placeholder: "Ask anything, or start with an idea…", "aria-label": "Message JARVIS" });
   const modelBtn = el("button", { type: "button", class: "model-picker-btn", id: "model-picker-btn" }, [
     el("span", { id: "model-picker-label", text: "No model — add one in Settings" }),
   ]);
@@ -273,7 +288,7 @@ export async function render(container) {
   const modelWrap = el("div", { class: "model-picker-wrap" }, [modelBtn, modelMenu]);
   modelBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(modelMenu); });
 
-  const inputTop = el("div", { class: "chat-input-top" }, [input, modelWrap]);
+  const inputTop = el("div", { class: "chat-input-top" }, [input]);
 
   // -- composer: bottom row (overflow "+" menu, workspace pill, send) --
   const overflowBtn = el("button", { type: "button", class: "input-icon-btn", id: "overflow-plus-btn", title: "More" });
@@ -298,11 +313,15 @@ export async function render(container) {
   sendBtn.insertAdjacentHTML("beforeend", ICON_SEND);
 
   const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, workspacePill]);
-  const inputRight = el("div", {}, [sendBtn]);
+  const inputRight = el("div", { class: "chat-input-right" }, [modelWrap, sendBtn]);
   const inputBottom = el("div", { class: "chat-input-bottom" }, [inputLeft, inputRight]);
 
-  const composer = el("div", { class: "glass chat-input-bar" }, [inputTop, inputBottom]);
-  main.append(messages, attachStrip, composer);
+  const composer = el("div", { class: "glass chat-input-bar border-beam" }, [inputTop, inputBottom]);
+  main.append(messages, attachStrip, composer, el("div", { class: "composer-hint", text: "Enter to send · Shift + Enter for a new line" }));
+  sendBtn.setAttribute("aria-label", "Send message");
+  const syncBeam = () => { composer.dataset.active = String(!document.hidden); };
+  document.addEventListener("visibilitychange", syncBeam);
+  syncBeam();
 
   container.append(sessionsPanel, sessionsBackdrop, main);
   // Selecting a session or starting a new one closes the mobile drawer —
@@ -322,10 +341,30 @@ export async function render(container) {
     input.style.height = Math.min(input.scrollHeight, 200) + "px";
   });
 
-  document.addEventListener("click", () => { closeMenu(overflowMenu); closeMenu(modelMenu); closeMenu(projectPickerMenu); });
+  const dismissMenus = () => { closeMenu(overflowMenu); closeMenu(modelMenu); closeMenu(projectPickerMenu); };
+  const escapeMenus = (event) => { if (event.key === "Escape") { dismissMenus(); closeSessionsDrawer(); } };
+  document.addEventListener("click", dismissMenus);
+  document.addEventListener("keydown", escapeMenus);
+
+  let disposed = false;
+  const cleanup = () => {
+    if (disposed) return;
+    disposed = true;
+    document.removeEventListener("click", dismissMenus);
+    document.removeEventListener("keydown", escapeMenus);
+    document.removeEventListener("visibilitychange", syncBeam);
+    closeSessionMenu();
+    mountSubscriptions.forEach((unsub) => unsub());
+    if (activeUnsubscribers === mountSubscriptions) activeUnsubscribers = [];
+  };
+  options.registerCleanup?.(cleanup);
 
   await refreshSessions(sessionsList, messages);
+  if (disposed || !container.isConnected) return cleanup;
   await refreshProjectPicker(sessionsList, messages);
+  if (disposed || !container.isConnected) return cleanup;
+  if (options.sessionId) await openSession(options.sessionId, sessionsList, messages);
+  if (disposed || !container.isConnected) return cleanup;
 
   // New Tab builder handoff (Developer Mode, David's ask 2026-09-01) — the
   // one deliberate exception to "Chat always lands on the welcome screen"
@@ -352,10 +391,7 @@ export async function render(container) {
   // convention home.js already uses for its WebGL scene. Without it, a
   // reattached chatStream listener from this mount would keep firing
   // against DOM this view no longer owns.
-  return () => {
-    activeUnsubscribers.forEach((unsub) => unsub());
-    activeUnsubscribers = [];
-  };
+  return cleanup;
 }
 
 function menuItem(iconSvg, label, onclick) {
@@ -685,6 +721,7 @@ async function refreshProjectPicker(sessionsList, messages) {
   const gearBtn = document.getElementById("project-settings-btn");
   if (!label || !menu) return;
   const allProjects = await api("/api/projects").catch(() => []);
+  if (!sessionsList.isConnected) return;
   menu.innerHTML = "";
 
   menu.appendChild(el("div", {
@@ -827,6 +864,7 @@ async function openProjectModal(project) {
 
 async function refreshSessions(sessionsList, messages) {
   const allSessions = await api("/api/sessions");
+  if (!sessionsList.isConnected) return;
   // Projects (David's ask 2026-09-12) — narrows the list to whatever
   // project is currently selected in the picker above; null (the default,
   // "All Chats") shows everything, unchanged from before this feature.
@@ -840,7 +878,8 @@ async function refreshSessions(sessionsList, messages) {
     sessionsList.appendChild(el("div", { class: "empty-state", text: activeProjectFilter === null ? "No chats yet" : "No chats in this project yet" }));
   }
   for (const session of sessions) {
-    const item = el("div", {
+    const item = el("button", {
+      type: "button",
       class: "session-item" + (session.id === activeSessionId ? " active" : ""),
       "data-session-id": session.id,
       "data-title": session.title,
@@ -956,9 +995,8 @@ function showSessionMenu(x, y, session, item, sessionsList, messages) {
 }
 
 function startRename(item, session, sessionsList, messages) {
-  item.innerHTML = "";
-  const input = el("input", { class: "session-rename-input", value: session.title });
-  item.appendChild(input);
+  const input = el("input", { class: "session-rename-input", value: session.title, "aria-label": "Conversation title" });
+  item.replaceWith(input);
   input.focus();
   input.select();
 
@@ -1005,6 +1043,7 @@ async function openSession(sessionId, sessionsList, messages) {
   if (attachStrip) attachStrip.innerHTML = "";
   [...sessionsList.children].forEach((c) => c.classList.remove("active"));
   const session = await api(`/api/sessions/${sessionId}`);
+  if (!messages.isConnected || activeSessionId !== sessionId) return;
   messages.innerHTML = "";
   for (const msg of session.messages) {
     messages.appendChild(messageCard(msg.role, msg.content, msg.ts));

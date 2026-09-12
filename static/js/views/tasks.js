@@ -13,14 +13,14 @@ export async function render(container) {
   const header = el("div", { class: "view-header" }, [
     el("div", {}, [
       el("h2", { text: "Tasks" }),
-      el("div", { class: "sub", text: "Scheduled automations — distinct from Notes' todos" }),
+      el("div", { class: "sub", text: "Give recurring work a rhythm. Schedule it once, keep moving." }),
     ]),
   ]);
 
-  const builtinCard = el("div", { class: "glass bracket card" });
+  const builtinCard = el("div", { class: "glass card automation-library" });
   await refreshBuiltins(builtinCard);
 
-  const form = el("div", { class: "glass card" });
+  const form = el("details", { class: "disclosure-panel" });
   const nameInput = el("input", { placeholder: "e.g. Morning summary" });
   const promptInput = el("input", { placeholder: "e.g. Summarize my open notes" });
   const kindSelect = customSelect({}, [
@@ -57,7 +57,7 @@ export async function render(container) {
   });
 
   form.append(
-    el("div", { class: "title", style: "margin-bottom:12px;", text: "Schedule your own" }),
+    el("summary", { text: "+ Schedule a task" }),
     el("div", { class: "form-grid" }, [
       el("div", { class: "field field-grow" }, [el("label", { text: "Name" }), nameInput]),
       el("div", { class: "field field-grow" }, [el("label", { text: "Prompt to run" }), promptInput]),
@@ -71,7 +71,7 @@ export async function render(container) {
   );
 
   const list = el("div", { id: "tasks-list", style: "margin-top:14px;" });
-  container.append(el("div", { class: "view-constrained" }, [header, builtinCard, form, list]));
+  container.append(el("div", { class: "view-constrained" }, [header, form, list, builtinCard]));
 
   addBtn.addEventListener("click", async () => {
     const name = nameInput.value.trim();
@@ -111,10 +111,10 @@ async function refreshBuiltins(card) {
   const [builtins, channels] = await Promise.all([api("/api/tasks/builtin"), api("/api/channels")]);
   card.innerHTML = "";
   card.append(
-    el("div", { class: "title", text: "Built-in Tasks" }),
-    el("div", { class: "meta", style: "margin:4px 0 12px;", text: "Premade automations — turn on with one click. \"Action\" ones run deterministic code, no model call; \"llm\" ones build a real prompt from your live data each run." }),
+    el("div", { class: "title", text: "Automation library" }),
+    el("div", { class: "meta", style: "margin:4px 0 18px;", text: "Useful routines, ready to make your own." }),
   );
-  const grid = el("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:10px;" });
+  const grid = el("div", { class: "automation-grid" });
   for (const b of builtins) {
     const channelSelect = customSelect({ style: "font-size:11px;", disabled: b.enabled }, [
       el("option", { value: "", text: "Tasks tab only" }),
@@ -145,7 +145,7 @@ async function refreshBuiltins(card) {
       const list = document.getElementById("tasks-list");
       if (list) await refresh(list);
     });
-    grid.appendChild(el("div", { class: "card-row", style: "justify-content:space-between;align-items:flex-start;border:1px solid var(--border);border-radius:8px;padding:10px;" }, [
+    grid.appendChild(el("div", { class: "automation-card" }, [
       el("div", {}, [
         el("div", { class: "title", style: "font-size:12.5px;", text: b.label }),
         el("div", { class: "meta", style: "margin-top:3px;", text: b.description }),
@@ -164,7 +164,7 @@ async function refresh(list) {
     list.appendChild(emptyState({
       icon: ICONS.tasks,
       title: "No scheduled tasks",
-      hint: "Turn on a built-in task above, or schedule your own prompt to run on a timer. Output can be delivered straight to Discord.",
+      hint: "Choose a routine from the library below, or schedule your own prompt. Output can be delivered straight to Discord.",
     }));
     return;
   }

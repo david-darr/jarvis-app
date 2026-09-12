@@ -51,7 +51,7 @@ export async function render(container) {
   const header = el("div", { class: "view-header" }, [
     el("div", {}, [
       el("h2", { text: "Calendar" }),
-      el("div", { class: "sub", text: "Real events, plus due-dated Notes rendered alongside them" }),
+      el("div", { class: "sub", text: "Make room for what matters. Events and deadlines, together." }),
     ]),
   ]);
 
@@ -92,7 +92,7 @@ export async function render(container) {
 }
 
 function buildCreateBar() {
-  const bar = el("div", { class: "glass card cal-create-bar" });
+  const bar = el("details", { class: "disclosure-panel cal-create-bar" }, [el("summary", { text: "+ Add an event" })]);
   const titleInput = el("input", { placeholder: "Event title...", style: "flex:1;" });
   const dateInput = el("input", { type: "date" });
   const startInput = el("input", { type: "time", value: "09:00" });
@@ -177,7 +177,7 @@ async function renderGrid(monthLabel, grid, createBar, dayPanel) {
   for (let i = 0; i < 42; i++) {
     const dayKey = cursor.toDateString();
     const isOtherMonth = cursor.getMonth() !== currentMonth;
-    const cell = el("div", { class: "cal-day" + (isOtherMonth ? " other-month" : "") + (dayKey === todayKey ? " today" : "") + (dayKey === selectedDayKey ? " selected" : "") });
+    const cell = el("button", { type: "button", "aria-label": dayKey, class: "cal-day" + (isOtherMonth ? " other-month" : "") + (dayKey === todayKey ? " today" : "") + (dayKey === selectedDayKey ? " selected" : "") });
     cell.appendChild(el("div", { class: "cal-day-num", text: String(cursor.getDate()) }));
 
     const dayItems = byDay[dayKey] || [];

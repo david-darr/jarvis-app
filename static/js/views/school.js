@@ -29,12 +29,12 @@ export async function render(container) {
   const header = el("div", { class: "view-header" }, [
     el("div", {}, [
       el("h2", { text: "School" }),
-      el("div", { class: "sub", text: "Canvas assignments by course, with a text editor and course-memory chat per assignment" }),
+      el("div", { class: "sub", text: "Your courses, deadlines, and a little more room to think." }),
     ]),
   ]);
 
   const body = el("div", { id: "school-body" });
-  container.append(header, body);
+  container.append(el("div", { class: "view-constrained" }, [header, body]));
   await renderBody(body);
 }
 
@@ -48,8 +48,8 @@ async function renderBody(body) {
 // -- settings ---------------------------------------------------------------
 async function renderSettings(container, onSynced) {
   const settings = await api("/api/tab-school/settings");
-  const card = el("div", { class: "glass bracket card", style: "padding:8px 10px;" });
-  const inputStyle = "flex:1;min-width:180px;font-size:11.5px;padding:5px 8px;";
+  const card = el("details", { class: "disclosure-panel" });
+  const inputStyle = "flex:1;min-width:180px;";
   const baseUrlInput = el("input", { placeholder: "Canvas base URL (e.g. https://school.instructure.com)", value: settings.canvas_base_url, style: inputStyle });
   const tokenInput = el("input", { type: "password", placeholder: settings.canvas_api_token_configured ? "API token saved (leave blank to keep)" : "Canvas API access token (optional)", style: inputStyle });
   const icsInput = el("input", { placeholder: "or: Canvas iCal feed URL (Calendar > Calendar Feed)", value: settings.ics_url, style: inputStyle });
@@ -79,7 +79,7 @@ async function renderSettings(container, onSynced) {
   });
 
   card.append(
-    el("div", { class: "title", style: "margin-bottom:4px;font-size:12px;", text: "Canvas Connection" }),
+    el("summary", { text: "Canvas connection" }),
     el("div", { class: "meta", style: "margin-bottom:6px;font-size:10px;", text: "Use the API (real descriptions + links) if you have a token, or just the iCal feed URL otherwise." }),
     el("div", { class: "card-row", style: "flex-wrap:wrap;gap:6px;" }, [baseUrlInput, tokenInput]),
     el("div", { class: "card-row", style: "flex-wrap:wrap;gap:6px;margin-top:6px;" }, [icsInput, saveBtn, syncBtn]),
@@ -104,7 +104,7 @@ async function renderOverview(body) {
   ]);
 
   body.appendChild(el("div", { class: "title", style: "margin:18px 0 10px;font-size:15px;", text: "Courses" }));
-  const grid = el("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;margin-bottom:22px;" });
+  const grid = el("div", { class: "document-grid" });
   body.appendChild(grid);
   if (courses.length === 0) {
     grid.appendChild(el("div", { class: "empty-state", text: "No courses yet — connect Canvas above and hit Sync Now." }));

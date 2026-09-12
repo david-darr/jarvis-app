@@ -9,14 +9,15 @@ import { createVaultGraph } from "../vaultGraph.js";
 // "how JARVIS's memory works" facets of one Brain concept.
 let activeSection = "skills";
 
-export async function render(container) {
+export async function render(container, tabId, options = {}) {
+  if (options.section === "vault" || options.section === "skills") activeSection = options.section;
   container.innerHTML = "";
   let vaultCleanup = null;
 
   const header = el("div", { class: "view-header" }, [
     el("div", {}, [
       el("h2", { text: "Brain" }),
-      el("div", { class: "sub", text: "Skills — portable SKILL.md procedures. Memory lives directly in the vault." }),
+      el("div", { class: "sub", text: "A connected home for everything JARVIS knows." }),
     ]),
   ]);
 
