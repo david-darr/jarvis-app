@@ -12,6 +12,11 @@ data/
 # Secrets
 .env
 .env.*
+
+# Personal AI-assistant boot pointer (David's own CLAUDE.md/vault setup) —
+# local-only. jarvis-app is a public repo; this points at a personal path
+# and identity that has no business being published alongside the OSS code.
+AGENTS.md
 # Tailscale-issued TLS cert + private key used by scripts/run_remote.py.
 # These are per-machine and must never be committed OR packaged — the
 # packaging filter excludes them too.
