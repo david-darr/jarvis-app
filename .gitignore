@@ -17,6 +17,9 @@ data/
 # local-only. jarvis-app is a public repo; this points at a personal path
 # and identity that has no business being published alongside the OSS code.
 AGENTS.md
+# Launcher that always grants Codex CLI write access to David's personal
+# vault path alongside this repo — same personal-path reasoning as above.
+codex-jarvis.cmd
 # Tailscale-issued TLS cert + private key used by scripts/run_remote.py.
 # These are per-machine and must never be committed OR packaged — the
 # packaging filter excludes them too.
