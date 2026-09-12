@@ -25,7 +25,7 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import StreamEvent
 
-from core import hive_mind_server, integrations, projects, settings as settings_store, system_prompt
+from core import hive_mind_server, image_gen, integrations, projects, settings as settings_store, system_prompt
 from core.constants import REPO_CODE_DIRS
 from core.vault import resolve_vault_dir
 
@@ -182,6 +182,13 @@ class Brain:
         else:
             disabled = [*disabled, "Bash"]
 
+        # A generated file needs somewhere to be built that isn't the vault
+        # (David's ask 2026-09-12, after a live test found Claude writing a
+        # requested .pptx straight into vault root — see
+        # system_prompt.py's _GENERATED_FILES_ADDENDUM) — must exist before
+        # the SDK will grant access to it.
+        os.makedirs(image_gen.GENERATED_FILES_DIR, exist_ok=True)
+
         return ClaudeAgentOptions(
             cwd=self.cwd_override or self.vault_dir,
             # Full read/write on jarvis-app's own source (David's ask
@@ -189,7 +196,10 @@ class Brain:
             # model), this just additionally grants the app's own code so
             # Claude can do real dev work on jarvis-app itself. data/ is
             # deliberately not in this list — see REPO_CODE_DIRS' comment.
-            add_dirs=REPO_CODE_DIRS,
+            # generated_files IS included (unlike the rest of data/) so a
+            # requested deliverable can be built there directly instead of
+            # in the vault.
+            add_dirs=REPO_CODE_DIRS + [image_gen.GENERATED_FILES_DIR],
             # Found live 2026-09-08: the SDK's own default here is 1MB, and
             # a handful of real photos read back through a file tool (see
             # core/attachments.py) easily produces one JSON message from the

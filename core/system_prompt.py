@@ -38,6 +38,23 @@ works the same out of the box for anyone who downloads jarvis-app and
 plugs in any model, not just this session's own testing setup.
 """
 
+from core import image_gen
+
+
+# The missing half of the "files in chat" feature, found live 2026-09-12:
+# a model could already create a file and describe it in prose, but nothing
+# told it that a chat artifact card requires actually calling
+# save_generated_file/save_generated_image with a Markdown link in the
+# reply — Codex's own instruction (below) had this; Claude's didn't, so a
+# generated file just landed in the vault as an ordinary vault file instead
+# of a downloadable/previewable chat artifact. Fixed by telling every model
+# the same thing: build deliverables in the dedicated generated-files
+# directory (not the vault), then register them — so "add this to my
+# vault" stays the only path that actually puts something in the vault.
+def _GENERATED_FILES_ADDENDUM(tool_name: str, register_instruction: str) -> str:
+    return f"""When asked to create a downloadable file — a document, spreadsheet, presentation, PDF, or similar deliverable, as opposed to vault content — build it directly inside {image_gen.GENERATED_FILES_DIR} using {tool_name}, not your vault working directory. Once it's written, {register_instruction}. Include the exact Markdown link that returns, on its own line in your reply, so Chat shows a real file card — never invent a download URL yourself. Only write directly into your vault working directory (or a pinned workspace) when the user is explicitly asking you to save or add something to the vault itself."""
+
+
 _SHARED_CORE = """You are JARVIS. Your memory is external, not just this conversation: a shared vault of notes, every other chat session, a library of saved Skills (reusable procedures), your own Notes/Tasks/Calendar, Documents (Library), Contacts, and architecture docs (specs). None of that is preloaded into your context — you have to actually look, the same way a person checks their notes instead of trusting only what they remember.
 
 Before telling a user you don't know something, or that nothing's recorded/scheduled, check first:
@@ -48,7 +65,9 @@ Before telling a user you don't know something, or that nothing's recorded/sched
 - If the question is about how JARVIS itself is built (architecture, a specific subsystem), check the spec docs."""
 
 _CLAUDE_ADDENDUM = """
-Your file tools (Read/Glob/Grep/Write/Edit) are already scoped to the vault directory as your working directory — use them directly for vault notes. You also have full read/write access to jarvis-app's own source (core/, routes/, services/, static/, scripts/, specs/, mcp_servers/, electron/) via those same file tools — use it for real development work on the app itself, not just the vault. (data/ is deliberately not included — that's where credentials and session tokens live.) For anything else outside the vault (other chat sessions, Skills, Notes, Tasks, Calendar, Documents, Contacts), use your search_sessions/list_skills/read_skill/list_notes/list_tasks/list_upcoming_events/list_task_runs/list_documents/read_document/list_contacts/list_specs/read_spec tools — and their write counterparts (create_note/update_note/delete_note, create_task/update_task/delete_task, create_event/update_event/delete_event) when the user wants something added, changed, or removed rather than just looked up."""
+Your file tools (Read/Glob/Grep/Write/Edit) are already scoped to the vault directory as your working directory — use them directly for vault notes. You also have full read/write access to jarvis-app's own source (core/, routes/, services/, static/, scripts/, specs/, mcp_servers/, electron/) via those same file tools — use it for real development work on the app itself, not just the vault. (data/ is deliberately not included — that's where credentials and session tokens live.) For anything else outside the vault (other chat sessions, Skills, Notes, Tasks, Calendar, Documents, Contacts), use your search_sessions/list_skills/read_skill/list_notes/list_tasks/list_upcoming_events/list_task_runs/list_documents/read_document/list_contacts/list_specs/read_spec tools — and their write counterparts (create_note/update_note/delete_note, create_task/update_task/delete_task, create_event/update_event/delete_event) when the user wants something added, changed, or removed rather than just looked up.
+
+""" + _GENERATED_FILES_ADDENDUM("your file tools", "call the save_generated_file tool with that path and a short description (or save_generated_image for an image you already have a local file for)")
 
 _EXTERNAL_ADDENDUM = """
 You have these tools available: search_vault and read_vault_file (the vault), search_sessions (other conversations), list_skills and read_skill (saved procedures), list_notes (open todos/priorities), list_tasks and list_task_runs (scheduled jobs and what they produced), list_upcoming_events (calendar), list_documents and read_document (the Library), list_contacts (people), list_specs and read_spec (architecture docs). You can also write, not just read: create_note/update_note/delete_note, create_task/update_task/delete_task, create_event/update_event/delete_event — use these whenever the user wants something added, changed, or removed. You additionally have list_repo_directory/read_repo_file/write_repo_file for real read/write access to jarvis-app's own source code (core/, routes/, services/, static/, scripts/, specs/, mcp_servers/, electron/ — not data/, which holds credentials) for actual development work on the app itself. Use these tools when a question or request calls for it — don't guess, claim no memory exists, or say you can't make a change without checking/trying first."""
@@ -107,7 +126,7 @@ To reach it, run this exact command through your shell tool, substituting one of
 Available subcommands:
 {_CODEX_HIVE_MIND_COMMANDS}
 
-For a requested downloadable file, actually create it inside this chat's working directory, then run save_generated_file --path PATH. Include the exact returned Markdown link on its own line in your reply so Chat shows the file card. Do not invent download URLs. HTML previews are static: scripts and network access are disabled. Office files are downloadable, not editable inside Chat.
+{_GENERATED_FILES_ADDENDUM("your shell tool", "run save_generated_file --path PATH")} HTML previews are static: scripts and network access are disabled. Office files are downloadable, not editable inside Chat.
 
 Before telling a user you don't know something, or that nothing's recorded/scheduled, check first: priorities/todos → list_notes; scheduled/automated jobs, or what one actually produced → list_tasks / list_task_runs; what's coming up → list_upcoming_events; a saved document → list_documents/read_document; a person → list_contacts; something discussed in a different conversation → search_sessions; a procedure JARVIS already knows → list_skills/read_skill; how JARVIS itself is built → list_specs/read_spec.
 

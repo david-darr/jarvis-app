@@ -43,18 +43,28 @@ GENERATED_FILES_URL_PREFIX = "/generated-files"
 
 
 def register_generated_file(source_path: str) -> dict:
-    """Copies an already-created local file (e.g. a .pptx a skill just
-    built via python-pptx) into GENERATED_FILES_DIR so it's servable.
-    Returns {"path", "filename", "url"}. Raises FileNotFoundError/OSError on
-    a real problem — the calling tool turns that into a plain-text
-    explanation, same contract as import_image_from_url below."""
+    """Makes an already-created local file (e.g. a .pptx a skill just built
+    via python-pptx) servable from GENERATED_FILES_DIR. Returns {"path",
+    "filename", "url"}. Raises FileNotFoundError/OSError on a real problem —
+    the calling tool turns that into a plain-text explanation, same contract
+    as import_image_from_url below.
+
+    Moves rather than copies when the source is already inside
+    GENERATED_FILES_DIR — the normal case now that brain.py/codex_brain.py
+    grant write access there directly (David's ask 2026-09-12: build
+    deliverables there instead of the vault) — so registering doesn't leave
+    a duplicate original sitting next to the renamed copy. A source outside
+    that directory (an older workflow, or a model pointing this at existing
+    content) is only ever copied, never deleted — it might be something the
+    user actually owns."""
     if not os.path.isfile(source_path):
         raise FileNotFoundError(f"no such file: {source_path}")
     os.makedirs(GENERATED_FILES_DIR, exist_ok=True)
     original_name = os.path.basename(source_path)
     filename = f"{uuid.uuid4().hex[:12]}_{original_name}"
     dest = os.path.join(GENERATED_FILES_DIR, filename)
-    shutil.copyfile(source_path, dest)
+    same_dir = os.path.dirname(os.path.abspath(source_path)) == os.path.abspath(GENERATED_FILES_DIR)
+    (shutil.move if same_dir else shutil.copyfile)(source_path, dest)
     return {"path": dest, "filename": filename, "url": f"{GENERATED_FILES_URL_PREFIX}/{quote(filename, safe='')}"}
 
 

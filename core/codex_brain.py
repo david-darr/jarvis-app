@@ -46,6 +46,7 @@ import shutil
 import sys
 
 from core.auth import INTERNAL_TOOL_TOKEN
+from core import image_gen
 from core.constants import BASE_DIR, REPO_CODE_DIRS
 from core.session_manager import session_manager
 from core.vault import resolve_vault_dir
@@ -105,6 +106,13 @@ class CodexBrain:
             args = [codex, "exec", "resume", self.thread_id, "--json", "--skip-git-repo-check"]
         else:
             args = [codex, "exec", "--json", "--skip-git-repo-check", "-s", "workspace-write", "-C", self.cwd]
+            # A generated file needs somewhere to be built that isn't the
+            # vault (David's ask 2026-09-12 — see system_prompt.py's
+            # _GENERATED_FILES_ADDENDUM), granted unconditionally: unlike
+            # REPO_CODE_DIRS below this is just an output dropbox, not
+            # source access, so it isn't admin-gated.
+            os.makedirs(image_gen.GENERATED_FILES_DIR, exist_ok=True)
+            args += ["--add-dir", image_gen.GENERATED_FILES_DIR]
             # Repo dev access mirrors core/brain.py's add_dirs=REPO_CODE_DIRS
             # for Claude — but unlike Claude (separate file tools vs. a
             # gateable Bash tool), Codex has one native tool surface whose

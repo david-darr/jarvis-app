@@ -37,8 +37,11 @@ installed as part of this app's own requirements.
    ambiguous; otherwise `8.5 x 11` portrait is a safe default for a flyer.
 
 2. **Write a script, don't improvise in the shell.** Save it to a working
-   file (e.g. `/tmp/build_poster.py` or the session's workspace) and run it
-   with `python`. The core shape:
+   file and run it with `python`. Build the actual `.pptx` output inside the
+   generated-files directory your system instructions named (not your vault
+   working directory) — that's what makes step 6 below a real chat download
+   instead of a stray vault file. The build script itself can live anywhere
+   convenient. The core shape:
 
    ```python
    from pptx import Presentation
@@ -80,7 +83,7 @@ installed as part of this app's own requirements.
    run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
    run.font.name = "Arial Black"
 
-   prs.save("/tmp/poster.pptx")
+   prs.save(GENERATED_FILES_DIR + "/poster.pptx")  # the directory named in your system instructions
    ```
 
 3. **Build up the rest the same way** — one `add_textbox`/`add_shape` call
