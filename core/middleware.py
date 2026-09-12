@@ -39,6 +39,17 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # looked like it worked (server confirmed via curl) but the running
         # window was still executing the old, broken app.js.
         path = request.url.path
+        if path == "/api/chat/artifacts/content":
+            # Only the authenticated, session-checked viewer may be framed.
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+            response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'self'; sandbox"
+            response.headers["Cache-Control"] = "no-store"
+        elif path.startswith(("/generated-files/", "/generated-images/")):
+            # Legacy links still work, but generated HTML/SVG must never run
+            # with the app's origin (including when opened in a new tab).
+            response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+            if not path.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+                response.headers["Content-Disposition"] = "attachment"
         if path == "/" or path.endswith(_NO_CACHE_SUFFIXES):
             response.headers["Cache-Control"] = "no-store"
         return response

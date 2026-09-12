@@ -23,6 +23,7 @@ from claude_agent_sdk import (
     ResultMessage,
     TextBlock,
 )
+from claude_agent_sdk.types import StreamEvent
 
 from core import hive_mind_server, integrations, projects, settings as settings_store, system_prompt
 from core.constants import REPO_CODE_DIRS
@@ -204,6 +205,7 @@ class Brain:
             mcp_servers=mcp_servers,
             allowed_tools=allowed_tools,
             model=self.model,
+            include_partial_messages=True,
             # The "landing zone" (David's ask 2026-09-01, after live-testing
             # found chats couldn't answer real vault/memory questions) —
             # append to Claude Code's own default system prompt (a preset,
@@ -224,14 +226,8 @@ class Brain:
         return "".join(parts).strip()
 
     async def run_turn_stream(self, user_text: str):
-        """Yields reply text incrementally as it arrives.
-
-        Coarse-grained for this pass: yields once per completed TextBlock
-        (potentially several per turn, e.g. across tool calls), not
-        token-by-token. Real token-level streaming needs raw stream_event
-        parsing (see voice-line's own brain.py::_handle_stream_event for the
-        pattern) — worth doing once the UI actually wants that granularity;
-        this is enough for a real incremental streaming experience for now.
+        """Stream visible text deltas, never reasoning or tool-input events.
+        Completed blocks remain a fallback for CLI versions without deltas.
         """
         if self._client is None:
             raise RuntimeError("Brain.connect() must be called before run_turn_stream().")
@@ -239,27 +235,46 @@ class Brain:
         await self._client.query(user_text)
 
         response_iter = self._client.receive_response().__aiter__()
+        streamed_blocks = {}
+        has_text = False
         while True:
             try:
                 message = await asyncio.wait_for(
                     response_iter.__anext__(), timeout=TURN_MESSAGE_TIMEOUT_SECONDS
                 )
             except StopAsyncIteration:
-                return
+                raise RuntimeError("Claude Code ended before reporting completion")
             except asyncio.TimeoutError:
-                yield (
-                    "\n\n[JARVIS: Claude Code didn't respond within "
-                    f"{TURN_MESSAGE_TIMEOUT_SECONDS}s and may be stuck — try sending "
-                    "your message again, or restart the app if it keeps happening.]"
-                )
-                return
+                raise RuntimeError("Claude Code timed out waiting for a response")
 
+            if isinstance(message, StreamEvent):
+                if message.parent_tool_use_id:
+                    continue
+                event = message.event
+                if event.get("type") == "message_start":
+                    streamed_blocks = {}
+                elif event.get("type") == "content_block_delta" and event.get("delta", {}).get("type") == "text_delta":
+                    chunk = event["delta"].get("text", "")
+                    index = event.get("index", 0)
+                    if chunk:
+                        if index not in streamed_blocks and has_text:
+                            yield "\n\n"
+                        streamed_blocks[index] = streamed_blocks.get(index, "") + chunk
+                        has_text = True
+                        yield chunk
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):
+                        if block.text in streamed_blocks.values():
+                            continue
+                        if has_text:
+                            yield "\n\n"
+                        has_text = True
                         yield block.text
             if isinstance(message, ResultMessage):
                 self.last_usage = message.usage
+                if message.is_error:
+                    raise RuntimeError("Claude Code reported an unsuccessful turn")
                 break
 
     async def disconnect(self) -> None:

@@ -86,6 +86,7 @@ _CODEX_HIVE_MIND_COMMANDS = """  list_notes | list_tasks | list_upcoming_events 
   read_skill --slug SLUG
   read_spec --filename NAME
   read_document --doc_id ID
+  save_generated_file --path PATH
   create_note --text TEXT [--due_date ISO8601] [--project NAME]
   update_note --note_id ID [--text TEXT] [--due_date ISO8601] [--project NAME] [--completed true|false]
   delete_note --note_id ID
@@ -105,6 +106,8 @@ To reach it, run this exact command through your shell tool, substituting one of
 
 Available subcommands:
 {_CODEX_HIVE_MIND_COMMANDS}
+
+For a requested downloadable file, actually create it inside this chat's working directory, then run save_generated_file --path PATH. Include the exact returned Markdown link on its own line in your reply so Chat shows the file card. Do not invent download URLs. HTML previews are static: scripts and network access are disabled. Office files are downloadable, not editable inside Chat.
 
 Before telling a user you don't know something, or that nothing's recorded/scheduled, check first: priorities/todos → list_notes; scheduled/automated jobs, or what one actually produced → list_tasks / list_task_runs; what's coming up → list_upcoming_events; a saved document → list_documents/read_document; a person → list_contacts; something discussed in a different conversation → search_sessions; a procedure JARVIS already knows → list_skills/read_skill; how JARVIS itself is built → list_specs/read_spec.
 

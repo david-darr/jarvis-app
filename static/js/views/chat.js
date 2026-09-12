@@ -1,6 +1,7 @@
 import { api, el, toast, confirmDialog } from "../api.js";
 import { runSlashCommand } from "../slashCommands.js";
 import * as chatStream from "../chatStream.js";
+import { renderMessageBody, copyText, closeArtifact } from "../chatContent.js";
 
 // Composer rebuilt to match Odysseus's actual chat-input-bar structure
 // (David's ask 2026-08-31, cross-checked against the real repo at
@@ -46,61 +47,29 @@ const ICON_GEAR = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" s
 //
 // ts is a unix-seconds float (session_manager.append_message) or omitted
 // for a card being built live during streaming (uses "now").
-// Generated-image/file rendering (David's ask 2026-09-10: image generation,
-// then Office/PDF file generation, in chat). Messages render as plain
-// textContent everywhere in this file — there's no markdown renderer in the
-// app at all — so this is a narrow, targeted parser for exactly two
-// patterns (our own save_generated_image/save_generated_file tools' output),
-// not a general markdown implementation. Both tools are instructed to
-// always emit one of these two exact shapes.
-// One combined pass so a reply mixing an image and a file link (or several
-// of either) still renders left-to-right in the order they actually appear,
-// rather than all images first regardless of position.
-const GENERATED_ANY_RE = /(!)?\[([^\]]*)\]\((\/generated-(?:images|files)\/[^\s)]+)\)/g;
-
-function renderMessageBody(body, text) {
-  body.innerHTML = "";
-  GENERATED_ANY_RE.lastIndex = 0;
-  let lastIndex = 0;
-  let match;
-  while ((match = GENERATED_ANY_RE.exec(text)) !== null) {
-    if (match.index > lastIndex) body.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
-    const isImage = match[1] === "!";
-    const label = match[2];
-    const url = match[3];
-    if (isImage) {
-      body.appendChild(el("img", { src: url, alt: label || "Generated image", class: "msg-generated-image", loading: "lazy" }));
-    } else {
-      body.appendChild(el("a", { href: url, download: "", class: "msg-generated-file", target: "_blank", rel: "noopener", text: `⬇ ${label || "Download"}` }));
-    }
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < text.length || lastIndex === 0) body.appendChild(document.createTextNode(text.slice(lastIndex)));
-}
-
-function messageCard(role, text, ts) {
+function messageCard(role, text, ts, status = 'complete') {
   const time = new Date((ts || Date.now() / 1000) * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const body = el("div", { class: "msg-body" });
-  renderMessageBody(body, text);
+  renderMessageBody(body, text, activeSessionId, role === 'assistant');
   const copyBtn = el("button", { type: "button", class: "msg-action-btn", title: "Copy" });
   copyBtn.insertAdjacentHTML("beforeend", ICON_COPY);
   copyBtn.addEventListener("click", async () => {
-    await navigator.clipboard.writeText(body.textContent);
-    toast("Copied to clipboard", "success");
+    await copyText(body._rawText || '');
   });
   // Timestamp moved off the (now removed) header into the hover row, so the
   // information is still there without putting a label on every message.
   const actions = el("div", { class: "msg-actions" }, [copyBtn, el("span", { class: "msg-time", text: time })]);
 
-  return el("div", { class: `msg ${role}` }, [body, actions]);
+  const card = el("div", { class: `msg ${role}` }, [body, actions]);
+  if (status === 'interrupted') card.append(el('div', { class: 'msg-interrupted', text: 'Response interrupted · Partial reply saved' }));
+  return card;
 }
 
 // Claude's idle-thinking indicator (David's ask 2026-09-03): a pulsing dot
 // plus a highlight shimmering across the word. Both are pure CSS
 // animations, replacing the old JS setInterval that rotated "." -> ".." ->
 // "..." — no timer to clear, and it keeps animating through the silent
-// gaps in a long tool-using turn (brain.py yields once per completed
-// TextBlock, so a multi-step turn genuinely goes quiet between them).
+// gaps in a long tool-using turn, when there is no visible text to stream.
 function thinkingIndicator() {
   return el("div", { class: "msg-thinking-row" }, [
     el("span", { class: "msg-thinking-dot" }),
@@ -134,14 +103,18 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
   if (sendBtn) sendBtn.disabled = true;
 
   const paint = (entry) => {
+    const follow = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 100;
+    const current = sessionId === activeSessionId && replyCard.isConnected;
+    if (current) syncChatBusy(entry.status === 'processing');
+    replyCard.setAttribute('aria-busy', String(entry.status === 'processing'));
     if (entry.text) {
       if (thinkingEl && thinkingEl.isConnected) thinkingEl.remove();
-      replyBody.textContent = entry.text;
+      renderMessageBody(replyBody, entry.text, sessionId);
       if (entry.status === "processing") replyBody.appendChild(cursor);
     }
     if (entry.status === "done") {
       cursor.remove();
-      if (entry.text) renderMessageBody(replyBody, entry.text);
+      if (!entry.text) replyBody.textContent = 'No text response was returned.';
       const actionRow = replyCard.querySelector(".msg-actions");
       if (!actionRow.classList.contains("has-done")) {
         const doneIcon = el("span", { class: "msg-done" });
@@ -149,17 +122,16 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
         actionRow.appendChild(doneIcon);
         actionRow.classList.add("has-done");
       }
-      if (sendBtn) sendBtn.disabled = false;
+      if (current && sendBtn) sendBtn.disabled = false;
       unsubscribe();
     } else if (entry.status === "failed") {
       cursor.remove();
       if (thinkingEl && thinkingEl.isConnected) thinkingEl.remove();
-      replyBody.textContent = entry.text
-        ? entry.text + "\n\n[Reply interrupted — the connection dropped before it finished.]"
-        : "[Couldn't reach JARVIS. The backend may be restarting — try again.]";
+      renderMessageBody(replyBody, entry.text, sessionId);
+      replyCard.append(el('div', { class: 'msg-interrupted', role: 'status', text: entry.error || 'Response interrupted. Try sending your message again.' }));
       replyCard.classList.add("msg-failed");
       toast(`Message failed: ${entry.error || "connection dropped"}`, "error");
-      if (sendBtn) sendBtn.disabled = false;
+      if (current && sendBtn) sendBtn.disabled = false;
       unsubscribe();
     }
     // Guarded on still-being-the-active-session: this callback keeps firing
@@ -169,8 +141,9 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
     // overlay is what surfaces its progress elsewhere, not this DOM).
     // Without the guard, a background turn finishing would scroll/refresh
     // whatever chat happens to be visible right now, not its own.
-    if (sessionId === activeSessionId) {
-      messages.scrollTop = messages.scrollHeight;
+    if (current) {
+      if (follow) messages.scrollTop = messages.scrollHeight;
+      messages.dispatchEvent(new Event('scroll'));
       if (entry.status === "done" || entry.status === "failed") {
         const sessionsList = document.getElementById("sessions-list");
         if (sessionsList) refreshSessions(sessionsList, messages);
@@ -178,7 +151,14 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
     }
   };
 
-  const unsubscribe = chatStream.subscribe(sessionId, paint);
+  let paintTimer = null;
+  const detach = chatStream.subscribe(sessionId, entry => {
+    if (entry.status === 'processing') {
+      // Coalesce token bursts; do not rebuild Markdown for every byte.
+      if (paintTimer === null) paintTimer = setTimeout(() => { paintTimer = null; paint(entry); }, 40);
+    } else { clearTimeout(paintTimer); paintTimer = null; paint(entry); }
+  });
+  const unsubscribe = () => { clearTimeout(paintTimer); detach(); };
   if (initial) paint(initial); // reattach case: render whatever's already there, don't wait for the next chunk
   return unsubscribe;
 }
@@ -287,6 +267,11 @@ export async function render(container, tabId, options = {}) {
   const modelMenu = el("div", { class: "model-picker-menu hidden", id: "model-picker-menu" });
   const modelWrap = el("div", { class: "model-picker-wrap" }, [modelBtn, modelMenu]);
   modelBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(modelMenu); });
+  const versionBtn = el('button', { type: 'button', class: 'model-picker-btn', id: 'model-version-btn', text: 'Model version', hidden: true });
+  const versionMenu = el('div', { class: 'model-picker-menu hidden version-menu', id: 'model-version-menu' });
+  versionBtn.addEventListener('click', e => { e.stopPropagation(); toggleMenu(versionMenu); });
+  versionMenu.addEventListener('click', e => e.stopPropagation());
+  const versionWrap = el('div', { class: 'model-picker-wrap' }, [versionBtn, versionMenu]);
 
   const inputTop = el("div", { class: "chat-input-top" }, [input]);
 
@@ -313,11 +298,14 @@ export async function render(container, tabId, options = {}) {
   sendBtn.insertAdjacentHTML("beforeend", ICON_SEND);
 
   const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, workspacePill]);
-  const inputRight = el("div", { class: "chat-input-right" }, [modelWrap, sendBtn]);
+  const inputRight = el("div", { class: "chat-input-right" }, [modelWrap, versionWrap, sendBtn]);
   const inputBottom = el("div", { class: "chat-input-bottom" }, [inputLeft, inputRight]);
 
   const composer = el("div", { class: "glass chat-input-bar border-beam" }, [inputTop, inputBottom]);
   main.append(messages, attachStrip, composer, el("div", { class: "composer-hint", text: "Enter to send · Shift + Enter for a new line" }));
+  const jump = el('button', { type: 'button', class: 'chat-jump btn', text: '↓ Latest', hidden: true, onclick: () => messages.scrollTo({ top: messages.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }) });
+  main.append(jump);
+  messages.addEventListener('scroll', () => { jump.hidden = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 160; });
   sendBtn.setAttribute("aria-label", "Send message");
   const syncBeam = () => { composer.dataset.active = String(!document.hidden); };
   document.addEventListener("visibilitychange", syncBeam);
@@ -341,7 +329,7 @@ export async function render(container, tabId, options = {}) {
     input.style.height = Math.min(input.scrollHeight, 200) + "px";
   });
 
-  const dismissMenus = () => { closeMenu(overflowMenu); closeMenu(modelMenu); closeMenu(projectPickerMenu); };
+  const dismissMenus = () => { closeMenu(overflowMenu); closeMenu(modelMenu); closeMenu(versionMenu); closeMenu(projectPickerMenu); };
   const escapeMenus = (event) => { if (event.key === "Escape") { dismissMenus(); closeSessionsDrawer(); } };
   document.addEventListener("click", dismissMenus);
   document.addEventListener("keydown", escapeMenus);
@@ -354,6 +342,7 @@ export async function render(container, tabId, options = {}) {
     document.removeEventListener("keydown", escapeMenus);
     document.removeEventListener("visibilitychange", syncBeam);
     closeSessionMenu();
+    closeArtifact();
     mountSubscriptions.forEach((unsub) => unsub());
     if (activeUnsubscribers === mountSubscriptions) activeUnsubscribers = [];
   };
@@ -671,11 +660,21 @@ function syncWorkspacePill(path) {
 // Models; an empty list means truly nothing's configured yet.
 const NO_MODEL_LABEL = "No model — add one in Settings";
 
-async function refreshModelPicker(currentEndpointId) {
+function syncChatBusy(busy) {
+  for (const id of ['chat-send', 'model-picker-btn', 'model-version-btn']) {
+    const control = document.getElementById(id);
+    if (control) control.disabled = busy;
+  }
+  if (busy) document.querySelectorAll('.model-picker-menu').forEach(m => m.classList.add('hidden'));
+}
+
+async function refreshModelPicker(currentEndpointId, modelOverride = null) {
   const label = document.getElementById("model-picker-label");
   const menu = document.getElementById("model-picker-menu");
   if (!label || !menu) return;
-  const endpoints = await api("/api/models");
+  const sessionId = activeSessionId;
+  const endpoints = await api("/api/models").catch(() => []);
+  if (sessionId !== activeSessionId || !menu.isConnected) return;
   menu.innerHTML = "";
 
   const options = endpoints.map((ep) => ({
@@ -686,10 +685,12 @@ async function refreshModelPicker(currentEndpointId) {
     menu.appendChild(el("div", { class: "model-picker-item", text: "No models added yet — see Settings" }));
   }
   for (const opt of options) {
-    const item = el("div", {
+    const item = el("button", {
+      type: 'button',
       class: "model-picker-item" + (opt.id === (currentEndpointId || "") ? " active" : ""),
       text: opt.name,
       onclick: async () => {
+        if (chatStream.getInFlight(activeSessionId)?.status === 'processing') return;
         closeMenu(menu);
         // Landing on Chats without opening a chat leaves activeSessionId null,
         // and this used to `return` — so the dropdown listed every model and
@@ -697,14 +698,46 @@ async function refreshModelPicker(currentEndpointId) {
         // the same way sendMessage() lazily does, then apply the choice.
         if (!activeSessionId) await createSession();
         if (!activeSessionId) return; // creation genuinely failed
-        await api(`/api/sessions/${activeSessionId}/model`, { method: "POST", body: JSON.stringify({ model_endpoint_id: opt.id }) });
-        label.textContent = opt.name;
+        const target = activeSessionId;
+        try {
+          await api(`/api/sessions/${target}/model`, { method: "POST", body: JSON.stringify({ model_endpoint_id: opt.id }) });
+          if (activeSessionId === target) await refreshModelPicker(opt.id);
+        } catch (_) { /* api() displays the mutation error */ }
       },
     });
     menu.appendChild(item);
   }
   const active = options.find((o) => o.id === currentEndpointId);
   label.textContent = active ? active.name : NO_MODEL_LABEL;
+  const ep = endpoints.find(e => e.id === currentEndpointId);
+  const versionBtn = document.getElementById('model-version-btn');
+  const versionMenu = document.getElementById('model-version-menu');
+  if (!versionBtn || !versionMenu) return;
+  const cli = ep && ['claude_cli', 'codex_cli'].includes(ep.kind);
+  versionBtn.hidden = !cli;
+  versionMenu.replaceChildren();
+  if (cli) {
+    label.textContent = ep.name;
+    versionBtn.textContent = (modelOverride === null ? ep.model : modelOverride) || 'CLI default';
+    versionBtn.title = 'Model version for this chat';
+    const input = el('input', { id: 'chat-model-id', type: 'text', maxlength: '160', value: modelOverride ?? ep.model ?? '', placeholder: 'Exact model ID', autocomplete: 'off', spellcheck: 'false' });
+    const save = async value => {
+      if (activeSessionId !== sessionId || chatStream.getInFlight(sessionId)?.status === 'processing') return;
+      try {
+        const result = await api(`/api/sessions/${sessionId}/model`, { method: 'POST', body: JSON.stringify({ model_endpoint_id: ep.id, model_override: value }) });
+        if (activeSessionId === sessionId) { closeMenu(versionMenu); await refreshModelPicker(ep.id, result.model_override); toast('Model updated for this chat', 'success'); }
+      } catch (_) { /* keep the editor open on error */ }
+    };
+    const form = el('form', { class: 'model-version-form', onsubmit: e => { e.preventDefault(); save(input.value.trim()); } }, [
+      el('label', { for: 'chat-model-id', text: 'Model version' }), input,
+      el('p', { class: 'muted', text: 'Use an exact model ID supported by your CLI account. Applies to the next turn in this chat only.' }),
+      el('button', { type: 'submit', class: 'btn', text: 'Apply model' }),
+    ]);
+    versionMenu.append(form,
+      el('button', { type: 'button', class: 'model-picker-item', text: 'Use CLI default', onclick: () => save('') }),
+      el('button', { type: 'button', class: 'model-picker-item', text: 'Use endpoint setting', onclick: () => save(null) }));
+  }
+  syncChatBusy(chatStream.getInFlight(activeSessionId)?.status === 'processing');
 }
 
 // -- projects (David's ask 2026-09-12, "similar to how Claude and ChatGPT
@@ -1037,6 +1070,9 @@ async function createSession() {
 }
 
 async function openSession(sessionId, sessionsList, messages) {
+  closeArtifact();
+  activeUnsubscribers.forEach(unsub => unsub());
+  activeUnsubscribers.length = 0;
   activeSessionId = sessionId;
   stagedAttachments = [];
   const attachStrip = document.getElementById("attach-strip");
@@ -1046,21 +1082,22 @@ async function openSession(sessionId, sessionsList, messages) {
   if (!messages.isConnected || activeSessionId !== sessionId) return;
   messages.innerHTML = "";
   for (const msg of session.messages) {
-    messages.appendChild(messageCard(msg.role, msg.content, msg.ts));
+    messages.appendChild(messageCard(msg.role, msg.content, msg.ts, msg.status));
   }
   // Reattach to a turn still generating (David's ask 2026-09-12) — its
   // reply isn't in session.messages yet (the backend only persists it once
   // the full turn completes), so it renders as one extra live card on top
   // of the real history rather than something openSession would otherwise
   // know about.
-  if (chatStream.getInFlight(sessionId)) {
+  if (chatStream.getInFlight(sessionId)?.status === 'processing') {
     const replyCard = messageCard("assistant", "");
     const replyBody = replyCard.querySelector(".msg-body");
     messages.appendChild(replyCard);
     activeUnsubscribers.push(attachToInFlight(sessionId, messages, replyCard, replyBody, null));
   }
   messages.scrollTop = messages.scrollHeight;
-  await refreshModelPicker(session.model_endpoint_id);
+  await refreshModelPicker(session.model_endpoint_id, session.model_override ?? null);
+  if (!messages.isConnected || activeSessionId !== sessionId) return;
   syncWorkspacePill(session.workspace_dir);
   await refreshSessions(sessionsList, messages);
 }
@@ -1076,6 +1113,7 @@ export function openSessionById(sessionId) {
 }
 
 async function sendMessage(messages, input, sendBtn, attachStrip) {
+  if (sendBtn.disabled || chatStream.getInFlight(activeSessionId)?.status === 'processing') return;
   const text = input.value.trim();
   if (!text && stagedAttachments.length === 0) return;
 

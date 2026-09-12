@@ -1,0 +1,16 @@
+{
+  "name": "jarvis-chat-assets",
+  "private": true,
+  "scripts": {
+    "build:chat": "node scripts/build-chat-vendor.cjs"
+  },
+  "dependencies": {
+    "dompurify": "3.4.15",
+    "highlight.js": "11.12.0",
+    "marked": "18.0.12",
+    "pdfjs-dist": "6.3.289"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

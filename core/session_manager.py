@@ -101,11 +101,11 @@ class SessionManager:
             return None
         return read_json(_session_path(session_id), None)
 
-    def append_message(self, session_id: str, role: str, content: str) -> None:
+    def append_message(self, session_id: str, role: str, content: str, status: str = "complete") -> None:
         session = self.get_session(session_id)
         if session is None:
             raise KeyError(f"no such session: {session_id}")
-        session["messages"].append({"role": role, "content": content, "ts": time.time()})
+        session["messages"].append({"role": role, "content": content, "ts": time.time(), "status": status})
         session["updated_at"] = time.time()
 
         # Auto-title from the first user message, same idea as most chat UIs
@@ -122,15 +122,20 @@ class SessionManager:
         self._index[session_id]["message_count"] = len(session["messages"])
         self._save_index()
 
-    def set_model_endpoint(self, session_id: str, model_endpoint_id: Optional[str]) -> dict:
-        """Pin a session to a specific "bring your own model" endpoint (see
-        core/model_endpoints.py), or back to None for the default Claude Agent
-        SDK brain. chat_service picks the right Brain implementation off this
-        field per session — never mid-session-swap the live connection."""
+    def set_model_endpoint(self, session_id: str, model_endpoint_id: Optional[str], model_override: Optional[str] = None) -> dict:
+        """Pin an endpoint and optional CLI model; None means no model chosen.
+        model_override: None inherits the endpoint, empty string uses the CLI
+        default, a nonempty string selects an exact model for this chat only.
+        The caller validates kind and holds the session operation guard."""
         if session_id not in self._index:
             raise KeyError(f"no such session: {session_id}")
         session = self.get_session(session_id)
+        if session.get("model_endpoint_id") != model_endpoint_id:
+            # A different endpoint must not resume an old provider's thread.
+            # Saved messages are replayed into a fresh Codex thread instead.
+            session["codex_thread_id"] = None
         session["model_endpoint_id"] = model_endpoint_id
+        session["model_override"] = model_override
         write_json_atomic(_session_path(session_id), session)
         self._index[session_id]["model_endpoint_id"] = model_endpoint_id
         self._save_index()
@@ -148,6 +153,16 @@ class SessionManager:
         session["codex_thread_id"] = thread_id
         write_json_atomic(_session_path(session_id), session)
         return session
+
+    def register_artifact(self, session_id: str, url: str) -> None:
+        """Make a published file previewable before the turn finishes."""
+        session = self.get_session(session_id)
+        if session is None:
+            raise KeyError(f"no such session: {session_id}")
+        urls = session.setdefault("artifact_urls", [])
+        if url not in urls:
+            urls.append(url)
+            write_json_atomic(_session_path(session_id), session)
 
     def set_project(self, session_id: str, project_id: Optional[str]) -> dict:
         """Assigns a session to a project (core/projects.py), or clears it

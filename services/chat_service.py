@@ -11,6 +11,8 @@ before the user has added any model in Settings gets a canned reply telling
 them to go add one, instead of silently spending a real Claude turn.
 """
 from typing import AsyncIterator, Optional, Union
+from contextlib import asynccontextmanager
+from fastapi import HTTPException
 
 from claude_agent_sdk import CLIJSONDecodeError
 
@@ -24,6 +26,25 @@ from core.vault import resolve_vault_dir
 AnyBrain = Union[Brain, ExternalBrain, CodexBrain]
 
 _brains: dict[str, AnyBrain] = {}
+_busy: set[str] = set()
+
+
+def is_busy(session_id: str) -> bool:
+    return session_id in _busy
+
+
+@asynccontextmanager
+async def session_operation(session_id: str):
+    """Claim before the first await; never replace a running session brain."""
+    if session_manager.get_session(session_id) is None:
+        raise HTTPException(404, "session not found")
+    if session_id in _busy:
+        raise HTTPException(409, "This chat is busy. Wait for the current response to finish.")
+    _busy.add(session_id)
+    try:
+        yield
+    finally:
+        _busy.discard(session_id)
 
 NO_MODEL_MESSAGE = (
     "You haven't added a model yet. Go to Settings → Add Models to connect "
@@ -82,13 +103,15 @@ async def _get_brain(session_id: str, endpoint: dict, is_admin: bool = False) ->
     # Brain subclass, so every model kind picks it up the same way. See
     # core/projects.py's project_addendum() for what actually gets injected.
     project_id = (session or {}).get("project_id")
+    override = (session or {}).get("model_override")
+    cli_model = endpoint.get("model") if override is None else override
     if endpoint["kind"] == "claude_cli":
         brain = Brain(cwd_override=workspace_dir, integration_ids=integration_ids,
-                       session_id=session_id, model=endpoint.get("model") or None, is_admin=is_admin,
+                       session_id=session_id, model=cli_model or None, is_admin=is_admin,
                        project_id=project_id)
     elif endpoint["kind"] == "codex_cli":
         brain = CodexBrain(cwd_override=workspace_dir, session_id=session_id,
-                            model=endpoint.get("model") or None, is_admin=is_admin, project_id=project_id)
+                            model=cli_model or None, is_admin=is_admin, project_id=project_id)
     else:
         base_url, model, api_key, num_ctx = model_endpoints.resolve_runtime(endpoint["id"])
         brain = ExternalBrain(base_url, model, api_key, history=(session or {}).get("messages", []),
@@ -143,6 +166,11 @@ def _apply_attachments(session_id: str, text: str, attachment_ids: list[str] | N
 
 
 async def send_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> str:
+    async with session_operation(session_id):
+        return await _send_message(session_id, text, attachment_ids, is_admin)
+
+
+async def _send_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> str:
     session_manager.append_message(session_id, "user", text)
     endpoint = _resolve_endpoint(session_id)
     if endpoint is None:
@@ -166,6 +194,12 @@ async def send_message(session_id: str, text: str, attachment_ids: list[str] | N
 
 
 async def stream_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> AsyncIterator[str]:
+    async with session_operation(session_id):
+        async for chunk in _stream_message(session_id, text, attachment_ids, is_admin):
+            yield chunk
+
+
+async def _stream_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> AsyncIterator[str]:
     session_manager.append_message(session_id, "user", text)
     endpoint = _resolve_endpoint(session_id)
     if endpoint is None:
@@ -173,12 +207,11 @@ async def stream_message(session_id: str, text: str, attachment_ids: list[str] |
         yield NO_MODEL_MESSAGE
         return
 
-    full_text = _apply_attachments(session_id, text, attachment_ids)
-    brain, just_created = await _get_brain(session_id, endpoint, is_admin)
-    full_text = _prime_with_history(session_id, just_created, endpoint, full_text)
-
     reply_parts: list[str] = []
     try:
+        full_text = _apply_attachments(session_id, text, attachment_ids)
+        brain, just_created = await _get_brain(session_id, endpoint, is_admin)
+        full_text = _prime_with_history(session_id, just_created, endpoint, full_text)
         async for chunk in brain.run_turn_stream(full_text):
             reply_parts.append(chunk)
             yield chunk
@@ -186,7 +219,9 @@ async def stream_message(session_id: str, text: str, attachment_ids: list[str] |
         await close_session_brain(session_id)
         reply_parts.append(ATTACHMENT_TOO_LARGE_MESSAGE)
         yield ATTACHMENT_TOO_LARGE_MESSAGE
-    except Exception:
+    except BaseException:
+        # Includes client cancellation: preserve the visible partial answer.
+        session_manager.append_message(session_id, "assistant", "".join(reply_parts), status="interrupted")
         await close_session_brain(session_id)
         raise
 

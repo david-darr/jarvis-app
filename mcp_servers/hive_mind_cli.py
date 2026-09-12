@@ -123,6 +123,7 @@ def main() -> None:
     p = sub.add_parser("read_skill"); p.add_argument("--slug", required=True)
     p = sub.add_parser("read_spec"); p.add_argument("--filename", required=True)
     p = sub.add_parser("read_document"); p.add_argument("--doc_id", required=True)
+    p = sub.add_parser("save_generated_file"); p.add_argument("--path", required=True)
 
     p = sub.add_parser("create_note")
     p.add_argument("--text", required=True)
@@ -199,6 +200,13 @@ def main() -> None:
             print(memory_tools.read_spec(args.filename))
         elif args.command == "read_document":
             print(memory_tools.read_document(args.doc_id))
+        elif args.command == "save_generated_file":
+            session_id = os.environ.get("JARVIS_CODEX_SESSION_ID")
+            if not session_id:
+                raise ValueError("File delivery requires a JARVIS chat session")
+            result = _internal_request("POST", "/chat/artifacts", {"session_id": session_id, "path": args.path})
+            label = result['filename'].replace('[', '').replace(']', '')
+            print(f"File saved. Include this exact link on its own line in your reply: [{label}]({result['url']})")
         elif args.command == "create_note":
             note = _internal_request("POST", "/notes", {"text": args.text, "due_date": args.due_date, "project": args.project})
             print(f"Created note {note['id']}: {note['text']}")

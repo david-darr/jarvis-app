@@ -20,6 +20,7 @@ it never cared how the image was produced) can pick it up.
 import os
 import shutil
 import uuid
+from urllib.parse import quote
 
 import httpx
 
@@ -54,7 +55,7 @@ def register_generated_file(source_path: str) -> dict:
     filename = f"{uuid.uuid4().hex[:12]}_{original_name}"
     dest = os.path.join(GENERATED_FILES_DIR, filename)
     shutil.copyfile(source_path, dest)
-    return {"path": dest, "filename": filename, "url": f"{GENERATED_FILES_URL_PREFIX}/{filename}"}
+    return {"path": dest, "filename": filename, "url": f"{GENERATED_FILES_URL_PREFIX}/{quote(filename, safe='')}"}
 
 
 async def import_image_from_url(url: str) -> dict:

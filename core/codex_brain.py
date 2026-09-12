@@ -141,6 +141,11 @@ class CodexBrain:
         # prior instructions either).
         if is_fresh_thread:
             prompt_text = system_prompt.for_codex(sys.executable, HIVE_MIND_CLI_PATH, self.is_admin) + projects.project_addendum(self.project_id)
+            session = session_manager.get_session(self.session_id) if self.session_id else None
+            prior = (session or {}).get("messages", [])[:-1]
+            if prior:
+                transcript = "\n\n".join(f'{m["role"]}: {m["content"]}' for m in prior)
+                prompt_text += f"\n\n[Earlier conversation, for context:]\n{transcript}\n[End of earlier conversation]"
             prompt = f"[System instructions:]\n{prompt_text}\n\n[User message:]\n{user_text}"
         else:
             prompt = user_text
@@ -167,18 +172,27 @@ class CodexBrain:
         proc.stdin.write(prompt.encode("utf-8"))
         proc.stdin.write_eof()
 
+        stderr_task = asyncio.create_task(proc.stderr.read())
+        try:
+            async for chunk in self._consume_process(proc, stderr_task, is_fresh_thread, user_text):
+                yield chunk
+        finally:
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+            if not stderr_task.done():
+                stderr_task.cancel()
+            await asyncio.gather(stderr_task, return_exceptions=True)
+
+    async def _consume_process(self, proc, stderr_task, is_fresh_thread, user_text):
+        has_text = False
+        completed = False
+        failure = None
         while True:
             try:
                 line = await asyncio.wait_for(proc.stdout.readline(), timeout=CODEX_MESSAGE_TIMEOUT_SECONDS)
             except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-                yield (
-                    "\n\n[JARVIS: Codex didn't respond within "
-                    f"{CODEX_MESSAGE_TIMEOUT_SECONDS}s and may be stuck — try sending "
-                    "your message again.]"
-                )
-                return
+                raise RuntimeError("Codex timed out waiting for a response")
             if not line:
                 break
             try:
@@ -192,8 +206,12 @@ class CodexBrain:
                 if self.session_id:
                     session_manager.set_codex_thread_id(self.session_id, self.thread_id)
             elif etype == "item.completed" and event.get("item", {}).get("type") == "agent_message":
+                if has_text:
+                    yield "\n\n"
+                has_text = True
                 yield event["item"]["text"]
             elif etype == "turn.completed":
+                completed = True
                 usage = event.get("usage") or {}
                 # input_tokens/output_tokens are the true, non-overlapping
                 # totals; cached_input_tokens/reasoning_output_tokens are
@@ -201,12 +219,12 @@ class CodexBrain:
                 # *_tokens key the way core/token_usage.py's generic Claude
                 # path does would double-count. Pre-summed here instead.
                 self.last_usage = {"total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0)}
-            elif etype == "error":
-                yield f"\n\n[JARVIS: Codex error — {event.get('message', 'unknown error')}]"
+            elif etype in ("error", "turn.failed"):
+                failure = event.get("message") or (event.get("error") or {}).get("message") or "Codex could not complete this turn"
 
         rc = await proc.wait()
         if rc != 0:
-            stderr = (await proc.stderr.read()).decode(errors="replace")[:500].strip()
+            stderr = (await stderr_task).decode(errors="replace")[:500].strip()
             # Self-heal a stale resume target (verified live: codex reports
             # exactly this "no rollout found" message when a persisted
             # thread_id has since been archived/deleted/pruned on the codex
@@ -223,7 +241,9 @@ class CodexBrain:
                 async for chunk in self.run_turn_stream(user_text):
                     yield chunk
                 return
-            yield f"\n\n[JARVIS: Codex exited with an error (code {rc}) — {stderr or 'no output'}]"
+            raise RuntimeError(f"Codex exited with an error (code {rc}). Check the selected model and CLI connection.")
+        if failure or not completed:
+            raise RuntimeError("Codex did not report a successful turn. Check the selected model and CLI connection.")
 
     async def disconnect(self) -> None:
         pass  # no persistent process to close

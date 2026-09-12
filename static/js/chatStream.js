@@ -53,6 +53,7 @@ export function subscribeAll(callback) {
 // subscribe() right after this returns and not race the first chunk),
 // then runs the actual request in the background.
 export function startTurn(sessionId, sessionTitle, text, attachmentIds) {
+  if (_inflight.get(sessionId)?.status === 'processing') throw new Error('This chat already has a response in progress');
   const entry = { text: "", status: "processing", sessionTitle, error: null, listeners: new Set() };
   _inflight.set(sessionId, entry);
   _notify(sessionId);
@@ -67,27 +68,36 @@ async function _runTurn(sessionId, entry, text, attachmentIds) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: sessionId, message: text, attachment_ids: attachmentIds }),
     });
-    if (!res.ok || !res.body) throw new Error(`stream failed (${res.status})`);
+    if (!res.ok || !res.body) {
+      let detail = `Stream failed (${res.status})`;
+      try { detail = (await res.json()).detail || detail; } catch (_) {}
+      throw new Error(detail);
+    }
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let completed = false;
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n\n");
+      buffer += done ? decoder.decode() + '\n\n' : decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n\r?\n/);
       buffer = lines.pop();
       for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
+        const data = line.split(/\r?\n/).filter(row => row.startsWith('data:')).map(row => row.slice(5).trimStart()).join('\n');
+        if (!data) continue;
         let payload;
-        try { payload = JSON.parse(line.slice(6)); } catch (_) { continue; }
+        try { payload = JSON.parse(data); } catch (_) { throw new Error('Invalid response stream'); }
+        if (payload.error) throw new Error(payload.error);
+        if (payload.done === true) completed = true;
         if (payload.chunk) {
           entry.text += payload.chunk;
           _notify(sessionId);
         }
       }
+      if (done) break;
     }
+    if (!completed) throw new Error('Connection ended before the response finished. Reopen this chat to recover any saved reply.');
     entry.status = "done";
   } catch (e) {
     entry.status = "failed";
@@ -96,7 +106,9 @@ async function _runTurn(sessionId, entry, text, attachmentIds) {
   _notify(sessionId);
 
   setTimeout(() => {
-    _inflight.delete(sessionId);
-    _notify(sessionId);
+    if (_inflight.get(sessionId) === entry) {
+      _inflight.delete(sessionId);
+      _notify(sessionId);
+    }
   }, FINISHED_RETENTION_MS);
 }

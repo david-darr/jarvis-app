@@ -9,6 +9,7 @@ const assert = require("node:assert/strict");
 const root = path.resolve(__dirname, "..");
 const output = path.join(root, "data", "ui-review", "run-" + Date.now());
 const updateDocImages = process.argv.includes("--update-doc-images");
+const updateChatImage = process.argv.includes("--update-chat-image");
 let empty = false, unavailable = false;
 let sessionDelay = 0;
 const writes = [];
@@ -62,7 +63,7 @@ function fixture(url) {
   if (route === "/api/system/status") return { scheduler_running: true, vault_ok: true, enabled_task_count: empty ? 0 : 1, model_endpoint_count: empty ? 0 : 3, discord_connected_bots: [], next_task: empty ? null : { name: "Daily briefing", next_run_at: future(6) } };
   if (route === "/api/system/events") return list([{ message: "Daily briefing completed", level: "info", ts: now - 800 }, { message: "Memory sync finished", level: "info", ts: now - 2000 }]);
   if (route === "/api/sessions") return list(sessions);
-  if (route.startsWith("/api/sessions/")) return { ...sessions[0], id: route.split("/")[3], model_endpoint_id: "m1", messages: [{ role: "user", content: "Let's make the workspace feel more focused.", ts: now - 100 }, { role: "assistant", content: "Let's start with what matters most: clear navigation, a calm reading space, and useful connections between your work.\n\nEverything should have a place, and enough room to breathe.", ts: now - 90 }] };
+  if (route.startsWith("/api/sessions/")) return { ...sessions[0], id: route.split("/")[3], model_endpoint_id: "m1", messages: [{ role: "user", content: "Let's make the workspace feel more focused.", ts: now - 100 }, { role: "assistant", content: "## A clearer direction\n\nStart with **what matters most**: clear navigation, a calm reading space, and useful connections between your work.\n\n- Keep the next step easy to find.\n- Bring the files into the conversation.\n- Give every thought room to breathe.\n\n```python\nworkspace = {\n    \"focus\": \"the work that matters\"\n}\n```\n\n[Project brief](/generated-files/012345abcdef_project-brief.md)", ts: now - 90 }] };
   if (route === "/api/projects") return list(projects);
   if (route.startsWith("/api/projects/")) return projects[0];
   if (route === "/api/notes") return list(url.searchParams.get("include_completed") === "false" ? notes.filter(n => !n.completed) : notes);
@@ -274,6 +275,7 @@ app.whenReady().then(async () => {
     assert.deepEqual(errors, [], "Renderer errors");
     // Explicit opt-in only: these are actual renderer captures with synthetic
     // data. Neither the live backend nor personal screenshots are a source.
+    if (updateChatImage && !updateDocImages) fs.copyFileSync(path.join(output, 'desktop-conversation.png'), path.join(root, 'docs', 'img', 'chat.png'));
     if (updateDocImages) {
       const mapping = { home: "desktop-home", chat: "desktop-conversation", tasks: "desktop-tasks", vault: "desktop-vault", calendar: "desktop-calendar", notes: "desktop-notes", brain: "desktop-brain", settings: "desktop-settings", library: "desktop-library", "sidebar-collapsed": "desktop-sidebar-collapsed" };
       for (const [name, source] of Object.entries(mapping)) fs.copyFileSync(path.join(output, source + ".png"), path.join(root, "docs", "img", name + ".png"));

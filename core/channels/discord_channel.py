@@ -81,7 +81,8 @@ def _extract_generated_attachments(text: str) -> tuple[str, list[str]]:
 
     def _strip(base_dir: str):
         def _inner(match: "re.Match") -> str:
-            filename = os.path.basename(match.group(2))
+            from urllib.parse import unquote
+            filename = os.path.basename(unquote(match.group(2)))
             candidate = os.path.join(base_dir, filename)
             if os.path.isfile(candidate):
                 paths.append(candidate)

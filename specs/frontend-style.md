@@ -56,6 +56,25 @@ Summary requests are read-only; missing data gets an unavailable state, not a fa
 
 A centered reading column uses compact user bubbles, unboxed assistant messages, and a bottom composer with attachment/model controls. Starter chips draft text only; they never send a message.
 
+### Chat upgrade — model selection, rich rendering, and file previews
+
+- `chatContent.js` renders assistant Markdown through locally bundled Marked and DOMPurify. User messages stay literal. Code has highlighting and a copy-original-source action; tables scroll within the reading column. Raw HTML styles, scripts, application-local navigation, and remote image loads are not allowed in responses.
+- CLI endpoints have a second composer control for an exact model ID. A session's `model_override` is `null` for the endpoint setting, `""` for the CLI default, or a specific ID. API/local endpoint configuration is unchanged. There is no hardcoded claim about account model availability.
+- Claude streams visible text deltas, with completed-block deduplication. Codex streams completed agent messages. The renderer coalesces updates and follows the bottom only while the reader is already near it; otherwise show Latest. A disconnected stream is not completion. Interrupted partial replies persist with a status label.
+- Generated links become file cards. The side panel previews images, Markdown, text/code, static HTML, and PDF pages. HTML has an opaque sandbox with no scripts, links, forms, or remote assets. PDF.js renders one page at a time with page controls and an accessible text disclosure. Office/unsupported files have download-only cards. Text previews over 2 MB use the same download fallback.
+- Preview/download routes require authentication and check that the file belongs to the selected session, including older Markdown-linked files. The new publish endpoint accepts files only within that session's workspace, excludes hidden paths, and caps files at 25 MB. Claude's existing save-file tool and Codex's `save_generated_file --path` command register real files, never invented URLs.
+- Session model changes, transcript mutations, and connection-setting changes are rejected while a turn is active. Changing endpoints starts a fresh provider connection and replays saved conversation text as needed; selecting an explicit model within Codex retains its thread. Returning to CLI defaults may require transcript replay into a fresh thread.
+
+Styles live in `static/css/chat.css` and reuse the shared tokens. Preview panels close and release PDF workers when switching sessions or leaving Chat. Escape closes the panel and restores focus. On small screens the preview fills the Chat area.
+
+Rebuild browser dependencies with `npm ci` then `npm run build:chat`. Generated local bundles and third-party license notices under `static/js/vendor/` ship with the static app; end users need neither Node nor a CDN. PDF code loads only when a PDF is opened.
+
+Use `scripts/ui-smoke.cjs --update-chat-image` to refresh only the shared website/GitHub Chat screenshot from the full app with synthetic data. The default test run does not change published image assets.
+
+Run `python scripts/test_chat.py` using the project environment for isolated backend tests, and `electron/node_modules/electron/dist/electron.exe scripts/chat-smoke.cjs` for the dedicated browser checks. Results and screenshots go under ignored `data/chat-review/`. Both suites use synthetic data; they do not verify account-specific model availability or authorize live model calls.
+
+Implementation references: [Codex CLI flags](https://learn.chatgpt.com/docs/developer-commands?surface=cli), [Claude streaming events](https://code.claude.com/docs/en/agent-sdk/streaming-output), [Marked sanitization guidance](https://marked.js.org/), and [PDF.js rendering](https://mozilla.github.io/pdf.js/examples/).
+
 The `.border-beam` composer implements the requested Libraries.dev-style border effect natively, without adding a React wrapper to this non-React app. A masked conic gradient animates a registered CSS angle around the border at 0.7 opacity, with a restrained focus highlight. It must not intercept input or clip the model menu. It pauses while the document is hidden; reduced-motion makes it static. This is not the border-beam npm package and does not expose its React props.
 
 `core3d.js` renders locally batched triangular particles with Three.js. It reacts to actual in-flight conversations and system status, supports pause, respects reduced motion/visibility, and disposes GPU resources on unmount. A static fallback covers unavailable WebGL.

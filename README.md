@@ -12,7 +12,7 @@ This is the real product (v2). [jarvis-starter-kit](https://github.com/david-dar
 
 ## What it does
 
-- **Chat** with any model you connect — Claude via the Agent SDK, any OpenAI-compatible endpoint, or a local model (Ollama, or the built-in llama.cpp engine). Per-conversation model choice, file attachments, folder-scoped workspaces, and slash commands.
+- **Chat** with any model you connect — Claude via the Agent SDK, any OpenAI-compatible endpoint, or a local model (Ollama, or the built-in llama.cpp engine). Per-conversation model choice (including exact CLI model versions for Claude Code and Codex CLI), file attachments, folder-scoped workspaces, and slash commands. Responses render as formatted Markdown with syntax-highlighted, copyable code; generated files show up as in-chat cards with previews for images, PDFs, Markdown, text/code, and static HTML (Office files stay downloadable).
 - **Home dashboard**: recent conversations, projects, upcoming events, connected systems, and a live activity feed around a responsive particle core.
 - **A focused workspace**: a minimal dark interface, an animated chat composer, and a sidebar that collapses to an icon rail. Your layout preference is remembered; mobile keeps its full navigation drawer.
 - **Notes, Calendar, Email, Library** — one unified place for priorities and todos (due-dated notes render on the calendar), CalDAV/iCal calendar sync, IMAP/SMTP email accounts, and a searchable document library.

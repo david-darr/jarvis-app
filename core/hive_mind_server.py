@@ -381,6 +381,9 @@ def get_hive_mind_server(exclude_session_id: str | None = None):
     async def _save_generated_image(args: dict) -> dict:
         try:
             result = await image_gen.import_image_from_url(args["url"])
+            if exclude_session_id:
+                from core.session_manager import session_manager
+                session_manager.register_artifact(exclude_session_id, result["url"])
         except Exception as e:
             return {"content": [{"type": "text", "text": f"Couldn't fetch that image: {e}"}]}
         alt = args["description"][:80].replace("[", "").replace("]", "")
@@ -409,6 +412,9 @@ def get_hive_mind_server(exclude_session_id: str | None = None):
     async def _save_generated_file(args: dict) -> dict:
         try:
             result = image_gen.register_generated_file(args["path"])
+            if exclude_session_id:
+                from core.session_manager import session_manager
+                session_manager.register_artifact(exclude_session_id, result["url"])
         except Exception as e:
             return {"content": [{"type": "text", "text": f"Couldn't save that file: {e}"}]}
         desc = args["description"][:80].replace("[", "").replace("]", "")
