@@ -8,6 +8,7 @@ cryptography>=42
 discord.py>=2.4
 httpx>=0.27
 python-pptx>=1.0  # Office file generation skill (David's ask 2026-09-10) — MIT licensed, pure Python, no LibreOffice/Node needed
+pypdfium2>=4  # Split scanned PDF attachments into per-page images (David's ask 2026-09-13) — BSD-3-Clause/Apache-2.0, ships PDFium's binary in the wheel, no system Poppler/Tesseract install needed
 
 # Cookbook's built-in local model engine (David's ask 2026-09-01 — a local
 # model option needing no separate app install, unlike Ollama). Real

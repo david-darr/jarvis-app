@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from core import chat_artifacts, image_gen, middleware
+from core import attachments, chat_artifacts, image_gen, middleware
 from core.session_manager import session_manager, SessionManager
 from core.codex_brain import CodexBrain
 from core.brain import Brain
@@ -34,6 +34,52 @@ ENDPOINTS = {
     "codex": {"id": "codex", "kind": "codex_cli", "model": "endpoint-model"},
     "local": {"id": "local", "kind": "local", "model": "local-model"},
 }
+
+
+def _make_text_pdf(path: Path, pages: int = 1) -> None:
+    """Minimal hand-built PDF with a real per-page text content stream (same
+    technique as scripts/chat-smoke.cjs's samplePDF()) — a real text layer,
+    not a scan."""
+    objects, page_nums = [], []
+    obj_num = 3
+    font_num = obj_num
+    objects.append((font_num, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"))
+    obj_num += 1
+    for i in range(pages):
+        stream = f"BT /F1 24 Tf 50 700 Td (This is real, extractable page {i + 1} body text, well over the scanned-page character threshold.) Tj ET"
+        content_num = obj_num
+        objects.append((content_num, f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream"))
+        obj_num += 1
+        page_num = obj_num
+        objects.append((page_num, f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 {font_num} 0 R >> >> /Contents {content_num} 0 R >>"))
+        page_nums.append(page_num)
+        obj_num += 1
+    all_objects = [(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+                   (2, f"<< /Type /Pages /Kids [{' '.join(f'{n} 0 R' for n in page_nums)}] /Count {pages} >>")] + objects
+    all_objects.sort(key=lambda o: o[0])
+    out, offsets = "%PDF-1.4\n", [0]
+    for num, body in all_objects:
+        offsets.append(len(out.encode("latin-1")))
+        out += f"{num} 0 obj\n{body}\nendobj\n"
+    xref = len(out.encode("latin-1"))
+    out += f"xref\n0 {len(all_objects) + 1}\n0000000000 65535 f \n"
+    for off in offsets[1:]:
+        out += f"{off:010d} 00000 n \n"
+    out += f"trailer\n<< /Size {len(all_objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF"
+    path.write_bytes(out.encode("latin-1"))
+
+
+def _make_scanned_pdf(path: Path, pages: int = 1) -> None:
+    """A PDF with real pages but zero text objects — pypdfium2's own
+    PdfDocument, since fabricating that by hand isn't worth it; this is
+    exactly what attachments._split_scanned_pdf's char-count heuristic is
+    meant to catch."""
+    import pypdfium2 as pdfium
+    pdf = pdfium.PdfDocument.new()
+    for _ in range(pages):
+        pdf.new_page(400, 500)
+    pdf.save(str(path))
+    pdf.close()
 
 
 class ChatTests(unittest.TestCase):
@@ -190,6 +236,46 @@ class ChatTests(unittest.TestCase):
         self.assertEqual(chat_artifacts.resolve(self.sid, url)[1]['kind'], 'download')
         with patch('core.middleware.auth_enabled', return_value=True):
             self.assertEqual(client.get('/api/chat/artifacts', params={"session_id": self.sid, "url": url}).status_code, 401)
+
+    def test_scanned_pdf_gets_split_text_pdf_does_not(self):
+        # Regression for 2026-09-13: a scanned course PDF blew past Claude
+        # Code's per-response transport buffer because its pages are
+        # already full-resolution images by construction — see
+        # attachments.SCANNED_AVG_CHARS_PER_PAGE's docstring.
+        text_id = attachments.stage_file('syllabus.pdf', b'placeholder')['id']
+        scan_id = attachments.stage_file('scan.pdf', b'placeholder')['id']
+        # stage_file above just wrote a placeholder under data/attachments/ —
+        # overwrite it in place with a real PDF before resolve_for_turn copies it.
+        staged_text = Path(attachments._find_staged_path(text_id))
+        staged_scan = Path(attachments._find_staged_path(scan_id))
+        _make_text_pdf(staged_text, pages=2)
+        _make_scanned_pdf(staged_scan, pages=3)
+
+        names, warnings = attachments.resolve_for_turn([text_id, scan_id], self.sid, str(self.root))
+        self.assertEqual(warnings, [])
+        text_names = [n for n in names if n.endswith('syllabus.pdf')]
+        page_names = [n for n in names if 'scan_page' in n]
+        self.assertEqual(len(text_names), 1, names)
+        self.assertEqual(len(page_names), 3, names)
+        for n in page_names:
+            self.assertTrue((self.root / n).is_file())
+            self.assertTrue(n.endswith('.jpg'))
+        # The scanned original was consumed by the split; the text PDF was not.
+        self.assertTrue((self.root / text_names[0]).is_file())
+        self.assertFalse(any(n.endswith('scan.pdf') for n in names))
+
+    def test_scanned_pdf_truncates_with_warning_past_page_cap(self):
+        big_id = attachments.stage_file('bigscan.pdf', b'placeholder')['id']
+        staged = Path(attachments._find_staged_path(big_id))
+        _make_scanned_pdf(staged, pages=attachments.MAX_SPLIT_PAGES + 5)
+
+        names, warnings = attachments.resolve_for_turn([big_id], self.sid, str(self.root))
+        self.assertEqual(len(names), attachments.MAX_SPLIT_PAGES)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn(str(attachments.MAX_SPLIT_PAGES + 5), warnings[0])
+
+        full_text = chat_service._apply_attachments(self.sid, "here's the reading", [big_id])
+        self.assertIn('only the first', full_text)
 
 
 if __name__ == '__main__':

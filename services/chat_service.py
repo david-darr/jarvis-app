@@ -158,10 +158,12 @@ def _apply_attachments(session_id: str, text: str, attachment_ids: list[str] | N
         return text
     session = session_manager.get_session(session_id) or {}
     cwd = session.get("workspace_dir") or resolve_vault_dir()
-    names = attachments.resolve_for_turn(attachment_ids, session_id, cwd)
+    names, warnings = attachments.resolve_for_turn(attachment_ids, session_id, cwd)
     if not names:
         return text
     note = "\n\n[Attached file(s), read with your file tools relative to your working directory: " + ", ".join(names) + "]"
+    if warnings:
+        note += " (" + "; ".join(warnings) + ")"
     return text + note
 
 
