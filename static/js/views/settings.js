@@ -1,5 +1,6 @@
 import { api, el, customSelect, toast, confirmDialog } from "../api.js";
 import { suppressBrowser, releaseBrowser } from "../browserPane.js";
+import { renderSpeechPanel } from "./speechPanel.js";
 import { renderAppearancePanel } from './appearancePanel.js';
 
 // The side browser's page is a NATIVE view composited above the HTML in the
@@ -85,6 +86,8 @@ const SECTION_GROUPS = [
     id: "workspace", label: "Workspace", sections: [
       { id: "vault", label: "Vault", render: renderVaultPanel,
         keywords: ["obsidian", "notes folder", "memory", "path", "sync", "location"] },
+      { id: "speech", label: "Speech", render: renderSpeechPanel,
+        keywords: ["voice", "dictation", "microphone", "mic", "transcribe", "whisper", "speech to text", "open mic"] },
     ],
   },
   {

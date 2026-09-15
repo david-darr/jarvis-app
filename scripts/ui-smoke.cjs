@@ -76,6 +76,10 @@ function fixture(url) {
   if (route === "/api/tasks") return list(tasks);
   if (route === "/api/tasks/builtin") return ["Daily briefing", "Review priorities", "Organize memory", "Inbox triage"].map((label, i) => ({ label, description: "Keep the important things in view with a regular review.", action_id: "routine" + i, enabled: i === 0 && !empty, task_id: "t1", uses_model: true, default_daily_time: "07:00" }));
   if (route === "/api/models") return list(models);
+  if (route === "/api/speech/status") return { engine_available: true, active_model: null, models: [
+    { name: "tiny.en", label: "Tiny", size_mb: 75, description: "Fastest, roughest.", downloaded: false },
+    { name: "base.en", label: "Base", size_mb: 142, description: "A good balance for dictation.", downloaded: true },
+  ] };
   if (route === "/api/models/catalog") return {
     claude_cli: [{ id: "workspace-large", display_name: "Workspace Large", description: "Most capable model for complex work.", alias: null, default_effort: null, supported_efforts: ["low", "high"].map(effort => ({ effort, description: effort + " reasoning" })), context_window: 200000, effective_context_percent: null, source: "curated", estimated: true }],
     codex_cli: [{ id: "workspace-fast", display_name: "Workspace Fast", description: "Balances speed and reasoning depth.", alias: null, default_effort: "medium", supported_efforts: ["low", "medium", "high"].map(effort => ({ effort, description: effort + " reasoning" })), context_window: 272000, effective_context_percent: 95, source: "cli_cache", estimated: false }],
@@ -242,6 +246,20 @@ app.whenReady().then(async () => {
       // Custom Tabs stays behind Developer Mode, which this fixture reports
       // as off — the regrouping must not have loosened that gate.
       assert.ok(!(await js("[...document.querySelectorAll('.settings-nav-item')].some(i=>i.dataset.section==='custom-tabs')")), "Custom Tabs stays dev-mode gated");
+      // -- Speech panel (David's ask 2026-09-15). Without it there is no way
+      // to obtain a model, so dictation could only ever refuse.
+      await js("document.querySelector('[data-section=speech]').click()");
+      // The panel root mounts before its status fetch resolves, so waiting on
+      // the root alone races the content it is supposed to be showing.
+      await waitFor("document.querySelectorAll('.speech-model').length===2");
+      // A downloaded model shows its state; an absent one offers the download.
+      assert.ok(await js("document.querySelector('.speech-panel').textContent.includes('Downloaded')"), 'Downloaded model is marked');
+      assert.equal(await js("document.querySelectorAll('.speech-model-actions .btn').length"), 1, 'Only the missing model offers a download');
+      assert.ok(await js("document.querySelector('.speech-panel').textContent.includes('never uploaded')"), 'Panel states audio stays local');
+      assert.deepEqual(await overflow(), [], label + " speech overflow");
+      await capture(label + "-speech");
+      await js("document.querySelector('[data-section=vault]').click()");
+      await waitFor("!!document.querySelector('#settings-content .card')");
       // Search matches what someone would actually type, not just the
       // visible label — "2fa" appears nowhere in the word "Account".
       await js("{ const s=document.querySelector('.settings-search'); s.value='2fa'; s.dispatchEvent(new Event('input')); }");

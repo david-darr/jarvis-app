@@ -1464,3 +1464,9 @@ button.dashboard-row:hover { background: rgba(255,255,255,.035); }
   .border-beam::before { animation: none !important; --beam-angle: 140deg; opacity: .45; }
   .msg-thinking-text { color: var(--text-dim); background: none; }
 }
+
+/* -- Settings > Speech (David's ask 2026-09-15) ------------------------- */
+.speech-panel .card-row { justify-content: space-between; align-items: center; gap: 16px; }
+.speech-model p.meta { margin: 4px 0 0; }
+.speech-model-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.speech-model-actions .meta { font-variant-numeric: tabular-nums; min-width: 38px; text-align: right; }
