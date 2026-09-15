@@ -33,6 +33,11 @@ const files = {
   '/generated-files/012345abcdef_image.png': { filename: 'image.png', extension: 'png', kind: 'image', text: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jX1sAAAAASUVORK5CYII=', 'base64') },
 };
 const rich = '# A clearer direction\n\nHere is a **focused plan**, with `useful details` and [a reference](https://example.test).\n\n## Next steps\n\n1. Keep the important work visible.\n2. Make room for deeper thinking.\n\n> Good tools stay out of your way.\n\n| Area | Direction |\n| --- | --- |\n| Chat | Clear, readable responses |\n| Files | Preview without leaving |\n\n```python\ndef greet(name):\n    return f"Hello, {name}"\n```\n\n[Project brief](/generated-files/012345abcdef_Project%20brief.md)\n\n[Static preview](/generated-files/012345abcdef_preview.html)\n\n[Word document](/generated-files/012345abcdef_report.docx)\n\n[Python source](/generated-files/012345abcdef_snippet.py)\n\n[Workbook](/generated-files/012345abcdef_budget.xlsx)\n\n[Slide deck](/generated-files/012345abcdef_deck.pptx)\n\n[Rows](/generated-files/012345abcdef_rows.csv)\n\n[Macro document](/generated-files/012345abcdef_macros.docm)';
+// Engine available, no model downloaded: what a fresh install looks like.
+let speechStatus = { engine_available: true, active_model: null, models: [
+  { name: 'tiny.en', label: 'Tiny', size_mb: 75, downloaded: false },
+  { name: 'base.en', label: 'Base', size_mb: 142, downloaded: false },
+] };
 const models = [{ id: 'claude', name: 'Claude Code', kind: 'claude_cli', model: 'configured-model' }, { id: 'codex', name: 'Codex CLI', kind: 'codex_cli', model: '' }, { id: 'local', name: 'Local', kind: 'local', model: 'local-model' }];
 // Stands in for core/model_catalog.py's response. "ultra" belongs to one
 // codex model and not the other on purpose — same asymmetry the backend
@@ -68,6 +73,7 @@ const server = http.createServer(async (req, res) => {
     const data = body && req.headers['content-type']?.includes('application/json') ? JSON.parse(body) : {};
     requests.push({ path: url.pathname, method: req.method, data });
     const json = value => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(value)); };
+    if (url.pathname === '/api/speech/status') return json(speechStatus);
     if (url.pathname === '/api/models/catalog') return json(catalog);
     if (url.pathname === '/api/models') return json(models);
     if (url.pathname === '/api/projects') return json([]);
@@ -417,6 +423,27 @@ app.whenReady().then(async () => {
     await waitFor("document.querySelector('#chat-send').dataset.mode==='send'");
     try { pending.res.end(); } catch (e) {}
     pending = null;
+
+
+    // -- dictation (David's ask 2026-09-15). The no-model path is checked
+    // because it needs no microphone: the button verifies a model exists
+    // BEFORE opening the mic, so the failure arrives before recording rather
+    // than after a user has already spoken into it.
+    assert.ok(await js("!document.querySelector('#chat-mic').hidden"), 'Mic button shows where recording is supported');
+    await js("document.querySelector('#chat-mic').click()");
+    await waitFor("[...document.querySelectorAll('.toast')].some(t=>t.textContent.includes('No speech model'))");
+    // Nothing should be recording after that refusal.
+    assert.ok(await js("!document.querySelector('#chat-mic').classList.contains('recording')"), 'A refused start leaves the mic idle');
+    await js("document.querySelectorAll('.toast').forEach(t=>t.remove())");
+    // With the engine missing entirely the message is different, because a
+    // broken build and a missing download are not the same problem.
+    speechStatus = { engine_available: false, active_model: null, models: [] };
+    await js("import('/static/js/voiceInput.js').then(m=>m.refreshSpeechStatus())");
+    await js("document.querySelector('#chat-mic').click()");
+    await waitFor("[...document.querySelectorAll('.toast')].some(t=>t.textContent.includes('not available in this build'))");
+    await js("document.querySelectorAll('.toast').forEach(t=>t.remove())");
+    speechStatus = { engine_available: true, active_model: null, models: [] };
+    await js("import('/static/js/voiceInput.js').then(m=>m.refreshSpeechStatus())");
 
     // Inject dangerous content through the real renderer, not a stub parser.
     const attack = '<img src="https://example.test/track" onerror="window.__xss=1"><iframe src="/api/settings"></iframe><script>window.__xss=1</script><p class="artifact-panel">safe</p>[bad](javascript:alert(1))';

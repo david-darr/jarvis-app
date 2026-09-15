@@ -207,3 +207,20 @@
 .msg-stopped { font-size: 12px; color: var(--text-faint); margin-top: 14px; padding: 10px 12px; border-left: 2px solid var(--border-strong); background: var(--bg-panel); }
 #chat-send[data-mode='stop'] { background: var(--surface-2); color: var(--text); }
 #chat-send[data-mode='stop']:hover { background: var(--border-strong); }
+
+/* -- dictation (David's ask 2026-09-15) --------------------------------- */
+.chat-mic-btn[hidden] { display: none; }
+.chat-mic-btn.recording { color: var(--danger); }
+/* The ring tracks real mic level, so a muted or dead device is visibly
+   different from one that is actually hearing you. */
+.chat-mic-btn.recording::after {
+  content: ''; position: absolute; inset: -2px; border-radius: 8px;
+  border: 1.5px solid var(--danger);
+  opacity: calc(.35 + var(--mic-level, 0) * .65);
+  transform: scale(calc(1 + var(--mic-level, 0) * .12));
+  transition: opacity 90ms linear, transform 90ms linear;
+  pointer-events: none;
+}
+.chat-mic-btn { position: relative; }
+.chat-mic-btn.busy { opacity: .55; }
+@media (prefers-reduced-motion: reduce) { .chat-mic-btn.recording::after { transition: none; transform: none; } }

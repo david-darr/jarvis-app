@@ -3,6 +3,7 @@ import { runSlashCommand } from "../slashCommands.js";
 import * as chatStream from "../chatStream.js";
 import { renderMessageBody, copyText, closeArtifact } from "../chatContent.js";
 import { openBrowser, closeBrowser } from "../browserPane.js";
+import { createRecorder, transcribeBlob, getSpeechStatus, isRecordingSupported } from "../voiceInput.js";
 import { createChatActivity } from '../chatActivity.js';
 
 // Composer rebuilt to match Odysseus's actual chat-input-bar structure
@@ -27,6 +28,7 @@ const ICON_WORKSPACE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="no
 const ICON_PROMPT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 2 4 4"/><path d="m17 7 3-3"/><path d="M19 9 8.7 19.3c-1 1-2.5 1-3.4 0l-.6-.6c-1-1-1-2.5 0-3.4L15 5"/><path d="m9 11 4 4"/></svg>';
 const ICON_PLUS = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
 const ICON_STOP = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+const ICON_MIC = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>';
 const ICON_SEND = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
 const ICON_X = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>';
 const ICON_CHEVRON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
@@ -340,7 +342,13 @@ export async function render(container, tabId, options = {}) {
   sendBtn.insertAdjacentHTML("beforeend", ICON_SEND);
 
   const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, workspacePill, contextPill]);
-  const inputRight = el("div", { class: "chat-input-right" }, [modelWrap, versionWrap, sendBtn]);
+  // Dictation (David's ask 2026-09-15). Hidden outright when the browser
+  // cannot record, rather than offered and then failing on click.
+  const micBtn = el("button", { type: "button", class: "input-icon-btn chat-mic-btn", id: "chat-mic", title: "Dictate", "aria-label": "Dictate a message" });
+  micBtn.insertAdjacentHTML("beforeend", ICON_MIC);
+  micBtn.hidden = !isRecordingSupported();
+  wireMic(micBtn, input);
+  const inputRight = el("div", { class: "chat-input-right" }, [modelWrap, versionWrap, micBtn, sendBtn]);
   const inputBottom = el("div", { class: "chat-input-bottom" }, [inputLeft, inputRight]);
 
   const composer = el("div", { class: "glass chat-input-bar border-beam" }, [inputTop, inputBottom]);
@@ -741,6 +749,80 @@ function syncWorkspacePill(path) {
   });
   pill.appendChild(clearBtn);
   slot.appendChild(pill);
+}
+
+// -- dictation ---------------------------------------------------------------
+// Click to start, click again to stop and transcribe. Toggle rather than
+// press-and-hold: hold is fiddly with a mouse, impossible to discover, and
+// awkward on a phone where the same button has to work by touch.
+function wireMic(micBtn, input) {
+  let recorder = null;
+  const reset = () => {
+    recorder = null;
+    micBtn.classList.remove('recording', 'busy');
+    micBtn.style.removeProperty('--mic-level');
+    micBtn.title = 'Dictate';
+    micBtn.setAttribute('aria-label', 'Dictate a message');
+    micBtn.disabled = false;
+  };
+
+  micBtn.addEventListener('click', async () => {
+    if (recorder) {
+      // Stop and transcribe.
+      const active = recorder;
+      recorder = null;
+      micBtn.classList.remove('recording');
+      micBtn.classList.add('busy');
+      micBtn.disabled = true;
+      micBtn.title = 'Transcribing…';
+      try {
+        const blob = await active.stop();
+        if (!blob) { reset(); return; }
+        const text = await transcribeBlob(blob);
+        if (!text) {
+          toast('No speech was picked up.', 'error');
+        } else {
+          // Appended rather than replacing: dictation is often used to finish
+          // a sentence someone already started typing.
+          const existing = input.value.trim();
+          input.value = existing ? `${existing} ${text}` : text;
+          input.dispatchEvent(new Event('input'));
+          input.focus();
+        }
+      } catch (error) {
+        toast(error.message || 'Transcription failed.', 'error');
+      }
+      reset();
+      return;
+    }
+
+    // Starting: check the model is actually there before opening the mic, so
+    // the failure arrives before recording rather than after.
+    const status = await getSpeechStatus();
+    if (!status || !status.engine_available) {
+      toast('Speech recognition is not available in this build.', 'error');
+      return;
+    }
+    if (!status.active_model) {
+      toast('No speech model downloaded yet. Add one in Settings > Speech.', 'error');
+      return;
+    }
+    const active = createRecorder({ onLevel: level => micBtn.style.setProperty('--mic-level', level.toFixed(2)) });
+    try {
+      await active.start();
+    } catch (error) {
+      // Denied permission and no device look the same to the caller, so the
+      // message covers both rather than guessing.
+      toast(error && error.name === 'NotAllowedError'
+        ? 'Microphone access was blocked. Allow it and try again.'
+        : 'No microphone is available.', 'error');
+      return;
+    }
+    recorder = active;
+    micBtn.classList.add('recording');
+    micBtn.title = 'Stop and transcribe';
+    micBtn.setAttribute('aria-label', 'Stop recording and transcribe');
+  });
 }
 
 // -- model picker -----------------------------------------------------------
