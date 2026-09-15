@@ -38,7 +38,9 @@ Usage:
 """
 import argparse
 import io
+import json
 import os
+import re
 import platform
 import shutil
 import subprocess
@@ -124,6 +126,59 @@ def run(python_exe: str, args: list[str]) -> None:
         raise RuntimeError(f"command failed ({result.returncode}): {' '.join(args)}")
 
 
+def required_distributions() -> list:
+    """Distribution names from requirements.txt.
+
+    Derived from the file rather than restated in code. A hardcoded list is
+    exactly how this check silently rotted: it named nine packages while
+    requirements.txt had grown to fourteen, so a runtime missing the newer
+    ones verified clean and shipped, and the failure only surfaced on a
+    user's machine when they opened a spreadsheet.
+
+    Version pins, extras, environment markers and index directives are all
+    stripped. This answers "is the package there at all", which is the thing
+    that actually goes wrong.
+    """
+    names = []
+    with open(REQUIREMENTS, encoding="utf-8") as handle:
+        for raw in handle:
+            line = raw.split("#", 1)[0].strip()
+            if not line or line.startswith("-"):
+                continue
+            line = line.split(";", 1)[0].strip()
+            line = re.split(r"[<>=!~\[]", line, maxsplit=1)[0]
+            name = line.strip().lower().replace("_", "-")
+            if name and name not in names:
+                names.append(name)
+    return names
+
+
+def missing_distributions(python_exe: str) -> list:
+    """Which required packages the runtime does NOT have installed.
+
+    Checked through importlib.metadata rather than by importing, because
+    distribution names and import names differ often enough (python-docx ->
+    docx, discord.py -> discord, llama-cpp-python -> llama_cpp) that a
+    name-mapping table would just be a second source of drift.
+    """
+    probe = "\n".join([
+        "import json,sys",
+        "from importlib.metadata import distribution, PackageNotFoundError",
+        "missing=[]",
+        "for name in json.loads(sys.argv[1]):",
+        "    try: distribution(name)",
+        "    except PackageNotFoundError: missing.append(name)",
+        "print(json.dumps(missing))",
+    ])
+    result = subprocess.run(
+        [python_exe, "-c", probe, json.dumps(required_distributions())],
+        cwd=BASE_DIR, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("runtime dependency check failed:\n" + result.stderr.strip())
+    return json.loads(result.stdout.strip() or "[]")
+
+
 def verify(python_exe: str) -> None:
     """Prove the runtime can actually import the app's real dependency graph
     before we call the build good — a runtime that installs cleanly but
@@ -138,6 +193,9 @@ def verify(python_exe: str) -> None:
     if result.returncode != 0:
         raise RuntimeError(f"runtime verification failed:\n{result.stderr.strip()}")
     log(result.stdout.strip())
+    missing = missing_distributions(python_exe)
+    if missing:
+        raise RuntimeError("runtime is missing required packages: " + ", ".join(missing))
 
 
 def main() -> int:
@@ -150,10 +208,19 @@ def main() -> int:
                   else os.path.join(RUNTIME_DIR, "bin", "python3"))
 
     if os.path.exists(python_exe) and not args.force:
-        log("runtime already present — verifying it instead of rebuilding (use --force to rebuild)")
-        verify(python_exe)
-        log("runtime OK")
-        return 0
+        stale = missing_distributions(python_exe)
+        if stale:
+            # Self-healing rather than merely loud: a runtime built before a
+            # dependency was added to requirements.txt is stale, and someone
+            # running `npm run dist` without --force is precisely how that
+            # ships broken. Rebuilding here is what stops a release going out
+            # with a package missing.
+            log("runtime is missing " + ", ".join(stale) + " - rebuilding instead of reusing it")
+        else:
+            log("runtime already present — verifying it instead of rebuilding (use --force to rebuild)")
+            verify(python_exe)
+            log("runtime OK")
+            return 0
 
     if not (IS_WINDOWS or IS_MACOS):
         raise RuntimeError(f"no runtime recipe for this platform ({sys.platform})")
