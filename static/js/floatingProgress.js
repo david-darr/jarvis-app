@@ -36,7 +36,8 @@ function render(sessionId, entry) {
     return;
   }
   if (!card) {
-    card = document.createElement("div");
+    card = document.createElement("button");
+    card.type = 'button';
     card.className = "chat-progress-card";
     card.addEventListener("click", () => jumpToSession(sessionId));
     host.appendChild(card);
@@ -44,18 +45,17 @@ function render(sessionId, entry) {
     // Force layout before the "show" transition so it actually animates in.
     card.getBoundingClientRect();
     card.classList.add("show");
+    card.appendChild(Object.assign(document.createElement('span'), { className: 'chat-progress-dot' }));
+    card.appendChild(Object.assign(document.createElement('span'), { className: 'chat-progress-label' }));
   }
   card.classList.toggle("done", entry.status === "done");
   card.classList.toggle("failed", entry.status === "failed");
-  const statusText = entry.status === "processing" ? "responding..."
+  const statusText = entry.status === "processing" ? (entry.text ? 'receiving response' : 'waiting for response')
     : entry.status === "done" ? "finished"
       : "failed";
-  card.innerHTML = "";
-  card.appendChild(Object.assign(document.createElement("span"), { className: "chat-progress-dot" }));
-  const label = document.createElement("span");
-  label.className = "chat-progress-label";
-  label.textContent = `${entry.sessionTitle} — ${statusText}`;
-  card.appendChild(label);
+  const label = card.querySelector('.chat-progress-label');
+  const next = `${entry.sessionTitle} · ${statusText}`;
+  if (label.textContent !== next) label.textContent = next;
 }
 
 export function init({ switchTab }) {

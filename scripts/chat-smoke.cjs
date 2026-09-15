@@ -52,6 +52,7 @@ const chats = {
   s2: { id: 's2', title: 'Another conversation', model_endpoint_id: 'codex', messages: [] },
 };
 let pending = null;
+let deferFirstChunk = false;
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/') {
@@ -129,7 +130,8 @@ const server = http.createServer(async (req, res) => {
       chats[data.session_id].messages.push({ role: 'user', content: data.message });
       res.setHeader('Content-Type', 'text/event-stream');
       const text = '## Working on your request\n\n' + 'A paragraph with enough detail to exercise the reading position.\n\n'.repeat(25);
-      res.write('data: ' + JSON.stringify({ chunk: text }) + '\r\n\r\n');
+      res.flushHeaders();
+      if (!deferFirstChunk) res.write('data: ' + JSON.stringify({ chunk: text }) + '\r\n\r\n');
       pending = { res, sid: data.session_id, text };
       return;
     }
@@ -138,7 +140,7 @@ const server = http.createServer(async (req, res) => {
   const target = path.resolve(root, '.' + url.pathname);
   if (!target.startsWith(path.join(root, 'static') + path.sep)) { res.writeHead(404); res.end(); return; }
   try {
-    res.setHeader('Content-Type', { '.js': 'text/javascript', '.mjs': 'text/javascript', '.wasm': 'application/wasm', '.css': 'text/css', '.png': 'image/png' }[path.extname(target)] || 'application/octet-stream');
+    res.setHeader('Content-Type', { '.js': 'text/javascript', '.mjs': 'text/javascript', '.wasm': 'application/wasm', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml' }[path.extname(target)] || 'application/octet-stream');
     res.end(fs.readFileSync(target));
   } catch { res.writeHead(404); res.end(); }
 });
@@ -150,7 +152,7 @@ app.whenReady().then(async () => {
   const base = 'http://127.0.0.1:' + server.address().port;
   session.defaultSession.webRequest.onBeforeRequest((details, cb) => cb({ cancel: !details.url.startsWith(base + '/') && !details.url.startsWith('about:') && !details.url.startsWith('data:') }));
   const win = new BrowserWindow({ width: 1440, height: 900, show: false, useContentSize: true, webPreferences: { offscreen: true, contextIsolation: true, nodeIntegration: false } });
-  win.webContents.on('console-message', (_e, level, message) => { if (level >= 3) errors.push(message); });
+  win.webContents.on('console-message', (details) => { if (details.level === 'error') errors.push(details.message); });
   const js = async code => {
     let timer;
     try { return await Promise.race([win.webContents.executeJavaScript(code), new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Renderer timeout: ' + code)), 10000); })]); }
@@ -351,7 +353,17 @@ app.whenReady().then(async () => {
     assert.ok(await js("document.querySelector('#chat-main').classList.contains('is-empty')"));
     await js("window.originalComposer=document.querySelector('#chat-input')");
     await capture('desktop-new-chat');
+    deferFirstChunk = true;
     await js("document.querySelector('#chat-input').value='Build a plan'; document.querySelector('#chat-send').click()");
+    await waitFor("document.querySelector('.chat-activity')?.dataset.state==='waiting'");
+    await js("document.querySelector('.chat-activity summary').click()");
+    assert.equal(await js("document.querySelectorAll('.chat-activity li[data-state=done]').length"), 1);
+    await capture('chat-activity-waiting');
+    await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{name:'prefers-reduced-motion',value:'reduce'}] });
+    assert.equal(await js("getComputedStyle(document.querySelector('.chat-activity-marker')).animationName"), 'none');
+    await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [] });
+    pending.res.write('data: ' + JSON.stringify({ chunk: pending.text }) + '\n\n');
+    deferFirstChunk = false;
     await waitFor("document.querySelector('.msg-body').textContent==='Build a plan' && document.querySelectorAll('.chat-prose p').length > 20");
     assert.equal(await js("document.querySelector('#model-version-btn').disabled"), true);
     assert.ok(await js("!document.querySelector('#chat-main').classList.contains('is-empty') && document.querySelector('#chat-input')===window.originalComposer"), 'First turn moves the same composer');
@@ -370,6 +382,7 @@ app.whenReady().then(async () => {
     chats.s2.messages.push({ role: 'assistant', content: finalText });
     pending.res.end('data: {"done":true}\n\n'); pending = null;
     await waitFor("!document.querySelector('#chat-send').disabled");
+    assert.equal(await js("document.querySelector('.chat-activity')?.dataset.state"), 'done');
     await open('s2');
     assert.equal(await js("document.querySelectorAll('.msg.assistant').length"), 1, 'Finished retention never duplicates a persisted reply');
     // Truncated SSE must fail, not masquerade as a successful reply.
@@ -378,6 +391,7 @@ app.whenReady().then(async () => {
     while (!pending) await delay(20);
     pending.res.end(); pending = null;
     await waitFor("!!document.querySelector('.msg-interrupted')");
+    assert.equal(await js("[...document.querySelectorAll('.chat-activity')].at(-1).dataset.state"), 'failed');
     assert.equal(await js("document.querySelectorAll('.msg.assistant').length"), 2);
     // Inject dangerous content through the real renderer, not a stub parser.
     const attack = '<img src="https://example.test/track" onerror="window.__xss=1"><iframe src="/api/settings"></iframe><script>window.__xss=1</script><p class="artifact-panel">safe</p>[bad](javascript:alert(1))';

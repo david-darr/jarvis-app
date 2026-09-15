@@ -3,6 +3,7 @@ import { runSlashCommand } from "../slashCommands.js";
 import * as chatStream from "../chatStream.js";
 import { renderMessageBody, copyText, closeArtifact } from "../chatContent.js";
 import { openBrowser, closeBrowser } from "../browserPane.js";
+import { createChatActivity } from '../chatActivity.js';
 
 // Composer rebuilt to match Odysseus's actual chat-input-bar structure
 // (David's ask 2026-08-31, cross-checked against the real repo at
@@ -67,18 +68,6 @@ function messageCard(role, text, ts, status = 'complete') {
   return card;
 }
 
-// Claude's idle-thinking indicator (David's ask 2026-09-03): a pulsing dot
-// plus a highlight shimmering across the word. Both are pure CSS
-// animations, replacing the old JS setInterval that rotated "." -> ".." ->
-// "..." — no timer to clear, and it keeps animating through the silent
-// gaps in a long tool-using turn, when there is no visible text to stream.
-function thinkingIndicator() {
-  return el("div", { class: "msg-thinking-row" }, [
-    el("span", { class: "msg-thinking-dot" }),
-    el("span", { class: "msg-thinking-text", text: "Thinking" }),
-  ]);
-}
-
 let activeSessionId = null;
 let activeProjectFilter = null; // David's ask 2026-09-12 — null = "All Chats"
 let stagedAttachments = []; // [{id, filename}]
@@ -97,20 +86,17 @@ let activeUnsubscribers = [];
 function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
   const cursor = el("span", { class: "msg-cursor" });
   const initial = chatStream.getInFlight(sessionId);
-  let thinkingEl = null;
-  if (initial && !initial.text) {
-    thinkingEl = thinkingIndicator();
-    replyBody.appendChild(thinkingEl);
-  }
+  const activity = createChatActivity();
+  replyCard.insertBefore(activity.node, replyBody);
   if (sendBtn) sendBtn.disabled = true;
 
   const paint = (entry) => {
+    activity.update(entry);
     const follow = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 100;
     const current = sessionId === activeSessionId && replyCard.isConnected;
     if (current) syncChatBusy(entry.status === 'processing');
     replyCard.setAttribute('aria-busy', String(entry.status === 'processing'));
     if (entry.text) {
-      if (thinkingEl && thinkingEl.isConnected) thinkingEl.remove();
       renderMessageBody(replyBody, entry.text, sessionId);
       if (entry.status === "processing") replyBody.appendChild(cursor);
     }
@@ -128,7 +114,6 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
       unsubscribe();
     } else if (entry.status === "failed") {
       cursor.remove();
-      if (thinkingEl && thinkingEl.isConnected) thinkingEl.remove();
       renderMessageBody(replyBody, entry.text, sessionId);
       replyCard.append(el('div', { class: 'msg-interrupted', role: 'status', text: entry.error || 'Response interrupted. Try sending your message again.' }));
       replyCard.classList.add("msg-failed");

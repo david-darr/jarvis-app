@@ -6,6 +6,7 @@ import * as commandPalette from "./commandPalette.js";
 import * as floatingProgress from "./floatingProgress.js";
 import { setupSidebar, restoreSidebar } from "./sidebar.js";
 import { closeBrowser, openBrowser } from "./browserPane.js";
+import { initAppearance } from "./appearance.js";
 
 restoreSidebar();
 
@@ -375,6 +376,8 @@ async function boot() {
   // 401 silently here with nothing on screen to show for it.
   overlay.classList.remove("hidden");
   await auth.run(overlay);
+  const identity = await api('/api/auth/status');
+  await initAppearance(identity.username);
   overlay.classList.add("hidden");
 
   const settings = await api("/api/settings");

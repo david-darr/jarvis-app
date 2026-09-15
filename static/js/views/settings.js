@@ -1,5 +1,6 @@
 import { api, el, customSelect, toast, confirmDialog } from "../api.js";
 import { suppressBrowser, releaseBrowser } from "../browserPane.js";
+import { renderAppearancePanel } from './appearancePanel.js';
 
 // The side browser's page is a NATIVE view composited above the HTML in the
 // desktop app (see static/js/browserPane.js), so it would paint straight
@@ -88,6 +89,8 @@ const SECTION_GROUPS = [
   },
   {
     id: "personal", label: "Personal", sections: [
+      { id: "appearance", label: "Appearance", render: renderAppearancePanel,
+        keywords: ["theme", "background", "image", "color", "shader", "flow", "tint", "swirl", "grain", "motion"] },
       { id: "account", label: "Account", render: renderAccountPanel,
         keywords: ["password", "2fa", "two factor", "totp", "authenticator", "username", "sign out", "security"] },
       { id: "shortcuts", label: "Shortcuts", render: renderShortcutsPanel,

@@ -104,6 +104,7 @@ function fixture(url) {
 }
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src 'self' https:");
   if (url.pathname.startsWith("/api/")) {
     if (url.pathname === "/api/sessions" && sessionDelay) await delay(sessionDelay);
     res.setHeader("Content-Type", "application/json");
@@ -120,7 +121,7 @@ const server = http.createServer(async (req, res) => {
   const file = path.resolve(root, url.pathname === "/" ? "static/index.html" : url.pathname === "/docs/" ? "docs/index.html" : "." + decodeURIComponent(url.pathname));
   if (!["static", "docs"].some(dir => file.startsWith(path.join(root, dir) + path.sep))) { res.writeHead(404); res.end(); return; }
   try {
-    const mime = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".png": "image/png" };
+    const mime = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".png": "image/png", ".svg": "image/svg+xml" };
     res.setHeader("Content-Type", mime[path.extname(file)] || "application/octet-stream");
     res.setHeader("Cache-Control", "no-store");
     res.end(fs.readFileSync(file));
@@ -135,8 +136,11 @@ app.whenReady().then(async () => {
   const base = "http://127.0.0.1:" + server.address().port;
   session.defaultSession.webRequest.onBeforeRequest((details, cb) => cb({ cancel: !details.url.startsWith(base + "/") }));
   const win = new BrowserWindow({ width: 1440, height: 900, show: false, useContentSize: true, webPreferences: { offscreen: true, contextIsolation: true, nodeIntegration: false } });
-  win.webContents.on("console-message", (_e, level, message) => { if (level >= 3) errors.push(message); });
-  const js = (code) => win.webContents.executeJavaScript(code);
+  win.webContents.on("console-message", (details) => { if (details.level === 'error') errors.push(details.message); });
+  const js = async (code) => {
+    try { return await win.webContents.executeJavaScript(code); }
+    catch (error) { throw new Error(error.message + '\nRenderer expression: ' + code); }
+  };
   const waitFor = async (condition) => {
     for (let i = 0; i < 80; i++) { if (await js(condition)) return; await delay(50); }
     throw new Error("Timed out: " + condition);
@@ -158,6 +162,7 @@ app.whenReady().then(async () => {
     win.webContents.debugger.attach("1.3");
     await win.webContents.debugger.sendCommand("Emulation.setFocusEmulationEnabled", { enabled: true });
     await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
+    await require('./appearance-checks.cjs')({ js, win, waitFor, capture, base, delay });
     const railWidth = () => js("document.querySelector('#sidebar').getBoundingClientRect().width");
     assert.equal(await railWidth(), 204);
     await js("document.querySelector('#sidebar-toggle').click()");

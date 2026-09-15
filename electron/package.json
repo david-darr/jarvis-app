@@ -9,14 +9,18 @@
   "author": "David Darr",
   "license": "MIT",
   "scripts": {
+    "postinstall": "install-electron",
     "start": "electron .",
     "build-runtime": "python ../scripts/build_runtime.py",
     "predist": "npm run build-runtime",
     "dist": "electron-builder"
   },
   "devDependencies": {
-    "electron": "^31.0.0",
+    "electron": "43.7.0",
     "electron-builder": "^25.0.0"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   },
   "build": {
     "appId": "com.davidmichael.jarvis",

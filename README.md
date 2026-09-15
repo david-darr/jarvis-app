@@ -65,7 +65,7 @@ JARVIS updates itself: new versions download in the background and install when 
 
 ## Developing
 
-Requirements: **Python 3.12+** and **Node 18+**.
+Requirements: **Python 3.12+** and **Node 22.12+** (Node 24 recommended). The development runtime is pinned to Electron 43.7.0; `npm install` in `electron/` downloads that runtime through the project's postinstall step.
 
 **Backend:**
 ```

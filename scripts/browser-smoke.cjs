@@ -24,6 +24,7 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 
 const root = path.resolve(__dirname, '..');
+app.setPath('userData', path.join(root, 'data', 'browser-smoke-profile'));
 const sideBrowser = require(path.join(root, 'electron', 'browser.js'));
 
 const failures = [];
@@ -42,6 +43,7 @@ const server = http.createServer((req, res) => {
   res.setHeader('Content-Type', 'text/html');
   res.end('<!doctype html><title>Fixture</title><h1>fixture page</h1>');
 });
+server.on('error', error => finish(1, error.message));
 
 app.commandLine.appendSwitch('host-resolver-rules', `MAP fixture.test 127.0.0.1, MAP other.test 127.0.0.1`);
 
@@ -69,6 +71,8 @@ process.on('unhandledRejection', (error) => {
 setTimeout(() => finish(1, 'FAIL: timed out before finishing.'), process.argv.includes('--live') ? 180000 : 90000).unref();
 
 app.whenReady().then(async () => {
+  console.log(`Runtime: Electron ${process.versions.electron}, Chromium ${process.versions.chrome}`);
+  if (process.argv.includes('--verify-failure')) { finish(1, 'EXPECTED FAILURE: exit-code verification'); return; }
   await new Promise(resolve => server.listen(BACKEND_PORT, '127.0.0.1', resolve));
 
   // -- URL gating. The single choke point every entry path funnels through,

@@ -54,7 +54,7 @@ export function subscribeAll(callback) {
 // then runs the actual request in the background.
 export function startTurn(sessionId, sessionTitle, text, attachmentIds) {
   if (_inflight.get(sessionId)?.status === 'processing') throw new Error('This chat already has a response in progress');
-  const entry = { text: "", status: "processing", sessionTitle, error: null, listeners: new Set() };
+  const entry = { text: "", status: "processing", connected: false, sessionTitle, error: null, listeners: new Set() };
   _inflight.set(sessionId, entry);
   _notify(sessionId);
   _runTurn(sessionId, entry, text, attachmentIds);
@@ -74,6 +74,8 @@ async function _runTurn(sessionId, entry, text, attachmentIds) {
       throw new Error(detail);
     }
 
+    entry.connected = true;
+    _notify(sessionId);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";

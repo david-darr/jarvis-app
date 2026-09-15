@@ -103,6 +103,22 @@ Run `electron/node_modules/electron/dist/electron.exe scripts/ui-smoke.cjs` for 
 
 The five-button preview switches between Home, New chat, Conversation, Vault, and the collapsed sidebar. Use real buttons with a pressed state, keep the image's alternative text and full-size link synchronized, and keep the default screenshot usable without JavaScript. Maintain mobile navigation, keyboard focus, a skip link, image dimensions, and reduced-motion behavior.
 
+## Appearance (Settings > Personal > Appearance)
+
+Four background modes: Original, Color, Image, Flow. Every setting is a local-device preference, stored per signed-in username in localStorage, with an uploaded image held as a Blob in IndexedDB. Nothing is uploaded and no server setting exists; the panel says so, because "appearance" reading as an account-level setting would be misleading.
+
+The sidebar is always the chosen colour darkened by 18%, and foreground colours flip for light backgrounds so text stays readable against either. Content panels keep solid backgrounds regardless of mode: a shader or photo behind body text is not worth the legibility. Image mode accepts PNG/JPEG/WebP only, up to 12 MB and 40 megapixels, normalised to 2560px on the longest edge and decoded through `createImageBitmap` into a canvas, never assigned as an image URL, so the CSP stays unwidened.
+
+Flow is a native WebGL fragment shader with no added renderer dependency. Distortion, swirl, grain mixer and grain overlay are independent uniforms, and each must visibly change rendered pixels. The canvas caps at 1280px on its longest edge and around 25fps, pauses when the document is hidden, and holds still under reduced motion. **A lost WebGL context must fall back to a static gradient and repaint**, not leave the last frame or an empty canvas behind the whole UI; a restored context returns to the shader. Dials are operable by both pointer drag and keyboard, and the pointer path uses real pointer capture, so it can only be tested with genuine pointer input rather than synthesised events.
+
+## Chat activity
+
+Chat shows an expandable set of transport steps driven by real stream events: sending, connected, waiting, responding, done, interrupted. **It never fabricates reasoning or tool-use steps** — the current backend stream exposes text, done and error only, so anything richer would be invented. The progress element mounts outside the streamed Markdown so token updates never rebuild it, and the floating progress cards keep stable DOM rather than being recreated per token.
+
+## Test commands
+
+Run the Electron suites through `node scripts/run-electron-test.cjs <suite>`. On Windows a direct invocation returns exit 0 while the GUI process is still running, which reads as a pass for a suite that has not finished. The wrapper uses the project's own Electron, waits for the process, passes through output and exit status, and times out at 240 seconds. `browser-smoke --live` adds real websites; `browser-smoke --verify-failure` proves a non-zero exit still survives. Never use npx to fetch a different Electron.
+
 The website and root README share `docs/img/` screenshots. They are actual app renders with synthetic fixture data, not personal account captures or generated mockups. Captions must say development preview/sample data. Keep the existing logo/favicon; replacing the brand is not part of a screenshot refresh.
 
 Refresh the eleven product images only with the explicit `--update-doc-images` flag on the UI smoke command. This includes `chat-new.png` showing the centered composer with both history tucked away and the global rail collapsed. The runner verifies sidebar animation, keyboard operation, persisted state, mobile override, and website previews/images/layout, alongside the existing UI checks. Review the generated desktop/mobile website and app screenshots before handoff. The flag copies only the named product captures into `docs/img/`; a normal test run leaves tracked images alone. Updating these files locally does not publish the website or push to GitHub.
