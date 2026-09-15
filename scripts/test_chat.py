@@ -540,6 +540,42 @@ class ChatTests(unittest.TestCase):
         self.assertIn('only the first', full_text)
 
 
+class RepoIntegrityTests(unittest.TestCase):
+    """Guards against a corruption that has now happened twice.
+
+    The repo root's package.json is the chat-asset manifest: it owns the
+    build:chat script and the vendored DOMPurify/marked/highlight.js/pdf.js
+    dependencies. Twice it has been silently overwritten with a copy of
+    electron/package.json, leaving a manifest that names main.js in a
+    directory with no main.js. Nothing breaks loudly when that happens - the
+    app keeps working because the vendor bundle is committed - but
+    `npm run build:chat` can no longer run, so DOMPurify cannot be rebuilt.
+    That is the one dependency you most want to be able to patch quickly,
+    since it sanitises model output before it reaches the DOM.
+
+    The cause is still unidentified: plain `npm install`, `npm install
+    --save-dev`, and `electron-builder --dir` were each ruled out by direct
+    test. Rather than keep hunting, this makes the damage impossible to miss,
+    because the failure mode is silence.
+    """
+
+    def test_root_package_json_is_the_chat_asset_manifest(self):
+        import json
+        root = Path(__file__).resolve().parents[1]
+        manifest = json.loads((root / "package.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            manifest.get("name"), "jarvis-chat-assets",
+            "Root package.json has been overwritten - it should be the chat-asset manifest, "
+            "not a copy of electron/package.json. Restore it with: git checkout HEAD -- package.json",
+        )
+        self.assertIn("build:chat", manifest.get("scripts", {}),
+                      "Root package.json lost its build:chat script, so the chat vendor bundle cannot be rebuilt.")
+        for dependency in ("dompurify", "marked", "highlight.js", "pdfjs-dist"):
+            self.assertIn(dependency, manifest.get("dependencies", {}),
+                          f"Root package.json lost its vendored {dependency} dependency.")
+
+
+
 if __name__ == '__main__':
     try:
         unittest.main()
