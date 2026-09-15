@@ -63,6 +63,9 @@ function fixture(url) {
   if (route === "/api/system/status") return { scheduler_running: true, vault_ok: true, enabled_task_count: empty ? 0 : 1, model_endpoint_count: empty ? 0 : 3, discord_connected_bots: [], next_task: empty ? null : { name: "Daily briefing", next_run_at: future(6) } };
   if (route === "/api/system/events") return list([{ message: "Daily briefing completed", level: "info", ts: now - 800 }, { message: "Memory sync finished", level: "info", ts: now - 2000 }]);
   if (route === "/api/sessions") return list(sessions);
+  // Must precede the generic /api/sessions/ match below, which would
+  // otherwise swallow this and return a whole session object.
+  if (route.endsWith("/context")) return { available: true, used_tokens: 48200, capacity_tokens: 258400, percent: 18.7, estimated_capacity: false, capacity_source: "cli_cache", model: "synthetic-model" };
   if (route.startsWith("/api/sessions/")) return { ...sessions[0], id: route.split("/")[3], model_endpoint_id: "m1", messages: [{ role: "user", content: "Let's make the workspace feel more focused.", ts: now - 100 }, { role: "assistant", content: "## A clearer direction\n\nStart with **what matters most**: clear navigation, a calm reading space, and useful connections between your work.\n\n- Keep the next step easy to find.\n- Bring the files into the conversation.\n- Give every thought room to breathe.\n\n```python\nworkspace = {\n    \"focus\": \"the work that matters\"\n}\n```\n\n[Project brief](/generated-files/012345abcdef_project-brief.md)", ts: now - 90 }] };
   if (route === "/api/projects") return list(projects);
   if (route.startsWith("/api/projects/")) return projects[0];
@@ -72,6 +75,10 @@ function fixture(url) {
   if (route === "/api/tasks") return list(tasks);
   if (route === "/api/tasks/builtin") return ["Daily briefing", "Review priorities", "Organize memory", "Inbox triage"].map((label, i) => ({ label, description: "Keep the important things in view with a regular review.", action_id: "routine" + i, enabled: i === 0 && !empty, task_id: "t1", uses_model: true, default_daily_time: "07:00" }));
   if (route === "/api/models") return list(models);
+  if (route === "/api/models/catalog") return {
+    claude_cli: [{ id: "workspace-large", display_name: "Workspace Large", description: "Most capable model for complex work.", alias: null, default_effort: null, supported_efforts: ["low", "high"].map(effort => ({ effort, description: effort + " reasoning" })), context_window: 200000, effective_context_percent: null, source: "curated", estimated: true }],
+    codex_cli: [{ id: "workspace-fast", display_name: "Workspace Fast", description: "Balances speed and reasoning depth.", alias: null, default_effort: "medium", supported_efforts: ["low", "medium", "high"].map(effort => ({ effort, description: effort + " reasoning" })), context_window: 272000, effective_context_percent: 95, source: "cli_cache", estimated: false }],
+  };
   if (route === "/api/models/usage") return { m1: { percentage: 18 } };
   if (route === "/api/documents") return list(docs);
   if (route === "/api/documents/search") return list(docs.filter(d => d.title.toLowerCase().includes(url.searchParams.get("q").toLowerCase())));
@@ -155,9 +162,10 @@ app.whenReady().then(async () => {
     await js("document.querySelector('#sidebar-toggle').click()");
     await delay(80);
     const movingWidth = await railWidth();
-    assert.ok(movingWidth > 72 && movingWidth < 204, "Sidebar animates between widths");
+    assert.ok(movingWidth > 52 && movingWidth < 204, "Sidebar animates between widths");
     await delay(300);
-    assert.equal(await railWidth(), 72);
+    assert.equal(await railWidth(), 52);
+    assert.ok(await js("[...document.querySelectorAll('#sidebar .nav-item svg')].every(e=>{const r=e.getBoundingClientRect();return r.left>=0&&r.right<=52})"), 'Icons fit the slim rail');
     assert.equal(await js("document.querySelector('#sidebar-toggle').getAttribute('aria-expanded')"), "false");
     assert.equal(await js("localStorage.getItem('jarvis:sidebar-collapsed')"), "true");
     assert.ok(await js("[...document.querySelectorAll('#nav button')].every(b => b.getAttribute('aria-label') && b.querySelector('svg'))"), "Every icon-only tab has an accessible name and an icon");
@@ -165,10 +173,11 @@ app.whenReady().then(async () => {
     await win.loadURL(base);
     await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
     await delay(350);
-    assert.equal(await railWidth(), 72, "Collapsed state survives reload");
+    assert.equal(await railWidth(), 52, "Collapsed state survives reload");
     for (const tab of ["chat", "notes", "library", "calendar", "tasks", "email", "brain", "cookbook", "school"]) {
       await navigate(tab);
       assert.deepEqual(await overflow(), [], "collapsed " + tab);
+      if (tab === 'chat') await capture('desktop-chat-minimal');
     }
     await js("document.querySelector('[data-tab=chat]').focus()");
     assert.equal(await js("document.querySelector('.sidebar-tooltip').textContent"), "Chats");
@@ -217,7 +226,62 @@ app.whenReady().then(async () => {
         assert.ok(await js("document.querySelector('.settings-search').getBoundingClientRect().width > 250"), "Settings search has room to type");
         assert.ok(await js("[...document.querySelectorAll('#settings-content input')].filter(e=>e.offsetWidth).every(e=>e.offsetWidth>=170)"), "Mobile model fields do not collapse");
       }
+
+      // -- grouped nav + keyword search (David's ask 2026-09-15).
+      assert.deepEqual(
+        await js("[...document.querySelectorAll('.settings-nav-group')].filter(g=>!g.hidden).map(g=>g.textContent)"),
+        ["MODELS", "CONNECTIONS", "WORKSPACE", "PERSONAL", "ADMINISTRATION"],
+        label + " settings groups",
+      );
+      // Custom Tabs stays behind Developer Mode, which this fixture reports
+      // as off — the regrouping must not have loosened that gate.
+      assert.ok(!(await js("[...document.querySelectorAll('.settings-nav-item')].some(i=>i.dataset.section==='custom-tabs')")), "Custom Tabs stays dev-mode gated");
+      // Search matches what someone would actually type, not just the
+      // visible label — "2fa" appears nowhere in the word "Account".
+      await js("{ const s=document.querySelector('.settings-search'); s.value='2fa'; s.dispatchEvent(new Event('input')); }");
+      await waitFor("[...document.querySelectorAll('.settings-nav-item')].filter(i=>!i.hidden).length===1");
+      assert.equal(await js("document.querySelector('.settings-nav-item:not([hidden])').dataset.section"), "account");
+      // An emptied group takes its heading with it rather than leaving a
+      // stray label over nothing.
+      assert.deepEqual(await js("[...document.querySelectorAll('.settings-nav-group')].filter(g=>!g.hidden).map(g=>g.textContent)"), ["PERSONAL"]);
+      await js("{ const s=document.querySelector('.settings-search'); s.value='tailscale'; s.dispatchEvent(new Event('input')); }");
+      await waitFor("document.querySelector('.settings-nav-item:not([hidden])').dataset.section==='remote'");
+      await js("{ const s=document.querySelector('.settings-search'); s.value=''; s.dispatchEvent(new Event('input')); }");
+      await waitFor("[...document.querySelectorAll('.settings-nav-item')].filter(i=>!i.hidden).length>5");
       await capture(label + "-settings");
+
+      if (label === "desktop") {
+        // -- titlebar drag, constrained to the viewport. Losing the titlebar
+        // off screen would be unrecoverable, since dragging is the only way
+        // to bring the window back.
+        const drag = (dx, dy) => js(`(() => {
+          const bar = document.querySelector('.settings-titlebar');
+          const r = bar.getBoundingClientRect();
+          const from = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, bubbles: true };
+          bar.dispatchEvent(new MouseEvent('mousedown', from));
+          document.dispatchEvent(new MouseEvent('mousemove', { ...from, clientX: from.clientX + ${dx}, clientY: from.clientY + ${dy}, bubbles: true }));
+          document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+          const w = document.querySelector('.settings-window').getBoundingClientRect();
+          return { left: Math.round(w.left), top: Math.round(w.top), right: Math.round(w.right), bottom: Math.round(w.bottom) };
+        })()`);
+        const moved = await drag(60, 40);
+        const pinned = await js("(() => { const w=document.querySelector('.settings-window').getBoundingClientRect(); return {left:Math.round(w.left), top:Math.round(w.top)}; })()");
+        assert.equal(moved.left, pinned.left, "window actually moves with the titlebar");
+        // Shoved hard past every edge in turn; it must stay wholly inside.
+        for (const [dx, dy] of [[-4000, -4000], [4000, 4000]]) {
+          const box = await drag(dx, dy);
+          assert.ok(box.left >= 0 && box.top >= 0, `stays inside top-left (${JSON.stringify(box)})`);
+          assert.ok(box.right <= 1441 && box.bottom <= 901, `stays inside bottom-right (${JSON.stringify(box)})`);
+        }
+        // Shrinking the app must not strand a window that was fine before.
+        win.setContentSize(900, 640);
+        await delay(150);
+        const after = await js("(() => { const w=document.querySelector('.settings-window').getBoundingClientRect(); return {left:Math.round(w.left), top:Math.round(w.top), right:Math.round(w.right), bottom:Math.round(w.bottom)}; })()");
+        assert.ok(after.left >= 0 && after.top >= 0 && after.right <= 901 && after.bottom <= 641, `re-clamped on resize (${JSON.stringify(after)})`);
+        win.setContentSize(1440, 900);
+        await delay(150);
+      }
+
       await js(`document.querySelector(".settings-titlebar-btn[title='Close'], .settings-titlebar-btn[title='Back']").click()`);
     }
     win.setContentSize(1440, 900);
@@ -225,7 +289,15 @@ app.whenReady().then(async () => {
     await waitFor("document.querySelectorAll('.dashboard-row').length > 0");
     await js("document.querySelector('.dashboard-row').click()");
     await waitFor("document.querySelectorAll('#chat-messages .msg').length === 2");
+    await delay(400);
     await capture("desktop-conversation");
+    await js("document.querySelector('#chat-history-toggle').click()");
+    await delay(300);
+    assert.equal(await js("document.querySelector('#chat-sessions').inert"), false);
+    assert.equal(await js("getComputedStyle(document.querySelector('.chat-history-close')).display"), 'none', 'Drawer close control stays mobile-only');
+    await capture('desktop-chat-history');
+    await js("document.querySelector('#chat-history-toggle').click()");
+    await delay(300);
     assert.equal(writes.length, 0, "Navigation must not write data");
     await js("document.querySelector('#model-picker-btn').click()");
     await capture("desktop-model-menu");
@@ -244,9 +316,26 @@ app.whenReady().then(async () => {
     await capture("desktop-reduced-motion");
     await win.webContents.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [] });
     await navigate("chat");
-    await js("document.querySelector('.suggestion-chip').click()");
-    assert.ok((await js("document.querySelector('#chat-input').value")).includes("calendar"));
-    assert.equal(writes.length, 0, "Suggestions only draft a prompt");
+    assert.ok(await js("document.querySelector('#chat-main').classList.contains('is-empty') && !document.querySelector('.chat-welcome')"));
+    assert.ok(await js("(() => {const r=document.querySelector('.chat-input-bar').getBoundingClientRect(); return Math.abs((r.top+r.bottom)/2-innerHeight/2)<60})()"), 'New-chat composer is centered');
+    await js("window.originalComposer=document.querySelector('#chat-input'); originalComposer.value='A draft worth keeping'; document.querySelector('#chat-history-toggle').click()");
+    await delay(300);
+    assert.equal(await js("document.querySelector('#chat-history-toggle').getAttribute('aria-expanded')"), 'true');
+    assert.equal(await js("document.querySelector('#chat-input')===window.originalComposer && originalComposer.value==='A draft worth keeping'"), true);
+    await navigate('notes');
+    await navigate('chat');
+    assert.equal(await js("document.querySelector('#chat-history-toggle').getAttribute('aria-expanded')"), 'true', 'History preference survives remount');
+    await js("document.querySelector('#chat-history-toggle').click(); document.querySelector('.chat-header-new').click()");
+    assert.equal(writes.length, 0, 'New-chat landing and history navigation do not create sessions');
+    win.setContentSize(390, 844);
+    await delay(300);
+    await js("document.querySelector('#chat-history-toggle').click()");
+    assert.equal(await js("document.querySelector('#chat-sessions').inert"), false);
+    await capture('mobile-chat-history');
+    await js("document.querySelector('.chat-history-close').click()");
+    assert.equal(await js("document.activeElement.id"), 'chat-history-toggle');
+    assert.equal(await js("document.querySelector('#chat-sessions').inert"), true);
+    win.setContentSize(1440, 900);
     await navigate("notes");
     await js("document.querySelector('#notes-list input[type=checkbox]').click()");
     await delay(100);
@@ -261,7 +350,7 @@ app.whenReady().then(async () => {
     assert.equal(await js("document.querySelector('.view-header h2').textContent"), "Notes");
     sessionDelay = 0;
     await navigate("chat");
-    assert.ok(await js("!!document.querySelector('.chat-welcome')"));
+    assert.ok(await js("document.querySelector('#chat-main').classList.contains('is-empty')"));
     empty = true;
     for (const tab of ["home", "chat", "notes", "library", "calendar", "tasks", "email", "brain", "cookbook", "school"]) {
       await navigate(tab, tab === "brain" ? { section: "skills" } : {});
@@ -277,7 +366,7 @@ app.whenReady().then(async () => {
     // data. Neither the live backend nor personal screenshots are a source.
     if (updateChatImage && !updateDocImages) fs.copyFileSync(path.join(output, 'desktop-conversation.png'), path.join(root, 'docs', 'img', 'chat.png'));
     if (updateDocImages) {
-      const mapping = { home: "desktop-home", chat: "desktop-conversation", tasks: "desktop-tasks", vault: "desktop-vault", calendar: "desktop-calendar", notes: "desktop-notes", brain: "desktop-brain", settings: "desktop-settings", library: "desktop-library", "sidebar-collapsed": "desktop-sidebar-collapsed" };
+      const mapping = { home: "desktop-home", chat: "desktop-conversation", "chat-new": "desktop-chat-minimal", tasks: "desktop-tasks", vault: "desktop-vault", calendar: "desktop-calendar", notes: "desktop-notes", brain: "desktop-brain", settings: "desktop-settings", library: "desktop-library", "sidebar-collapsed": "desktop-sidebar-collapsed" };
       for (const [name, source] of Object.entries(mapping)) fs.copyFileSync(path.join(output, source + ".png"), path.join(root, "docs", "img", name + ".png"));
     }
     for (const [label, width, height] of [["desktop",1440,900],["mobile",390,844]]) {
@@ -290,9 +379,9 @@ app.whenReady().then(async () => {
       const anchors = await js("[...document.querySelectorAll('a[href^=\"#\"]')].every(a => document.querySelector(a.getAttribute('href')))");
       assert.ok(anchors, "Website anchors resolve");
       await capture(label + "-website");
-      for (const key of ["chat","vault","sidebar-collapsed","home"]) {
+      for (const key of ["chat-new","chat","vault","sidebar-collapsed","home"]) {
         await js("document.querySelector('[data-preview=\"" + key + "\"]').click()");
-        await waitFor("document.querySelector('#preview-image').getAttribute('src') === 'img/" + key + ".png'");
+        await waitFor("document.querySelector('#preview-image').getAttribute('src') === 'img/" + key + ".png' && document.querySelector('#preview-image').complete && document.querySelector('#preview-image').naturalWidth > 0");
         assert.ok(await js("document.querySelector('#preview-image').naturalWidth > 0"));
       }
       await js("document.querySelector('.preview-switcher').scrollIntoView({behavior:'instant'})");
@@ -312,7 +401,7 @@ app.whenReady().then(async () => {
     assert.equal(await js("getComputedStyle(document.querySelector('.button')).transitionDuration"), "0s");
     console.log("PASS: app desktop/mobile and icon rail, persistence/keyboard/tooltips, reduced motion, vault/chat/Settings, empty/error states, website layouts/links/images/previews.");
     console.log("Screenshots: " + output);
-    fs.writeFileSync(path.join(output, "result.json"), JSON.stringify({ passed: true, checks: ["10 tabs desktop/mobile", "icon rail layout and animation", "sidebar persistence, keyboard, tooltips, mobile override", "vault search/read", "Settings and usable mobile forms", "Home chat link and model menu", "beam/core reduced motion", "draft suggestions and mocked note completion", "delayed navigation", "10 empty views and unavailable status", "website desktop/mobile layouts, anchors, images, preview switcher and reduced motion"], docImagesUpdated: updateDocImages, errors, writes }, null, 2));
+    fs.writeFileSync(path.join(output, "result.json"), JSON.stringify({ passed: true, checks: ["10 tabs desktop/mobile", "52px icon rail layout and animation", "sidebar persistence, keyboard, tooltips, mobile override", "vault search/read", "Settings and usable mobile forms", "Home chat link and model menu", "beam/core reduced motion", "centered new-chat composer", "independent history persistence, draft retention and mobile focus", "new-chat landing does not write data", "mocked note completion", "delayed navigation", "10 empty views and unavailable status", "website desktop/mobile layouts, anchors, images, five preview states and reduced motion"], docImagesUpdated: updateDocImages, errors, writes }, null, 2));
   } catch (error) {
     await capture("failure").catch(() => {});
     fs.writeFileSync(path.join(output, "result.json"), JSON.stringify({ passed: false, failure: error.stack, actual: error.actual, expected: error.expected, errors }, null, 2));

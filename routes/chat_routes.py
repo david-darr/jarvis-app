@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 
-from core import attachments, chat_artifacts
+from core import attachments, chat_artifacts, office_preview
 from core.auth import auth_manager
 from core.middleware import require_user
 from services import chat_service
@@ -33,11 +33,35 @@ async def artifact_metadata(session_id: str, url: str, user: str = Depends(requi
     return metadata
 
 
+@router.get("/artifacts/office")
+async def artifact_office(session_id: str, url: str, user: str = Depends(require_user)) -> dict:
+    """Structured contents of a spreadsheet, document, deck, or CSV (David's
+    ask 2026-09-15) — sheet grids, reading-order blocks, per-slide text.
+
+    Goes through chat_artifacts.resolve() exactly like every other preview
+    route, so the same ownership check applies: a file is readable only if
+    this session actually references it. Extraction is local and read-only;
+    see core/office_preview.py for the macro/formula/zip-bomb boundaries.
+    """
+    path, metadata = chat_artifacts.resolve(session_id, url)
+    if metadata["kind"] != "office":
+        raise HTTPException(400, "This file has no structured preview")
+    try:
+        return office_preview.extract(path, path.suffix.lower())
+    except office_preview.PreviewUnavailable as e:
+        # The message is written to be shown to the user as-is, and says why
+        # rather than failing blankly.
+        raise HTTPException(422, str(e))
+
+
 @router.get("/artifacts/content")
 async def artifact_content(session_id: str, url: str, download: bool = False, user: str = Depends(require_user)):
     path, metadata = chat_artifacts.resolve(session_id, url)
     mime = chat_artifacts.IMAGE_MIMES.get(path.suffix.lower(), "application/pdf" if metadata["kind"] == "pdf" else "text/plain")
-    if download or metadata["kind"] == "download":
+    # An Office file served inline would be handed to whatever the browser
+    # does with it; the preview reads it through /artifacts/office instead,
+    # so the raw bytes are only ever a download.
+    if download or metadata["kind"] in ("download", "office"):
         return FileResponse(path, media_type="application/octet-stream", filename=metadata["filename"])
     return FileResponse(path, media_type=mime, headers={"Cache-Control": "no-store"})
 

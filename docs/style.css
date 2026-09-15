@@ -34,10 +34,10 @@ h1 span { color: var(--dim); }
 .button.secondary:hover { background: var(--panel); color: var(--text); }
 .button:active { transform: translateY(1px); }
 .download-note { color: var(--faint); font-size: 10px; margin: 16px 0 52px; }
-.preview-switcher { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 4px; padding: 4px; border: 1px solid var(--border); border-radius: 9px; background: #151618; }
+.preview-switcher { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 4px; padding: 4px; border: 1px solid var(--border); border-radius: 12px; background: #151618; }
 .preview-button { border: 0; border-radius: 6px; padding: 7px 14px; color: var(--faint); background: transparent; font-size: 11px; cursor: pointer; transition: color 160ms ease, background 160ms ease; }
 .preview-button:hover { color: var(--text); }
-.preview-button.active { background: #2a2b31; color: var(--text); box-shadow: 0 1px 3px #0003; }
+.preview-button.active { background: #26262e; color: var(--text); box-shadow: inset 0 0 0 1px #ffffff08, 0 1px 3px #0003; }
 .product-preview { margin: 18px 0 0; text-align: left; }
 .product-preview > a { display: block; overflow: hidden; border: 1px solid var(--strong); border-radius: 14px; box-shadow: 0 28px 70px #0004; }
 .product-preview img { display: block; width: 100%; height: auto; aspect-ratio: 16/10; object-fit: cover; }

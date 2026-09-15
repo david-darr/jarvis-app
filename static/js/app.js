@@ -5,6 +5,7 @@ import * as auth from "./auth.js";
 import * as commandPalette from "./commandPalette.js";
 import * as floatingProgress from "./floatingProgress.js";
 import { setupSidebar, restoreSidebar } from "./sidebar.js";
+import { closeBrowser, openBrowser } from "./browserPane.js";
 
 restoreSidebar();
 
@@ -61,6 +62,12 @@ let navigationVersion = 0;
 
 export async function switchTab(tabId, options = {}) {
   const version = ++navigationVersion;
+  // The side browser's chrome lives in the Chat view's DOM, but in the
+  // desktop app the page itself is a NATIVE view owned by the main process.
+  // Replacing the view container below removes the chrome and would leave
+  // that native layer floating over the new tab, still loaded and still
+  // running scripts. Closing it here is what actually disposes of it.
+  closeBrowser();
   // Views that own real resources (currently just home.js's WebGL scene)
   // return a cleanup function from render(). Without calling it here before
   // wiping the DOM, a canvas's animation loop and GPU buffers would keep
@@ -408,6 +415,17 @@ async function startApp() {
   document.addEventListener("jarvis:tabs-changed", () => { buildSidebar(); });
   commandPalette.init({ nav: NAV, customTabs: customTabs || [], switchTab, openSettings });
   floatingProgress.init({ switchTab });
+  // Activating an external link in a reply (David's ask 2026-09-15). Those
+  // links carry target="_blank"; electron/main.js refuses to open a real
+  // second window for them and routes the URL here instead, so a web page
+  // always lands in the sandboxed pane with a visible address rather than a
+  // chrome-less window. Registered globally because the click can happen
+  // before the Chat view is mounted — the pane lives in Chat's layout, so
+  // this switches there first.
+  window.jarvis?.browser?.onOpenRequest(async (url) => {
+    if (activeTab !== "chat") await switchTab("chat");
+    openBrowser(url);
+  });
   await switchTab("home");
 }
 

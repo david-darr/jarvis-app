@@ -10,8 +10,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from core import model_endpoints, token_usage
-from core.middleware import require_admin
+from core import model_catalog, model_endpoints, token_usage
+from core.middleware import require_admin, require_user
 from core.providers import openai_compatible
 
 router = APIRouter(prefix="/api/models", tags=["models"])
@@ -37,6 +37,26 @@ class CreateEndpointRequest(BaseModel):
 @router.get("")
 async def list_endpoints(user: str = Depends(require_admin)) -> list[dict]:
     return model_endpoints.list_endpoints()
+
+
+@router.get("/catalog")
+async def get_catalog(user: str = Depends(require_user)) -> dict:
+    """Selectable models and their reasoning levels per endpoint kind — the
+    chat composer's model picker (David's ask 2026-09-15).
+
+    require_user, not require_admin like the rest of this router: picking a
+    model for your own chat is a normal per-session action (see
+    routes/session_routes.py's /model, also require_user), and this response
+    carries no endpoint records, URLs, or keys — only public model names,
+    effort levels, and context sizes. Adding or editing an endpoint stays
+    admin-only.
+
+    An empty list for a kind is a normal answer meaning "no catalog
+    available here" (Codex's local cache absent, say) — the client keeps its
+    custom model-ID field either way, so the picker degrades to exactly the
+    pre-catalog behaviour rather than blocking.
+    """
+    return {kind: model_catalog.list_models(kind) for kind in model_catalog.CATALOG_KINDS}
 
 
 @router.get("/usage")

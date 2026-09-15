@@ -45,7 +45,8 @@ class Brain:
 
     def __init__(self, vault_dir: str | None = None, cwd_override: str | None = None,
                  integration_ids: list[str] | None = None, session_id: str | None = None,
-                 model: str | None = None, is_admin: bool = False, project_id: str | None = None):
+                 model: str | None = None, is_admin: bool = False, project_id: str | None = None,
+                 effort: str | None = None):
         self.vault_dir = vault_dir or resolve_vault_dir()
         # Optional model override for a "Claude Code CLI" endpoint added in
         # Settings > Add Models (David's ask 2026-08-31 — Claude is no
@@ -53,6 +54,14 @@ class Brain:
         # own optional model field). None keeps the `claude` CLI's own
         # default model, same as every session before this option existed.
         self.model = model
+        # Reasoning effort for this session (David's ask 2026-09-15) — a
+        # native field on ClaudeAgentOptions in the installed SDK, not a
+        # wrapper of our own, so it's passed straight through below. None
+        # means the field is never set at all, which is byte-for-byte the
+        # behaviour every session had before this option existed; the
+        # caller (routes/session_routes.py) validates the value against
+        # core/model_catalog.py before it ever reaches here.
+        self.effort = effort
         # Set on every completed turn from the SDK's own ResultMessage.usage
         # (David's ask 2026-09-01: per-model token usage on Home) — read by
         # services/chat_service.py right after run_turn()/run_turn_stream()
@@ -215,6 +224,7 @@ class Brain:
             mcp_servers=mcp_servers,
             allowed_tools=allowed_tools,
             model=self.model,
+            effort=self.effort,
             include_partial_messages=True,
             # The "landing zone" (David's ask 2026-09-01, after live-testing
             # found chats couldn't answer real vault/memory questions) —

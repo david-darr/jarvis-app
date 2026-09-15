@@ -27,8 +27,23 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # dynamic import(), so 'unsafe-inline' is dropped from script-src.
         # style-src keeps it since style.css still uses some inline style
         # attributes from JS-built elements (views/*.js).
+        # frame-src (David's ask 2026-09-15, the side browser): the web
+        # client has no native browser view, so it falls back to an iframe —
+        # and without an explicit frame-src, `default-src 'self'` blocks
+        # every remote page outright, making that fallback dead on arrival.
+        # Found by scripts/chat-smoke.cjs, which reproduces this exact header.
+        #
+        # Deliberately the narrowest widening that makes it work: it permits
+        # EMBEDDING https pages and nothing else. No script, style, connect,
+        # or font source changes, so a framed page still cannot run anything
+        # in this origin — it is a separate browsing context, the frame is
+        # sandboxed without allow-top-navigation (static/js/browserPane.js),
+        # and X-Frame-Options/frame-ancestors below still stop JARVIS itself
+        # from being framed by anyone else. http: is excluded so the fallback
+        # cannot silently downgrade to a plaintext page.
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; "
+            "frame-src 'self' https:"
         )
         # Odysseus applies this same no-cache rule to .js/.css/.html source
         # files specifically (see specs/frontend.md) — without it, Electron's

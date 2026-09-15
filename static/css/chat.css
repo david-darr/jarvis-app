@@ -35,16 +35,58 @@
 .msg-interrupted { font-size: 12px; color: var(--text-dim); margin-top: 14px; padding: 10px 12px; border-left: 2px solid var(--danger); background: var(--bg-panel); }
 .msg.msg-failed .msg-body { color: var(--text); }
 #chat-main { position: relative; min-width: 0; }
-.chat-jump { position: absolute; bottom: 158px; left: 50%; transform: translateX(-50%); z-index: 3; border-radius: 24px; box-shadow: var(--shadow-elevated); }
+.chat-jump { position: absolute; bottom: calc(var(--composer-height, 140px) + 12px); left: 50%; transform: translateX(-50%); z-index: 3; border-radius: 24px; box-shadow: var(--shadow-elevated); }
 .chat-jump[hidden], #model-version-btn[hidden] { display: none; }
-.chat-input-right { min-width: 0; }
+.chat-input-right { min-width: 0; gap: 4px; }
+.chat-input-bar .model-picker-btn { max-width: 180px; font-size: 11px; padding: 5px 7px; }
+.chat-composer-dock .attach-strip { width: 100%; max-width: none; padding: 0 0 10px; }
+.chat-composer-dock .attach-strip:empty { display: none; }
 .model-picker-btn { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-picker-item { width: 100%; text-align: left; font: inherit; background: none; border: 0; color: var(--text); }
 .model-version-form { padding: 12px; display: grid; gap: 10px; }
 .model-version-form label { font-size: 12px; font-weight: 550; }
 .model-version-form input { width: 100%; min-width: 0; }
 .model-version-form p { font-size: 12px; line-height: 1.6; margin: 0; }
-.version-menu { width: 300px; }
+.version-menu { width: 330px; max-height: 420px; }
+
+/* -- model catalog + reasoning level (David's ask 2026-09-15) ----------- */
+.model-version-search { padding: 8px 8px 4px; position: sticky; top: -4px; z-index: 1; background: var(--bg-panel-solid); }
+.model-version-search input { width: 100%; min-width: 0; }
+.model-catalog-list { display: grid; gap: 2px; padding: 0 4px 4px; }
+.model-catalog-list .muted { font-size: 12px; line-height: 1.6; margin: 0; padding: 8px 6px; }
+.model-catalog-item { display: grid; gap: 2px; padding: 8px 10px; }
+.model-catalog-name { font-size: 12.5px; font-weight: 550; }
+.model-catalog-desc {
+  font-size: 11px; color: var(--text-faint); line-height: 1.5;
+  /* Descriptions vary from a few words to a sentence; clamp so one long
+     entry can't push the rest of the list out of view. */
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.model-effort-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 8px 10px; border-top: 1px solid var(--border); }
+.model-effort-label { font-size: 11px; color: var(--text-faint); margin-right: 2px; }
+.model-effort-btn {
+  background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+  border-radius: 6px; padding: 3px 8px; font: inherit; font-size: 11px; cursor: pointer;
+}
+.model-effort-btn:hover { border-color: var(--border-strong); color: var(--text); }
+.model-effort-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+.model-custom-details { border-top: 1px solid var(--border); }
+.model-custom-details summary { padding: 8px 10px; font-size: 12px; color: var(--text-dim); cursor: pointer; }
+.model-custom-details summary:hover { color: var(--text); }
+
+/* -- context meter ------------------------------------------------------ */
+/* Deliberately quiet: this reports state, it is not a control. It stays
+   hidden entirely until a turn reports a real measurement. */
+.context-pill { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 7px; font-size: 11px; color: var(--text-faint); cursor: default; }
+.context-pill[hidden] { display: none; }
+.context-bar { width: 42px; height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
+.context-bar-fill { height: 100%; width: 0; border-radius: 2px; background: var(--text-faint); transition: width 240ms ease-out; }
+.context-text { font-variant-numeric: tabular-nums; }
+.context-pill[data-level='warn'] .context-bar-fill { background: #e5bd99; }
+.context-pill[data-level='warn'] .context-text { color: #e5bd99; }
+.context-pill[data-level='high'] .context-bar-fill { background: var(--danger); }
+.context-pill[data-level='high'] .context-text { color: var(--danger); }
+@media (prefers-reduced-motion: reduce) { .context-bar-fill { transition: none; } }
 .artifact-card { display: flex; align-items: center; gap: 14px; width: min(100%, 430px); margin: 12px 0; padding: 16px; text-align: left; border: 1px solid var(--border); border-radius: 12px; color: var(--text); background: var(--bg-panel); cursor: pointer; transition: border-color 180ms, background 180ms; font: inherit; }
 .artifact-card:hover { border-color: var(--border-strong); background: var(--surface-2); }
 .artifact-icon { display: grid; place-items: center; flex: 0 0 44px; height: 48px; border: 1px solid var(--border-strong); border-radius: 7px; font: 10px monospace; color: var(--text-dim); }
@@ -53,7 +95,7 @@
 .artifact-info > span { font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-arrow { margin-left: auto; color: var(--text-faint); }
 .artifact-panel { flex: 0 0 clamp(330px, 38vw, 660px); min-width: 0; display: flex; flex-direction: column; background: var(--bg-panel); border-left: 1px solid var(--border); animation: artifact-enter 220ms var(--ease-out, ease-out); }
-.artifact-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 22px; border-bottom: 1px solid var(--border); }
+.artifact-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 20px; border-bottom: 1px solid var(--border); }
 .artifact-header > div { min-width: 0; }
 .artifact-header h2 { font-size: 14px; font-weight: 550; overflow-wrap: anywhere; margin: 0 0 5px; }
 .artifact-detail { font-size: 11px; color: var(--text-faint); }
@@ -70,7 +112,67 @@
 .artifact-pdf-text { margin-top: 18px; line-height: 1.7; }
 .artifact-document { color: var(--text); }
 .artifact-fallback { padding: 40px 12px; text-align: center; line-height: 1.7; }
+/* -- Office previews (David's ask 2026-09-15) ---------------------------- */
+.office-tabs { display: flex; gap: 4px; flex-wrap: wrap; padding-bottom: 12px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+.office-tab {
+  background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+  border-radius: 7px; padding: 5px 10px; font: inherit; font-size: 12px; cursor: pointer;
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.office-tab:hover { border-color: var(--border-strong); color: var(--text); }
+.office-tab.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+.office-body { min-height: 0; }
+/* Wide sheets scroll inside their own box so the panel itself never gains a
+   horizontal scrollbar. */
+.office-grid-wrap { max-width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; margin: 0 0 14px; }
+.office-grid { border-collapse: collapse; font-size: 12.5px; width: max-content; min-width: 100%; }
+.office-grid th, .office-grid td {
+  text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border);
+  white-space: pre-wrap; vertical-align: top; max-width: 320px; overflow-wrap: anywhere;
+}
+.office-grid th { background: var(--bg-panel); font-weight: 550; position: sticky; top: 0; }
+.office-grid tr:last-child td { border-bottom: 0; }
+.office-grid th:last-child, .office-grid td:last-child { border-right: 0; }
+.office-note { font-size: 11.5px; line-height: 1.6; color: var(--text-faint); margin: 0 0 12px; }
+.office-doc h1, .office-doc h2, .office-doc h3, .office-doc h4, .office-doc h5, .office-doc h6 { font-weight: 600; line-height: 1.35; margin: 1.4em 0 .5em; }
+.office-doc h1 { font-size: 1.45em; } .office-doc h2 { font-size: 1.22em; } .office-doc h3 { font-size: 1.08em; }
+.office-doc > :first-child { margin-top: 0; }
+.office-doc p { margin: 0 0 .9em; line-height: 1.75; }
+.office-list-item { padding-left: 1.2em; position: relative; }
+.office-list-item::before { content: '•'; position: absolute; left: .2em; color: var(--text-faint); }
+.office-slide { border: 1px solid var(--border); border-radius: 12px; padding: 20px; background: var(--bg-panel); margin-bottom: 14px; }
+.office-slide h2 { font-size: 1.2em; font-weight: 600; margin: 0 0 .7em; }
+.office-slide p { margin: 0 0 .6em; line-height: 1.7; }
+.office-notes summary { font-size: 12px; color: var(--text-dim); cursor: pointer; }
+.office-notes p { margin: 8px 0 0; font-size: 12.5px; line-height: 1.7; color: var(--text-dim); }
+
+/* -- side browser (David's ask 2026-09-15) ------------------------------- */
+/* Shares .artifact-panel's layout so the right-hand region behaves
+   identically whichever pane is open — only one ever is. */
+.browser-panel {
+  display: flex; flex-direction: column;
+  /* No slide-in, unlike the file preview: a native view cannot be animated
+     by CSS, so the chrome would glide in while the page sat still behind it.
+     Appearing at once is the honest version. */
+  animation: none;
+}
+.browser-toolbar { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.browser-toolbar .btn { padding: 5px 9px; font-size: 12px; flex-shrink: 0; }
+.browser-address-form { flex: 1; min-width: 0; display: flex; }
+.browser-address {
+  width: 100%; min-width: 0; font-size: 12px; padding: 6px 10px;
+  border-radius: 7px; font-family: inherit;
+}
+.browser-status { margin: 0; padding: 8px 14px; font-size: 11.5px; line-height: 1.6; color: var(--text-faint); border-bottom: 1px solid var(--border); }
+.browser-status:empty { display: none; }
+/* In the desktop app this box stays deliberately EMPTY: the page is a native
+   view the main process positions over this exact rectangle. The background
+   is white so a slow-loading page doesn't flash the dark app theme through,
+   which is also what the iframe path wants. */
+.browser-viewport { flex: 1; min-height: 0; position: relative; background: #fff; }
+.browser-frame { border: 0; display: block; width: 100%; height: 100%; background: #fff; }
+
 @keyframes artifact-enter { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: translateX(0); } }
 @media (max-width: 1100px) { .artifact-panel { position: absolute; inset: 0 0 0 auto; width: min(620px, 85%); z-index: 30; box-shadow: var(--shadow-elevated); } .chat-layout { position: relative; } }
-@media (max-width: 680px) { .artifact-panel { width: 100%; inset: 0; } .chat-prose { font-size: 14px; } .model-picker-btn { max-width: 105px; font-size: 11px; } .chat-input-right { gap: 4px; } .artifact-header { padding: 16px; } .msg-actions { opacity: 1; } }
+@media (max-width: 680px) { .artifact-panel { width: 100%; inset: 0; } .chat-prose { font-size: 14px; } .chat-input-bar .model-picker-btn { max-width: 105px; font-size: 10px; padding-inline: 4px; } .chat-input-right { gap: 4px; } .artifact-header { padding: 16px; } .msg-actions { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .artifact-panel { animation: none; } .artifact-card { transition: none; } }

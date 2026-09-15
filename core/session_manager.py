@@ -122,24 +122,70 @@ class SessionManager:
         self._index[session_id]["message_count"] = len(session["messages"])
         self._save_index()
 
-    def set_model_endpoint(self, session_id: str, model_endpoint_id: Optional[str], model_override: Optional[str] = None) -> dict:
+    def set_model_endpoint(self, session_id: str, model_endpoint_id: Optional[str], model_override: Optional[str] = None,
+                           model_effort: Optional[str] = None) -> dict:
         """Pin an endpoint and optional CLI model; None means no model chosen.
         model_override: None inherits the endpoint, empty string uses the CLI
         default, a nonempty string selects an exact model for this chat only.
-        The caller validates kind and holds the session operation guard."""
+        model_effort: None sends no reasoning effort at all (the behaviour
+        every session had before the option existed); otherwise a value the
+        caller has already validated against core/model_catalog.py.
+
+        An effort change deliberately does NOT clear codex_thread_id, unlike
+        an endpoint change below. Verified live before deciding that:
+        `-c model_reasoning_effort` is accepted ahead of codex's `resume`
+        subcommand, so a resumed thread genuinely picks up the new effort on
+        its next turn — throwing the thread away would discard real
+        conversation history to no purpose. The caller validates kind and
+        holds the session operation guard."""
         if session_id not in self._index:
             raise KeyError(f"no such session: {session_id}")
         session = self.get_session(session_id)
-        if session.get("model_endpoint_id") != model_endpoint_id:
+        # Read both before either is overwritten — comparing after assignment
+        # would make these checks dead code.
+        endpoint_changed = session.get("model_endpoint_id") != model_endpoint_id
+        model_changed = endpoint_changed or session.get("model_override") != model_override
+        if endpoint_changed:
             # A different endpoint must not resume an old provider's thread.
             # Saved messages are replayed into a fresh Codex thread instead.
             session["codex_thread_id"] = None
+        if model_changed:
+            # A different model has a different context capacity, so the
+            # stored occupancy no longer describes anything real. Cleared
+            # rather than left to render a stale percentage against the new
+            # model's window until the next turn overwrites it.
+            session["context_state"] = None
         session["model_endpoint_id"] = model_endpoint_id
         session["model_override"] = model_override
+        session["model_effort"] = model_effort
         write_json_atomic(_session_path(session_id), session)
         self._index[session_id]["model_endpoint_id"] = model_endpoint_id
         self._save_index()
         return session
+
+    def set_context_state(self, session_id: str, state: Optional[dict]) -> None:
+        """Records this chat's CURRENT context occupancy (David's ask
+        2026-09-15) — overwritten every turn, never accumulated. That
+        overwrite is the whole mechanism: after a compaction the next turn
+        simply reports a smaller number and the meter falls, with no
+        compaction event to detect or subscribe to. Storing it on the
+        session record (rather than a process-level dict) is what makes it
+        survive a reload and stay correct when switching between chats —
+        each session carries its own, and a deleted session takes its
+        reading with it.
+
+        Best-effort by the same convention as record_usage(): a turn whose
+        provider reported no usable usage passes None and simply leaves the
+        previous reading in place rather than blanking a good value. Never
+        raises — a bookkeeping failure must not fail a turn that already
+        succeeded."""
+        if state is None or session_id not in self._index:
+            return
+        session = self.get_session(session_id)
+        if session is None:
+            return
+        session["context_state"] = state
+        write_json_atomic(_session_path(session_id), session)
 
     def set_codex_thread_id(self, session_id: str, thread_id: Optional[str]) -> dict:
         """Records the Codex CLI thread id a session's first codex_cli turn

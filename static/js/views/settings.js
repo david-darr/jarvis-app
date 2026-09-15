@@ -1,4 +1,22 @@
 import { api, el, customSelect, toast, confirmDialog } from "../api.js";
+import { suppressBrowser, releaseBrowser } from "../browserPane.js";
+
+// The side browser's page is a NATIVE view composited above the HTML in the
+// desktop app (see static/js/browserPane.js), so it would paint straight
+// through this window no matter what z-index it carried. Hiding it is the
+// only thing that actually works. Tracked with a flag so open/close/minimize
+// can't leave the suppress counter unbalanced and the page hidden forever.
+let browserHidden = false;
+function hidePageBehind() {
+  if (browserHidden) return;
+  browserHidden = true;
+  suppressBrowser();
+}
+function restorePageBehind() {
+  if (!browserHidden) return;
+  browserHidden = false;
+  releaseBrowser();
+}
 
 // Same display convention chat.js's model picker uses (name + underlying
 // model, CLI-aware) — duplicated rather than shared since the two modules
@@ -27,25 +45,71 @@ function modelLabel(ep) {
 // research feature to point defaults at, so a settings panel for it would
 // be fake UI with nothing behind it.
 
-const NAV_SECTIONS = [
-  { id: "add-models", label: "Add Models", render: renderAddModelsPanel },
-  { id: "added-models", label: "Added Models", render: renderAddedModelsPanel },
-  { id: "integrations", label: "Integrations", render: renderIntegrationsPanel },
-  { id: "vault", label: "Vault", render: renderVaultPanel },
-  { id: "channels", label: "Channels", render: renderChannelsPanel },
-  { id: "remote", label: "Remote Access", render: renderRemotePanel },
-  { id: "account", label: "Account", render: renderAccountPanel },
-  { id: "shortcuts", label: "Shortcuts", render: renderShortcutsPanel },
+// Grouped nav (David's ask 2026-09-15). A flat list of twelve items gave no
+// hint which ones relate to each other; these are the same twelve panels,
+// organised. Only the registry and buildNav() changed — every render*Panel
+// function below is untouched, which is the point of keeping the registry as
+// the single source of structure.
+//
+// `keywords` is what makes the search box useful rather than decorative. It
+// used to filter on the visible label alone, so typing the actual thing you
+// wanted — "2fa", "api key", "tailscale" — matched nothing at all. These are
+// the words someone would really type for each panel, not a restatement of
+// its title.
+//
+// `admin: true` on a group keeps the existing gate exactly as it was: the
+// group is only built for an admin, and Custom Tabs stays additionally
+// behind Developer Mode, the same condition app.js uses for its "+ New Tab"
+// nav item.
+const SECTION_GROUPS = [
+  {
+    id: "models", label: "Models", sections: [
+      { id: "add-models", label: "Add Models", render: renderAddModelsPanel,
+        keywords: ["provider", "api key", "openai", "anthropic", "claude", "codex", "ollama", "local model", "endpoint", "base url", "openrouter", "gemini"] },
+      { id: "added-models", label: "Added Models", render: renderAddedModelsPanel,
+        keywords: ["manage", "remove model", "delete model", "test connection", "endpoints", "context"] },
+    ],
+  },
+  {
+    id: "connections", label: "Connections", sections: [
+      { id: "integrations", label: "Integrations", render: renderIntegrationsPanel,
+        keywords: ["mcp", "connector", "tools", "caldav", "ical", "calendar feed", "google", "api service"] },
+      { id: "channels", label: "Channels", render: renderChannelsPanel,
+        keywords: ["discord", "bot", "token", "telegram", "channel override", "announcements", "dm"] },
+      { id: "remote", label: "Remote Access", render: renderRemotePanel,
+        keywords: ["tailscale", "remote", "phone", "https", "certificate", "tunnel", "sign in", "account login", "url"] },
+    ],
+  },
+  {
+    id: "workspace", label: "Workspace", sections: [
+      { id: "vault", label: "Vault", render: renderVaultPanel,
+        keywords: ["obsidian", "notes folder", "memory", "path", "sync", "location"] },
+    ],
+  },
+  {
+    id: "personal", label: "Personal", sections: [
+      { id: "account", label: "Account", render: renderAccountPanel,
+        keywords: ["password", "2fa", "two factor", "totp", "authenticator", "username", "sign out", "security"] },
+      { id: "shortcuts", label: "Shortcuts", render: renderShortcutsPanel,
+        keywords: ["keyboard", "hotkey", "command palette", "keys"] },
+    ],
+  },
+  {
+    id: "administration", label: "Administration", admin: true, sections: [
+      { id: "agent-tools", label: "Agent Tools", render: renderAgentToolsPanel,
+        keywords: ["bash", "shell", "permissions", "disabled tools", "allowed tools", "capabilities"] },
+      { id: "users", label: "Users", render: renderUsersPanel,
+        keywords: ["accounts", "add user", "roles", "admin", "people"] },
+      { id: "system", label: "System", render: renderSystemPanel,
+        keywords: ["backup", "export", "import", "diagnostics", "health", "reset", "wipe", "danger"] },
+      { id: "custom-tabs", label: "Custom Tabs", render: renderCustomTabsPanel, devMode: true,
+        keywords: ["new tab", "developer mode", "custom tab"] },
+    ],
+  },
 ];
-const ADMIN_SECTIONS = [
-  { id: "agent-tools", label: "Agent Tools", render: renderAgentToolsPanel },
-  { id: "users", label: "Users", render: renderUsersPanel },
-  { id: "system", label: "System", render: renderSystemPanel },
-  // Developer Mode only (David's ask 2026-09-01) — filtered out of
-  // buildNav()'s renderGroup(ADMIN_SECTIONS) call below unless dev-mode is
-  // on, same gate app.js uses for the "+ New Tab" nav item.
-  { id: "custom-tabs", label: "Custom Tabs", render: renderCustomTabsPanel },
-];
+
+// Flattened once rather than rebuilt on every lookup.
+const ALL_SECTIONS = SECTION_GROUPS.flatMap((group) => group.sections);
 
 let modalEl = null;
 let pillEl = null;
@@ -71,7 +135,12 @@ export async function openSettingsWindow() {
   }
   const modal = getModal();
   modal.classList.remove("hidden");
-  pinInitialRect(modal.querySelector(".settings-window"));
+  hidePageBehind();
+  const panel = modal.querySelector(".settings-window");
+  pinInitialRect(panel);
+  // The window keeps its position between opens, so the viewport may have
+  // changed since it was last on screen.
+  clampToViewport(panel);
   buildNav();
   await selectSection(activeSectionId);
 }
@@ -113,6 +182,7 @@ export async function renderMobilePage(container) {
 
 function closeSettingsWindow() {
   if (modalEl) modalEl.classList.add("hidden");
+  restorePageBehind();
   // No dedicated "Settings" page to return to — go back to Home, same as
   // closing any other floating window in the app.
   const homeNav = document.querySelector('.nav-item[data-tab="home"]');
@@ -121,8 +191,11 @@ function closeSettingsWindow() {
 
 function minimizeSettingsWindow() {
   if (modalEl) modalEl.classList.add("hidden");
+  // Minimized leaves only a small pill on screen, so the page behind is
+  // meant to be visible again — same as closing, from the pane's side.
+  restorePageBehind();
   if (pillEl) return;
-  pillEl = el("div", { class: "glass bracket settings-minimized-pill", onclick: () => { pillEl.remove(); pillEl = null; modalEl.classList.remove("hidden"); } }, [
+  pillEl = el("div", { class: "glass bracket settings-minimized-pill", onclick: () => { pillEl.remove(); pillEl = null; modalEl.classList.remove("hidden"); hidePageBehind(); } }, [
     el("span", { text: "⚙" }),
     el("span", { text: "Settings" }),
   ]);
@@ -149,6 +222,12 @@ function getModal() {
   panel.addEventListener("click", (e) => e.stopPropagation());
   document.body.appendChild(backdrop);
   attachResizeHandles(panel);
+  attachTitlebarDrag(panel, titlebar);
+  // Shrinking the app window, restoring it from maximised, or crossing the
+  // responsive breakpoint can all leave the window partly or wholly outside
+  // the viewport. Re-clamping keeps it reachable — losing the titlebar off
+  // screen would be unrecoverable, since dragging is the only way back.
+  window.addEventListener("resize", () => clampToViewport(panel));
 
   modalEl = backdrop;
   return modalEl;
@@ -186,6 +265,55 @@ function pinInitialRect(panel) {
   panel.style.maxWidth = "none";
   panel.style.maxHeight = "none";
 }
+// Keeps the window wholly inside the viewport (David's ask 2026-09-15:
+// dragging "constrained to the app viewport"). Used by the drag handler, by
+// the window-resize listener, and after the responsive breakpoint changes —
+// all three can otherwise strand the window, and the one that strands the
+// TITLEBAR is unrecoverable, because the titlebar is the only way to drag it
+// back. Shrinking comes before repositioning so a window larger than the
+// viewport ends up fully visible rather than pinned at a negative offset.
+function clampToViewport(panel) {
+  if (!panel || !panel.dataset.pinned) return;
+  const maxWidth = Math.max(MIN_WIDTH, window.innerWidth);
+  const maxHeight = Math.max(MIN_HEIGHT, window.innerHeight);
+  const width = Math.min(panel.offsetWidth, maxWidth);
+  const height = Math.min(panel.offsetHeight, maxHeight);
+  panel.style.width = `${width}px`;
+  panel.style.height = `${height}px`;
+  panel.style.left = `${Math.max(0, Math.min(parseFloat(panel.style.left) || 0, window.innerWidth - width))}px`;
+  panel.style.top = `${Math.max(0, Math.min(parseFloat(panel.style.top) || 0, window.innerHeight - height))}px`;
+}
+
+function attachTitlebarDrag(panel, titlebar) {
+  titlebar.addEventListener("mousedown", (e) => {
+    // Only a plain left-press on the bar itself. Without the button check,
+    // pressing minimize or close would start a drag as well as firing the
+    // action, so the window jumped as it was dismissed.
+    if (e.button !== 0 || e.target.closest("button")) return;
+    if (!panel.dataset.pinned) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startLeft = parseFloat(panel.style.left) || 0;
+    const startTop = parseFloat(panel.style.top) || 0;
+    panel.classList.add("is-dragging");
+
+    function onMove(ev) {
+      const width = panel.offsetWidth;
+      const height = panel.offsetHeight;
+      panel.style.left = `${Math.max(0, Math.min(startLeft + ev.clientX - startX, window.innerWidth - width))}px`;
+      panel.style.top = `${Math.max(0, Math.min(startTop + ev.clientY - startY, window.innerHeight - height))}px`;
+    }
+    function onUp() {
+      panel.classList.remove("is-dragging");
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+}
+
 function attachResizeHandles(panel) {
   for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
     const handle = el("div", { class: `resize-handle resize-${dir}` });
@@ -216,6 +344,9 @@ function attachResizeHandles(panel) {
       function onUp() {
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
+        // Dragging an edge outward can push the opposite edge past the
+        // viewport; settle it back inside once the drag ends.
+        clampToViewport(panel);
       }
       document.addEventListener("mousemove", onMove);
       document.addEventListener("mouseup", onUp);
@@ -223,49 +354,77 @@ function attachResizeHandles(panel) {
   }
 }
 
+// Which sections this user can actually reach. One place, so the nav, the
+// search, and selectSection() can never disagree about it — a stale
+// activeSectionId pointing at a gated panel used to be able to render it
+// even while the nav hid its entry.
+function visibleSections() {
+  const devMode = document.documentElement.classList.contains("dev-mode");
+  return SECTION_GROUPS
+    .filter((group) => !group.admin || cachedStatus.is_admin)
+    .map((group) => ({ ...group, sections: group.sections.filter((s) => !s.devMode || devMode) }))
+    .filter((group) => group.sections.length);
+}
+
 function buildNav() {
   const nav = document.getElementById("settings-nav");
   nav.innerHTML = "";
-  const search = el("input", { class: "settings-search", placeholder: "Find settings...", "aria-label": "Find settings" });
+  const search = el("input", { class: "settings-search", type: "search", placeholder: "Find settings...", "aria-label": "Find settings" });
   const navList = el("div", { class: "settings-nav-list" });
   nav.append(search, navList);
 
-  const allItems = [];
-  const renderGroup = (sections) => {
-    for (const sec of sections) {
-      const item = el("button", { type: "button", class: "settings-nav-item" + (sec.id === activeSectionId ? " active" : ""), text: sec.label, onclick: () => selectSection(sec.id) });
-      allItems.push({ item, label: sec.label });
+  const entries = [];
+  for (const group of visibleSections()) {
+    const heading = el("div", { class: "settings-nav-group", text: group.label.toUpperCase() });
+    navList.appendChild(heading);
+    const items = [];
+    for (const sec of group.sections) {
+      const item = el("button", {
+        type: "button",
+        class: "settings-nav-item" + (sec.id === activeSectionId ? " active" : ""),
+        text: sec.label,
+        onclick: () => selectSection(sec.id),
+      });
+      // data-section rather than matching on textContent: two groups could
+      // legitimately hold panels with the same label, and comparing labels
+      // would highlight both.
+      item.dataset.section = sec.id;
+      items.push({ item, sec });
+      entries.push({ item, sec });
       navList.appendChild(item);
     }
-  };
-  renderGroup(NAV_SECTIONS);
-  if (cachedStatus.is_admin) {
-    navList.appendChild(el("div", { class: "settings-nav-group", text: "ADMIN" }));
-    const devMode = document.documentElement.classList.contains("dev-mode");
-    renderGroup(ADMIN_SECTIONS.filter((s) => s.id !== "custom-tabs" || devMode));
+    entries.push({ heading, items });
   }
+
+  const matches = (sec, q) => !q
+    || sec.label.toLowerCase().includes(q)
+    || (sec.keywords || []).some((word) => word.includes(q));
 
   search.addEventListener("input", () => {
     const q = search.value.trim().toLowerCase();
-    for (const { item, label } of allItems) {
-      item.style.display = label.toLowerCase().includes(q) ? "" : "none";
+    for (const entry of entries) {
+      if (entry.sec) entry.item.hidden = !matches(entry.sec, q);
+      // A group heading with nothing under it is noise, so it hides with
+      // its children rather than leaving a stray label behind.
+      else entry.heading.hidden = !entry.items.some(({ sec }) => matches(sec, q));
     }
   });
 }
 
 async function selectSection(id) {
-  activeSectionId = id;
-  document.querySelectorAll(".settings-nav-item").forEach((n) => n.classList.toggle("active", n.textContent === sectionLabel(id)));
+  const groups = visibleSections();
+  const reachable = groups.flatMap((group) => group.sections);
+  const section = reachable.find((s) => s.id === id) || reachable[0];
+  if (!section) return;
+  activeSectionId = section.id;
+  document.querySelectorAll(".settings-nav-item").forEach((n) => n.classList.toggle("active", n.dataset.section === section.id));
   const content = document.getElementById("settings-content");
   content.innerHTML = "";
-  const all = [...NAV_SECTIONS, ...ADMIN_SECTIONS];
-  const section = all.find((s) => s.id === id) || all[0];
   await section.render(content, cachedStatus);
 }
 
 function sectionLabel(id) {
-  const all = [...NAV_SECTIONS, ...ADMIN_SECTIONS];
-  return (all.find((s) => s.id === id) || {}).label;
+  return (ALL_SECTIONS.find((s) => s.id === id) || {}).label;
 }
 
 // Known API providers (David's ask 2026-08-31, "reference the odysseus

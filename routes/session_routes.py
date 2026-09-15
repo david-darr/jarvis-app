@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from functools import wraps
 
-from core import workspace, model_endpoints
+from core import workspace, model_catalog, model_endpoints
 from core.middleware import require_admin, require_user
 from core.session_manager import session_manager
 from services import chat_service
@@ -35,6 +35,11 @@ class StarSessionRequest(BaseModel):
 class SetModelRequest(BaseModel):
     model_endpoint_id: str | None = None
     model_override: str | None = None
+    # None means "send no reasoning effort at all" — the behaviour every
+    # session had before this field existed, and the value a client that
+    # doesn't know about efforts keeps sending. Validated against
+    # core/model_catalog.py below, never passed through blind.
+    effort: str | None = None
 
 
 class SetWorkspaceRequest(BaseModel):
@@ -103,6 +108,22 @@ async def set_session_model(session_id: str, body: SetModelRequest, user: str = 
         import re
         if len(override) > 160 or (override and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/+\[\]-]*", override)):
             raise HTTPException(400, "Enter a valid model ID (160 characters maximum)")
+    # Reasoning effort (David's ask 2026-09-15). Validated server-side
+    # against what the provider actually advertises for the chosen model,
+    # because the CLI itself won't catch a bad one: `codex exec
+    # --strict-config` rejects unknown config keys but not unknown values,
+    # so an invalid effort would reach the provider and fail the turn with a
+    # far less useful message. The model being validated against is the one
+    # this call is setting, not the session's current one.
+    effort = body.effort
+    if effort is not None:
+        effort = effort.strip() or None
+    if effort is not None:
+        if not endpoint:
+            raise HTTPException(400, "Choose a model before setting a reasoning level")
+        resolved_model = (endpoint.get("model") if override is None else override) or None
+        if not model_catalog.validate_effort(endpoint["kind"], resolved_model, effort):
+            raise HTTPException(400, "That reasoning level isn't supported by the selected model")
     async with chat_service.session_operation(session_id):
         await chat_service.close_session_brain(session_id)
         previous = session_manager.get_session(session_id)
@@ -111,8 +132,29 @@ async def set_session_model(session_id: str, body: SetModelRequest, user: str = 
             # through CLI defaults, with saved transcript replay, when the
             # user explicitly resets to an unpinned model.
             session_manager.set_codex_thread_id(session_id, None)
-        session_manager.set_model_endpoint(session_id, body.model_endpoint_id, override)
-    return {"ok": True, "model_endpoint_id": body.model_endpoint_id, "model_override": override}
+        session_manager.set_model_endpoint(session_id, body.model_endpoint_id, override, effort)
+    return {"ok": True, "model_endpoint_id": body.model_endpoint_id, "model_override": override, "effort": effort}
+
+
+@router.get("/{session_id}/context")
+async def get_session_context(session_id: str, user: str = Depends(require_user)) -> dict:
+    """This chat's current context occupancy (David's ask 2026-09-15), for
+    the meter in the chat header.
+
+    `available: False` is a real, expected answer, not an error — a chat
+    that hasn't completed a turn yet, or whose provider reported no usable
+    usage, genuinely has nothing to show, and the UI says "unavailable"
+    rather than rendering a fabricated percentage. `percent` can also be
+    absent on its own when the occupancy is known but the model's capacity
+    isn't; the client shows the raw token count in that case.
+    """
+    session = session_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    state = session.get("context_state")
+    if not state:
+        return {"available": False}
+    return {"available": True, **state}
 
 
 @router.post("/{session_id}/workspace")

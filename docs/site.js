@@ -1,5 +1,6 @@
 const previews = {
   home: ["Your day, in focus.", "Home dashboard with a particle core, recent conversations, and upcoming events. Demo data."],
+  "chat-new": ["One thought is enough to begin.", "A centered new-chat composer, hidden chat history, and a slim icon-only navigation rail. Development preview with sample data."],
   chat: ["A little space to think.", "A focused conversation and floating composer with model controls. Demo data."],
   vault: ["A connected home for your knowledge.", "Vault graph with colored note triangles and linked folders. Demo data."],
   "sidebar-collapsed": ["More room. Everything still in reach.", "JARVIS Home with its sidebar collapsed to an icon rail. Demo data."],

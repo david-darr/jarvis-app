@@ -8,13 +8,18 @@ import re
 from urllib.parse import unquote, urlsplit
 
 from fastapi import HTTPException
-from core import image_gen
+from core import image_gen, office_preview
 from core.session_manager import session_manager
 
 LINK = re.compile(r"!?\[[^\]]*\]\(<?(/generated-(?:images|files)/[^\s)>]+)>?\)")
 TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".csv", ".json", ".py", ".js", ".ts", ".jsx", ".tsx", ".css", ".html", ".htm", ".xml", ".yaml", ".yml", ".sql", ".sh", ".ps1", ".java", ".c", ".cpp", ".rs", ".go", ".log", ".svg"}
 IMAGE_MIMES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
 MAX_PREVIEW_BYTES = 2 * 1024 * 1024
+# Higher than the text ceiling because Office files carry their own
+# compression and embedded media, so a perfectly ordinary deck or workbook is
+# routinely bigger than a 2 MB text file. core/office_preview.py applies the
+# real limits on how much of it is actually expanded and rendered.
+MAX_OFFICE_BYTES = 25 * 1024 * 1024
 
 
 def resolve(session_id: str, url: str) -> tuple[Path, dict]:
@@ -38,8 +43,19 @@ def resolve(session_id: str, url: str) -> tuple[Path, dict]:
         raise HTTPException(404, "The generated file is no longer available")
     ext = target.suffix.lower()
     size = target.stat().st_size
-    kind = "image" if ext in IMAGE_MIMES else "pdf" if ext == ".pdf" else "html" if ext in (".html", ".htm") else "markdown" if ext in (".md", ".markdown") else "text" if ext in TEXT_EXTENSIONS else "download"
+    # Office formats are checked before the generic text branch: .csv is in
+    # TEXT_EXTENSIONS and would otherwise render as raw text rather than a
+    # grid. Macro-enabled variants (.xlsm/.docm/.pptm) are deliberately NOT
+    # in office_preview.PREVIEWABLE, so they fall through to "download" —
+    # these readers cannot execute a macro, but declining to open them at all
+    # is a clearer boundary than depending on that.
+    if ext in office_preview.PREVIEWABLE:
+        kind = "office"
+    else:
+        kind = "image" if ext in IMAGE_MIMES else "pdf" if ext == ".pdf" else "html" if ext in (".html", ".htm") else "markdown" if ext in (".md", ".markdown") else "text" if ext in TEXT_EXTENSIONS else "download"
     if kind in ("html", "markdown", "text") and size > MAX_PREVIEW_BYTES:
+        kind = "download"
+    if kind == "office" and size > MAX_OFFICE_BYTES:
         kind = "download"
     return target, {"filename": re.sub(r"^[a-f0-9]{12}_", "", name), "extension": ext.lstrip("."), "size": size, "kind": kind}
 

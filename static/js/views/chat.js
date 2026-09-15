@@ -2,6 +2,7 @@ import { api, el, toast, confirmDialog } from "../api.js";
 import { runSlashCommand } from "../slashCommands.js";
 import * as chatStream from "../chatStream.js";
 import { renderMessageBody, copyText, closeArtifact } from "../chatContent.js";
+import { openBrowser, closeBrowser } from "../browserPane.js";
 
 // Composer rebuilt to match Odysseus's actual chat-input-bar structure
 // (David's ask 2026-08-31, cross-checked against the real repo at
@@ -29,6 +30,7 @@ const ICON_X = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stro
 const ICON_CHEVRON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
 const ICON_COPY = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const ICON_PLUG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6"/><path d="M15 2v6"/><path d="M12 17v5"/><path d="M6 8h12a2 2 0 0 1 2 2v2a6 6 0 0 1-6 6h-4a6 6 0 0 1-6-6v-2a2 2 0 0 1 2-2z"/></svg>';
+const ICON_GLOBE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
 const ICON_CHATS = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4V5z"/></svg>';
 // "Done" marker (David's ask 2026-09-02: a clear indicator for when a reply
 // has fully finished, distinct from mid-turn pauses that can look frozen).
@@ -147,6 +149,8 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
       if (entry.status === "done" || entry.status === "failed") {
         const sessionsList = document.getElementById("sessions-list");
         if (sessionsList) refreshSessions(sessionsList, messages);
+        // The turn that just finished is what produced the new reading.
+        refreshContextMeter(sessionId);
       }
     }
   };
@@ -163,33 +167,34 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
   return unsubscribe;
 }
 
-// Chat tab's default landing state (David's ask 2026-09-01) — a large
-// JARVIS wordmark + prompt, not an auto-opened conversation. Nothing here
-// is persisted; sendMessage()'s existing lazy createSession() call already
-// only creates a real session on the first actual message.
+// Keep one live composer: moving it never replaces its input or attachments.
+function syncChatLayout(messages, title) {
+  const main = messages.closest('#chat-main');
+  if (!main) return;
+  const dock = main.querySelector('.chat-composer-dock');
+  const empty = !messages.childElementCount;
+  if (main.classList.contains('is-empty') !== empty) {
+    dock.getAnimations().forEach(animation => animation.cancel());
+    const before = dock.getBoundingClientRect();
+    main.classList.toggle('is-empty', empty);
+    const after = dock.getBoundingClientRect();
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      dock.animate([
+        { transform: `translateY(${before.top - after.top}px)` },
+        { transform: 'translateY(0)' },
+      ], { duration: 380, easing: 'cubic-bezier(.22,1,.36,1)' });
+    }
+  }
+  if (title !== undefined) {
+    const label = main.querySelector('.chat-title');
+    label.textContent = title || 'New chat';
+    label.title = title || 'New chat';
+  }
+}
+
 function renderWelcome(messages) {
-  messages.innerHTML = "";
-  messages.appendChild(
-    el("div", { class: "chat-welcome" }, [
-      el("img", { src: "/static/img/jarvis-logo.png", alt: "" }),
-      el("h1", { text: "What's on your mind?" }),
-      el("p", { text: "A thought, a plan, a place to start." }),
-      el("div", { class: "chat-suggestions" }, [
-        ["Plan my day", "Help me plan today around my calendar and open priorities."],
-        ["Find in my vault", "Help me find something in my vault: "],
-        ["Think it through", "I'd like to think through an idea with you: "],
-      ].map(([label, prompt]) => el("button", {
-        type: "button", class: "suggestion-chip", text: label,
-        onclick: () => {
-          const input = document.getElementById("chat-input");
-          if (!input) return;
-          input.value = prompt;
-          input.dispatchEvent(new Event("input"));
-          input.focus();
-        },
-      }))),
-    ]),
-  );
+  messages.replaceChildren();
+  syncChatLayout(messages, 'New chat');
 }
 
 export async function render(container, tabId, options = {}) {
@@ -236,30 +241,61 @@ export async function render(container, tabId, options = {}) {
   projectSettingsBtn.insertAdjacentHTML("beforeend", ICON_GEAR);
   const projectPickerWrap = el("div", { class: "project-picker-wrap" }, [projectPickerBtn, projectSettingsBtn, projectPickerMenu]);
 
-  const newBtn = el("button", { class: "btn chat-new-btn", text: "+ New chat", onclick: createSession });
+  const newBtn = el("button", { type: "button", class: "btn chat-new-btn", text: "New chat", onclick: startNewChat });
+  newBtn.insertAdjacentHTML('afterbegin', ICON_PLUS);
   const sessionsList = el("div", { id: "sessions-list" });
   sessionsPanel.append(projectPickerWrap, newBtn, sessionsList);
 
-  // Mobile-only (David's ask 2026-09-01) — sessions become a slide-out
-  // drawer below the responsive breakpoint (style.css's @media block),
-  // matching Claude/ChatGPT mobile's "tap to see chat history" pattern
-  // instead of a fixed always-visible column. The button/backdrop are
-  // display:none above the breakpoint, so this is inert on desktop.
+  // History has its own preference, independent of the global icon rail.
   const sessionsBackdrop = el("div", { class: "chat-sessions-backdrop hidden" });
-  const openSessionsBtn = el("button", { type: "button", class: "input-icon-btn chat-mobile-menu-btn", title: "Chats" });
+  const openSessionsBtn = el("button", { type: "button", id: "chat-history-toggle", class: "input-icon-btn chat-mobile-menu-btn", "aria-controls": "chat-sessions" });
   openSessionsBtn.insertAdjacentHTML("beforeend", ICON_CHATS);
-  const mobileHeader = el("div", { class: "chat-mobile-header" }, [openSessionsBtn, el("span", { text: "JARVIS" })]);
-  function openSessionsDrawer() { sessionsPanel.classList.add("open"); sessionsBackdrop.classList.remove("hidden"); }
-  function closeSessionsDrawer() { sessionsPanel.classList.remove("open"); sessionsBackdrop.classList.add("hidden"); }
-  openSessionsBtn.addEventListener("click", openSessionsDrawer);
-  sessionsBackdrop.addEventListener("click", closeSessionsDrawer);
+  const headerNewBtn = el('button', { type: 'button', class: 'input-icon-btn chat-header-new', title: 'New chat', 'aria-label': 'New chat', onclick: startNewChat });
+  headerNewBtn.insertAdjacentHTML('beforeend', ICON_PLUS);
+  const mobileHeader = el("div", { class: "chat-mobile-header" }, [openSessionsBtn, el("span", { class: 'chat-title', text: "New chat" }), headerNewBtn]);
+  const desktopChat = matchMedia('(min-width: 769px)');
+  let historyCollapsed = true;
+  try { historyCollapsed = localStorage.getItem('jarvis:chat-history-collapsed') !== 'false'; } catch { /* Storage is optional. */ }
+  function syncHistory() {
+    container.classList.toggle('chat-history-collapsed', historyCollapsed);
+    const visible = desktopChat.matches ? !historyCollapsed : sessionsPanel.classList.contains('open');
+    sessionsPanel.inert = !visible;
+    sessionsPanel.setAttribute('aria-hidden', String(!visible));
+    openSessionsBtn.setAttribute('aria-expanded', String(visible));
+    openSessionsBtn.setAttribute('aria-label', visible ? 'Hide chat history' : 'Show chat history');
+    openSessionsBtn.title = visible ? 'Hide chat history' : 'Show chat history';
+  }
+  function closeSessionsDrawer(restoreFocus = false) {
+    const wasOpen = sessionsPanel.classList.contains('open');
+    sessionsPanel.classList.remove('open');
+    sessionsBackdrop.classList.add('hidden');
+    syncHistory();
+    if (restoreFocus && wasOpen) openSessionsBtn.focus();
+  }
+  openSessionsBtn.addEventListener('click', () => {
+    if (desktopChat.matches) {
+      historyCollapsed = !historyCollapsed;
+      try { localStorage.setItem('jarvis:chat-history-collapsed', String(historyCollapsed)); } catch { /* Storage is optional. */ }
+    } else {
+      const open = sessionsPanel.classList.toggle('open');
+      sessionsBackdrop.classList.toggle('hidden', !open);
+    }
+    syncHistory();
+    if (!desktopChat.matches && sessionsPanel.classList.contains('open')) newBtn.focus();
+  });
+  const historyCloseBtn = el('button', { type: 'button', class: 'input-icon-btn chat-history-close', text: 'Close', 'aria-label': 'Close chat history', onclick: () => closeSessionsDrawer(true) });
+  sessionsPanel.prepend(historyCloseBtn);
+  sessionsBackdrop.addEventListener('click', () => closeSessionsDrawer(true));
+  const onChatBreakpoint = () => closeSessionsDrawer();
+  desktopChat.addEventListener('change', onChatBreakpoint);
+  syncHistory();
 
-  const main = el("div", { id: "chat-main" }, [mobileHeader]);
+  const main = el("div", { id: "chat-main", class: 'is-empty' }, [mobileHeader]);
   const messages = el("div", { id: "chat-messages" });
   const attachStrip = el("div", { id: "attach-strip", class: "attach-strip" });
 
   // -- composer: top row (textarea + model picker) --------------------
-  const input = el("textarea", { id: "chat-input", rows: "2", placeholder: "Ask anything, or start with an idea…", "aria-label": "Message JARVIS" });
+  const input = el("textarea", { id: "chat-input", rows: "1", placeholder: "Where should we start?", "aria-label": "Message JARVIS" });
   const modelBtn = el("button", { type: "button", class: "model-picker-btn", id: "model-picker-btn" }, [
     el("span", { id: "model-picker-label", text: "No model — add one in Settings" }),
   ]);
@@ -289,20 +325,33 @@ export async function render(container, tabId, options = {}) {
   const workspaceItem = menuItem(ICON_WORKSPACE, "Workspace", () => { closeMenu(overflowMenu); openWorkspaceModal(); });
   const promptItem = menuItem(ICON_PROMPT, "Prompt", () => { closeMenu(overflowMenu); openPromptMenu(promptItem); });
   const integrationsItem = menuItem(ICON_PLUG, "Integrations", () => { closeMenu(overflowMenu); openIntegrationsModal(); });
-  overflowMenu.append(attachItem, docItem, workspaceItem, integrationsItem, promptItem);
+  // Side browser (David's ask 2026-09-15) — an explicit user action, which
+  // is the only way the pane ever opens. The other entry point is activating
+  // a link in a reply (see app.js's onOpenRequest). Nothing opens it
+  // automatically, and no agent tool reads from it.
+  const browseItem = menuItem(ICON_GLOBE, "Browse the web", () => { closeMenu(overflowMenu); openBrowser(''); });
+  overflowMenu.append(attachItem, docItem, workspaceItem, browseItem, integrationsItem, promptItem);
   const overflowWrap = el("div", { class: "overflow-wrapper" }, [overflowBtn, overflowMenu, fileInput]);
 
   const workspacePill = el("div", { id: "workspace-pill-slot" });
+  // Context meter (David's ask 2026-09-15) — how full THIS chat's context
+  // currently is, which is a different question from the Home tab's
+  // cumulative token spend. Hidden until a turn actually reports usable
+  // usage, so it never occupies the composer with a placeholder.
+  const contextPill = el("div", { id: "context-pill", class: "context-pill", hidden: true, role: "status" });
 
   const sendBtn = el("button", { class: "btn", id: "chat-send", title: "Send" });
   sendBtn.insertAdjacentHTML("beforeend", ICON_SEND);
 
-  const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, workspacePill]);
+  const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, workspacePill, contextPill]);
   const inputRight = el("div", { class: "chat-input-right" }, [modelWrap, versionWrap, sendBtn]);
   const inputBottom = el("div", { class: "chat-input-bottom" }, [inputLeft, inputRight]);
 
   const composer = el("div", { class: "glass chat-input-bar border-beam" }, [inputTop, inputBottom]);
-  main.append(messages, attachStrip, composer, el("div", { class: "composer-hint", text: "Enter to send · Shift + Enter for a new line" }));
+  const dock = el('div', { class: 'chat-composer-dock' }, [attachStrip, composer, el("div", { class: "composer-hint", text: "Enter to send · Shift + Enter for a new line" })]);
+  main.append(messages, dock);
+  const dockObserver = new ResizeObserver(() => main.style.setProperty('--composer-height', `${dock.offsetHeight}px`));
+  dockObserver.observe(dock);
   const jump = el('button', { type: 'button', class: 'chat-jump btn', text: '↓ Latest', hidden: true, onclick: () => messages.scrollTo({ top: messages.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }) });
   main.append(jump);
   messages.addEventListener('scroll', () => { jump.hidden = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 160; });
@@ -314,8 +363,23 @@ export async function render(container, tabId, options = {}) {
   container.append(sessionsPanel, sessionsBackdrop, main);
   // Selecting a session or starting a new one closes the mobile drawer —
   // no-op above the breakpoint since the classes it touches are inert there.
-  sessionsList.addEventListener("click", closeSessionsDrawer);
-  newBtn.addEventListener("click", closeSessionsDrawer);
+  sessionsList.addEventListener("click", () => closeSessionsDrawer(true));
+
+  function startNewChat() {
+    closeArtifact();
+    activeUnsubscribers.forEach(unsub => unsub());
+    activeUnsubscribers.length = 0;
+    activeSessionId = null;
+    stagedAttachments = [];
+    renderAttachStrip(attachStrip);
+    input.value = '';
+    input.style.height = 'auto';
+    jump.hidden = true;
+    renderWelcome(messages);
+    closeSessionsDrawer();
+    refreshSessions(sessionsList, messages).catch(error => toast(error.message, 'error'));
+    input.focus();
+  }
 
   sendBtn.addEventListener("click", () => sendMessage(messages, input, sendBtn, attachStrip));
   input.addEventListener("keydown", (e) => {
@@ -330,7 +394,15 @@ export async function render(container, tabId, options = {}) {
   });
 
   const dismissMenus = () => { closeMenu(overflowMenu); closeMenu(modelMenu); closeMenu(versionMenu); closeMenu(projectPickerMenu); };
-  const escapeMenus = (event) => { if (event.key === "Escape") { dismissMenus(); closeSessionsDrawer(); } };
+  const escapeMenus = (event) => {
+    if (event.key === "Escape") { dismissMenus(); closeSessionsDrawer(true); }
+    if (event.key === 'Tab' && !desktopChat.matches && sessionsPanel.classList.contains('open')) {
+      const controls = [...sessionsPanel.querySelectorAll('button, input, [tabindex="0"]')].filter(node => node.getClientRects().length && !node.disabled);
+      const first = controls[0], last = controls.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }
+  };
   document.addEventListener("click", dismissMenus);
   document.addEventListener("keydown", escapeMenus);
 
@@ -341,8 +413,12 @@ export async function render(container, tabId, options = {}) {
     document.removeEventListener("click", dismissMenus);
     document.removeEventListener("keydown", escapeMenus);
     document.removeEventListener("visibilitychange", syncBeam);
+    desktopChat.removeEventListener('change', onChatBreakpoint);
+    dockObserver.disconnect();
+    dock.getAnimations().forEach(animation => animation.cancel());
     closeSessionMenu();
     closeArtifact();
+    closeBrowser();
     mountSubscriptions.forEach((unsub) => unsub());
     if (activeUnsubscribers === mountSubscriptions) activeUnsubscribers = [];
   };
@@ -393,7 +469,22 @@ function menuItem(iconSvg, label, onclick) {
 function toggleMenu(menu) {
   const wasHidden = menu.classList.contains("hidden");
   document.querySelectorAll(".overflow-menu, .model-picker-menu").forEach((m) => m.classList.add("hidden"));
-  if (wasHidden) menu.classList.remove("hidden");
+  if (!wasHidden) return;
+  // Centered composers need menus to choose the side with room, especially
+  // on a short phone viewport. Clamp horizontally without clipping controls.
+  menu.style.transform = '';
+  menu.classList.remove('hidden');
+  const anchor = menu.parentElement.getBoundingClientRect();
+  const above = anchor.top - 12;
+  const below = innerHeight - anchor.bottom - 12;
+  const opensBelow = menu.classList.contains('below') || (above < 260 && below > above);
+  menu.style.top = opensBelow ? 'calc(100% + 8px)' : 'auto';
+  menu.style.bottom = opensBelow ? 'auto' : 'calc(100% + 8px)';
+  menu.style.maxHeight = `${Math.max(0, Math.min(320, opensBelow ? below : above))}px`;
+  menu.style.maxWidth = 'calc(100vw - 24px)';
+  const rect = menu.getBoundingClientRect();
+  const offset = rect.left < 12 ? 12 - rect.left : Math.min(0, innerWidth - 12 - rect.right);
+  menu.style.transform = `translateX(${offset}px)`;
 }
 function closeMenu(menu) { menu.classList.add("hidden"); }
 
@@ -660,6 +751,60 @@ function syncWorkspacePill(path) {
 // Models; an empty list means truly nothing's configured yet.
 const NO_MODEL_LABEL = "No model — add one in Settings";
 
+// -- context meter ----------------------------------------------------------
+// David's ask 2026-09-15: show how much of the model's context this chat is
+// currently occupying — explicitly NOT the Home tab's cumulative token spend.
+// The value is whatever the last completed turn actually reported, so it
+// falls on its own after a compaction and is per-chat by construction (each
+// session stores its own; see core/session_manager.py's set_context_state).
+//
+// Everything here fails quiet: no reading, no meter. A number is only ever
+// rendered when the server sent a real measurement, and a percentage only
+// when a capacity is genuinely known — an estimated capacity says so in the
+// tooltip rather than passing itself off as measured.
+function formatTokens(n) {
+  if (!Number.isFinite(n)) return '';
+  if (n >= 1000000) return `${(n / 1000000).toFixed(n >= 10000000 ? 0 : 1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k`;
+  return String(n);
+}
+
+async function refreshContextMeter(sessionId) {
+  const pill = document.getElementById('context-pill');
+  if (!pill) return;
+  if (!sessionId) { pill.hidden = true; return; }
+  let state = null;
+  try { state = await api(`/api/sessions/${sessionId}/context`); } catch { /* a missing reading is not an error worth surfacing */ }
+  // The chat may have been switched while that request was in flight — a
+  // stale reading must never be painted onto a different session's composer.
+  if (sessionId !== activeSessionId || !pill.isConnected) return;
+  if (!state || !state.available || !Number.isFinite(state.used_tokens)) { pill.hidden = true; return; }
+
+  const used = state.used_tokens;
+  const capacity = Number.isFinite(state.capacity_tokens) ? state.capacity_tokens : null;
+  const percent = Number.isFinite(state.percent) ? state.percent : null;
+  pill.replaceChildren();
+  if (percent !== null && capacity) {
+    const bar = el('div', { class: 'context-bar' }, [el('div', { class: 'context-bar-fill' })]);
+    bar.firstChild.style.width = `${Math.min(percent, 100)}%`;
+    // Purely visual thresholds for "getting full" — they change the colour,
+    // never the reported number.
+    pill.dataset.level = percent >= 90 ? 'high' : percent >= 70 ? 'warn' : 'ok';
+    pill.append(bar, el('span', { class: 'context-text', text: `${percent}%` }));
+    const basis = state.estimated_capacity ? 'estimated capacity' : 'reported by the provider';
+    pill.title = `Context: ${used.toLocaleString()} of about ${capacity.toLocaleString()} tokens (${basis}).`
+      + `\nThis is the current conversation size, not total usage. It drops when the conversation is compacted.`;
+  } else {
+    // Real measurement, unknown ceiling: show the honest absolute number
+    // rather than inventing a denominator to make a percentage out of.
+    delete pill.dataset.level;
+    pill.append(el('span', { class: 'context-text', text: `${formatTokens(used)} ctx` }));
+    pill.title = `Context: ${used.toLocaleString()} tokens in this conversation.`
+      + `\nNo context capacity is published for this model, so no percentage is shown.`;
+  }
+  pill.hidden = false;
+}
+
 function syncChatBusy(busy) {
   for (const id of ['chat-send', 'model-picker-btn', 'model-version-btn']) {
     const control = document.getElementById(id);
@@ -668,7 +813,19 @@ function syncChatBusy(busy) {
   if (busy) document.querySelectorAll('.model-picker-menu').forEach(m => m.classList.add('hidden'));
 }
 
-async function refreshModelPicker(currentEndpointId, modelOverride = null) {
+// Fetched once per page load and shared by every chat — the catalog is
+// per-provider, not per-session, and re-fetching it on each session switch
+// would re-read Codex's ~220KB cache for no new information. A failure
+// caches an empty list rather than retrying in a loop: the custom model-ID
+// field stays available, so the picker degrades instead of breaking.
+let modelCatalogPromise = null;
+async function loadModelCatalog(kind) {
+  if (!modelCatalogPromise) modelCatalogPromise = api('/api/models/catalog').catch(() => ({}));
+  const catalog = await modelCatalogPromise;
+  return (catalog && catalog[kind]) || [];
+}
+
+async function refreshModelPicker(currentEndpointId, modelOverride = null, modelEffort = null) {
   const label = document.getElementById("model-picker-label");
   const menu = document.getElementById("model-picker-menu");
   if (!label || !menu) return;
@@ -696,7 +853,7 @@ async function refreshModelPicker(currentEndpointId, modelOverride = null) {
         // and this used to `return` — so the dropdown listed every model and
         // silently ignored every click (David, 2026-09-04). Create the session
         // the same way sendMessage() lazily does, then apply the choice.
-        if (!activeSessionId) await createSession();
+        if (!activeSessionId) await createSession({ preserveAttachments: true });
         if (!activeSessionId) return; // creation genuinely failed
         const target = activeSessionId;
         try {
@@ -708,7 +865,8 @@ async function refreshModelPicker(currentEndpointId, modelOverride = null) {
     menu.appendChild(item);
   }
   const active = options.find((o) => o.id === currentEndpointId);
-  label.textContent = active ? active.name : NO_MODEL_LABEL;
+  label.textContent = active ? active.name : options.length ? 'Choose model' : NO_MODEL_LABEL;
+  label.parentElement.title = label.textContent;
   const ep = endpoints.find(e => e.id === currentEndpointId);
   const versionBtn = document.getElementById('model-version-btn');
   const versionMenu = document.getElementById('model-version-menu');
@@ -718,22 +876,104 @@ async function refreshModelPicker(currentEndpointId, modelOverride = null) {
   versionMenu.replaceChildren();
   if (cli) {
     label.textContent = ep.name;
-    versionBtn.textContent = (modelOverride === null ? ep.model : modelOverride) || 'CLI default';
-    versionBtn.title = 'Model version for this chat';
-    const input = el('input', { id: 'chat-model-id', type: 'text', maxlength: '160', value: modelOverride ?? ep.model ?? '', placeholder: 'Exact model ID', autocomplete: 'off', spellcheck: 'false' });
-    const save = async value => {
+    // The model this chat will actually use: the session's own override
+    // when set, otherwise whatever the endpoint is configured with.
+    const effectiveModel = (modelOverride === null ? ep.model : modelOverride) || '';
+    const catalog = await loadModelCatalog(ep.kind);
+    if (sessionId !== activeSessionId || !versionMenu.isConnected) return;
+    const known = catalog.find(m => m.id === effectiveModel || m.alias === effectiveModel) || null;
+    versionBtn.textContent = (known ? known.display_name : effectiveModel) || 'CLI default';
+    if (modelEffort) versionBtn.textContent += ` · ${modelEffort}`;
+    versionBtn.title = 'Model and reasoning level for this chat';
+
+    const save = async (value, effort = null) => {
       if (activeSessionId !== sessionId || chatStream.getInFlight(sessionId)?.status === 'processing') return;
       try {
-        const result = await api(`/api/sessions/${sessionId}/model`, { method: 'POST', body: JSON.stringify({ model_endpoint_id: ep.id, model_override: value }) });
-        if (activeSessionId === sessionId) { closeMenu(versionMenu); await refreshModelPicker(ep.id, result.model_override); toast('Model updated for this chat', 'success'); }
-      } catch (_) { /* keep the editor open on error */ }
+        const result = await api(`/api/sessions/${sessionId}/model`, {
+          method: 'POST',
+          body: JSON.stringify({ model_endpoint_id: ep.id, model_override: value, effort }),
+        });
+        if (activeSessionId === sessionId) {
+          closeMenu(versionMenu);
+          await refreshModelPicker(ep.id, result.model_override, result.effort ?? null);
+          toast('Model updated for this chat', 'success');
+        }
+      } catch (_) { /* keep the editor open on error — api() shows the reason */ }
     };
+
+    // -- reasoning level. Only rendered for a model whose supported levels
+    // are actually known; a custom/unlisted ID gets no effort row rather
+    // than a guessed one, since the server would reject an unadvertised
+    // value anyway (core/model_catalog.py's validate_effort).
+    const effortRow = el('div', { class: 'model-effort-row' });
+    if (known && known.supported_efforts.length) {
+      effortRow.append(el('span', { class: 'model-effort-label', text: 'Reasoning' }));
+      const levels = [{ effort: null, description: known.default_effort
+        ? `Provider default (${known.default_effort})` : 'Provider default' }, ...known.supported_efforts];
+      for (const level of levels) {
+        effortRow.appendChild(el('button', {
+          type: 'button',
+          class: 'model-effort-btn' + ((modelEffort ?? null) === level.effort ? ' active' : ''),
+          text: level.effort || 'Default',
+          title: level.description || '',
+          onclick: () => save(modelOverride, level.effort),
+        }));
+      }
+    }
+
+    // -- searchable model list, filtered live. Falls back silently to the
+    // custom-ID field below when the provider offers no catalog on this
+    // machine, which is the exact behaviour this picker had before.
+    const listWrap = el('div', { class: 'model-catalog-list' });
+    const renderList = (query) => {
+      listWrap.replaceChildren();
+      const q = query.trim().toLowerCase();
+      const matches = catalog.filter(m => !q
+        || m.display_name.toLowerCase().includes(q)
+        || m.id.toLowerCase().includes(q)
+        || (m.description || '').toLowerCase().includes(q));
+      if (!matches.length) {
+        listWrap.appendChild(el('p', { class: 'muted', text: catalog.length ? 'No models match that search.' : 'No model list available for this CLI — enter an exact ID below.' }));
+        return;
+      }
+      for (const m of matches) {
+        const row = el('button', {
+          type: 'button',
+          class: 'model-picker-item model-catalog-item' + (known && m.id === known.id ? ' active' : ''),
+          // Switching model drops the effort: levels are per-model (verified
+          // against Codex's own catalog — GPT-5.5 advertises no "ultra"
+          // while Astra does), so carrying one across would send a value the
+          // new model may not support.
+          onclick: () => save(m.id, null),
+        }, [
+          el('span', { class: 'model-catalog-name', text: m.display_name }),
+          el('span', { class: 'model-catalog-desc', text: m.description || m.id }),
+        ]);
+        listWrap.appendChild(row);
+      }
+    };
+    const search = el('input', {
+      id: 'chat-model-search', type: 'search', placeholder: 'Search models',
+      autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Search models',
+      oninput: e => renderList(e.target.value),
+    });
+    renderList('');
+
+    // -- custom ID, kept as a secondary escape hatch exactly as before: the
+    // catalog is what the CLI advertises locally, which is not a promise
+    // about what a given account can reach.
+    const input = el('input', { id: 'chat-model-id', type: 'text', maxlength: '160', value: modelOverride ?? ep.model ?? '', placeholder: 'Exact model ID', autocomplete: 'off', spellcheck: 'false' });
     const form = el('form', { class: 'model-version-form', onsubmit: e => { e.preventDefault(); save(input.value.trim()); } }, [
-      el('label', { for: 'chat-model-id', text: 'Model version' }), input,
-      el('p', { class: 'muted', text: 'Use an exact model ID supported by your CLI account. Applies to the next turn in this chat only.' }),
+      el('label', { for: 'chat-model-id', text: 'Custom model ID' }), input,
+      el('p', { class: 'muted', text: 'For a model your CLI account can reach that is not listed above. Applies to this chat only.' }),
       el('button', { type: 'submit', class: 'btn', text: 'Apply model' }),
     ]);
-    versionMenu.append(form,
+
+    versionMenu.append(
+      el('div', { class: 'model-version-search' }, [search]),
+      listWrap,
+      ...(effortRow.childElementCount ? [effortRow] : []),
+      el('details', { class: 'model-custom-details' }, [el('summary', { text: 'Custom model ID' }), form]),
       el('button', { type: 'button', class: 'model-picker-item', text: 'Use CLI default', onclick: () => save('') }),
       el('button', { type: 'button', class: 'model-picker-item', text: 'Use endpoint setting', onclick: () => save(null) }));
   }
@@ -924,7 +1164,9 @@ async function refreshSessions(sessionsList, messages) {
     });
     if (session.starred) item.appendChild(el("span", { class: "star-mark", text: "★ " }));
     item.appendChild(document.createTextNode(session.title));
+    item.title = session.title;
     sessionsList.appendChild(item);
+    if (session.id === activeSessionId) syncChatLayout(messages, session.title);
   }
   if (!activeSessionId) {
     renderWelcome(messages);
@@ -1053,7 +1295,8 @@ function startRename(item, session, sessionsList, messages) {
   input.addEventListener("click", (e) => e.stopPropagation());
 }
 
-async function createSession() {
+async function createSession({ preserveAttachments = false } = {}) {
+  const draftFiles = preserveAttachments ? stagedAttachments : [];
   const session = await api("/api/sessions", { method: "POST", body: JSON.stringify({}) });
   activeSessionId = session.id;
   // A chat created while a project is selected joins it automatically
@@ -1067,10 +1310,19 @@ async function createSession() {
   const messages = document.getElementById("chat-messages");
   await refreshSessions(sessionsList, messages);
   await openSession(session.id, sessionsList, messages);
+  if (preserveAttachments && activeSessionId === session.id && messages.isConnected) {
+    stagedAttachments = draftFiles;
+    renderAttachStrip(document.getElementById('attach-strip'));
+  }
 }
 
 async function openSession(sessionId, sessionsList, messages) {
   closeArtifact();
+  // Disposed on session switch, not carried across: the pane belongs to the
+  // conversation it was opened from, and in the desktop app leaving it
+  // running would keep a native view (and its scripts and audio) alive over
+  // a chat that never asked for it.
+  closeBrowser();
   activeUnsubscribers.forEach(unsub => unsub());
   activeUnsubscribers.length = 0;
   activeSessionId = sessionId;
@@ -1095,10 +1347,14 @@ async function openSession(sessionId, sessionsList, messages) {
     messages.appendChild(replyCard);
     activeUnsubscribers.push(attachToInFlight(sessionId, messages, replyCard, replyBody, null));
   }
+  syncChatLayout(messages, session.title);
   messages.scrollTop = messages.scrollHeight;
-  await refreshModelPicker(session.model_endpoint_id, session.model_override ?? null);
+  await refreshModelPicker(session.model_endpoint_id, session.model_override ?? null, session.model_effort ?? null);
   if (!messages.isConnected || activeSessionId !== sessionId) return;
   syncWorkspacePill(session.workspace_dir);
+  // Read from the session record, so the meter is correct straight after a
+  // page reload or a switch between chats — not only after a fresh turn.
+  refreshContextMeter(sessionId);
   await refreshSessions(sessionsList, messages);
 }
 
@@ -1121,6 +1377,7 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
     input.value = "";
     input.style.height = "auto";
     messages.appendChild(messageCard("user", text));
+    syncChatLayout(messages);
     const sessionsList = document.getElementById("sessions-list");
     const { output } = await runSlashCommand(text, {
       sessionId: () => activeSessionId,
@@ -1130,6 +1387,7 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
       onWorkspaceCleared: () => syncWorkspacePill(null),
     });
     messages.appendChild(messageCard("assistant", output));
+    syncChatLayout(messages);
     messages.scrollTop = messages.scrollHeight;
     // Persist so the command + its reply survive leaving and reopening this
     // chat — real bug found live: they were only ever appended to the DOM,
@@ -1145,9 +1403,15 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
     return;
   }
 
-  if (!activeSessionId) await createSession();
-
+  // Lazy session creation opens a fresh session and clears staged UI files.
+  // Capture IDs first so the first message keeps its attachments.
   const attachmentIds = stagedAttachments.map((a) => a.id);
+  if (!activeSessionId) {
+    sendBtn.disabled = true;
+    try { await createSession({ preserveAttachments: true }); }
+    catch (error) { sendBtn.disabled = false; toast(`Couldn't start chat: ${error.message}`, 'error'); return; }
+    if (!messages.isConnected) return;
+  }
   stagedAttachments = [];
   renderAttachStrip(attachStrip);
 
@@ -1157,6 +1421,7 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
   const replyCard = messageCard("assistant", "");
   const replyBody = replyCard.querySelector(".msg-body");
   messages.appendChild(replyCard);
+  syncChatLayout(messages);
   messages.scrollTop = messages.scrollHeight;
 
   // The actual request now lives in chatStream.js, one level above this

@@ -10,18 +10,21 @@ model_endpoint_id; now that's just "nothing chosen yet," and a message sent
 before the user has added any model in Settings gets a canned reply telling
 them to go add one, instead of silently spending a real Claude turn.
 """
+import logging
 from typing import AsyncIterator, Optional, Union
 from contextlib import asynccontextmanager
 from fastapi import HTTPException
 
 from claude_agent_sdk import CLIJSONDecodeError
 
-from core import attachments, model_endpoints, token_usage
+from core import attachments, model_catalog, model_endpoints, token_usage
 from core.brain import Brain
 from core.codex_brain import CodexBrain
 from core.external_brain import ExternalBrain
 from core.session_manager import session_manager
 from core.vault import resolve_vault_dir
+
+logger = logging.getLogger(__name__)
 
 AnyBrain = Union[Brain, ExternalBrain, CodexBrain]
 
@@ -105,13 +108,19 @@ async def _get_brain(session_id: str, endpoint: dict, is_admin: bool = False) ->
     project_id = (session or {}).get("project_id")
     override = (session or {}).get("model_override")
     cli_model = endpoint.get("model") if override is None else override
+    # Reasoning effort (David's ask 2026-09-15) — validated at the route
+    # boundary against core/model_catalog.py, so by here it's either None
+    # (send nothing, the pre-existing behaviour) or a value the provider
+    # advertises for this model.
+    effort = (session or {}).get("model_effort")
     if endpoint["kind"] == "claude_cli":
         brain = Brain(cwd_override=workspace_dir, integration_ids=integration_ids,
                        session_id=session_id, model=cli_model or None, is_admin=is_admin,
-                       project_id=project_id)
+                       project_id=project_id, effort=effort)
     elif endpoint["kind"] == "codex_cli":
         brain = CodexBrain(cwd_override=workspace_dir, session_id=session_id,
-                            model=cli_model or None, is_admin=is_admin, project_id=project_id)
+                            model=cli_model or None, is_admin=is_admin, project_id=project_id,
+                            effort=effort)
     else:
         base_url, model, api_key, num_ctx = model_endpoints.resolve_runtime(endpoint["id"])
         brain = ExternalBrain(base_url, model, api_key, history=(session or {}).get("messages", []),
@@ -190,7 +199,7 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
     except Exception:
         await close_session_brain(session_id)
         raise
-    token_usage.record_usage(endpoint["id"], getattr(brain, "last_usage", None))
+    _record_turn_telemetry(session_id, endpoint, brain)
     session_manager.append_message(session_id, "assistant", reply)
     return reply
 
@@ -227,8 +236,42 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
         await close_session_brain(session_id)
         raise
 
-    token_usage.record_usage(endpoint["id"], getattr(brain, "last_usage", None))
+    _record_turn_telemetry(session_id, endpoint, brain)
     session_manager.append_message(session_id, "assistant", "".join(reply_parts))
+
+
+def _record_turn_telemetry(session_id: str, endpoint: dict, brain) -> None:
+    """Both post-turn bookkeeping jobs in one place, called from the
+    streaming and non-streaming paths alike so they can't drift apart.
+
+    Two genuinely different measurements come off the same usage payload:
+    record_usage() accumulates lifetime spend per endpoint (the Home tab's
+    card), while the context state is a point-in-time occupancy that
+    replaces its predecessor every turn (the chat header's meter). See
+    core/token_usage.py's extract_context_tokens() for why one can't be
+    derived from the other.
+
+    Deliberately non-fatal: the turn has already succeeded and its reply is
+    about to be saved, so a telemetry failure must never turn a good answer
+    into an error the user sees.
+    """
+    usage = getattr(brain, "last_usage", None)
+    try:
+        token_usage.record_usage(endpoint["id"], usage)
+    except Exception:
+        logger.exception("record_usage failed for endpoint %s", endpoint.get("id"))
+    try:
+        model_id = getattr(brain, "model", None) or endpoint.get("model") or None
+        capacity = model_catalog.context_capacity(endpoint.get("kind"), model_id)
+        if capacity is None and endpoint.get("kind") == "local" and endpoint.get("num_ctx"):
+            # A local endpoint's configured num_ctx IS its real context
+            # ceiling (core/model_endpoints.py sets and enforces it), so
+            # this is a measured capacity rather than a curated guess —
+            # flagged accordingly.
+            capacity = {"effective": int(endpoint["num_ctx"]), "estimated": False, "source": "endpoint_num_ctx"}
+        session_manager.set_context_state(session_id, token_usage.build_context_state(usage, capacity, model_id))
+    except Exception:
+        logger.exception("context state update failed for session %s", session_id)
 
 
 async def close_session_brain(session_id: str) -> None:

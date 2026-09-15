@@ -12,9 +12,10 @@ This is the real product (v2). [jarvis-starter-kit](https://github.com/david-dar
 
 ## What it does
 
-- **Chat** with any model you connect — Claude via the Agent SDK, any OpenAI-compatible endpoint, or a local model (Ollama, or the built-in llama.cpp engine). Per-conversation model choice (including exact CLI model versions for Claude Code and Codex CLI), file attachments, folder-scoped workspaces, and slash commands. Responses render as formatted Markdown with syntax-highlighted, copyable code; generated files show up as in-chat cards with previews for images, PDFs, Markdown, text/code, and static HTML (Office files stay downloadable).
+- **Chat** with any model you connect — Claude via the Agent SDK, any OpenAI-compatible endpoint, or a local model (Ollama, or the built-in llama.cpp engine). Pick the model and its reasoning level per conversation from a searchable list of what your CLI actually offers, with an exact-ID box for anything unlisted, plus a context meter showing how full the current conversation is. File attachments, folder-scoped workspaces, and slash commands. Responses render as formatted Markdown with syntax-highlighted, copyable code; generated files show up as in-chat cards with previews for images, PDFs, Markdown, text/code, static HTML, and Office documents — spreadsheets as sheet tabs and a grid, documents as a reading view, slides one at a time, CSV as a table. Office files are read locally and never uploaded to a converter.
+- **A side browser** in the chat, opened when you ask for it or when you follow a link in a reply. In the desktop app it runs as a real sandboxed browser view with its own cookies, separate from the app's, and it cannot reach JARVIS's own backend. In a plain browser tab it falls back to an embedded frame, with open-in-new-tab always available for sites that refuse to be embedded.
 - **Home dashboard**: recent conversations, projects, upcoming events, connected systems, and a live activity feed around a responsive particle core.
-- **A focused workspace**: a minimal dark interface, an animated chat composer, and a sidebar that collapses to an icon rail. Your layout preference is remembered; mobile keeps its full navigation drawer.
+- **A focused workspace**: a centered new-chat composer that settles below the conversation, independently collapsible chat history, and a 52px icon rail. Layout preferences are remembered; mobile keeps full navigation and chat-history drawers.
 - **Notes, Calendar, Email, Library** — one unified place for priorities and todos (due-dated notes render on the calendar), CalDAV/iCal calendar sync, IMAP/SMTP email accounts, and a searchable document library.
 - **Tasks** — scheduled automations, either your own prompts or built-in ones (Daily Brief, tidy-up jobs, skill audits). Output can be delivered to a connected channel rather than just sitting in the tab.
 - **Brain** — reusable `SKILL.md` procedures, plus a browsable graph of your Obsidian-style vault, which is where the assistant's long-term memory actually lives.
@@ -36,6 +37,10 @@ Memory is a folder of markdown notes, not a database — so it stays readable, p
 <summary>See the compact sidebar</summary>
 
 ![Home with the sidebar collapsed to an icon-only rail](docs/img/sidebar-collapsed.png)
+
+![New chat with a centered composer and slim icon rail](docs/img/chat-new.png)
+
+*New-chat development preview with sample data. Chat history and app navigation collapse independently.*
 
 The same workspace, with more room for your content. Demo data shown.
 

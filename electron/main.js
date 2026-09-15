@@ -25,6 +25,7 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { autoUpdater } = require("electron-updater");
+const sideBrowser = require("./browser");
 
 // In a packaged build, main.js runs from inside the app's asar archive, and
 // the backend source is bundled separately as an extraResource (see
@@ -218,6 +219,39 @@ async function createWindow() {
   });
 
   mainWindow = win;
+  sideBrowser.attach(win, { backendOrigin: new URL(BACKEND_URL).origin });
+
+  // The app's own renderer must never spawn a real second window. Chat
+  // replies carry target="_blank" on external links (see chatContent.js), and
+  // with no handler here Electron happily opens a chrome-less BrowserWindow
+  // for them — no address bar, app-level privileges, and no way to tell what
+  // site you're on. Ordinary web links go to the in-app side browser, which
+  // is sandboxed and shows its address; anything else is handed to the real
+  // browser. Nothing opens a new Electron window.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    let parsed = null;
+    try { parsed = new URL(url); } catch { return { action: "deny" }; }
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      win.webContents.send("browser:open-request", parsed.toString());
+    } else if (parsed.protocol === "mailto:") {
+      shell.openExternal(url).catch(() => {});
+    }
+    return { action: "deny" };
+  });
+
+  // The renderer itself is the trusted app UI and must stay on the backend
+  // origin. If anything ever tried to navigate the whole window elsewhere,
+  // that page would inherit the preload bridge — so it goes to the sandboxed
+  // pane instead.
+  win.webContents.on("will-navigate", (event, url) => {
+    try {
+      if (new URL(url).origin === new URL(BACKEND_URL).origin) return;
+    } catch { /* fall through to the block below */ }
+    event.preventDefault();
+  });
+
+  win.on("resize", () => win.webContents.send("browser:host-resized"));
+  win.on("closed", () => sideBrowser.close());
 
   // Load the splash BEFORE anything that can fail. It is the only channel for
   // telling you what went wrong, so it has to be on screen first — otherwise a
@@ -314,6 +348,49 @@ ipcMain.handle("pick-vault-folder", async () => {
   return result.filePaths[0];
 });
 
+// -- in-app side browser (David's ask 2026-09-15). See electron/browser.js
+// for the isolation model; this block is only the IPC boundary.
+//
+// Every handler checks the sender first. Without that, ANY web contents in
+// the process could drive the browser pane — including a page loaded inside
+// the pane itself, which is by definition untrusted content. Only the real
+// app window is allowed to ask.
+function fromAppWindow(event) {
+  return !!mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents;
+}
+
+ipcMain.handle("browser:open", (event, url, bounds) => {
+  if (!fromAppWindow(event)) return { ok: false, reason: "denied" };
+  return sideBrowser.open(url, bounds);
+});
+ipcMain.handle("browser:navigate", (event, url) => {
+  if (!fromAppWindow(event)) return { ok: false, reason: "denied" };
+  return sideBrowser.navigate(url);
+});
+ipcMain.handle("browser:external", (event) => {
+  if (!fromAppWindow(event)) return { ok: false };
+  return sideBrowser.openExternal();
+});
+ipcMain.handle("browser:state", (event) => (fromAppWindow(event) ? sideBrowser.state() : { open: false }));
+// Fire-and-forget controls. Each is a no-op when the pane isn't open, so the
+// renderer never has to track lifecycle to avoid an error.
+for (const [channel, fn] of [
+  ["browser:back", () => sideBrowser.goBack()],
+  ["browser:forward", () => sideBrowser.goForward()],
+  ["browser:reload", () => sideBrowser.reload()],
+  ["browser:close", () => sideBrowser.close()],
+]) {
+  ipcMain.on(channel, (event) => { if (fromAppWindow(event)) fn(); });
+}
+ipcMain.on("browser:bounds", (event, rect) => {
+  if (fromAppWindow(event)) sideBrowser.setBounds(rect);
+});
+// The pane is a native layer above the HTML, so this is how Settings,
+// modals, and menus get to appear over it — z-index cannot.
+ipcMain.on("browser:visible", (event, visible) => {
+  if (fromAppWindow(event)) sideBrowser.setVisible(visible);
+});
+
 // -- auto-update (David's ask 2026-09-03: "work like any other mainstream
 // app"). Without this, whoever installs a build is stranded on it forever —
 // including for security fixes — and retrofitting updates later means
@@ -387,5 +464,7 @@ app.on("window-all-closed", () => {});
 
 app.on("before-quit", () => {
   isQuitting = true;
+  // Destroyed, not hidden — a hidden view keeps running scripts and audio.
+  sideBrowser.close();
   stopBackend();
 });

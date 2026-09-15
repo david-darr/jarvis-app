@@ -1,5 +1,6 @@
 import { el, api, toast } from './api.js';
 import { marked, DOMPurify, hljs } from './vendor/chat-vendor.js';
+import { closeBrowser } from './browserPane.js';
 
 const GENERATED = /^\/generated-(?:images|files)\/[^/?#]+$/;
 const TAGS = ['p', 'br', 'strong', 'em', 'del', 's', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'a', 'img', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr', 'input'];
@@ -78,8 +79,115 @@ export function closeArtifact() {
 
 function fileSize(bytes) { return bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`; }
 
+// -- Office previews (David's ask 2026-09-15) ------------------------------
+// The document is parsed by core/office_preview.py and arrives here as plain
+// structured data — rows, blocks, slides. Nothing from the file is ever
+// treated as markup: every string below goes in through textContent, so a
+// spreadsheet cell containing "<script>" is shown as those characters.
+
+function officeGrid(rows, { header = true } = {}) {
+  const table = el('table', { class: 'office-grid' });
+  rows.forEach((row, index) => {
+    const tr = el('tr');
+    for (const cell of row) tr.append(el(header && index === 0 ? 'th' : 'td', { text: cell }));
+    table.append(tr);
+  });
+  const wrap = el('div', { class: 'office-grid-wrap', tabindex: '0', role: 'region', 'aria-label': 'Table contents' });
+  wrap.append(table);
+  return wrap;
+}
+
+function officeNote(text) { return el('p', { class: 'office-note', text }); }
+
+function renderSheets(content, actions, data) {
+  const sheets = data.sheets || [];
+  if (!sheets.length) { content.replaceChildren(officeNote('This workbook has no readable sheets.')); return; }
+  const body = el('div', { class: 'office-body' });
+  const tabs = el('div', { class: 'office-tabs', role: 'tablist' });
+  const show = (index) => {
+    const sheet = sheets[index];
+    [...tabs.children].forEach((tab, i) => {
+      tab.classList.toggle('active', i === index);
+      tab.setAttribute('aria-selected', String(i === index));
+    });
+    const parts = [officeGrid(sheet.rows)];
+    // Says plainly that this is a partial view, rather than letting the
+    // panel imply the file ends where the preview does.
+    if (sheet.truncated_rows || sheet.truncated_cols) {
+      parts.push(officeNote(
+        `Showing the first ${sheet.rows.length} of ${sheet.total_rows} rows`
+        + (sheet.truncated_cols ? ` and the first columns of ${sheet.total_cols}` : '')
+        + '. Download the file for everything.'));
+    }
+    body.replaceChildren(...parts);
+  };
+  sheets.forEach((sheet, index) => {
+    tabs.append(el('button', {
+      type: 'button', class: 'office-tab', role: 'tab', text: sheet.name,
+      onclick: () => show(index),
+    }));
+  });
+  content.replaceChildren(tabs, body);
+  if (data.truncated_sheets) content.append(officeNote('Only the first sheets are shown.'));
+  show(0);
+}
+
+function renderDoc(content, data) {
+  const doc = el('div', { class: 'artifact-document office-doc' });
+  for (const block of data.blocks || []) {
+    if (block.type === 'table') doc.append(officeGrid(block.rows));
+    else if (block.type === 'heading') doc.append(el(`h${Math.min(Math.max(block.level, 1), 6)}`, { text: block.text }));
+    else if (block.type === 'list') doc.append(el('p', { class: 'office-list-item', text: block.text }));
+    else doc.append(el('p', { text: block.text }));
+  }
+  if (!doc.childElementCount) doc.append(officeNote('This document has no readable text.'));
+  content.replaceChildren(doc);
+  if (data.truncated) content.append(officeNote('Only the beginning of this document is shown.'));
+}
+
+function renderDeck(content, actions, data) {
+  const slides = data.slides || [];
+  if (!slides.length) { content.replaceChildren(officeNote('This presentation has no readable slides.')); return; }
+  let index = 0;
+  const label = el('span', { class: 'muted', 'aria-live': 'polite' });
+  const prev = el('button', { type: 'button', class: 'btn quiet', text: '←', 'aria-label': 'Previous slide' });
+  const next = el('button', { type: 'button', class: 'btn quiet', text: '→', 'aria-label': 'Next slide' });
+  actions.append(prev, label, next);
+  const body = el('div', { class: 'office-body' });
+  const show = () => {
+    const slide = slides[index];
+    const card = el('div', { class: 'office-slide' });
+    if (slide.title) card.append(el('h2', { text: slide.title }));
+    for (const line of slide.body || []) card.append(el('p', { text: line }));
+    for (const rows of slide.tables || []) card.append(officeGrid(rows));
+    if (!card.childElementCount) card.append(officeNote('This slide has no text.'));
+    const parts = [card];
+    if (slide.notes) parts.push(el('details', { class: 'office-notes' }, [el('summary', { text: 'Speaker notes' }), el('p', { text: slide.notes })]));
+    body.replaceChildren(...parts);
+    label.textContent = `${index + 1} / ${slides.length}`;
+    prev.disabled = index === 0;
+    next.disabled = index >= slides.length - 1;
+    body.scrollTop = 0;
+  };
+  prev.onclick = () => { if (index > 0) { index--; show(); } };
+  next.onclick = () => { if (index < slides.length - 1) { index++; show(); } };
+  content.replaceChildren(body);
+  // Stated up front rather than left for someone to discover: the text and
+  // structure are real, the visual design is not reproduced. See
+  // core/office_preview.py for why there is no renderer behind this.
+  if (data.layout_fidelity === false) {
+    content.append(officeNote('Text and structure only — slide layout, theming, and images are not shown. Download the file to see the real slides.'));
+  }
+  if (data.truncated) content.append(officeNote('Only the first slides are shown.'));
+  show();
+}
+
 export async function openArtifact(sessionId, url, name, opener) {
   closeArtifact();
+  // One right-hand pane at a time. In the desktop app the browser's page is
+  // a native layer composited above the HTML, so leaving it open would paint
+  // straight over this preview regardless of stacking.
+  closeBrowser();
   const host = document.querySelector('.chat-layout');
   if (!host) return;
   const controller = new AbortController();
@@ -149,6 +257,44 @@ export async function openArtifact(sessionId, url, name, opener) {
       prev.onclick = () => { if (!rendering && pageNumber > 1) { pageNumber--; renderPage(); } };
       next.onclick = () => { if (!rendering && pageNumber < pdf.numPages) { pageNumber++; renderPage(); } };
       await renderPage();
+    } else if (meta.kind === 'office') {
+      content.textContent = 'Reading document…';
+      const data = await api(`/api/chat/artifacts/office?${query}`, { signal: controller.signal });
+      if (!panel.isConnected) return;
+      if (data.kind === 'xlsx') {
+        renderSheets(content, actions, data);
+      } else if (data.kind === 'docx') {
+        renderDoc(content, data);
+      } else if (data.kind === 'pptx') {
+        renderDeck(content, actions, data);
+      } else if (data.kind === 'csv') {
+        // A grid by default, with the raw file one click away — the parsed
+        // view is the useful one, but CSV is still a text file and someone
+        // may want to see exactly what is in it.
+        const gridView = () => {
+          const parts = [officeGrid(data.rows)];
+          if (data.truncated) parts.push(officeNote('Only the first rows are shown. Download the file for everything.'));
+          content.replaceChildren(...parts);
+        };
+        const gridBtn = el('button', { type: 'button', class: 'btn quiet', text: 'Table', 'aria-pressed': 'true' });
+        const rawBtn = el('button', { type: 'button', class: 'btn quiet', text: 'Source', 'aria-pressed': 'false' });
+        gridBtn.onclick = () => { gridView(); gridBtn.setAttribute('aria-pressed', 'true'); rawBtn.setAttribute('aria-pressed', 'false'); };
+        rawBtn.onclick = async () => {
+          gridBtn.setAttribute('aria-pressed', 'false'); rawBtn.setAttribute('aria-pressed', 'true');
+          try {
+            const res = await fetch(contentURL, { signal: controller.signal });
+            if (!res.ok) throw new Error('The file could not be loaded');
+            const text = await res.text();
+            if (panel.isConnected) content.replaceChildren(el('pre', { class: 'artifact-source', text }));
+          } catch (error) {
+            if (error.name !== 'AbortError' && panel.isConnected) content.textContent = 'The original file could not be loaded.';
+          }
+        };
+        actions.append(gridBtn, rawBtn);
+        gridView();
+      } else {
+        content.replaceChildren(officeNote('This file has no structured preview.'));
+      }
     } else if (['text', 'markdown', 'html'].includes(meta.kind)) {
       const res = await fetch(contentURL, { signal: controller.signal });
       if (!res.ok) throw new Error('The file could not be loaded');

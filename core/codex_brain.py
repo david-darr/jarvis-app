@@ -74,9 +74,15 @@ class CodexBrain:
 
     def __init__(self, vault_dir: str | None = None, cwd_override: str | None = None,
                  session_id: str | None = None, model: str | None = None, is_admin: bool = False,
-                 project_id: str | None = None):
+                 project_id: str | None = None, effort: str | None = None):
         self.cwd = cwd_override or vault_dir or resolve_vault_dir()
         self.model = model
+        # Reasoning effort for this session (David's ask 2026-09-15). Codex
+        # has no `--effort` flag — see _build_args() for the config-override
+        # route and why it's placed where it is. None sends nothing at all,
+        # leaving the CLI's own configured default untouched, exactly as
+        # before this option existed.
+        self.effort = effort
         self.session_id = session_id
         self.is_admin = is_admin
         # Projects (David's ask 2026-09-12) — appended to the landing-zone
@@ -100,12 +106,30 @@ class CodexBrain:
         return path
 
     def _build_args(self, codex: str) -> list[str]:
+        # Reasoning effort has no dedicated flag on `codex exec`; the
+        # supported route is a config override. Verified live before relying
+        # on it (codex-cli 0.154.0): `-c model_reasoning_effort="high"` is
+        # accepted BEFORE the `resume` subcommand and exits 0, unlike -C/-s
+        # which resume rejects outright — so unlike those two this can be
+        # applied to resumed turns as well as fresh ones, and is inserted
+        # directly after `exec` in both branches below for that reason.
+        #
+        # The value is TOML-parsed by codex, hence the embedded quotes. Two
+        # things make that safe rather than an injection surface: this is
+        # argv to create_subprocess_exec (no shell anywhere), and the value
+        # itself is already constrained to one of the provider-advertised
+        # effort strings by core/model_catalog.py's validate_effort() at the
+        # route boundary. That validation is not belt-and-braces: `codex
+        # exec --strict-config` checks unknown config KEYS but not their
+        # values, confirmed live, so an unvalidated effort would pass
+        # parsing and only surface later as a failed turn.
+        effort_args = ["-c", f'model_reasoning_effort="{self.effort}"'] if self.effort else []
         if self.thread_id:
             # Resume doesn't take -C/-s — the original invocation already
             # fixed the working directory and sandbox mode for this thread.
-            args = [codex, "exec", "resume", self.thread_id, "--json", "--skip-git-repo-check"]
+            args = [codex, "exec", *effort_args, "resume", self.thread_id, "--json", "--skip-git-repo-check"]
         else:
-            args = [codex, "exec", "--json", "--skip-git-repo-check", "-s", "workspace-write", "-C", self.cwd]
+            args = [codex, "exec", *effort_args, "--json", "--skip-git-repo-check", "-s", "workspace-write", "-C", self.cwd]
             # A generated file needs somewhere to be built that isn't the
             # vault (David's ask 2026-09-12 — see system_prompt.py's
             # _GENERATED_FILES_ADDENDUM), granted unconditionally: unlike
@@ -226,7 +250,22 @@ class CodexBrain:
                 # subsets of those two (verified live), so summing every
                 # *_tokens key the way core/token_usage.py's generic Claude
                 # path does would double-count. Pre-summed here instead.
-                self.last_usage = {"total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0)}
+                #
+                # input_tokens is kept alongside that pre-summed total
+                # (David's ask 2026-09-15, the context indicator): it is the
+                # size of the context this turn actually sent, which is a
+                # different quantity from the cumulative spend total above
+                # and cannot be recovered from it. Adding keys is safe for
+                # the existing counter — core/token_usage.py's
+                # _extract_total_tokens() prefers an explicit "total_tokens"
+                # and returns early, so it never sees these and cannot
+                # double-count them.
+                self.last_usage = {
+                    "total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
+                    "input_tokens": usage.get("input_tokens", 0),
+                    "cached_input_tokens": usage.get("cached_input_tokens", 0),
+                    "output_tokens": usage.get("output_tokens", 0),
+                }
             elif etype in ("error", "turn.failed"):
                 failure = event.get("message") or (event.get("error") or {}).get("message") or "Codex could not complete this turn"
 
