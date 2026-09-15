@@ -23,6 +23,7 @@ from routes import (
     email_routes,
     settings_routes,
     model_routes,
+    speech_routes,
     workspace_routes,
     system_routes,
     integrations_routes,
@@ -143,6 +144,7 @@ app.include_router(calendar_routes.router)
 app.include_router(email_routes.router)
 app.include_router(settings_routes.router)
 app.include_router(model_routes.router)
+app.include_router(speech_routes.router)
 app.include_router(workspace_routes.router)
 app.include_router(system_routes.router)
 app.include_router(integrations_routes.router)

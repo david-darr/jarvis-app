@@ -540,6 +540,99 @@ class ChatTests(unittest.TestCase):
         self.assertIn('only the first', full_text)
 
 
+class SpeechTests(unittest.TestCase):
+    """Local speech-to-text (David's ask 2026-09-15, chat dictation / Open Mic).
+
+    Runs against the isolated JARVIS_DATA_DIR like the rest of this suite, so
+    no model is present and the not-downloaded path is the honest default.
+    """
+
+    @staticmethod
+    def _wav(samples, rate=16000, channels=1):
+        import io, wave
+        import numpy as np
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as handle:
+            handle.setnchannels(channels)
+            handle.setsampwidth(2)
+            handle.setframerate(rate)
+            handle.writeframes((np.clip(samples, -1, 1) * 32767).astype(np.int16).tobytes())
+        return buf.getvalue()
+
+    def test_status_separates_engine_from_model(self):
+        from core import speech
+        state = speech.status()
+        # Two different failures with two different fixes: a missing binding
+        # is a broken build, a missing model is one download away. Collapsing
+        # them would leave the UI unable to say which.
+        self.assertIn("engine_available", state)
+        self.assertIn("active_model", state)
+        self.assertEqual({m["name"] for m in state["models"]}, {"tiny.en", "base.en", "small.en"})
+        self.assertTrue(all(m["downloaded"] is False for m in state["models"]))
+        self.assertIsNone(state["active_model"])
+
+    def test_audio_is_normalised_and_bad_audio_is_refused(self):
+        import numpy as np
+        from core import speech
+        # The browser sends 16 kHz mono; the other shapes are fallbacks for an
+        # odd client rather than the normal path.
+        self.assertEqual(speech._wav_to_float32(self._wav(np.zeros(16000, np.float32))).shape, (16000,))
+        self.assertEqual(speech._wav_to_float32(self._wav(np.zeros(32000, np.float32), channels=2)).shape, (16000,))
+        self.assertEqual(speech._wav_to_float32(self._wav(np.zeros(44100, np.float32), rate=44100)).shape, (16000,))
+        for label, payload in [
+            ("garbage", b"not a wav at all"),
+            # A cut-off upload raises EOFError rather than wave.Error, which
+            # escaped as a 500 until it was caught. Found by feeding the
+            # parser a deliberately truncated file.
+            ("truncated", self._wav(np.zeros(10, np.float32))[:20]),
+        ]:
+            with self.subTest(label), self.assertRaises(speech.SpeechUnavailable):
+                speech._wav_to_float32(payload)
+
+    def test_transcription_refusals_carry_user_facing_messages(self):
+        import numpy as np
+        from core import speech
+        with self.assertRaises(speech.SpeechUnavailable) as caught:
+            speech.transcribe(b"")
+        self.assertIn("No audio", str(caught.exception))
+        with self.assertRaises(speech.SpeechUnavailable) as caught:
+            speech.transcribe(b"x" * (speech.MAX_AUDIO_BYTES + 1))
+        self.assertIn("too large", str(caught.exception))
+        # No model downloaded in this fixture, so this is the real answer.
+        with self.assertRaises(speech.SpeechUnavailable) as caught:
+            speech.transcribe(self._wav(np.zeros(16000, np.float32)))
+        self.assertIn("model", str(caught.exception).lower())
+
+    def test_silence_transcribes_to_empty_rather_than_a_marker(self):
+        import numpy as np
+        from core import speech
+        # whisper.cpp reports silence as [BLANK_AUDIO]. Dropping that literal
+        # into someone's chat box would read as a bug, so it is stripped and
+        # an empty string is a successful "nothing was said".
+        with patch.object(speech, "installed_model", return_value="tiny.en"),              patch.object(speech, "engine_available", return_value=True),              patch.object(speech, "_load") as load:
+            load.return_value.transcribe.return_value = [
+                type("Seg", (), {"text": " [BLANK_AUDIO] "})(),
+            ]
+            self.assertEqual(speech.transcribe(self._wav(np.zeros(16000, np.float32))), "")
+            load.return_value.transcribe.return_value = [
+                type("Seg", (), {"text": " Hello there. "})(),
+                type("Seg", (), {"text": "How are you?"})(),
+            ]
+            self.assertEqual(speech.transcribe(self._wav(np.zeros(16000, np.float32))), "Hello there. How are you?")
+            # Too short to be speech. Checked inside the patch because the
+            # model check runs first in transcribe(), which is the right
+            # order: with no model downloaded, "download one" is the more
+            # useful answer than silently returning nothing.
+            load.return_value.transcribe.reset_mock()
+            self.assertEqual(speech.transcribe(self._wav(np.zeros(800, np.float32))), "")
+            load.return_value.transcribe.assert_not_called()
+
+    def test_unknown_model_download_is_rejected(self):
+        from core import speech
+        with self.assertRaises(ValueError):
+            speech.start_download("definitely-not-a-model")
+
+
 class RepoIntegrityTests(unittest.TestCase):
     """Guards against a corruption that has now happened twice.
 

@@ -33,3 +33,11 @@ llama-cpp-python[server]; sys_platform != "darwin"
 # that unpacks cleanly. Windows is unaffected and stays on the latest;
 # revisit when a fixed macOS wheel ships.
 llama-cpp-python[server]==0.3.19; sys_platform == "darwin"
+
+# Local speech-to-text for chat dictation and Open Mic (David's ask
+# 2026-09-15) - see core/speech.py. Deliberately pywhispercpp (a ~1.3 MB
+# wheel around whisper.cpp) rather than faster-whisper, which was measured
+# first and pulled 206 MB of ctranslate2/onnxruntime/tokenizers/av into the
+# bundled runtime for the same job. Models are NOT bundled; one is downloaded
+# on first use, so the installer does not grow for an optional feature.
+pywhispercpp>=1.5
