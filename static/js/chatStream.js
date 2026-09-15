@@ -26,6 +26,16 @@ function _notify(sessionId) {
   for (const cb of _globalListeners) cb(sessionId, entry);
 }
 
+// Stops a running turn. Safe to call when nothing is running, so callers
+// (barge-in especially) never have to check first.
+export function stopTurn(sessionId) {
+  const entry = _inflight.get(sessionId);
+  if (!entry || entry.status !== 'processing') return false;
+  entry.stopped = true;
+  try { entry.controller.abort(); } catch { /* already finished */ }
+  return true;
+}
+
 export function getInFlight(sessionId) {
   return _inflight.get(sessionId) || null;
 }
@@ -54,7 +64,11 @@ export function subscribeAll(callback) {
 // then runs the actual request in the background.
 export function startTurn(sessionId, sessionTitle, text, attachmentIds) {
   if (_inflight.get(sessionId)?.status === 'processing') throw new Error('This chat already has a response in progress');
-  const entry = { text: "", status: "processing", connected: false, sessionTitle, error: null, listeners: new Set() };
+  // The controller lives on the entry rather than in a closure so stopTurn()
+  // can reach it from anywhere - the composer's stop button, a tab switch, or
+  // Open Mic barge-in - without the caller having to hold a reference.
+  const controller = new AbortController();
+  const entry = { text: "", status: "processing", connected: false, sessionTitle, error: null, controller, listeners: new Set() };
   _inflight.set(sessionId, entry);
   _notify(sessionId);
   _runTurn(sessionId, entry, text, attachmentIds);
@@ -67,6 +81,7 @@ async function _runTurn(sessionId, entry, text, attachmentIds) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: sessionId, message: text, attachment_ids: attachmentIds }),
+      signal: entry.controller.signal,
     });
     if (!res.ok || !res.body) {
       let detail = `Stream failed (${res.status})`;
@@ -102,8 +117,18 @@ async function _runTurn(sessionId, entry, text, attachmentIds) {
     if (!completed) throw new Error('Connection ended before the response finished. Reopen this chat to recover any saved reply.');
     entry.status = "done";
   } catch (e) {
-    entry.status = "failed";
-    entry.error = e.message;
+    // A deliberate stop is not a failure. Aborting the fetch drops the
+    // connection, which the backend already treats as client cancellation and
+    // handles by saving the partial reply with status "interrupted" (see
+    // services/chat_service.py's BaseException branch) - so the text already
+    // on screen is the text that was kept, and there is nothing to apologise
+    // for in the UI.
+    if (entry.stopped || e.name === 'AbortError') {
+      entry.status = "stopped";
+    } else {
+      entry.status = "failed";
+      entry.error = e.message;
+    }
   }
   _notify(sessionId);
 

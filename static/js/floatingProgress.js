@@ -50,9 +50,11 @@ function render(sessionId, entry) {
   }
   card.classList.toggle("done", entry.status === "done");
   card.classList.toggle("failed", entry.status === "failed");
+  card.classList.toggle("stopped", entry.status === "stopped");
   const statusText = entry.status === "processing" ? (entry.text ? 'receiving response' : 'waiting for response')
     : entry.status === "done" ? "finished"
-      : "failed";
+      : entry.status === "stopped" ? "stopped"
+        : "failed";
   const label = card.querySelector('.chat-progress-label');
   const next = `${entry.sessionTitle} · ${statusText}`;
   if (label.textContent !== next) label.textContent = next;

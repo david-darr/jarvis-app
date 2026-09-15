@@ -370,7 +370,7 @@ app.whenReady().then(async () => {
     await delay(400);
     assert.ok(await js("document.querySelector('.chat-input-bar').getBoundingClientRect().bottom > innerHeight-70"), 'Conversation composer docks at bottom');
     await open('s1');
-    assert.equal(await js("document.querySelector('#chat-send').disabled"), false);
+    assert.equal(await js("document.querySelector('#chat-send').dataset.mode!=='stop'"), true);
     await open('s2');
     assert.equal(await js("document.querySelectorAll('.msg.assistant').length"), 1);
     await js("document.querySelector('#chat-messages').scrollTop=0");
@@ -381,18 +381,43 @@ app.whenReady().then(async () => {
     const finalText = pending.text + '\nFinal detail.';
     chats.s2.messages.push({ role: 'assistant', content: finalText });
     pending.res.end('data: {"done":true}\n\n'); pending = null;
-    await waitFor("!document.querySelector('#chat-send').disabled");
+    await waitFor("document.querySelector('#chat-send').dataset.mode!=='stop'");
     assert.equal(await js("document.querySelector('.chat-activity')?.dataset.state"), 'done');
     await open('s2');
     assert.equal(await js("document.querySelectorAll('.msg.assistant').length"), 1, 'Finished retention never duplicates a persisted reply');
     // Truncated SSE must fail, not masquerade as a successful reply.
     await js("document.querySelector('#chat-input').value='Interrupted turn'; document.querySelector('#chat-send').click()");
-    await waitFor("document.querySelector('#chat-send').disabled");
+    await waitFor("document.querySelector('#chat-send').dataset.mode==='stop'");
     while (!pending) await delay(20);
     pending.res.end(); pending = null;
     await waitFor("!!document.querySelector('.msg-interrupted')");
     assert.equal(await js("[...document.querySelectorAll('.chat-activity')].at(-1).dataset.state"), 'failed');
     assert.equal(await js("document.querySelectorAll('.msg.assistant').length"), 2);
+
+    // -- stopping a running turn (David's ask 2026-09-15, the foundation the
+    // voice work needs for barge-in). Before this there was no cancellation
+    // at all: chatStream.js notes the request "was never actually cancelled",
+    // so a long or wrong reply had to be waited out.
+    await js("document.querySelector('#chat-input').value='Stop this one'; document.querySelector('#chat-send').click()");
+    await waitFor("document.querySelector('#chat-send').dataset.mode==='stop'");
+    while (!pending) await delay(20);
+    pending.res.write('data: ' + JSON.stringify({ chunk: 'Partial answer before the stop.' }) + '\n\n');
+    await waitFor("document.querySelector('#chat-messages').textContent.includes('Partial answer before the stop')");
+    await js("document.querySelector('#chat-send').click()");
+    await waitFor("!!document.querySelector('.msg-stopped')");
+    // A stop is not a failure: no error styling and no error toast.
+    // Scoped to the message that was stopped: an earlier check in this suite
+    // deliberately produces a genuinely failed message, so a document-wide
+    // count would fail for the wrong reason.
+    assert.equal(await js("[...document.querySelectorAll('.msg.assistant')].at(-1).classList.contains('msg-failed')"), false, 'Stopping must not render as a failure');
+    assert.equal(await js("[...document.querySelectorAll('.chat-activity')].at(-1).dataset.state"), 'stopped');
+    // Whatever had streamed stays on screen, because the backend saved it.
+    assert.ok(await js("document.querySelector('#chat-messages').textContent.includes('Partial answer before the stop')"), 'Partial reply survives the stop');
+    // The button returns to send, so the chat is immediately usable again.
+    await waitFor("document.querySelector('#chat-send').dataset.mode==='send'");
+    try { pending.res.end(); } catch (e) {}
+    pending = null;
+
     // Inject dangerous content through the real renderer, not a stub parser.
     const attack = '<img src="https://example.test/track" onerror="window.__xss=1"><iframe src="/api/settings"></iframe><script>window.__xss=1</script><p class="artifact-panel">safe</p>[bad](javascript:alert(1))';
     await js(`import('/static/js/chatContent.js').then(m => { const node=document.createElement('div'); node.id='security-test'; document.body.append(node); m.renderMessageBody(node, ${JSON.stringify(attack)}, 's1'); })`);
@@ -444,7 +469,7 @@ app.whenReady().then(async () => {
     assert.deepEqual(requests.filter(r=>r.path==='/api/chat/stream').at(-1).data.attachment_ids, ['staged-test']);
     assert.equal(requests.filter(r=>r.path==='/api/chat/stream').at(-1).data.message, 'Keep this draft');
     pending.res.end('data: {"done":true}\n\n'); pending = null;
-    await waitFor("!document.querySelector('#chat-send').disabled");
+    await waitFor("document.querySelector('#chat-send').dataset.mode!=='stop'");
     await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
     await waitFor("matchMedia('(prefers-reduced-motion: reduce)').matches");
     await js("document.querySelector('.chat-header-new').click()");

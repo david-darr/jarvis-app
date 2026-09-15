@@ -14,11 +14,11 @@ export function createChatActivity() {
   const node = el('details', { class: 'chat-activity' }, [summary, list]);
   let previous = '';
   function update(entry) {
-    const state = entry.status === 'failed' ? 'failed' : entry.status === 'done' ? 'done' : entry.text ? 'responding' : entry.connected ? 'waiting' : 'sending';
+    const state = entry.status === 'failed' ? 'failed' : entry.status === 'stopped' ? 'stopped' : entry.status === 'done' ? 'done' : entry.text ? 'responding' : entry.connected ? 'waiting' : 'sending';
     if (state === previous) return;
     previous = state; node.dataset.state = state;
     label.textContent = { sending: 'Sending request', waiting: 'Waiting for response', responding: 'Receiving response', done: 'Response complete', failed: 'Response interrupted' }[state];
-    marker.textContent = state === 'done' ? '✓' : state === 'failed' ? '!' : '';
+    marker.textContent = state === 'done' ? '✓' : state === 'failed' ? '!' : state === 'stopped' ? '■' : '';
     const complete = [!!entry.connected, !!entry.text, state === 'done'];
     rows.forEach((row, index) => {
       row.dataset.state = complete[index] ? 'done' : state === 'failed' ? 'stopped' : index === complete.findIndex(value => !value) ? 'active' : 'pending';

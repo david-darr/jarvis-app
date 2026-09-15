@@ -26,6 +26,7 @@ const ICON_DOC = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" st
 const ICON_WORKSPACE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
 const ICON_PROMPT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 2 4 4"/><path d="m17 7 3-3"/><path d="M19 9 8.7 19.3c-1 1-2.5 1-3.4 0l-.6-.6c-1-1-1-2.5 0-3.4L15 5"/><path d="m9 11 4 4"/></svg>';
 const ICON_PLUS = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+const ICON_STOP = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
 const ICON_SEND = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
 const ICON_X = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>';
 const ICON_CHEVRON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
@@ -88,7 +89,10 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
   const initial = chatStream.getInFlight(sessionId);
   const activity = createChatActivity();
   replyCard.insertBefore(activity.node, replyBody);
-  if (sendBtn) sendBtn.disabled = true;
+  // Deliberately not touching sendBtn.disabled here: syncChatBusy() below
+  // owns that control now and flips it into stop mode, so disabling it would
+  // remove the only way to end the turn this function is rendering.
+  if (sendBtn) syncChatBusy(true);
 
   const paint = (entry) => {
     activity.update(entry);
@@ -110,7 +114,15 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
         actionRow.appendChild(doneIcon);
         actionRow.classList.add("has-done");
       }
-      if (current && sendBtn) sendBtn.disabled = false;
+      unsubscribe();
+    } else if (entry.status === "stopped") {
+      // Deliberate stop, so it reads as an ended reply rather than a fault.
+      // The backend already saved whatever had streamed, so the text on
+      // screen is the text that was kept.
+      cursor.remove();
+      renderMessageBody(replyBody, entry.text, sessionId);
+      if (!entry.text) replyBody.textContent = 'Stopped before a response started.';
+      replyCard.append(el('div', { class: 'msg-stopped', role: 'status', text: 'Stopped · partial reply saved' }));
       unsubscribe();
     } else if (entry.status === "failed") {
       cursor.remove();
@@ -118,7 +130,6 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
       replyCard.append(el('div', { class: 'msg-interrupted', role: 'status', text: entry.error || 'Response interrupted. Try sending your message again.' }));
       replyCard.classList.add("msg-failed");
       toast(`Message failed: ${entry.error || "connection dropped"}`, "error");
-      if (current && sendBtn) sendBtn.disabled = false;
       unsubscribe();
     }
     // Guarded on still-being-the-active-session: this callback keeps firing
@@ -131,7 +142,7 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
     if (current) {
       if (follow) messages.scrollTop = messages.scrollHeight;
       messages.dispatchEvent(new Event('scroll'));
-      if (entry.status === "done" || entry.status === "failed") {
+      if (entry.status === "done" || entry.status === "failed" || entry.status === "stopped") {
         const sessionsList = document.getElementById("sessions-list");
         if (sessionsList) refreshSessions(sessionsList, messages);
         // The turn that just finished is what produced the new reading.
@@ -366,7 +377,10 @@ export async function render(container, tabId, options = {}) {
     input.focus();
   }
 
-  sendBtn.addEventListener("click", () => sendMessage(messages, input, sendBtn, attachStrip));
+  sendBtn.addEventListener("click", () => {
+    if (sendBtn.dataset.mode === 'stop') { chatStream.stopTurn(activeSessionId); return; }
+    sendMessage(messages, input, sendBtn, attachStrip);
+  });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -791,9 +805,24 @@ async function refreshContextMeter(sessionId) {
 }
 
 function syncChatBusy(busy) {
-  for (const id of ['chat-send', 'model-picker-btn', 'model-version-btn']) {
+  // Model controls still lock during a turn: switching provider mid-reply
+  // would reconnect the brain underneath a running stream.
+  for (const id of ['model-picker-btn', 'model-version-btn']) {
     const control = document.getElementById(id);
     if (control) control.disabled = busy;
+  }
+  // Send doubles as stop rather than greying out. Before this there was no
+  // way at all to end a running reply (see chatStream.js's note that the
+  // request was never actually cancelled), so a long or wrong answer had to
+  // be waited out.
+  const send = document.getElementById('chat-send');
+  if (send) {
+    send.disabled = false;
+    send.dataset.mode = busy ? 'stop' : 'send';
+    send.title = busy ? 'Stop' : 'Send';
+    send.setAttribute('aria-label', busy ? 'Stop response' : 'Send message');
+    send.replaceChildren();
+    send.insertAdjacentHTML('beforeend', busy ? ICON_STOP : ICON_SEND);
   }
   if (busy) document.querySelectorAll('.model-picker-menu').forEach(m => m.classList.add('hidden'));
 }
@@ -1395,6 +1424,7 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
     sendBtn.disabled = true;
     try { await createSession({ preserveAttachments: true }); }
     catch (error) { sendBtn.disabled = false; toast(`Couldn't start chat: ${error.message}`, 'error'); return; }
+    sendBtn.disabled = false;
     if (!messages.isConnected) return;
   }
   stagedAttachments = [];
