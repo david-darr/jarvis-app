@@ -352,10 +352,19 @@ class ChatTests(unittest.TestCase):
         slide = deck.slides.add_slide(deck.slide_layouts[1])
         slide.shapes.title.text = "Slide one"
         slide.placeholders[1].text = "First point\nSecond point"
+        slide.notes_slide.notes_text_frame.text = "Speaker notes"
+        from pptx.util import Inches
+        grid = slide.shapes.add_table(2, 2, Inches(1), Inches(3), Inches(4), Inches(1)).table
+        grid.cell(0, 0).text, grid.cell(0, 1).text = "h1", "h2"
+        grid.cell(1, 0).text, grid.cell(1, 1).text = "v1", "v2"
         deck.save(self.root / "p.pptx")
         parsed = office_preview.extract(self.root / "p.pptx", ".pptx")
         self.assertEqual(parsed["slides"][0]["title"], "Slide one")
         self.assertEqual(parsed["slides"][0]["body"], ["First point", "Second point"])
+        self.assertEqual(parsed["slides"][0]["notes"], "Speaker notes")
+        # A table on a slide must survive: python-pptx's collections are not
+        # sliceable, and the per-shape guard hid that for a whole release.
+        self.assertEqual(parsed["slides"][0]["tables"], [[["h1", "h2"], ["v1", "v2"]]])
         # Stated in the payload so the UI can say so rather than implying the
         # preview looks like the real slide.
         self.assertFalse(parsed["layout_fidelity"])

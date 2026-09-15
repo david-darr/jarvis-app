@@ -224,8 +224,12 @@ def extract_pptx(path: Path) -> dict:
         for shape in list(slide.shapes)[:MAX_SHAPES_PER_SLIDE]:
             try:
                 if getattr(shape, "has_table", False) and shape.has_table:
-                    rows = [[_clip(cell.text).strip() for cell in row.cells[:MAX_COLS]]
-                            for row in shape.table.rows[:MAX_ROWS]]
+                    # list() first: python-pptx's row and cell collections
+                    # index by int only, and slicing them raises TypeError —
+                    # which the guard below would swallow, dropping every
+                    # table from the preview without a trace.
+                    rows = [[_clip(cell.text).strip() for cell in list(row.cells)[:MAX_COLS]]
+                            for row in list(shape.table.rows)[:MAX_ROWS]]
                     if rows:
                         tables.append(rows)
                     continue

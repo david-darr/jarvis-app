@@ -151,6 +151,7 @@ export function openBrowser(initialUrl) {
     // pretending about what it can show.
     let current = '';
     let timer = null;
+    let loading = false;
     const frame = el('iframe', {
       class: 'browser-frame', title: 'Embedded web page',
       referrerpolicy: 'no-referrer',
@@ -168,11 +169,17 @@ export function openBrowser(initialUrl) {
       // A site that refuses framing usually produces no load event at all.
       // There is no header to read cross-origin, so elapsed time is the only
       // signal available — and the message says exactly that.
+      loading = true;
       timer = setTimeout(() => {
+        loading = false;
         if (pane) status.textContent = 'This site may not allow being displayed here. Use "Open in new tab" to view it.';
       }, 4000);
     };
-    frame.addEventListener('load', () => { clearTimeout(timer); if (pane) status.textContent = ''; });
+    // Only a load this pane is still waiting on may clear the status. A
+    // refused address writes its own message, and the page that was loading
+    // before it must not wipe that message when it finally settles.
+    frame.addEventListener('load', () => { clearTimeout(timer); if (!loading) return; loading = false; if (pane) status.textContent = ''; });
+    const refuse = message => { clearTimeout(timer); loading = false; status.textContent = message; };
     cleanups.push(() => clearTimeout(timer));
 
     go = value => {
@@ -183,9 +190,9 @@ export function openBrowser(initialUrl) {
         target = /^[a-z][a-z0-9+.-]*:/i.test(text) ? new URL(text)
           : /^[^\s/]+\.[^\s/]{2,}(\/|$|\?|#)/i.test(text) ? new URL(`https://${text}`)
           : new URL(`https://duckduckgo.com/?q=${encodeURIComponent(text)}`);
-      } catch { status.textContent = "That address couldn't be opened."; return; }
+      } catch { refuse("That address couldn't be opened."); return; }
       if (target.protocol !== 'http:' && target.protocol !== 'https:') {
-        status.textContent = 'Only web addresses can be opened here.';
+        refuse('Only web addresses can be opened here.');
         return;
       }
       current = target.toString();

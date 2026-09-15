@@ -1,5 +1,6 @@
 // Real Chromium, synthetic sessions and loopback-only traffic. No live backend.
 const { app, BrowserWindow, session } = require('electron');
+const { exitAfterFlush } = require('./electron-exit.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
@@ -443,5 +444,5 @@ app.whenReady().then(async () => {
   } catch (error) {
     fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: false, error: error.stack, errors }, null, 2));
     await capture('failure'); console.error(error); process.exitCode = 1;
-  } finally { win.destroy(); server.close(); app.quit(); }
+  } finally { win.destroy(); server.close(); exitAfterFlush(process.exitCode); }
 });

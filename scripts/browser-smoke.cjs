@@ -18,6 +18,7 @@
 // the real web — the one thing loopback fixtures cannot demonstrate.
 
 const { app, BrowserWindow, session } = require('electron');
+const { exitAfterFlush } = require('./electron-exit.cjs');
 const http = require('node:http');
 const path = require('node:path');
 const assert = require('node:assert/strict');
@@ -49,17 +50,15 @@ app.commandLine.appendSwitch('host-resolver-rules', `MAP fixture.test 127.0.0.1,
 // nothing on screen and nothing on stdout. Both guards below turn that into
 // a real, readable failure.
 //
-// app.quit(), never app.exit(): app.exit() tears the process down
-// immediately and drops whatever is still buffered on stdout, which is
-// exactly how an earlier version of this file "passed" while printing
-// nothing at all. scripts/chat-smoke.cjs uses the same process.exitCode +
-// app.quit() pairing for the same reason.
+// exitAfterFlush, not app.quit() or app.exit(): see scripts/electron-exit.cjs.
+// app.exit() drops buffered stdout (an earlier version of this file "passed"
+// while printing nothing), and app.quit() ignores process.exitCode on
+// Electron 31/Windows (a failing run exited 0). The helper avoids both.
 function finish(code, message) {
   if (code) console.error(message); else console.log(message);
-  process.exitCode = code;
   try { server.close(); } catch { /* already closed */ }
   for (const w of BrowserWindow.getAllWindows()) w.destroy();
-  app.quit();
+  exitAfterFlush(code);
 }
 
 process.on('unhandledRejection', (error) => {

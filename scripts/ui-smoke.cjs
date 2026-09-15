@@ -2,6 +2,7 @@
 // Isolated renderer checks. All API responses are synthetic, all writes stay
 // in this process, and no request can reach the running JARVIS backend.
 const { app, BrowserWindow, session } = require("electron");
+const { exitAfterFlush } = require('./electron-exit.cjs');
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -407,5 +408,5 @@ app.whenReady().then(async () => {
     fs.writeFileSync(path.join(output, "result.json"), JSON.stringify({ passed: false, failure: error.stack, actual: error.actual, expected: error.expected, errors }, null, 2));
     console.error(error.stack); process.exitCode = 1;
   }
-  finally { win.destroy(); server.close(); app.exit(process.exitCode || 0); }
+  finally { win.destroy(); server.close(); exitAfterFlush(process.exitCode); }
 });
