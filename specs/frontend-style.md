@@ -115,6 +115,18 @@ Flow is a native WebGL fragment shader with no added renderer dependency. Distor
 
 Chat shows an expandable set of transport steps driven by real stream events: sending, connected, waiting, responding, done, interrupted. **It never fabricates reasoning or tool-use steps** — the current backend stream exposes text, done and error only, so anything richer would be invented. The progress element mounts outside the streamed Markdown so token updates never rebuild it, and the floating progress cards keep stable DOM rather than being recreated per token.
 
+## Voice
+
+Two ways to speak to a chat, both transcribed locally. Audio never leaves the machine: the browser records, decodes and resamples to 16 kHz mono WAV, and `core/speech.py` transcribes it with a whisper model on this computer. The engine ships with the app; a model is downloaded on first use from Settings > Speech, so an optional feature does not add half a gigabyte to every installer.
+
+**Dictation** is the mic button in the composer. Click to record, click to stop; the transcript is appended to whatever is already typed rather than replacing it. The model is checked before the microphone opens, so a missing download is reported before someone has spoken into it. A missing engine and a missing model say different things, because one is a broken build and the other is one download away.
+
+**Open Mic** turns a session into a continuous spoken conversation and back again. Its turns are ordinary messages that stream, persist and render like typed ones, so leaving the mode leaves a real conversation behind. Replies are spoken sentence by sentence as they stream, first sentence alone then in two-sentence breaths, with markdown stripped because text written to be read is unintelligible when spoken with its punctuation. Speaking over a reply cuts off both the voice and the in-flight turn: cancelling only the audio would leave the reply generating invisibly and the next thing said would land against stale context. Listening resumes only when the speech queue has fully drained, or the microphone hears the assistant's own next sentence. Pressing it on an empty chat opens a session first, which is how a chat starts as an Open Mic session.
+
+On exit the spoken stretch is folded into a summary written by a brain detached from the session, so it reads the transcript rather than its own memory of it. A failed summary leaves the raw turns in place: verbose beats lost.
+
+Endpointing is done in the browser from audio levels, so the stream never leaves the page until an utterance is complete. State the UI must always convey: listening, transcribing, thinking, speaking. An open microphone hears the room, so this is a mode turned on deliberately and never a default.
+
 ## Test commands
 
 Run the Electron suites through `node scripts/run-electron-test.cjs <suite>`. On Windows a direct invocation returns exit 0 while the GUI process is still running, which reads as a pass for a suite that has not finished. The wrapper uses the project's own Electron, waits for the process, passes through output and exit status, and times out at 240 seconds. `browser-smoke --live` adds real websites; `browser-smoke --verify-failure` proves a non-zero exit still survives. Never use npx to fetch a different Electron.

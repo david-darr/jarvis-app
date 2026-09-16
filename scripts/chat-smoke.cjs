@@ -459,6 +459,11 @@ app.whenReady().then(async () => {
     await js("document.querySelector('#chat-openmic').click()");
     await waitFor("[...document.querySelectorAll('.toast')].some(t=>t.textContent.includes('No speech model'))");
     assert.ok(await js("!document.querySelector('#chat-openmic').classList.contains('active')"), 'A refused start does not enter Open Mic');
+    // Starting Open Mic on an empty chat creates the session first, which is
+    // how a chat begins as an Open Mic session. Asserted by the refusal
+    // reaching the model check at all: with no session it would have stopped
+    // earlier with a different message.
+    assert.ok(await js("!!document.querySelector('#chat-openmic')"), 'Open Mic is reachable from a new chat');
     assert.ok(await js("!document.querySelector('#chat-main').classList.contains('open-mic')"));
     await js("document.querySelectorAll('.toast').forEach(t=>t.remove())");
     // Sentence chunking is the part with real behaviour, and driving it

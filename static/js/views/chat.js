@@ -889,7 +889,18 @@ async function setOpenMic(active, button) {
         : 'Speech recognition is not available in this build.', 'error');
       return;
     }
-    if (!activeSessionId) { toast('Send a message first to start a chat.', 'error'); return; }
+    // Starting Open Mic on a brand-new chat creates the session first, which
+    // is how "begin a chat as an Open Mic session" works: press it on an
+    // empty chat and it opens one and starts listening, rather than needing a
+    // separate control that would duplicate this one.
+    if (!activeSessionId) {
+      try {
+        await createSession();
+      } catch (error) {
+        toast(`Couldn't start chat: ${error.message}`, 'error');
+        return;
+      }
+    }
     try {
       await api(`/api/sessions/${activeSessionId}/open-mic`, { method: 'POST', body: JSON.stringify({ active: true }) });
     } catch (error) { toast(error.message || 'Open Mic could not be started.', 'error'); return; }
