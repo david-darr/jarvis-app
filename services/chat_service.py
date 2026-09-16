@@ -186,6 +186,45 @@ def _apply_attachments(session_id: str, text: str, attachment_ids: list[str] | N
     return text + note
 
 
+# Spoken replies are heard, not read, and David's note after the first real
+# Open Mic session was that the answers were far too long for a back-and-forth
+# (2026-09-15). This is the same instinct as voice-line's SPOKEN_DISCIPLINE,
+# cut down hard: voice-line is a standalone assistant that has to fill dead air
+# during tool calls, whereas an Open Mic chat is a conversation where the other
+# person is waiting to speak.
+#
+# Deliberately brief. A long style preamble on every turn competes with the
+# actual message for attention and eats the context window a spoken session
+# fills quickly anyway.
+OPEN_MIC_DISCIPLINE = (
+    "\n\n[This is a live spoken conversation. Your reply is read aloud and the "
+    "other person is waiting to answer. Keep it to a couple of sentences - say "
+    "the answer, not the reasoning, and stop. No markdown, no lists, no code "
+    "read aloud: describe it instead. Ask if they want the detail rather than "
+    "giving it unprompted. If a real answer genuinely needs length, say the "
+    "short version aloud and offer the rest.]"
+)
+
+
+def _apply_open_mic_discipline(session_id: str, full_text: str) -> str:
+    """Appends the spoken-reply instruction when this session is in Open Mic.
+
+    Applied to what is SENT, never to what is stored — same split as
+    _apply_attachments above. The transcript keeps the user's actual words, so
+    leaving Open Mic (and the summary that follows) sees a clean conversation
+    rather than one with a style note bolted onto every line.
+
+    Re-sent each turn rather than once at connection: the brain is long-lived,
+    and a single instruction at the top of a spoken session is reliably
+    forgotten by the tenth exchange, which is exactly when the replies growing
+    long is most annoying.
+    """
+    session = session_manager.get_session(session_id) or {}
+    if not session.get("open_mic"):
+        return full_text
+    return full_text + OPEN_MIC_DISCIPLINE
+
+
 async def send_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> str:
     async with session_operation(session_id):
         return await _send_message(session_id, text, attachment_ids, is_admin)
@@ -201,6 +240,7 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
     full_text = _apply_attachments(session_id, text, attachment_ids)
     brain, just_created = await _get_brain(session_id, endpoint, is_admin)
     full_text = _prime_with_history(session_id, just_created, endpoint, full_text)
+    full_text = _apply_open_mic_discipline(session_id, full_text)
     try:
         reply = await brain.run_turn(full_text)
     except CLIJSONDecodeError:
@@ -233,6 +273,7 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
         full_text = _apply_attachments(session_id, text, attachment_ids)
         brain, just_created = await _get_brain(session_id, endpoint, is_admin)
         full_text = _prime_with_history(session_id, just_created, endpoint, full_text)
+        full_text = _apply_open_mic_discipline(session_id, full_text)
         async for chunk in brain.run_turn_stream(full_text):
             reply_parts.append(chunk)
             yield chunk

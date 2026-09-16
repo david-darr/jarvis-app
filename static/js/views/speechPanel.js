@@ -1,5 +1,6 @@
 import { api, el, toast } from '../api.js';
 import { refreshSpeechStatus, listInputDevices, getInputDevice, setInputDevice, requestMicrophoneAccess, isRecordingSupported } from '../voiceInput.js';
+import { isSpeechOutputSupported, whenVoicesReady, resolveVoice, getPreferredVoice, setPreferredVoice } from '../voiceOutput.js';
 
 // Settings > Workspace > Speech (David's ask 2026-09-15).
 //
@@ -62,6 +63,64 @@ export async function renderSpeechPanel(content, status) {
           },
         }),
       ]));
+    }
+
+    return section;
+  }
+
+  // -- voice -----------------------------------------------------------------
+  async function drawVoice() {
+    if (!isSpeechOutputSupported()) return null;
+    const voices = await whenVoicesReady();
+    if (!root.isConnected) return null;
+    // Keeps speech-devices for the shared styling and adds its own hook, so a
+    // test can target this section rather than whichever matched first.
+    const section = el('div', { class: 'card speech-devices speech-voice' });
+
+    const automatic = resolveVoice(voices);
+    const select = el('select', { id: 'speech-voice', 'aria-label': 'Voice' });
+    select.append(el('option', {
+      value: '',
+      // Naming what "automatic" actually resolves to, so the default is not a
+      // black box someone has to test to understand.
+      text: automatic ? `Automatic (${automatic.name})` : 'Automatic',
+    }));
+    for (const voice of voices) {
+      select.append(el('option', { value: voice.name, text: `${voice.name} · ${voice.lang}` }));
+    }
+    select.value = getPreferredVoice();
+    // A saved voice whose language pack was removed leaves the select with no
+    // matching option, which silently displays the first one. Reset instead.
+    if (select.value !== getPreferredVoice()) setPreferredVoice('');
+
+    const preview = el('button', { type: 'button', class: 'btn quiet', text: 'Preview' });
+    preview.addEventListener('click', () => {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance('All systems online. What are we working on today?');
+      const chosen = voices.find(v => v.name === select.value) || automatic;
+      if (chosen) { utterance.voice = chosen; utterance.lang = chosen.lang; }
+      utterance.rate = 1.02;
+      window.speechSynthesis.speak(utterance);
+    });
+
+    select.addEventListener('change', () => {
+      setPreferredVoice(select.value);
+      toast(select.value ? 'Voice updated' : 'Using the best available voice', 'success');
+    });
+
+    section.append(el('div', {}, [
+      el('strong', { text: 'Voice' }),
+      el('p', { class: 'meta', text: 'Which voice reads replies aloud in Open Mic.' }),
+    ]), el('div', { class: 'speech-model-actions' }, [preview, select]));
+
+    if (!voices.some(v => /^en[-_]GB/i.test(v.lang))) {
+      // David asked for a British voice. None is installed, and quietly
+      // offering a list of American ones would look like the request was
+      // ignored. This says what is missing and exactly how to fix it.
+      section.append(el('p', { class: 'meta', text:
+        'No British English voice is installed on this computer, so only the American voices are listed. '
+        + 'Add one in Windows Settings under Time & language, Speech, Manage voices, Add voices, English (United Kingdom). '
+        + 'It appears here after a restart and is then chosen automatically.' }));
     }
 
     // Stated here because this is exactly where someone looks for it, and
@@ -162,6 +221,8 @@ export async function renderSpeechPanel(content, status) {
 
     const deviceSection = await drawDevices();
     if (deviceSection && root.isConnected) parts.push(deviceSection);
+    const voiceSection = await drawVoice();
+    if (voiceSection && root.isConnected) parts.push(voiceSection);
 
     parts.push(el('p', { class: 'meta', text: 'Larger models are more accurate and slower. Transcription runs on the processor, so a long recording on a modest machine takes a few seconds.' }));
     root.replaceChildren(...parts);

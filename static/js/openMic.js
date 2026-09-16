@@ -29,6 +29,18 @@ import { createSpeaker, isSpeechOutputSupported } from './voiceOutput.js';
 // value makes it interrupt itself.
 const SPEECH_LEVEL = 0.12;
 const BARGE_LEVEL = 0.22;
+// Barge-in must be SUSTAINED, not a single loud frame: the microphone hears
+// the assistant through the speakers, and one syllable's peak should never
+// count as an interruption or it talks over itself.
+//
+// Counted across a sliding window rather than as a consecutive run. Requiring
+// N in a row sounds equivalent and is not: each reading samples a slice of
+// audio, and speech dips between syllables, so a real interruption produces a
+// broken pattern of loud readings rather than an unbroken one. David talked
+// over it for seconds and the run almost never reached three, which is why
+// interrupting appeared to do nothing at all.
+const BARGE_LOUD_FRAMES = 3;
+const BARGE_WINDOW_FRAMES = 6;
 // Speech has gaps. Ending an utterance on the first quiet frame would cut
 // people off mid-sentence, so silence has to persist.
 const SILENCE_MS = 900;
@@ -36,7 +48,13 @@ const MIN_UTTERANCE_MS = 350;
 // A hard ceiling so a stuck recorder or a noisy room cannot record forever.
 const MAX_UTTERANCE_MS = 45000;
 
-export function createOpenMic({ sessionId, sendMessage, stopTurn, onState, onError }) {
+// `createMic` and `makeSpeaker` are injection points for the suites, not
+// configuration. Barge-in shipped broken because nothing could drive this
+// machine without a real microphone and a real voice, so the one test that
+// would have caught it could not be written. Defaulted to the real
+// implementations; production never passes them.
+export function createOpenMic({ sessionId, sendMessage, stopTurn, onState, onError,
+                                createMic = createRecorder, makeSpeaker = createSpeaker }) {
   let state = 'idle';
   let recorder = null;
   let speaker = null;
@@ -45,6 +63,7 @@ export function createOpenMic({ sessionId, sendMessage, stopTurn, onState, onErr
   let speechStartedAt = 0;
   let lastLoudAt = 0;
   let capturing = false;
+  let bargeWindow = [];
 
   const setState = (next) => {
     if (state === next) return;
@@ -62,15 +81,24 @@ export function createOpenMic({ sessionId, sendMessage, stopTurn, onState, onErr
     if (stopped) return;
     const now = Date.now();
 
-    if (state === 'speaking') {
-      // Barge-in. Cutting off both the voice and the in-flight turn, because
-      // letting the reply finish generating invisibly would make the next
-      // thing said arrive against stale context.
-      if (level >= BARGE_LEVEL) {
-        speaker?.cancel();
-        stopTurn?.(sessionId);
-        beginCapture(now);
-      }
+    // Barge-in. The microphone is open the whole time - through transcribing,
+    // thinking and speaking - which is the only reason levels arrive here at
+    // all. The first version closed the device in finishUtterance() and
+    // reopened it from the speaker's onEnd, so nothing was listening while the
+    // assistant talked and this branch could never run: barge-in was dead code
+    // behind thresholds nothing evaluated. Found by David testing it, not by
+    // the suites, which have no microphone to hear.
+    if (state === 'thinking' || state === 'speaking') {
+      bargeWindow.push(level >= BARGE_LEVEL);
+      if (bargeWindow.length > BARGE_WINDOW_FRAMES) bargeWindow.shift();
+      if (bargeWindow.filter(Boolean).length < BARGE_LOUD_FRAMES) return;
+      bargeWindow = [];
+      // Cut both the voice and the in-flight turn: letting the reply finish
+      // generating invisibly would make the next thing said land against
+      // stale context.
+      speaker?.cancel();
+      stopTurn?.(sessionId);
+      beginCapture(now);
       return;
     }
 
@@ -83,7 +111,15 @@ export function createOpenMic({ sessionId, sendMessage, stopTurn, onState, onErr
     }
     if (!capturing) return;
     if (now - lastLoudAt < SILENCE_MS) return;
-    if (now - speechStartedAt < MIN_UTTERANCE_MS) { capturing = false; return; }
+    if (now - speechStartedAt < MIN_UTTERANCE_MS) {
+      // Too short to be speech - a door, a cough, a keyboard. Drop it rather
+      // than only clearing the flag: the recorder is running by now, and
+      // leaving it to run would glue the noise onto the front of whatever is
+      // actually said next.
+      capturing = false;
+      discardCapture();
+      return;
+    }
     finishUtterance();
   };
 
@@ -91,20 +127,35 @@ export function createOpenMic({ sessionId, sendMessage, stopTurn, onState, onErr
     capturing = true;
     speechStartedAt = now;
     lastLoudAt = now;
+    // Recording starts HERE, not when the device opened. The stream is live
+    // continuously for level metering, but capturing continuously would put
+    // the assistant's own spoken reply - which the microphone hears through
+    // the speakers - at the front of the next utterance sent to whisper.
+    recorder?.capture();
     setState('listening');
+  }
+
+  // Ends the recording and throws the audio away. Failures are ignored on
+  // purpose: this is cleanup, and there is nothing useful to tell anyone about
+  // a noise that was never going to be transcribed.
+  function discardCapture() {
+    bargeWindow = [];
+    recorder?.stop().catch(() => {});
   }
 
   async function finishUtterance() {
     if (!recorder || !capturing) return;
     capturing = false;
+    bargeWindow = [];
     setState('transcribing');
     let blob = null;
     try {
+      // Ends the utterance but leaves the stream open, so levels keep arriving
+      // and the next barge-in is heard.
       blob = await recorder.stop();
     } catch {
       blob = null;
     }
-    recorder = null;
     if (stopped) return;
 
     let text = '';
@@ -118,14 +169,17 @@ export function createOpenMic({ sessionId, sendMessage, stopTurn, onState, onErr
     if (stopped) return;
 
     if (!text) {
-      // Nothing intelligible. Go straight back to listening rather than
-      // sending an empty turn or announcing it, since in a continuous loop
-      // that would fire constantly on ordinary room noise.
-      await listen();
+      // Nothing intelligible. Back to listening rather than sending an empty
+      // turn or announcing it, which in a continuous loop would fire
+      // constantly on ordinary room noise.
+      setState('listening');
       return;
     }
 
     setState('thinking');
+    // Clears the cancel latch from any previous interruption. Without it the
+    // speaker stays permanently silenced after the first barge-in.
+    speaker?.reset();
     try {
       await sendMessage(text, {
         onChunk: (delta) => speaker?.feed(delta),
@@ -133,52 +187,65 @@ export function createOpenMic({ sessionId, sendMessage, stopTurn, onState, onErr
       });
     } catch (error) {
       fail(error.message || 'That turn could not be sent.');
-      await listen();
+      setState('listening');
     }
   }
 
-  async function listen() {
-    if (stopped) return;
-    if (recorder) { try { recorder.cancel(); } catch { /* already gone */ } }
+  // Opens the device without claiming any particular state, and only once per
+  // session: the stream stays live from start() to stop(). Reopening it per
+  // turn would reacquire the device on every exchange, which on Windows costs
+  // a noticeable delay and flickers the recording indicator.
+  async function openMicrophone() {
+    if (stopped) return false;
+    if (recorder) return true;
     capturing = false;
-    recorder = createRecorder({ onLevel });
+    const active = createMic({ onLevel, gated: true });
     try {
-      await recorder.start();
+      await active.start();
     } catch (error) {
-      recorder = null;
       fail(error && error.name === 'NotAllowedError'
         ? 'Microphone access was blocked. Allow it to use Open Mic.'
         : 'No microphone is available.');
       stop();
-      return;
+      return false;
     }
-    setState('listening');
-    // The ceiling is checked here rather than in the level callback so it
-    // still applies to a completely silent stuck stream, which produces no
-    // level changes worth acting on.
-    const started = Date.now();
-    const guard = setInterval(() => {
-      if (stopped || !capturing) return;
-      if (Date.now() - speechStartedAt > MAX_UTTERANCE_MS) {
-        clearInterval(guard);
-        finishUtterance();
-      }
-      void started;
-    }, 1000);
-    guards.add(guard);
+    if (stopped) { try { active.cancel(); } catch { /* already gone */ } return false; }
+    recorder = active;
+    return true;
   }
 
-  const guards = new Set();
+  async function listen() {
+    if (!(await openMicrophone())) return;
+    setState('listening');
+  }
+
+  // One timer for the session, not one per turn. The original registered a
+  // fresh interval on every listen() and cleared none of them, so a long
+  // conversation accumulated a live interval per exchange.
+  let ceilingTimer = null;
 
   return {
     get state() { return state; },
 
+    // Exposed so a test can feed levels directly. The real path goes through
+    // the recorder's analyser, which a headless suite has no way to drive.
+    _level(value) { onLevel(value); },
+
     async start() {
       stopped = false;
-      speaker = createSpeaker({
+      clearInterval(ceilingTimer);
+      // Checked on a timer rather than in the level callback so it still
+      // applies to a silent stuck stream, which produces no levels to act on.
+      ceilingTimer = setInterval(() => {
+        if (stopped || !capturing) return;
+        if (Date.now() - speechStartedAt > MAX_UTTERANCE_MS) finishUtterance();
+      }, 1000);
+      speaker = makeSpeaker({
         onStart: () => setState('speaking'),
-        // Listening resumes only once the whole queue has drained, or the
-        // microphone would hear the assistant's own next sentence.
+        // The device is already open; this only returns the state. It fires
+        // once the whole queue has drained rather than per sentence, so the
+        // pause between the assistant's own sentences is never mistaken for
+        // the end of its turn.
         onEnd: () => { if (!stopped) listen(); },
       });
       if (!isSpeechOutputSupported()) {
@@ -199,9 +266,10 @@ export function createOpenMic({ sessionId, sendMessage, stopTurn, onState, onErr
 
   function stop() {
     stopped = true;
-    guards.forEach(clearInterval);
-    guards.clear();
-    try { recorder?.cancel(); } catch { /* already released */ }
+    clearInterval(ceilingTimer);
+    ceilingTimer = null;
+    bargeWindow = [];
+    try { recorder?.close(); } catch { /* already released */ }
     recorder = null;
     speaker?.cancel();
     speaker = null;
@@ -210,4 +278,4 @@ export function createOpenMic({ sessionId, sendMessage, stopTurn, onState, onErr
   }
 }
 
-export const _thresholds = { SPEECH_LEVEL, BARGE_LEVEL, SILENCE_MS, MIN_UTTERANCE_MS, MAX_UTTERANCE_MS };
+export const _thresholds = { SPEECH_LEVEL, BARGE_LEVEL, SILENCE_MS, MIN_UTTERANCE_MS, MAX_UTTERANCE_MS, BARGE_LOUD_FRAMES, BARGE_WINDOW_FRAMES };

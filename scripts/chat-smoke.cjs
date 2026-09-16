@@ -74,6 +74,7 @@ const server = http.createServer(async (req, res) => {
     requests.push({ path: url.pathname, method: req.method, data });
     const json = value => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(value)); };
     if (url.pathname === '/api/speech/status') return json(speechStatus);
+    if (url.pathname === '/api/speech/transcribe') return json({ text: 'what is the weather' });
     if (url.pathname === '/api/models/catalog') return json(catalog);
     if (url.pathname === '/api/models') return json(models);
     if (url.pathname === '/api/projects') return json([]);
@@ -484,6 +485,120 @@ app.whenReady().then(async () => {
       await js("import('/static/js/voiceOutput.js').then(m=>m._forSpeech(['## Title','','**bold** and `code` and [a link](http://x.test)','- item'].join(String.fromCharCode(10))))"),
       'Title bold and code and a link item',
     );
+
+    // Open Mic's loop, driven end to end with a fake microphone and a fake
+    // voice. This exists because barge-in shipped completely dead: the
+    // microphone was closed while the assistant spoke, so no level ever
+    // reached the handler and the interrupt branch could not run. Nothing
+    // caught it, because openMic.js hard-imported the recorder and no suite
+    // could drive the machine without real hardware. It is injectable now, so
+    // this test drives the actual state machine rather than a copy of it.
+    await js(`(async () => {
+      window.__bargeLog = [];
+      const m = await import('/static/js/openMic.js');
+      // A real, decodable WAV: the transcription path runs WebAudio for real
+      // rather than being stubbed out, so a regression there fails here too.
+      const wav = (seconds) => {
+        const rate = 16000, n = Math.floor(rate * seconds);
+        const buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+        const w = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+        w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+        v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+        v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
+        v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+        w(36, 'data'); v.setUint32(40, n * 2, true);
+        for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.sin(i / 8) * 8000, true);
+        return new Blob([buf], { type: 'audio/wav' });
+      };
+      window.__counts = { captured: 0, stopped: 0, closed: 0, cancelledSpeech: 0, speakerResets: 0 };
+      const fakeMic = () => ({
+        async start() {},
+        capture() { window.__counts.captured++; },
+        async stop() { window.__counts.stopped++; return wav(0.5); },
+        close() { window.__counts.closed++; },
+        cancel() { window.__counts.closed++; },
+      });
+      window.__spoken = [];
+      // Mirrors the real speaker's latch: once cancelled it stays silent until
+      // reset. That is the behaviour that made the app go quiet after the
+      // first interruption, so the fake has to reproduce it or the test would
+      // pass against the bug.
+      let speakerCancelled = false;
+      const fakeSpeaker = () => ({
+        feed(text) { if (!speakerCancelled) window.__spoken.push(text); },
+        finish() {},
+        reset() { speakerCancelled = false; window.__counts.speakerResets++; },
+        cancel() { speakerCancelled = true; window.__counts.cancelledSpeech++; },
+      });
+      window.__mic = m.createOpenMic({
+        sessionId: 's1',
+        // Never resolves, so the turn is still in flight when the interrupt
+        // arrives - which is the only state barge-in is about.
+        sendMessage: (text, handlers) => {
+          window.__bargeLog.push('sent:' + text);
+          // Streams one chunk so the speaker is exercised, then never settles:
+          // the turn has to still be in flight when the interruption arrives.
+          handlers.onChunk('a reply sentence.');
+          return new Promise(() => {});
+        },
+        stopTurn: () => { window.__bargeLog.push('stopTurn'); },
+        onState: (s) => window.__bargeLog.push('state:' + s),
+        createMic: fakeMic,
+        makeSpeaker: fakeSpeaker,
+      });
+      await window.__mic.start();
+      return true;
+    })()`);
+    assert.equal(await js("window.__mic.state"), 'listening', 'Open Mic starts listening');
+    assert.equal(await js("window.__counts.captured"), 0, 'An open microphone is not recording yet');
+
+    await js("window.__mic._level(0.5)");
+    assert.equal(await js("window.__counts.captured"), 1, 'Recording starts when speech does, not when the device opens');
+    await delay(420);
+    await js("window.__mic._level(0.5)");
+    await delay(950);
+    await js("window.__mic._level(0.01)");
+    await waitFor("window.__mic.state==='thinking'");
+    assert.ok(await js("window.__bargeLog.includes('sent:what is the weather')"), 'The transcript is sent as an ordinary turn');
+    assert.equal(await js("window.__counts.stopped"), 1, 'The utterance ended without closing the device');
+    assert.equal(await js("window.__counts.closed"), 0, 'The microphone stays open through the reply');
+
+    assert.deepEqual(await js("window.__spoken"), ['a reply sentence.'], 'The reply is spoken');
+
+    // An isolated peak must not interrupt: the microphone hears the assistant
+    // through the speakers, and one syllable of its own voice coming back
+    // would make it talk over itself.
+    await js("window.__mic._level(0.5)");
+    await js("window.__mic._level(0.01)");
+    await js("window.__mic._level(0.01)");
+    await js("window.__mic._level(0.01)");
+    assert.ok(!(await js("window.__bargeLog.includes('stopTurn')")), 'An isolated peak does not interrupt');
+
+    // Real speech read through a level meter is a BROKEN run of loud readings,
+    // not an unbroken one - it dips between syllables. Requiring consecutive
+    // frames is what made interrupting do nothing while David talked over it
+    // for seconds, so the pattern below is deliberately gappy.
+    await js("window.__mic._level(0.5)");
+    await js("window.__mic._level(0.05)");
+    await js("window.__mic._level(0.5)");
+    assert.ok(!(await js("window.__bargeLog.includes('stopTurn')")), 'Two loud readings are still not enough');
+    await js("window.__mic._level(0.5)");
+    assert.ok(await js("window.__bargeLog.includes('stopTurn')"), 'Speech with normal gaps cuts the assistant off');
+    assert.equal(await js("window.__counts.cancelledSpeech"), 1, 'Barge-in silences the voice as well as the turn');
+    assert.equal(await js("window.__counts.captured"), 2, 'The interruption is recorded as the next utterance');
+
+    // The turn AFTER an interruption must still be audible. The speaker's
+    // cancel latch was never cleared, so the first barge-in silenced the rest
+    // of the session: text kept appearing, nothing was ever spoken again.
+    await delay(420);
+    await js("window.__mic._level(0.5)");
+    await delay(950);
+    await js("window.__mic._level(0.01)");
+    await waitFor("window.__counts.speakerResets>0");
+    await waitFor("window.__spoken.length>1");
+    assert.deepEqual(await js("window.__spoken"), ['a reply sentence.', 'a reply sentence.'],
+      'A reply after an interruption is still spoken aloud');
+    await js("window.__mic.stop(); window.__mic=null;");
 
     // Inject dangerous content through the real renderer, not a stub parser.
     const attack = '<img src="https://example.test/track" onerror="window.__xss=1"><iframe src="/api/settings"></iframe><script>window.__xss=1</script><p class="artifact-panel">safe</p>[bad](javascript:alert(1))';

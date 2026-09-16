@@ -598,10 +598,22 @@ class SpeechTests(unittest.TestCase):
         with self.assertRaises(speech.SpeechUnavailable) as caught:
             speech.transcribe(b"x" * (speech.MAX_AUDIO_BYTES + 1))
         self.assertIn("too large", str(caught.exception))
-        # No model downloaded in this fixture, so this is the real answer.
-        with self.assertRaises(speech.SpeechUnavailable) as caught:
-            speech.transcribe(self._wav(np.zeros(16000, np.float32)))
-        self.assertIn("model", str(caught.exception).lower())
+        # Both remaining refusals, each pinned rather than inferred from the
+        # machine. This used to assert the model message with no patching at
+        # all, which only passed while the developer happened to have no model
+        # downloaded AND the engine importable; downloading a model to test
+        # dictation flipped it to the engine message and failed a test that had
+        # nothing to do with the change being made. A test that depends on the
+        # machine's state is testing the machine.
+        audio = self._wav(np.zeros(16000, np.float32))
+        with patch.object(speech, "engine_available", return_value=False):
+            with self.assertRaises(speech.SpeechUnavailable) as caught:
+                speech.transcribe(audio)
+            self.assertIn("not available in this build", str(caught.exception))
+        with patch.object(speech, "engine_available", return_value=True),              patch.object(speech, "installed_model", return_value=None):
+            with self.assertRaises(speech.SpeechUnavailable) as caught:
+                speech.transcribe(audio)
+            self.assertIn("model", str(caught.exception).lower())
 
     def test_silence_transcribes_to_empty_rather_than_a_marker(self):
         import numpy as np
@@ -669,6 +681,39 @@ class OpenMicTests(unittest.TestCase):
         self.assertFalse(session["open_mic"])
         # Cleared on exit so a later stretch cannot re-summarise an earlier one.
         self.assertNotIn("open_mic_started_at", session)
+
+    def test_spoken_replies_are_told_to_be_short_without_polluting_the_transcript(self):
+        """David's note after the first real Open Mic session (2026-09-15):
+        the answers were far too long for a back-and-forth.
+
+        The instruction rides on what is SENT and never on what is stored.
+        That split is the whole point - if it were appended to the saved
+        message it would end up in the transcript, in the summary written from
+        that transcript, and in the history replayed to a reconnecting brain,
+        where it would keep shortening replies long after Open Mic ended.
+        """
+        sent = []
+
+        async def run(open_mic: bool):
+            if open_mic:
+                session_manager.set_open_mic(self.sid, True)
+            brain = AsyncMock()
+            brain.run_turn = AsyncMock(side_effect=lambda text: sent.append(text) or "ok")
+            with patch.object(chat_service, "_get_brain", return_value=(brain, False)):
+                await chat_service.send_message(self.sid, "what is the weather")
+
+        asyncio.run(run(open_mic=False))
+        self.assertNotIn("live spoken conversation", sent[0])
+
+        asyncio.run(run(open_mic=True))
+        self.assertIn("live spoken conversation", sent[1])
+        # Last thing the model reads, so it is not buried behind the message.
+        self.assertTrue(sent[1].endswith("]"))
+
+        stored = [m["content"] for m in session_manager.get_session(self.sid)["messages"]]
+        for content in stored:
+            self.assertNotIn("live spoken conversation", content)
+        self.assertIn("what is the weather", stored)
 
     def test_summary_replaces_only_the_spoken_stretch(self):
         session_manager.append_message(self.sid, "user", "typed before, must survive")

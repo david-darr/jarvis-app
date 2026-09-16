@@ -71,24 +71,89 @@ export function isSpeechOutputSupported() {
   return typeof window !== 'undefined' && 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
 }
 
-let preferredVoice = null;
+// -- voice selection ---------------------------------------------------------
+// Which voice speaks. Persisted per device, like the microphone choice: it
+// depends on which voices this machine has installed, so it should not follow
+// someone to another one.
+//
+// David asked for a British voice, closer to the films (2026-09-15). This
+// machine has none - only Microsoft David and Zira (en-US), plus Mark exposed
+// to Chromium - so the preference below is aspirational until an English (UK)
+// voice pack is installed, at which point it is selected automatically with no
+// further change here. See the Settings > Speech panel, which says as much
+// rather than silently offering a choice that cannot be honoured.
+const VOICE_KEY = 'jarvis:speech-voice';
+
+// Names Windows and Chromium use for the UK voices, most JARVIS-like first.
+// Matched on substring because the exposed name varies by source: SAPI reports
+// "Microsoft George Desktop" where OneCore reports "Microsoft George".
+const BRITISH_MALE = ['ryan', 'george', 'oliver', 'thomas', 'daniel', 'arthur'];
+
+let preferredVoice = (() => {
+  try { return localStorage.getItem(VOICE_KEY) || null; } catch { return null; }
+})();
+
 export function listVoices() {
   if (!isSpeechOutputSupported()) return [];
   return window.speechSynthesis.getVoices();
 }
-export function setPreferredVoice(name) { preferredVoice = name || null; }
 
-function pickVoice() {
-  const voices = listVoices();
+export function getPreferredVoice() { return preferredVoice || ''; }
+
+export function setPreferredVoice(name) {
+  preferredVoice = name || null;
+  try {
+    if (name) localStorage.setItem(VOICE_KEY, name);
+    else localStorage.removeItem(VOICE_KEY);
+  } catch { /* storage is optional; the choice just will not persist */ }
+}
+
+// Voices load asynchronously in Chromium: getVoices() is commonly empty on the
+// first call and only populates on voiceschanged. Anything drawing a list has
+// to wait for that or it renders an empty picker on a machine that has voices.
+export function whenVoicesReady() {
+  return new Promise(resolve => {
+    if (!isSpeechOutputSupported()) { resolve([]); return; }
+    const existing = window.speechSynthesis.getVoices();
+    if (existing.length) { resolve(existing); return; }
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      resolve(window.speechSynthesis.getVoices());
+    };
+    window.speechSynthesis.addEventListener('voiceschanged', done, { once: true });
+    // Some builds never fire the event when there is nothing to load, so this
+    // resolves empty rather than leaving the caller waiting forever.
+    setTimeout(done, 1500);
+  });
+}
+
+// Exported for the same reason it is used below: the Settings panel needs to
+// show which voice is actually speaking, and recomputing that logic there
+// would let the two drift apart.
+export function resolveVoice(voices) {
   if (!voices.length) return null;
   if (preferredVoice) {
     const chosen = voices.find(v => v.name === preferredVoice);
     if (chosen) return chosen;
+    // A saved voice can vanish with an uninstalled language pack. Fall through
+    // to the default rather than going silent.
   }
   // A local voice is preferred over a network one: network voices stall
   // without connectivity and would send text off the machine, which the rest
   // of this feature deliberately avoids.
-  return voices.find(v => v.localService && /^en/i.test(v.lang)) || voices.find(v => v.localService) || voices[0];
+  const local = voices.filter(v => v.localService);
+  const pool = local.length ? local : voices;
+  const british = pool.filter(v => /^en[-_]GB/i.test(v.lang));
+  return british.find(v => BRITISH_MALE.some(name => v.name.toLowerCase().includes(name)))
+    || british[0]
+    || pool.find(v => /^en/i.test(v.lang))
+    || pool[0];
+}
+
+function pickVoice() {
+  return resolveVoice(listVoices());
 }
 
 // One speaker per conversation. Holds the sentence buffer and the queue so a
@@ -135,6 +200,20 @@ export function createSpeaker({ onStart, onEnd } = {}) {
       // Nothing was ever queued, so no end event is coming to release the
       // caller. Report completion rather than leaving the loop waiting.
       if (queued === 0 && !speaking) onEnd?.();
+    },
+    // Clears the latch set by cancel(). Without this, cancel() is permanent:
+    // `cancelled` was never set back to false, so feed() and enqueue() dropped
+    // everything from then on and the session went silent after the first
+    // interruption - text kept rendering, nothing was ever spoken again. David
+    // hit exactly this. The latch still has to exist, or chunks still in
+    // flight from the aborted turn would be spoken over the interruption, so
+    // the fix is to clear it deliberately when the next turn begins rather
+    // than to drop it.
+    reset() {
+      cancelled = false;
+      chunker.reset();
+      queued = 0;
+      speaking = false;
     },
     cancel() {
       cancelled = true;

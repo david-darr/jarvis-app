@@ -160,7 +160,24 @@ export async function transcribeBlob(blob) {
 // functions so the caller can always reach stop() and release the microphone,
 // including from an error path — a live mic indicator left on after a failure
 // is alarming and looks like the app is listening when it isn't.
-export function createRecorder({ onLevel } = {}) {
+// One recording session. Kept as an object rather than a start/stop pair of
+// functions so the caller can always reach stop() and release the microphone,
+// including from an error path — a live mic indicator left on after a failure
+// is alarming and looks like the app is listening when it isn't.
+//
+// `gated` splits listening from recording, which Open Mic needs and dictation
+// does not. Ungated (the mic button): start() records immediately, stop()
+// returns the audio and releases the device. Gated (Open Mic): start() opens
+// the stream and the level meter but records nothing until capture() is
+// called, and stop() returns the utterance while leaving the stream live.
+//
+// That split is not a nicety. A continuously recording microphone hears the
+// assistant's own reply through the speakers, so the next "utterance" would
+// arrive at whisper with the whole spoken answer in front of it. Gating means
+// only audio from the moment speech is detected is ever recorded. The cost is
+// the ~100ms before the level crosses the threshold, which lands in the attack
+// of the first word rather than in its middle.
+export function createRecorder({ onLevel, gated = false } = {}) {
   let stream = null;
   let recorder = null;
   let chunks = [];
@@ -175,12 +192,41 @@ export function createRecorder({ onLevel } = {}) {
     recorder = null;
   };
 
+  const beginRecording = () => {
+    if (!stream || recorder) return;
+    chunks = [];
+    recorder = new MediaRecorder(stream);
+    recorder.addEventListener('dataavailable', event => {
+      if (event.data && event.data.size) chunks.push(event.data);
+    });
+    recorder.start();
+  };
+
+  // Ends the MediaRecorder and hands back what it captured, without touching
+  // the stream. Shared by both modes; only the caller differs on whether the
+  // device is released afterwards.
+  const endRecording = async () => {
+    if (!recorder || recorder.state !== 'recording') { recorder = null; return null; }
+    const active = recorder;
+    const finished = new Promise(resolve => active.addEventListener('stop', resolve, { once: true }));
+    active.stop();
+    await finished;
+    recorder = null;
+    const type = chunks[0]?.type || 'audio/webm';
+    const blob = chunks.length ? new Blob(chunks, { type }) : null;
+    chunks = [];
+    return blob;
+  };
+
   return {
     get active() { return !!recorder && recorder.state === 'recording'; },
+    get live() { return !!stream; },
 
     async start() {
       // Chromium's own processing is good and costs nothing here; raw mic
-      // input into whisper is noticeably worse in a normal room.
+      // input into whisper is noticeably worse in a normal room. In Open Mic
+      // echoCancellation is doing more than polish: it is the main defence
+      // against the microphone hearing the assistant through the speakers.
       const constraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
       const chosen = getInputDevice();
       try {
@@ -198,21 +244,26 @@ export function createRecorder({ onLevel } = {}) {
         setInputDevice('');
         stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
       }
-      chunks = [];
-      recorder = new MediaRecorder(stream);
-      recorder.addEventListener('dataavailable', event => {
-        if (event.data && event.data.size) chunks.push(event.data);
-      });
-      recorder.start();
+      if (!gated) beginRecording();
 
       if (onLevel) {
         // A live level meter, so it is obvious the mic is actually hearing
-        // something rather than silently recording a muted device.
+        // something rather than silently recording a muted device. In gated
+        // mode this runs the whole time and is what decides when to record.
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const analyser = audioContext.createAnalyser();
-        analyser.fftSize = 512;
+        // 2048 samples is ~43ms at 48kHz. The original 512 was ~10ms, and the
+        // buffer was sized with frequencyBinCount (half of fftSize), so each
+        // reading actually looked at ~5ms out of every 100ms and threw the
+        // other 95% away. Speech energy oscillates, so those snapshots landed
+        // in the quiet part of a syllable constantly: David's measured audio
+        // clipped at 1.00 while only 14 of 482 readings registered above the
+        // interrupt threshold. The gaps were sampling artefacts, not silence.
+        analyser.fftSize = 2048;
         audioContext.createMediaStreamSource(stream).connect(analyser);
-        const data = new Uint8Array(analyser.frequencyBinCount);
+        // Sized to fftSize, not frequencyBinCount: getByteTimeDomainData fills
+        // at most array.length samples, so the old array halved the window.
+        const data = new Uint8Array(analyser.fftSize);
         levelTimer = setInterval(() => {
           analyser.getByteTimeDomainData(data);
           let peak = 0;
@@ -222,18 +273,22 @@ export function createRecorder({ onLevel } = {}) {
       }
     },
 
+    // Gated mode only: start recording an utterance on an already-open stream.
+    capture() { beginRecording(); },
+
     // Resolves with the recorded audio, or null if nothing was captured.
+    // Gated mode keeps the device open for the next utterance; ungated mode
+    // releases it, since dictation is finished the moment the button is let go.
     async stop() {
-      if (!recorder || recorder.state !== 'recording') { release(); return null; }
-      const finished = new Promise(resolve => recorder.addEventListener('stop', resolve, { once: true }));
-      recorder.stop();
-      await finished;
-      const type = chunks[0]?.type || 'audio/webm';
-      const blob = chunks.length ? new Blob(chunks, { type }) : null;
-      release();
+      const blob = await endRecording();
+      if (!gated) release();
       return blob;
     },
 
     cancel() { try { recorder?.stop(); } catch { /* already stopped */ } release(); },
+
+    // Explicit teardown for gated mode, where stop() deliberately does not
+    // release. Same thing as cancel(); named for what the caller means.
+    close() { try { recorder?.stop(); } catch { /* already stopped */ } release(); },
   };
 }
