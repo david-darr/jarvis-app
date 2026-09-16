@@ -1470,3 +1470,5 @@ button.dashboard-row:hover { background: rgba(255,255,255,.035); }
 .speech-model p.meta { margin: 4px 0 0; }
 .speech-model-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .speech-model-actions .meta { font-variant-numeric: tabular-nums; min-width: 38px; text-align: right; }
+.speech-devices select { min-width: 220px; max-width: 320px; }
+.speech-devices .meta { margin: 6px 0 0; }

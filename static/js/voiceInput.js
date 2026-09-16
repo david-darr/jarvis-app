@@ -36,6 +36,49 @@ export function isRecordingSupported() {
   return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
 }
 
+// -- input device selection --------------------------------------------------
+// Which microphone to record from. Persisted per device rather than per user:
+// it describes the hardware in front of someone, not an account preference,
+// so it should not follow them to another machine.
+//
+// There is deliberately no matching output-device setting. speechSynthesis has
+// no sink control at all - verified against this Electron's own Chromium: no
+// setSinkId, nothing on the utterance - so replies play to the system default
+// and nothing in this app can change that. HTMLMediaElement.setSinkId does
+// exist, so output routing would become possible if speech output ever moved
+// to a TTS engine producing audio data rather than the Web Speech API.
+const INPUT_DEVICE_KEY = 'jarvis:speech-input-device';
+
+export function getInputDevice() {
+  try { return localStorage.getItem(INPUT_DEVICE_KEY) || ''; } catch { return ''; }
+}
+
+export function setInputDevice(deviceId) {
+  try {
+    if (deviceId) localStorage.setItem(INPUT_DEVICE_KEY, deviceId);
+    else localStorage.removeItem(INPUT_DEVICE_KEY);
+  } catch { /* storage is optional; the choice just will not persist */ }
+}
+
+// Labels are only populated once the page has been granted microphone access.
+// Before that the browser returns entries with empty labels, so the caller is
+// told rather than left rendering a list of blanks.
+export async function listInputDevices() {
+  if (!navigator.mediaDevices?.enumerateDevices) return { devices: [], labelled: false };
+  let devices = [];
+  try { devices = await navigator.mediaDevices.enumerateDevices(); } catch { return { devices: [], labelled: false }; }
+  const inputs = devices.filter(d => d.kind === 'audioinput');
+  return { devices: inputs, labelled: inputs.some(d => d.label) };
+}
+
+// Prompting for access is what makes labels readable. Kept separate from
+// listing so a settings panel can show the list first and only ask when the
+// user actually wants to identify the devices.
+export async function requestMicrophoneAccess() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  stream.getTracks().forEach(track => track.stop());
+}
+
 function encodeWav(samples, sampleRate) {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
   const view = new DataView(buffer);
@@ -136,11 +179,25 @@ export function createRecorder({ onLevel } = {}) {
     get active() { return !!recorder && recorder.state === 'recording'; },
 
     async start() {
-      stream = await navigator.mediaDevices.getUserMedia({
-        // Chromium's own processing is good and costs nothing here; raw mic
-        // input into whisper is noticeably worse in a normal room.
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
+      // Chromium's own processing is good and costs nothing here; raw mic
+      // input into whisper is noticeably worse in a normal room.
+      const constraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+      const chosen = getInputDevice();
+      try {
+        // `exact` so a chosen device that has been unplugged fails loudly
+        // here rather than silently recording from something else - hearing
+        // the wrong microphone with no indication why is worse than an error.
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: chosen ? { ...constraints, deviceId: { exact: chosen } } : constraints,
+        });
+      } catch (error) {
+        if (!chosen || error.name === 'NotAllowedError') throw error;
+        // The saved device is gone. Fall back to the default and clear the
+        // stale choice, so dictation keeps working and the setting stops
+        // pointing at hardware that no longer exists.
+        setInputDevice('');
+        stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+      }
       chunks = [];
       recorder = new MediaRecorder(stream);
       recorder.addEventListener('dataavailable', event => {

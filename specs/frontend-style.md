@@ -125,6 +125,10 @@ Two ways to speak to a chat, both transcribed locally. Audio never leaves the ma
 
 On exit the spoken stretch is folded into a summary written by a brain detached from the session, so it reads the transcript rather than its own memory of it. A failed summary leaves the raw turns in place: verbose beats lost.
 
+**Devices.** The microphone is selectable in Settings > Speech and the choice is stored per device, since it describes the hardware in front of someone rather than an account preference. A saved device that has been unplugged fails loudly and falls back to the default with the stale choice cleared, rather than silently recording from something else. Device names are withheld by the browser until a page has microphone access, so the panel says why and offers to ask rather than listing blanks.
+
+There is no output-device setting, and the panel states this rather than staying silent about it. `speechSynthesis` exposes no sink control at all, so spoken replies always play through the system default. Output routing would only become possible if speech output moved to a TTS engine producing audio data played through an element, where `setSinkId` applies.
+
 Endpointing is done in the browser from audio levels, so the stream never leaves the page until an utterance is complete. State the UI must always convey: listening, transcribing, thinking, speaking. An open microphone hears the room, so this is a mode turned on deliberately and never a default.
 
 ## Test commands

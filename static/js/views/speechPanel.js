@@ -1,5 +1,5 @@
 import { api, el, toast } from '../api.js';
-import { refreshSpeechStatus } from '../voiceInput.js';
+import { refreshSpeechStatus, listInputDevices, getInputDevice, setInputDevice, requestMicrophoneAccess, isRecordingSupported } from '../voiceInput.js';
 
 // Settings > Workspace > Speech (David's ask 2026-09-15).
 //
@@ -23,6 +23,53 @@ export async function renderSpeechPanel(content, status) {
   const stopPolling = () => { timers.forEach(clearInterval); timers.clear(); };
   const observer = new MutationObserver(() => { if (!root.isConnected) { stopPolling(); observer.disconnect(); } });
   observer.observe(content, { childList: true });
+
+  // -- devices ---------------------------------------------------------------
+  async function drawDevices() {
+    if (!isRecordingSupported()) return null;
+    const section = el('div', { class: 'card speech-devices' });
+    const { devices, labelled } = await listInputDevices();
+
+    const select = el('select', { id: 'speech-input-device', 'aria-label': 'Microphone' });
+    select.append(el('option', { value: '', text: 'System default' }));
+    for (const device of devices) {
+      // An unlabelled device still has to be selectable, so it gets a stable
+      // stand-in rather than an empty row.
+      const label = device.label || `Microphone ${device.deviceId.slice(0, 6)}`;
+      select.append(el('option', { value: device.deviceId, text: label }));
+    }
+    select.value = getInputDevice();
+    select.addEventListener('change', () => {
+      setInputDevice(select.value);
+      toast(select.value ? 'Microphone updated' : 'Using the system default microphone', 'success');
+    });
+
+    section.append(el('div', {}, [
+      el('strong', { text: 'Microphone' }),
+      el('p', { class: 'meta', text: 'Which device dictation and Open Mic record from.' }),
+    ]), el('div', { class: 'speech-model-actions' }, [select]));
+
+    if (!labelled && devices.length) {
+      // Browsers withhold device names until a page has been granted access,
+      // so the list is real but unreadable. Saying why beats showing blanks.
+      section.append(el('p', { class: 'meta' }, [
+        'Device names appear once microphone access is allowed. ',
+        el('button', {
+          type: 'button', class: 'btn quiet', text: 'Allow and show names',
+          onclick: async () => {
+            try { await requestMicrophoneAccess(); draw(); }
+            catch { toast('Microphone access was blocked.', 'error'); }
+          },
+        }),
+      ]));
+    }
+
+    // Stated here because this is exactly where someone looks for it, and
+    // silence would read as an oversight rather than a real constraint.
+    section.append(el('p', { class: 'meta', text:
+      'Spoken replies always play through your system default output. The browser speech engine provides no way to choose a device, so this has to be changed in your operating system sound settings.' }));
+    return section;
+  }
 
   async function draw() {
     let state;
@@ -112,6 +159,9 @@ export async function renderSpeechPanel(content, status) {
       }
       parts.push(row);
     }
+
+    const deviceSection = await drawDevices();
+    if (deviceSection && root.isConnected) parts.push(deviceSection);
 
     parts.push(el('p', { class: 'meta', text: 'Larger models are more accurate and slower. Transcription runs on the processor, so a long recording on a modest machine takes a few seconds.' }));
     root.replaceChildren(...parts);

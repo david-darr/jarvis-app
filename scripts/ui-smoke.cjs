@@ -256,6 +256,18 @@ app.whenReady().then(async () => {
       assert.ok(await js("document.querySelector('.speech-panel').textContent.includes('Downloaded')"), 'Downloaded model is marked');
       assert.equal(await js("document.querySelectorAll('.speech-model-actions .btn').length"), 1, 'Only the missing model offers a download');
       assert.ok(await js("document.querySelector('.speech-panel').textContent.includes('never uploaded')"), 'Panel states audio stays local');
+      // -- device selection. Input is selectable; output deliberately is not,
+      // because speechSynthesis exposes no sink control at all (verified
+      // against this Chromium). The panel says so rather than staying silent,
+      // since this is exactly where someone looks for it.
+      await waitFor("!!document.querySelector('#speech-input-device')");
+      assert.ok(await js("[...document.querySelector('#speech-input-device').options].some(o=>o.value==='')"), 'System default is offered');
+      assert.ok(await js("document.querySelector('.speech-devices').textContent.includes('system default output')"), 'Output limitation is stated, not hidden');
+      // The choice persists locally and survives a reload.
+      await js("import('/static/js/voiceInput.js').then(m=>m.setInputDevice('fixture-device-id'))");
+      assert.equal(await js("import('/static/js/voiceInput.js').then(m=>m.getInputDevice())"), 'fixture-device-id');
+      await js("import('/static/js/voiceInput.js').then(m=>m.setInputDevice(''))");
+      assert.equal(await js("import('/static/js/voiceInput.js').then(m=>m.getInputDevice())"), '');
       assert.deepEqual(await overflow(), [], label + " speech overflow");
       await capture(label + "-speech");
       await js("document.querySelector('[data-section=vault]').click()");
