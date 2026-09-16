@@ -633,6 +633,113 @@ class SpeechTests(unittest.TestCase):
             speech.start_download("definitely-not-a-model")
 
 
+class OpenMicTests(unittest.TestCase):
+    """Open Mic session mode and summarise-on-exit (David's ask 2026-09-15)."""
+
+    def setUp(self):
+        self.sid = session_manager.create_session()["id"]
+        # A summary needs a model to write it, so the session must be pinned
+        # to one - without this the summariser correctly declines and the
+        # tests would be asserting against the wrong refusal.
+        session_manager.set_model_endpoint(self.sid, "claude")
+        self.endpoint_patch = patch("core.model_endpoints.get_endpoint", side_effect=lambda key: ENDPOINTS.get(key))
+        self.endpoint_patch.start()
+        chat_service._busy.clear()
+        chat_service._brains.clear()
+
+    def tearDown(self):
+        self.endpoint_patch.stop()
+
+    def _spoken(self, pairs=3):
+        session_manager.set_open_mic(self.sid, True)
+        for i in range(pairs):
+            session_manager.append_message(self.sid, "user", f"spoken question {i}")
+            session_manager.append_message(self.sid, "assistant", f"spoken answer {i}")
+
+    def test_mode_marks_where_the_spoken_stretch_began(self):
+        session_manager.append_message(self.sid, "user", "typed before")
+        session_manager.set_open_mic(self.sid, True)
+        session = session_manager.get_session(self.sid)
+        self.assertTrue(session["open_mic"])
+        # The marker is what tells the summariser how far back to reach, so it
+        # must point past anything typed before the mode was turned on.
+        self.assertEqual(session["open_mic_started_at"], 1)
+        session_manager.set_open_mic(self.sid, False)
+        session = session_manager.get_session(self.sid)
+        self.assertFalse(session["open_mic"])
+        # Cleared on exit so a later stretch cannot re-summarise an earlier one.
+        self.assertNotIn("open_mic_started_at", session)
+
+    def test_summary_replaces_only_the_spoken_stretch(self):
+        session_manager.append_message(self.sid, "user", "typed before, must survive")
+        self._spoken()
+        async def run():
+            brain = AsyncMock()
+            brain.run_turn = AsyncMock(return_value="They discussed the deployment and agreed to ship Friday.")
+            with patch.object(chat_service, "_build_brain", return_value=brain):
+                return await chat_service.summarise_open_mic(self.sid)
+        result = asyncio.run(run())
+        self.assertTrue(result["summarised"])
+        self.assertEqual(result["replaced"], 6)
+        messages = session_manager.get_session(self.sid)["messages"]
+        # Everything before the stretch is untouched; the stretch itself is one
+        # summary, marked as a summary rather than posing as something said.
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[0]["content"], "typed before, must survive")
+        self.assertTrue(messages[1]["open_mic_summary"])
+        self.assertIn("ship Friday", messages[1]["content"])
+        self.assertFalse(session_manager.get_session(self.sid)["open_mic"])
+
+    def test_summary_is_built_from_the_transcript_by_a_detached_brain(self):
+        self._spoken(pairs=2)
+        captured = {}
+        async def run():
+            brain = AsyncMock()
+            brain.run_turn = AsyncMock(return_value="notes")
+            def build(endpoint, session_id, is_admin=False):
+                captured["session_id"] = session_id
+                return brain
+            with patch.object(chat_service, "_build_brain", side_effect=build):
+                await chat_service.summarise_open_mic(self.sid)
+            return brain.run_turn.await_args[0][0]
+        prompt = asyncio.run(run())
+        # Detached from the session on purpose: a live brain already holds this
+        # conversation, so asking it to summarise would pollute its history and
+        # bias it toward memory rather than the transcript.
+        self.assertIsNone(captured["session_id"])
+        self.assertIn("spoken question 0", prompt)
+        self.assertIn("spoken answer 1", prompt)
+
+    def test_a_failed_summary_leaves_the_conversation_intact(self):
+        self._spoken()
+        before = session_manager.get_session(self.sid)["messages"]
+        async def run():
+            brain = AsyncMock()
+            brain.run_turn = AsyncMock(side_effect=RuntimeError("model exploded"))
+            with patch.object(chat_service, "_build_brain", return_value=brain):
+                return await chat_service.summarise_open_mic(self.sid)
+        result = asyncio.run(run())
+        # Losing the conversation would be far worse than leaving it verbose,
+        # so a failure keeps the raw turns and still exits the mode.
+        self.assertFalse(result["summarised"])
+        self.assertEqual(session_manager.get_session(self.sid)["messages"], before)
+        self.assertFalse(session_manager.get_session(self.sid)["open_mic"])
+
+    def test_short_or_empty_stretches_are_not_summarised(self):
+        async def run():
+            return await chat_service.summarise_open_mic(self.sid)
+        session_manager.set_open_mic(self.sid, True)
+        # Nothing was said at all.
+        self.assertFalse(asyncio.run(run())["summarised"])
+        session_manager.set_open_mic(self.sid, True)
+        session_manager.append_message(self.sid, "user", "one thing")
+        session_manager.append_message(self.sid, "assistant", "one reply")
+        # A summary of a single exchange would be longer than the exchange.
+        result = asyncio.run(run())
+        self.assertFalse(result["summarised"])
+        self.assertEqual(len(session_manager.get_session(self.sid)["messages"]), 2)
+
+
 class RepoIntegrityTests(unittest.TestCase):
     """Guards against a corruption that has now happened twice.
 

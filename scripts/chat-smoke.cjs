@@ -86,7 +86,7 @@ const server = http.createServer(async (req, res) => {
       }
       return json(Object.values(chats));
     }
-    const match = url.pathname.match(/^\/api\/sessions\/([^/]+)(\/model|\/context)?$/);
+    const match = url.pathname.match(/^\/api\/sessions\/([^/]+)(\/model|\/context|\/open-mic)?$/);
     if (match) {
       const chat = chats[match[1]];
       if (match[2] === '/model') {
@@ -96,6 +96,10 @@ const server = http.createServer(async (req, res) => {
         // no longer applies.
         if ('model_override' in data) chat.context_state = null;
         return json({ ok: true, ...data });
+      }
+      if (match[2] === '/open-mic') {
+        chat.open_mic = !!data.active;
+        return json(data.active ? { open_mic: true } : { open_mic: false, summarised: false, reason: 'too short to summarise' });
       }
       if (match[2] === '/context') return json(chat.context_state ? { available: true, ...chat.context_state } : { available: false });
       return json(chat);
@@ -444,6 +448,37 @@ app.whenReady().then(async () => {
     await js("document.querySelectorAll('.toast').forEach(t=>t.remove())");
     speechStatus = { engine_available: true, active_model: null, models: [] };
     await js("import('/static/js/voiceInput.js').then(m=>m.refreshSpeechStatus())");
+
+
+    // -- Open Mic (David's ask 2026-09-15). Driven through the no-model
+    // refusal, which needs no microphone: the toggle checks a model exists
+    // before opening the device, same as the dictation button.
+    assert.ok(await js("!document.querySelector('#chat-openmic').hidden"), 'Open Mic button shows where recording is supported');
+    speechStatus = { engine_available: true, active_model: null, models: [] };
+    await js("import('/static/js/voiceInput.js').then(m=>m.refreshSpeechStatus())");
+    await js("document.querySelector('#chat-openmic').click()");
+    await waitFor("[...document.querySelectorAll('.toast')].some(t=>t.textContent.includes('No speech model'))");
+    assert.ok(await js("!document.querySelector('#chat-openmic').classList.contains('active')"), 'A refused start does not enter Open Mic');
+    assert.ok(await js("!document.querySelector('#chat-main').classList.contains('open-mic')"));
+    await js("document.querySelectorAll('.toast').forEach(t=>t.remove())");
+    // Sentence chunking is the part with real behaviour, and driving it
+    // through live speech synthesis would be slow and machine-dependent.
+    assert.deepEqual(
+      await js("import('/static/js/voiceOutput.js').then(m=>m._chunk('First one. Second one. Third one. Fourth one.'))"),
+      ['First one.', 'Second one. Third one.', 'Fourth one.'],
+      'First sentence ships alone, then two-sentence breaths',
+    );
+    // A trailing sentence with no terminal punctuation must still be spoken;
+    // that is the case voice-line's chunker exists for.
+    assert.deepEqual(
+      await js("import('/static/js/voiceOutput.js').then(m=>m._chunk('Hello there. And then this trails off'))"),
+      ['Hello there.', 'And then this trails off'],
+    );
+    // Markdown is written to be read, not heard.
+    assert.equal(
+      await js("import('/static/js/voiceOutput.js').then(m=>m._forSpeech(['## Title','','**bold** and `code` and [a link](http://x.test)','- item'].join(String.fromCharCode(10))))"),
+      'Title bold and code and a link item',
+    );
 
     // Inject dangerous content through the real renderer, not a stub parser.
     const attack = '<img src="https://example.test/track" onerror="window.__xss=1"><iframe src="/api/settings"></iframe><script>window.__xss=1</script><p class="artifact-panel">safe</p>[bad](javascript:alert(1))';

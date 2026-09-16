@@ -59,6 +59,10 @@ class SetProjectRequest(BaseModel):
     project_id: str | None = None
 
 
+class SetOpenMicRequest(BaseModel):
+    active: bool
+
+
 @router.get("")
 async def list_sessions(user: str = Depends(require_user)) -> list[dict]:
     return session_manager.list_sessions()
@@ -156,6 +160,30 @@ async def get_session_context(session_id: str, user: str = Depends(require_user)
         return {"available": False}
     return {"available": True, **state}
 
+
+
+@router.post("/{session_id}/open-mic")
+@idle_session
+async def set_open_mic(session_id: str, body: SetOpenMicRequest, user: str = Depends(require_user)) -> dict:
+    """Turn a session into an Open Mic conversation, or end one.
+
+    Ending is the interesting half: the spoken turns were ordinary messages
+    while they happened, and they are folded into a summary on the way out so
+    the substance survives without the transcript occupying the whole context
+    window. See services/chat_service.py's summarise_open_mic for why a fresh
+    brain does the summarising.
+
+    Guarded by idle_session like every other session mutation, because
+    rewriting the transcript underneath a running turn would race whatever
+    that turn is about to append.
+    """
+    if session_manager.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if body.active:
+        session_manager.set_open_mic(session_id, True)
+        return {"open_mic": True}
+    result = await chat_service.summarise_open_mic(session_id)
+    return {"open_mic": False, **result}
 
 @router.post("/{session_id}/workspace")
 @idle_session

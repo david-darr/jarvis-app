@@ -4,6 +4,7 @@ import * as chatStream from "../chatStream.js";
 import { renderMessageBody, copyText, closeArtifact } from "../chatContent.js";
 import { openBrowser, closeBrowser } from "../browserPane.js";
 import { createRecorder, transcribeBlob, getSpeechStatus, isRecordingSupported } from "../voiceInput.js";
+import { createOpenMic } from "../openMic.js";
 import { createChatActivity } from '../chatActivity.js';
 
 // Composer rebuilt to match Odysseus's actual chat-input-bar structure
@@ -29,6 +30,7 @@ const ICON_PROMPT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
 const ICON_PLUS = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
 const ICON_STOP = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
 const ICON_MIC = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>';
+const ICON_OPENMIC = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M4 4l16 16" opacity="0"/><circle cx="12" cy="12" r="10.5" opacity=".45"/></svg>';
 const ICON_SEND = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
 const ICON_X = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>';
 const ICON_CHEVRON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
@@ -348,7 +350,11 @@ export async function render(container, tabId, options = {}) {
   micBtn.insertAdjacentHTML("beforeend", ICON_MIC);
   micBtn.hidden = !isRecordingSupported();
   wireMic(micBtn, input);
-  const inputRight = el("div", { class: "chat-input-right" }, [modelWrap, versionWrap, micBtn, sendBtn]);
+  const openMicBtn = el("button", { type: "button", class: "input-icon-btn chat-openmic-btn", id: "chat-openmic", title: "Open Mic", "aria-label": "Start an Open Mic conversation" });
+  openMicBtn.insertAdjacentHTML("beforeend", ICON_OPENMIC);
+  openMicBtn.hidden = !isRecordingSupported();
+  openMicBtn.addEventListener("click", () => setOpenMic(!isOpenMicActive(), openMicBtn));
+  const inputRight = el("div", { class: "chat-input-right" }, [modelWrap, versionWrap, micBtn, openMicBtn, sendBtn]);
   const inputBottom = el("div", { class: "chat-input-bottom" }, [inputLeft, inputRight]);
 
   const composer = el("div", { class: "glass chat-input-bar border-beam" }, [inputTop, inputBottom]);
@@ -426,6 +432,8 @@ export async function render(container, tabId, options = {}) {
     closeSessionMenu();
     closeArtifact();
     closeBrowser();
+    // A live microphone must never outlive the view that owns it.
+    if (openMic) { openMic.stop(); openMic = null; }
     mountSubscriptions.forEach((unsub) => unsub());
     if (activeUnsubscribers === mountSubscriptions) activeUnsubscribers = [];
   };
@@ -823,6 +831,107 @@ function wireMic(micBtn, input) {
     micBtn.title = 'Stop and transcribe';
     micBtn.setAttribute('aria-label', 'Stop recording and transcribe');
   });
+}
+
+// -- Open Mic ----------------------------------------------------------------
+// A session you can talk to continuously: it listens, replies aloud, and can
+// be cut off mid-sentence. Turns are ordinary messages while it runs, so
+// leaving the mode leaves a real conversation behind; the spoken stretch is
+// then folded into a summary server-side so a long exchange does not occupy
+// the whole context window.
+let openMic = null;
+
+export function isOpenMicActive() { return !!openMic; }
+
+function sendVoiceTurn(text, { onChunk, onDone }) {
+  // Reuses the normal turn path rather than a parallel one, so a spoken turn
+  // streams, persists and renders exactly like a typed one.
+  return new Promise((resolve, reject) => {
+    const messages = document.getElementById('chat-messages');
+    if (!messages || !activeSessionId) { reject(new Error('No chat is open.')); return; }
+    messages.appendChild(messageCard('user', text));
+    const replyCard = messageCard('assistant', '');
+    const replyBody = replyCard.querySelector('.msg-body');
+    messages.appendChild(replyCard);
+    syncChatLayout(messages);
+    messages.scrollTop = messages.scrollHeight;
+
+    const sessionItem = document.querySelector(`.session-item[data-session-id="${activeSessionId}"]`);
+    try {
+      chatStream.startTurn(activeSessionId, sessionItem?.dataset.title || 'Chat', text, []);
+    } catch (error) { reject(error); return; }
+    activeUnsubscribers.push(attachToInFlight(activeSessionId, messages, replyCard, replyBody, document.getElementById('chat-send')));
+
+    let spoken = 0;
+    const detach = chatStream.subscribe(activeSessionId, entry => {
+      if (entry.text.length > spoken) {
+        onChunk?.(entry.text.slice(spoken));
+        spoken = entry.text.length;
+      }
+      if (entry.status === 'processing') return;
+      detach();
+      // A stopped turn is a barge-in: the loop is already capturing the
+      // interruption, so it must not be told to start speaking again.
+      if (entry.status === 'stopped') { resolve('stopped'); return; }
+      onDone?.();
+      if (entry.status === 'failed') reject(new Error(entry.error || 'That turn failed.'));
+      else resolve('done');
+    });
+  });
+}
+
+async function setOpenMic(active, button) {
+  if (active) {
+    const status = await getSpeechStatus();
+    if (!status?.engine_available || !status?.active_model) {
+      toast(status?.engine_available
+        ? 'No speech model downloaded yet. Add one in Settings > Speech.'
+        : 'Speech recognition is not available in this build.', 'error');
+      return;
+    }
+    if (!activeSessionId) { toast('Send a message first to start a chat.', 'error'); return; }
+    try {
+      await api(`/api/sessions/${activeSessionId}/open-mic`, { method: 'POST', body: JSON.stringify({ active: true }) });
+    } catch (error) { toast(error.message || 'Open Mic could not be started.', 'error'); return; }
+
+    openMic = createOpenMic({
+      sessionId: activeSessionId,
+      sendMessage: (text, handlers) => sendVoiceTurn(text, handlers),
+      stopTurn: (id) => chatStream.stopTurn(id),
+      onState: state => {
+        button.dataset.micState = state;
+        button.title = `Open Mic: ${state}`;
+      },
+      onError: message => toast(message, 'error'),
+    });
+    button.classList.add('active');
+    document.getElementById('chat-main')?.classList.add('open-mic');
+    await openMic.start();
+    return;
+  }
+
+  const controller = openMic;
+  openMic = null;
+  controller?.stop();
+  button.classList.remove('active');
+  button.removeAttribute('data-mic-state');
+  button.title = 'Open Mic';
+  document.getElementById('chat-main')?.classList.remove('open-mic');
+  const sessionId = activeSessionId;
+  if (!sessionId) return;
+  toast('Ending Open Mic and summarising…', 'success');
+  try {
+    const result = await api(`/api/sessions/${sessionId}/open-mic`, { method: 'POST', body: JSON.stringify({ active: false }) });
+    if (result.summarised && activeSessionId === sessionId) {
+      // The transcript was rewritten server-side, so the on-screen copy is
+      // now stale and has to be reloaded rather than patched.
+      const sessionsList = document.getElementById('sessions-list');
+      const messages = document.getElementById('chat-messages');
+      if (sessionsList && messages) await openSession(sessionId, sessionsList, messages);
+    }
+  } catch (error) {
+    toast(error.message || 'The summary could not be created.', 'error');
+  }
 }
 
 // -- model picker -----------------------------------------------------------

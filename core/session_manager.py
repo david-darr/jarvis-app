@@ -210,6 +210,56 @@ class SessionManager:
             urls.append(url)
             write_json_atomic(_session_path(session_id), session)
 
+    def set_open_mic(self, session_id: str, active: bool) -> dict:
+        """Marks a session as an Open Mic conversation (David's ask
+        2026-09-15).
+
+        Stored on the session rather than held in the page so the mode
+        survives a reload and is visible to any surface listing sessions. The
+        turns themselves are ordinary messages - nothing about a voice turn is
+        stored differently - so leaving the mode leaves a real conversation
+        behind rather than a separate voice log needing to be merged.
+
+        `open_mic_started_at` marks where the spoken stretch began, which is
+        what summarise_open_mic() uses to know how far back to reach. It is
+        cleared on exit so a later stretch cannot accidentally re-summarise an
+        earlier one.
+        """
+        if session_id not in self._index:
+            raise KeyError(f"no such session: {session_id}")
+        session = self.get_session(session_id)
+        session["open_mic"] = bool(active)
+        if active:
+            session.setdefault("open_mic_started_at", len(session.get("messages", [])))
+        else:
+            session.pop("open_mic_started_at", None)
+        write_json_atomic(_session_path(session_id), session)
+        self._index[session_id]["open_mic"] = bool(active)
+        self._save_index()
+        return session
+
+    def replace_messages(self, session_id: str, start_index: int, replacement: list) -> dict:
+        """Swaps a run of messages for a shorter stand-in, keeping everything
+        before it untouched.
+
+        Used to fold a spoken stretch into a summary when Open Mic ends. The
+        slice is replaced rather than appended to, because the point is that
+        the long back-and-forth stops occupying the context while its substance
+        is kept.
+        """
+        if session_id not in self._index:
+            raise KeyError(f"no such session: {session_id}")
+        session = self.get_session(session_id)
+        messages = session.get("messages", [])
+        start = max(0, min(start_index, len(messages)))
+        session["messages"] = messages[:start] + replacement
+        session["updated_at"] = time.time()
+        write_json_atomic(_session_path(session_id), session)
+        self._index[session_id]["message_count"] = len(session["messages"])
+        self._index[session_id]["updated_at"] = session["updated_at"]
+        self._save_index()
+        return session
+
     def set_project(self, session_id: str, project_id: Optional[str]) -> dict:
         """Assigns a session to a project (core/projects.py), or clears it
         back to None. Caller (routes/session_routes.py) is responsible for

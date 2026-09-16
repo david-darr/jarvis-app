@@ -224,3 +224,22 @@
 .chat-mic-btn { position: relative; }
 .chat-mic-btn.busy { opacity: .55; }
 @media (prefers-reduced-motion: reduce) { .chat-mic-btn.recording::after { transition: none; transform: none; } }
+
+/* -- Open Mic (David's ask 2026-09-15) ---------------------------------- */
+.chat-openmic-btn[hidden] { display: none; }
+.chat-openmic-btn.active { color: var(--accent); background: var(--accent-dim); }
+/* The state is the whole point of the indicator: listening, thinking and
+   speaking are the three things you need to know without looking away. */
+.chat-openmic-btn[data-mic-state='listening'] { color: var(--success); }
+.chat-openmic-btn[data-mic-state='transcribing'],
+.chat-openmic-btn[data-mic-state='thinking'] { color: var(--text-dim); }
+.chat-openmic-btn[data-mic-state='speaking'] { color: var(--accent); }
+.chat-openmic-btn[data-mic-state='listening']::after {
+  content: ''; position: absolute; inset: -3px; border-radius: 9px;
+  border: 1.5px solid var(--success); opacity: .5;
+  animation: openmic-pulse 1.8s ease-in-out infinite;
+}
+.chat-openmic-btn { position: relative; }
+#chat-main.open-mic .chat-input-bar { box-shadow: inset 0 0 0 1px var(--accent-dim); }
+@keyframes openmic-pulse { 0%, 100% { opacity: .25; } 50% { opacity: .7; } }
+@media (prefers-reduced-motion: reduce) { .chat-openmic-btn[data-mic-state='listening']::after { animation: none; } }

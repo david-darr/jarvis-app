@@ -11,6 +11,7 @@ before the user has added any model in Settings gets a canned reply telling
 them to go add one, instead of silently spending a real Claude turn.
 """
 import logging
+import time
 from typing import AsyncIterator, Optional, Union
 from contextlib import asynccontextmanager
 from fastapi import HTTPException
@@ -99,7 +100,21 @@ async def _get_brain(session_id: str, endpoint: dict, is_admin: bool = False) ->
     if brain is not None:
         return brain, False
 
-    session = session_manager.get_session(session_id)
+    brain = _build_brain(endpoint, session_id=session_id, is_admin=is_admin)
+    await brain.connect()
+    _brains[session_id] = brain
+    return brain, True
+
+
+def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = False) -> AnyBrain:
+    """Construct (but do not connect) a brain for an endpoint.
+
+    session_id=None builds one detached from any conversation: no cross-session
+    search context, no replayed history. That is what the Open Mic summariser
+    wants, since it must read the saved transcript rather than lean on what a
+    live brain happens to remember.
+    """
+    session = session_manager.get_session(session_id) if session_id else None
     workspace_dir = (session or {}).get("workspace_dir")
     integration_ids = (session or {}).get("enabled_integration_ids")
     # Projects (David's ask 2026-09-12) — read once here rather than in each
@@ -114,21 +129,16 @@ async def _get_brain(session_id: str, endpoint: dict, is_admin: bool = False) ->
     # advertises for this model.
     effort = (session or {}).get("model_effort")
     if endpoint["kind"] == "claude_cli":
-        brain = Brain(cwd_override=workspace_dir, integration_ids=integration_ids,
-                       session_id=session_id, model=cli_model or None, is_admin=is_admin,
-                       project_id=project_id, effort=effort)
-    elif endpoint["kind"] == "codex_cli":
-        brain = CodexBrain(cwd_override=workspace_dir, session_id=session_id,
-                            model=cli_model or None, is_admin=is_admin, project_id=project_id,
-                            effort=effort)
-    else:
-        base_url, model, api_key, num_ctx = model_endpoints.resolve_runtime(endpoint["id"])
-        brain = ExternalBrain(base_url, model, api_key, history=(session or {}).get("messages", []),
-                               session_id=session_id, num_ctx=num_ctx, is_admin=is_admin, project_id=project_id)
-
-    await brain.connect()
-    _brains[session_id] = brain
-    return brain, True
+        return Brain(cwd_override=workspace_dir, integration_ids=integration_ids,
+                     session_id=session_id, model=cli_model or None, is_admin=is_admin,
+                     project_id=project_id, effort=effort)
+    if endpoint["kind"] == "codex_cli":
+        return CodexBrain(cwd_override=workspace_dir, session_id=session_id,
+                          model=cli_model or None, is_admin=is_admin, project_id=project_id,
+                          effort=effort)
+    base_url, model, api_key, num_ctx = model_endpoints.resolve_runtime(endpoint["id"])
+    return ExternalBrain(base_url, model, api_key, history=(session or {}).get("messages", []),
+                         session_id=session_id, num_ctx=num_ctx, is_admin=is_admin, project_id=project_id)
 
 
 def _prime_with_history(session_id: str, just_created: bool, endpoint: dict, full_text: str) -> str:
@@ -283,3 +293,89 @@ async def close_session_brain(session_id: str) -> None:
 async def shutdown() -> None:
     for session_id in list(_brains.keys()):
         await close_session_brain(session_id)
+
+# -- Open Mic (David's ask 2026-09-15) ---------------------------------------
+
+SUMMARY_PROMPT = (
+    "Below is a spoken conversation between a user and their assistant, transcribed from voice. "
+    "Rewrite it as a compact summary that preserves everything a later reply would need: decisions made, "
+    "facts established, questions still open, and anything the user asked to be remembered. "
+    "Write it as notes, not dialogue. Do not add anything that was not said. "
+    "If nothing of substance was discussed, say so in one line." + chr(10) * 2
+)
+
+
+async def summarise_open_mic(session_id: str) -> dict:
+    """Fold a spoken stretch into a summary when Open Mic ends.
+
+    The turns were ordinary messages while they happened, which is what makes
+    leaving the mode leave a real conversation behind. But spoken exchanges run
+    long and repetitive - "sorry, say that again", half sentences, filler - and
+    carrying all of it forward would spend the context window on transcription
+    artefacts. So the stretch is replaced by notes covering what was actually
+    established.
+
+    Deliberately summarised by a FRESH brain rather than the session's own: a
+    live brain already holds this conversation, so asking it to summarise would
+    both pollute its history with the request and bias it toward what it
+    remembers rather than what the transcript says. The summary is derived from
+    the saved messages only.
+
+    Never raises. A failed summary leaves the raw turns in place, which is the
+    safe direction - losing the conversation would be far worse than leaving it
+    verbose.
+    """
+    session = session_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    start = session.get("open_mic_started_at")
+    messages = session.get("messages", [])
+    if start is None or start >= len(messages):
+        session_manager.set_open_mic(session_id, False)
+        return {"summarised": False, "reason": "nothing was spoken"}
+
+    spoken = messages[start:]
+    # One exchange is not worth compressing, and a summary of it would be
+    # longer than the thing itself.
+    if len(spoken) < 4:
+        session_manager.set_open_mic(session_id, False)
+        return {"summarised": False, "reason": "too short to summarise"}
+
+    endpoint = _resolve_endpoint(session_id)
+    if endpoint is None:
+        session_manager.set_open_mic(session_id, False)
+        return {"summarised": False, "reason": "no model available"}
+
+    transcript = (chr(10) * 2).join(f'{m["role"]}: {m["content"]}' for m in spoken if m.get("content"))
+    brain = None
+    try:
+        brain = _build_brain(endpoint, session_id=None, is_admin=False)
+        await brain.connect()
+        summary = (await brain.run_turn(SUMMARY_PROMPT + transcript)).strip()
+    except Exception:
+        logger.exception("open mic: summary failed for %s", session_id)
+        session_manager.set_open_mic(session_id, False)
+        return {"summarised": False, "reason": "the summary could not be generated"}
+    finally:
+        if brain is not None:
+            try:
+                await brain.disconnect()
+            except Exception:
+                logger.exception("open mic: summary brain failed to disconnect")
+
+    if not summary:
+        session_manager.set_open_mic(session_id, False)
+        return {"summarised": False, "reason": "the summary came back empty"}
+
+    # Marked as what it is. A reader scrolling back should be able to tell
+    # this is a condensed record rather than something either party said.
+    session_manager.replace_messages(session_id, start, [{
+        "role": "assistant",
+        "content": "**Voice conversation summary**" + chr(10) * 2 + summary,
+        "ts": time.time(),
+        "status": "complete",
+        "open_mic_summary": True,
+    }])
+    session_manager.set_open_mic(session_id, False)
+    return {"summarised": True, "replaced": len(spoken)}
+
