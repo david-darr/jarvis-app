@@ -163,3 +163,6 @@
 @media (max-width: 768px) { .swarm-connection { grid-template-columns: 1fr; } }
 .swarm-conclusion { margin: 0 0 6px; color: var(--text); }
 .swarm-conclusion strong { color: var(--success); }
+.swarm-needs { border: 1px solid var(--accent); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+.swarm-needs strong { color: var(--accent); }
+.swarm-needs p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }

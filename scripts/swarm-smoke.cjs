@@ -319,6 +319,16 @@ app.whenReady().then(async () => {
     company.conclusion = { reason: 'cycle_limit', summary: 'Reached the 5-cycle ceiling for one start.' };
     emit(company, 'mission.concluded'); await wait(300);
     assert.ok(await js("document.querySelector('.swarm-conclusion').textContent.includes('cycle ceiling')"), 'A ceiling stop is named, not silent');
+    // A team waiting on its owner reads as a question, and the composer answers it.
+    company.conclusion = { reason: 'needs_owner', summary: 'Paste the transcript text into a message.' };
+    emit(company, 'mission.concluded'); await wait(300);
+    assert.ok(await js("document.querySelector('.swarm-needs').textContent.includes('needs something from you')"), 'A waiting team asks visibly');
+    assert.ok(await js("document.querySelector('.swarm-needs').textContent.includes('Paste the transcript')"), 'And says what it needs');
+    assert.equal(await js("document.querySelector('.swarm-composer textarea').getAttribute('placeholder')"), 'Answer what the team asked for…');
+    assert.ok(await js("[...document.querySelectorAll('button')].some(b=>b.textContent==='Answer and resume')"), 'The composer becomes the answer');
+    await capture('desktop-needs-owner');
+    delete company.conclusion;
+    emit(company, 'system.updated'); await wait(300);
 
     await click('Activity');
     await until("!!document.querySelector('.swarm-activity')");

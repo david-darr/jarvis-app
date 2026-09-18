@@ -713,15 +713,77 @@ class SwarmStore:
             return True
 
     def mission_concluded(self, system_id):
+        """The current ending, if the company has one.
+
+        A conclusion is not necessarily final: answering what a team was
+        waiting for reopens the mission, so a reopening after the last
+        conclusion means there is no ending to report.
+        """
         with self._lock:
             row = self.db.execute(
-                "SELECT data FROM events WHERE system_id=? AND kind='mission.concluded' ORDER BY id DESC LIMIT 1",
+                """SELECT kind,data FROM events WHERE system_id=?
+                   AND kind IN ('mission.concluded','mission.reopened') ORDER BY id DESC LIMIT 1""",
                 (system_id,)).fetchone()
-            return json.loads(row[0]) if row else None
+            return json.loads(row[1]) if row and row[0] == "mission.concluded" else None
 
     def run_count(self, system_id):
         with self._lock:
             return self.db.execute("SELECT COUNT(*) FROM runs WHERE system_id=?", (system_id,)).fetchone()[0]
+
+    def eligible_tasks(self, system_id):
+        """Ready work that could actually be claimed right now.
+
+        "Ready" is not the same as claimable: a task whose dependency will
+        never finish stays ready forever. Asking the nominal state is what let
+        a wedged company look busy instead of stuck, so this applies the same
+        dependency rule `reserve` does.
+        """
+        with self._lock:
+            return [dict(row) for row in self.db.execute(
+                """SELECT t.* FROM tasks t WHERE t.system_id=? AND t.state='ready'
+                   AND NOT EXISTS (SELECT 1 FROM dependencies d JOIN tasks p ON p.id=d.depends_on
+                                   WHERE d.task_id=t.id AND p.state!='done')
+                   ORDER BY t.created_at,t.id""", (system_id,))]
+
+    def blocked_for_owner(self, system_id):
+        """Work that stopped because someone needs something from the owner."""
+        with self._lock:
+            return [dict(row) for row in self.db.execute(
+                """SELECT * FROM tasks WHERE system_id=? AND state='review' AND result IS NOT NULL
+                   AND json_valid(result) AND json_extract(result,'$.status')='blocked'
+                   ORDER BY created_at""", (system_id,))]
+
+    def answer_blockers(self, system_id, note):
+        """The owner answered, so held work becomes claimable again.
+
+        The answer itself already reached the team as an ordinary message;
+        this only returns the tasks that stopped for it, so the next attempt
+        starts with the answer sitting in its inbox.
+        """
+        with self.transaction() as db:
+            rows = db.execute(
+                """SELECT * FROM tasks WHERE system_id=? AND state='review' AND result IS NOT NULL
+                   AND json_valid(result) AND json_extract(result,'$.status')='blocked'""",
+                (system_id,)).fetchall()
+            for row in rows:
+                db.execute("UPDATE tasks SET state='ready',revision=revision+1 WHERE id=?", (row["id"],))
+                self._event(db, system_id, "task.unblocked", row["id"], {"note": (note or "")[:2000]})
+            if rows:
+                self._event(db, system_id, "mission.reopened", system_id, {"note": (note or "")[:2000]})
+            return len(rows)
+
+    def reopen_for_start(self, system_id):
+        """A stopped company can be started again.
+
+        Found while diagnosing a wedged company: stop leaves the system
+        stopped, opening a run requires idle, so Start returned a conflict and
+        the usual escape hatch did not work.
+        """
+        with self.transaction() as db:
+            system = self._one(db, "systems", system_id)
+            if system["state"] == "stopped":
+                db.execute("UPDATE systems SET state='idle',reason=NULL,revision=revision+1 WHERE id=?", (system_id,))
+                self._event(db, system_id, "system.reopened", system_id, {})
 
     def tasks_in_review(self, system_id):
         with self._lock:

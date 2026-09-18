@@ -219,6 +219,19 @@ class SwarmService:
             closed = True
         if closed:
             return True
+        # A blocked task is a question for the owner, not work awaiting review.
+        # Counting the lead's own escalation as "the lead is busy" is what
+        # wedged a real company: no further review task could ever be created,
+        # and everything stopped in silence. Specialists' blockers stay
+        # reviewable, so the lead still gets one chance to reassign or work
+        # around one - the digest below makes it exactly one.
+        def is_blocked(task):
+            try:
+                return json.loads(task["result"] or "{}").get("status") == "blocked"
+            except ValueError:
+                return False
+
+        waiting = [task for task in waiting if not (task["agent_id"] == lead["id"] and is_blocked(task))]
         if any(task["agent_id"] == lead["id"] for task in waiting):
             return False
         if not waiting:
@@ -239,6 +252,19 @@ class SwarmService:
         task_id = created.get("review")
         return bool(task_id) and self.store.get_task(task_id)["state"] == "ready"
 
+    @staticmethod
+    def _request_text(blocked):
+        """What the team is actually asking for, in its own words."""
+        asks = []
+        for task in blocked:
+            try:
+                result = json.loads(task["result"] or "{}")
+            except ValueError:
+                continue
+            asks.append((result.get("needs") or result.get("reason") or "").strip())
+        joined = " ".join(ask for ask in asks if ask)
+        return joined[:4000] or "The team stopped and could not say what it needs."
+
     def _continue_reason(self, system_id):
         """Whether to open another cycle, and if not, why not.
 
@@ -253,16 +279,19 @@ class SwarmService:
         if self.store.mission_concluded(system_id):
             return False, None           # already recorded
         if system["state"] != "idle":
-            # A run only reaches idle by completing. Still active with nothing
-            # eligible means the lead ended its cycle without assigning work or
-            # finishing the mission - a real outcome the owner should not have
-            # to infer from a company that just went quiet. Paused and stopped
-            # already record their own reasons.
-            eligible = self.store.db.execute(
-                "SELECT 1 FROM tasks WHERE system_id=? AND state IN ('ready','running')", (system_id,)).fetchone()
-            if system["state"] == "active" and not eligible:
-                return False, ("stalled", "A cycle ended without the lead assigning work or finishing the mission.")
-            return False, None           # paused or stopped
+            if system["state"] != "active":
+                return False, None       # paused or stopped record their own reasons
+            # Claimable work, not nominally ready work. A task whose dependency
+            # will never finish stays ready for ever, which is exactly how a
+            # wedged company looked busy instead of stuck.
+            running = self.store.db.execute(
+                "SELECT 1 FROM tasks WHERE system_id=? AND state='running'", (system_id,)).fetchone()
+            if running or self.store.eligible_tasks(system_id):
+                return False, None
+            blocked = self.store.blocked_for_owner(system_id)
+            if blocked:
+                return False, ("needs_owner", self._request_text(blocked))
+            return False, ("stalled", "A cycle ended without the lead assigning work or finishing the mission.")
         finished = self.store.db.execute(
             """SELECT result FROM tasks WHERE system_id=? AND result IS NOT NULL
                AND json_valid(result) AND json_extract(result, '$.status')='concluded'""",
@@ -337,9 +366,22 @@ class SwarmService:
             return self.store.owner_update(owner, system_id, self._prepare(data), command_id, revision)
 
     async def message(self, owner, system_id, body, command_id):
+        """Send the lead an idea - or the answer a stopped team was waiting for.
+
+        A company that stopped because it needed something from its owner is
+        waiting on exactly this. Answering returns the held work to ready and
+        starts the cycle again, so the next attempt finds the answer in its
+        inbox rather than the owner having to know to press Start.
+        """
         async with self.lock:
             self.ready()
-            return self.store.owner_message(owner, system_id, body, command_id)
+            result = self.store.owner_message(owner, system_id, body, command_id)
+            resumed = False
+            if self.store.blocked_for_owner(system_id):
+                resumed = bool(self.store.answer_blockers(system_id, body))
+            if resumed:
+                self._dispatch(system_id)
+            return {**result, "resumed": resumed}
 
     async def lifecycle(self, owner, system_id, action, command_id, revision):
         async with self.lock:
@@ -361,6 +403,10 @@ class SwarmService:
                 else:
                     if action == "resume":
                         self.store.resume(system_id)
+                    # A stopped company can be started again: stop leaves it
+                    # stopped, and opening a run needs idle, so Start used to
+                    # fail with a conflict and leave no way back.
+                    self.store.reopen_for_start(system_id)
                     self._seed_run(system_id)
                     # Work runs in a backend-owned task: closing the tab, or
                     # this request returning, must not end the company's run.

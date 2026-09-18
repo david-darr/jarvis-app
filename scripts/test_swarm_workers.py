@@ -589,6 +589,79 @@ class CycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(store.mission_concluded(guided), "guided mode ends without concluding the mission")
         self.assertNotEqual(store.run_count(system_id), 1)
 
+    async def test_a_team_that_needs_the_owner_says_so_and_resumes_when_answered(self):
+        """David's first real run, reproduced.
+
+        A specialist hit the no-file-access boundary and blocked, the lead
+        escalated by blocking too, and the company wedged in silence with
+        three tasks ready behind a dependency that would never finish.
+        """
+        state = {"blocked": True}
+
+        def script(body):
+            transcript = json.dumps(body["messages"])
+            is_lead = "the lead of" in body["messages"][0]["content"]
+            used_a_tool = any(message["role"] == "tool" for message in body["messages"])
+            if not used_a_tool:
+                return reply(calls=[("get_assigned_work", {})])
+            if not is_lead:
+                if state["blocked"]:
+                    return reply(calls=[("report_blocker", {
+                        "reason": "I have no file access and the objective needs a local file.",
+                        "needs": "Paste the transcript text into a message."})])
+                return reply(calls=[("submit_result", {"summary": "Done", "output": "The playbook"})])
+            if "waiting on your review" in transcript:
+                # The lead agrees it cannot be worked around and escalates.
+                return reply(calls=[("report_blocker", {
+                    "reason": "Nobody on the team can read that file.",
+                    "needs": "Please paste the full transcript text here."})])
+            if "Review what this company has produced" in transcript:
+                return reply(calls=[("finish_mission", {"summary": "Delivered."})])
+            return reply(calls=[("assign_plan", {"tasks": [
+                {"key": "read", "assignee": "Backend", "objective": "Read the local transcript"}]})])
+
+        system_id = await self.run_autonomous(script)
+        store = self.service.store
+
+        concluded = store.mission_concluded(system_id)
+        self.assertIsNotNone(concluded, "a wedged company must say why it stopped, not go quiet")
+        self.assertEqual(concluded["reason"], "needs_owner")
+        self.assertIn("Paste the transcript", concluded["summary"])
+        self.assertTrue(store.blocked_for_owner(system_id), "the request is still on the record")
+        self.assertFalse(store.eligible_tasks(system_id), "nothing was claimable, which is why it stopped")
+
+        # The owner answers. That alone should restart the work.
+        state["blocked"] = False
+        await self.service.message("alice", system_id, "Here is the transcript: ...", "answer")
+        cycle = self.service.cycles.get(system_id)
+        self.assertIsNotNone(cycle, "answering a waiting team resumes it without pressing Start")
+        await asyncio.wait_for(cycle, timeout=120)
+
+        self.assertIsNone(store.mission_concluded(system_id), "the mission reopened when it was answered")
+        self.assertFalse(store.blocked_for_owner(system_id), "the held work was released")
+        done = store.db.execute("SELECT COUNT(*) FROM tasks WHERE system_id=? AND state='done'", (system_id,)).fetchone()[0]
+        self.assertGreater(done, 0, "work actually finished after the answer")
+
+    async def test_a_stopped_company_can_be_started_again(self):
+        endpoint = {"id": "endpoint-a", "name": "Stub", "kind": "api",
+                    "base_url": "http://127.0.0.1:1/v1", "model": "m", "api_key": None, "num_ctx": None}
+        with patch.object(SwarmService, "_resolved", staticmethod(lambda endpoint_id: endpoint)), \
+             patch.object(SwarmService, "_connection", staticmethod(lambda endpoint_id: endpoint)):
+            created = await self.service.create("alice", setup_payload(), "create")
+            system_id = created["id"]
+            store = self.service.store
+            revision = store.get_system(system_id)["revision"]
+            await self.service.lifecycle("alice", system_id, "start", "one", revision)
+            if self.service.cycles.get(system_id):
+                await asyncio.wait_for(self.service.cycles[system_id], timeout=60)
+            revision = store.get_system(system_id)["revision"]
+            await self.service.lifecycle("alice", system_id, "stop", "stop", revision)
+            self.assertEqual(store.get_system(system_id)["state"], "stopped")
+            revision = store.get_system(system_id)["revision"]
+            result = await self.service.lifecycle("alice", system_id, "start", "two", revision)
+        self.assertEqual(result["status"], "active", result)
+        self.assertEqual(store.run_count(system_id), 2, "a second run really opened")
+
     async def test_a_specialist_cannot_end_the_mission(self):
         root = tempfile.TemporaryDirectory(dir=environment.name)
         fixture = Fixture(root.name)

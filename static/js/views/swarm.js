@@ -389,7 +389,16 @@ export function render(root, _tab, options = {}) {
       stalled: "Stopped without a conclusion",
     };
     const conclusion = snapshot.conclusion;
-    if (conclusion) {
+    if (conclusion && conclusion.reason === "needs_owner") {
+      // The team asked the owner for something and cannot go on without it.
+      // This is the one ending that is a question, so it reads as one and
+      // says how to answer: the composer below is the answer.
+      ui.notice.append(el("div", { class: "swarm-needs", role: "status" }, [
+        el("strong", { text: "The team needs something from you" }),
+        el("p", { text: conclusion.summary }),
+        el("small", { class: "muted", text: "Reply below and the work starts again from where it stopped." }),
+      ]));
+    } else if (conclusion) {
       ui.notice.append(el("p", { class: "swarm-conclusion" }, [
         el("strong", { text: ENDINGS[conclusion.reason] || "Stopped" }),
         conclusion.summary ? el("span", { text: ` — ${conclusion.summary}` }) : null,
@@ -415,6 +424,9 @@ export function render(root, _tab, options = {}) {
         button("Stop", () => lifecycle("stop"), { disabled: system.state === "stopped" }),
         button("Archive", () => lifecycle("archive")));
     }
+    const waiting = snapshot.conclusion?.reason === "needs_owner";
+    ui.composer.setAttribute("placeholder", waiting ? "Answer what the team asked for…" : "Give your lead an idea…");
+    ui.send.textContent = waiting ? "Answer and resume" : "Queue idea";
     ui.composer.disabled = system.state === "archived";
     ui.send.disabled = system.state === "archived" || !!ui.sending;
     ui.team.replaceChildren(el("h2", { text: "Team" }), el("p", { class: "muted", text: system.mission }));
@@ -515,10 +527,13 @@ export function render(root, _tab, options = {}) {
       case "system.created": return "Company created.";
       case "run.started": return `Run started: ${clip(data.objective)}`;
       case "run.completed": return "Cycle completed.";
+      case "task.unblocked": return `${who} can continue: ${clip(data.note)}`;
+      case "mission.reopened": return "You answered, so the work started again.";
+      case "system.reopened": return "The company was started again after being stopped.";
       case "mission.concluded":
-        return data.reason === "mission_complete"
-          ? `The lead ended the mission: ${clip(data.summary) || "no summary given"}`
-          : `The company stopped: ${clip(data.summary) || data.reason}`;
+        if (data.reason === "mission_complete") return `The lead ended the mission: ${clip(data.summary) || "no summary given"}`;
+        if (data.reason === "needs_owner") return `The team needs something from you: ${clip(data.summary)}`;
+        return `The company stopped: ${clip(data.summary) || data.reason}`;
       case "message.queued": return "You sent an idea to the lead.";
       case "message.message": case "message.finding": case "message.proposal": {
         const from = agents.get(data.sender_id) || "A teammate";
