@@ -284,15 +284,42 @@ class StoreTests(Fixture, unittest.TestCase):
         with self.assertRaises(Conflict):
             self.store.resume(self.system)
 
-    def test_quota_expiry_on_idle_specialist_pauses_everyone(self):
-        separate = self.store.create_pool("Specialist", self.limit)
-        self.store.add_agent(self.system, "Research", "research", separate, self.limit)
-        self.store.update_quota(separate, "daily", used_percent=10, status="allowed",
+    def test_a_healthy_reading_that_merely_aged_does_not_block_work(self):
+        """Found on a real company that could then never be resumed.
+
+        The only way to refresh an account reading is to make a request, so
+        refusing every request because the last reading aged is a deadlock
+        rather than caution. A stale healthy reading counts as no reading:
+        local budgets still apply and the next response refreshes it.
+        """
+        self.store.update_quota(self.pool, "five_hour", used_percent=51, status="warning",
                                 observed_at=self.clock(), valid_until=self.clock() + 1)
         self.own()
         self.clock.now += 2
-        self.assertIsNone(self.claim())
-        self.assertEqual(self.store.get_system(self.system)["state"], "pausing")
+        self.assertIsNotNone(self.claim(), "an aged healthy reading must not strand the company")
+        self.assertEqual(self.store.get_system(self.system)["state"], "active")
+
+    def test_an_unhealthy_reading_keeps_blocking_after_it_ages(self):
+        """Going stale is not evidence of recovery."""
+        self.store.update_quota(self.pool, "five_hour", used_percent=99, status="rejected",
+                                observed_at=self.clock(), valid_until=self.clock() + 1)
+        self.own()
+        self.clock.now += 2
+        self.assertIsNone(self.claim(), "an exhausted account stays blocked when its reading ages")
+
+    def test_one_request_may_probe_once_a_reported_reset_has_passed(self):
+        """A known reset time is not proof of capacity, but it earns one look."""
+        self.store.update_quota(self.pool, "five_hour", used_percent=99, status="rejected",
+                                observed_at=self.clock(), valid_until=self.clock() + 1,
+                                resets_at=self.clock() + 5)
+        self.own()
+        self.clock.now += 2
+        self.assertIsNone(self.claim(), "still before the reset")
+        self.store.resume(self.system) if self.store.get_system(self.system)["state"] == "paused" else None
+        self.store.db.execute("UPDATE systems SET state='active',reason=NULL WHERE id=?", (self.system,))
+        self.store.db.execute("UPDATE runs SET state='running' WHERE system_id=?", (self.system,))
+        self.clock.now += 10
+        self.assertIsNotNone(self.claim(), "after the reported reset, one request goes through to find out")
 
     def test_final_usage_settlement_releases_hold_only_after_recorded_stop(self):
         self.own()

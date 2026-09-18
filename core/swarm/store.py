@@ -433,10 +433,24 @@ class SwarmStore:
             if limit.exhausted(used) or not limit.admits(used, held, requested):
                 return f"budget:{scope}:{target}"
         for row in db.execute("SELECT * FROM quotas WHERE pool_id=?", (attempt["pool_id"],)):
-            if row["valid_until"] <= self.clock():
-                return "quota_stale:" + row["bucket"]
-            if self._quota_blocks(db, row):
+            unhealthy = self._quota_blocks(db, row)
+            stale = row["valid_until"] <= self.clock()
+            if unhealthy:
+                # An unhealthy reading keeps blocking past its freshness
+                # window, because going stale is not evidence of recovery.
+                # Once its own reset time has passed, one request may go
+                # through to find out what the allowance actually is.
+                if stale and row["resets_at"] and row["resets_at"] <= self.clock():
+                    continue
                 return "quota:" + row["bucket"]
+            if stale:
+                # Found by a real company that could never be resumed: a
+                # healthy reading that merely aged blocked every request, and
+                # the only way to refresh a reading is to make a request. That
+                # is a deadlock, not caution. A stale healthy reading is
+                # treated as no reading - local budgets still apply, and the
+                # next response refreshes it.
+                continue
         return None
 
     def _company_reason(self, db, system_id, run_id):
