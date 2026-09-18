@@ -1,0 +1,165 @@
+.swarm-view { padding: 28px; min-height: 0; display: flex; flex-direction: column; gap: 18px; }
+.swarm-view h1 { font-size: 24px; font-weight: 500; margin: 0; }
+.swarm-view h2 { font-size: 17px; font-weight: 500; margin: 0 0 12px; }
+.swarm-view h3 { font-size: 14px; font-weight: 500; }
+.swarm-view p { line-height: 1.6; overflow-wrap: anywhere; }
+.swarm-header, .swarm-actions, .swarm-footer, .swarm-dialog-header { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.swarm-header h1 { flex: 1; min-width: 140px; overflow-wrap: anywhere; }
+.swarm-state { font-size: 12px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 20px; padding: 4px 10px; text-transform: capitalize; }
+.swarm-notice { margin: 0; padding: 12px 16px; background: var(--bg-panel); border-radius: var(--radius); color: var(--text-dim); }
+.swarm-system-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(min(100%,290px),1fr)); gap: 16px; }
+.swarm-system-card { text-align: left; color: var(--text); background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; cursor: pointer; min-width: 0; }
+.swarm-system-card:hover { border-color: var(--border-strong); }
+.swarm-system-card h2 { margin-top: 20px; overflow-wrap: anywhere; }
+.swarm-system-card p { color: var(--text-dim); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.swarm-empty { color: var(--text-dim); padding: 30px 4px; }
+.swarm-layout { display: grid; grid-template-columns: 190px minmax(260px,1.3fr) minmax(250px,1fr); flex: 1; min-height: 0; gap: 22px; }
+.swarm-team, .swarm-conversation, .swarm-work { min-width: 0; min-height: 0; overflow: auto; }
+.swarm-agent, .swarm-budget, .swarm-record { padding: 15px 0; border-bottom: 1px solid var(--border); }
+.swarm-agent { display: flex; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
+.swarm-agent span { font-size: 12px; color: var(--text-dim); }
+.swarm-agent small { white-space: pre-wrap; }
+.swarm-conversation { display: flex; flex-direction: column; }
+.swarm-messages { flex: 1; overflow: auto; min-height: 100px; }
+.swarm-message { margin: 8px 0 22px; }
+.swarm-message p { white-space: pre-wrap; margin-top: 6px; }
+.swarm-message .muted { font-size: 11px; }
+.swarm-composer { padding-top: 12px; border-top: 1px solid var(--border); }
+.swarm-composer textarea { resize: vertical; width: 100%; min-height: 86px; max-height: 240px; }
+.swarm-composer .swarm-actions { justify-content: flex-end; margin-top: 8px; }
+.swarm-composer .muted { flex: 1; font-size: 12px; margin: 0; }
+.swarm-panel-tabs { display: flex; flex-wrap: wrap; gap: 5px; position: sticky; top: 0; background: var(--bg); padding-bottom: 12px; }
+.swarm-panel-tabs .btn, .swarm-mobile-tabs .btn { font-size: 12px; padding: 6px 9px; }
+.swarm-view [aria-pressed="true"] { background: var(--accent-dim); border-color: var(--accent); }
+.swarm-record pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; max-height: 300px; overflow: auto; }
+.swarm-record .btn { margin: 4px 6px 0 0; }
+.swarm-footer { justify-content: space-between; font-size: 11px; }
+.swarm-dialog { color: var(--text); background: var(--bg-panel-solid); border: 1px solid var(--border-strong); border-radius: var(--radius); width: min(720px,calc(100vw - 32px)); max-height: calc(100dvh - 40px); padding: 0; box-shadow: var(--shadow-elevated); }
+.swarm-dialog::backdrop { background: rgba(0,0,0,.65); }
+.swarm-dialog-header { padding: 18px 24px; border-bottom: 1px solid var(--border); justify-content: space-between; }
+.swarm-dialog-header h2 { margin: 0; }
+.swarm-dialog-body { padding: 24px; }
+.swarm-setup, .swarm-form-team { display: flex; flex-direction: column; gap: 18px; }
+.swarm-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; min-width: 0; }
+.swarm-field input, .swarm-field textarea, .swarm-field select { width: 100%; min-width: 0; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 9px; font: inherit; }
+.swarm-field textarea { resize: vertical; }
+.swarm-member-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 16px; min-width: 0; }
+.swarm-member-form > .swarm-field:nth-of-type(3), .swarm-member-form > .swarm-limits { grid-column: 1 / -1; }
+.swarm-member-form legend, .swarm-limits legend { color: var(--text-dim); font-size: 12px; padding: 0 5px; }
+.swarm-limits { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; border: 0; padding: 12px 0; min-width: 0; }
+.swarm-error { color: var(--danger); }
+.swarm-view :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.swarm-mobile-tabs { display: none; }
+@media (max-width: 1100px) and (min-width: 769px) { .swarm-layout { grid-template-columns: 150px minmax(230px,1fr); } .swarm-work { grid-column: 1 / -1; max-height: 350px; } }
+@media (max-width: 768px) {
+  .swarm-view { padding: 62px 16px 16px; gap: 12px; }
+  .swarm-header { align-items: flex-start; }
+  .swarm-header .swarm-actions { width: 100%; }
+  .swarm-header .swarm-actions .btn { padding: 7px 10px; }
+  .swarm-mobile-tabs { display: flex; gap: 8px; }
+  .swarm-layout { display: flex; flex-direction: column; }
+  .swarm-layout > section { display: none; }
+  .swarm-layout[data-mobile-panel="team"] > .swarm-team, .swarm-layout[data-mobile-panel="work"] > .swarm-work { display: block; }
+  .swarm-layout[data-mobile-panel="inbox"] > .swarm-conversation { display: flex; }
+  .swarm-dialog-body { padding: 16px; }
+  .swarm-member-form { grid-template-columns: 1fr; }
+  .swarm-limits { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { .swarm-view *, .swarm-dialog * { animation: none !important; transition: none !important; } }
+
+/* Work views (David's ask 2026-09-16): a swimlane dependency graph and a
+   board over the same persisted tasks. [hidden] needs the explicit rule
+   because the flex/grid declarations below and above it would otherwise beat
+   the user-agent rule and leave an "inactive" view on screen. */
+.swarm-view [hidden] { display: none !important; }
+.swarm-view { --swarm-ready: var(--text-faint); --swarm-running: var(--accent); --swarm-blocked: var(--danger); --swarm-review: #d7b26b; --swarm-done: var(--success); --swarm-cancelled: var(--text-faint); }
+.swarm-view-tabs { display: flex; flex-wrap: wrap; gap: 5px; }
+.swarm-view-tabs .btn { font-size: 12px; padding: 6px 11px; }
+.swarm-canvas-wrap, .swarm-board-wrap { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
+.swarm-canvas-bar, .swarm-board-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.swarm-canvas-status, .swarm-board-status { margin: 0; font-size: 12px; }
+.swarm-board-status .btn { margin-left: 8px; font-size: 12px; padding: 4px 8px; }
+.swarm-canvas-bar .btn { min-width: 38px; }
+
+.swarm-canvas { position: relative; flex: 1; min-height: 320px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); background-color: var(--bg-panel); background-image: radial-gradient(circle, rgba(255,255,255,.075) 1px, transparent 1px); cursor: grab; touch-action: none; }
+.swarm-canvas-dragging { cursor: grabbing; }
+.swarm-canvas-surface { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.swarm-canvas-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 20px; }
+.swarm-lanes, .swarm-nodes { position: absolute; top: 0; left: 0; }
+.swarm-lane { position: absolute; top: 0; left: 0; border-bottom: 1px solid var(--border); }
+.swarm-lane:nth-child(odd) { background: rgba(255,255,255,.017); }
+.swarm-lane-labels { position: absolute; top: 0; left: 0; width: 132px; transform-origin: 0 0; pointer-events: none; z-index: 2; }
+.swarm-lane-label { position: absolute; top: 0; left: 0; width: 132px; display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 0 12px; background: linear-gradient(90deg, var(--bg-panel-solid) 78%, transparent); overflow: hidden; }
+.swarm-lane-label strong { font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+.swarm-lane-label small { font-size: 10px; }
+
+.swarm-edges { position: absolute; top: 0; left: 0; overflow: visible; pointer-events: none; color: var(--text-faint); transition: opacity .2s linear; }
+.swarm-edges-settling { opacity: .3; }
+.swarm-edge { fill: none; stroke: currentColor; stroke-width: 1.4; opacity: .5; }
+.swarm-edge-met { stroke: var(--swarm-done); opacity: .45; }
+
+.swarm-node { position: absolute; top: 0; left: 0; width: 196px; height: 78px; display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px; color: var(--text); background: var(--bg-panel-solid); border: 1px solid var(--border); border-left: 3px solid var(--swarm-ready); border-radius: 10px; cursor: pointer; overflow: hidden; transition: transform .28s var(--ease-out), border-color .2s linear, box-shadow .2s linear; }
+.swarm-node:hover { border-color: var(--border-strong); }
+.swarm-node strong { font-size: 12px; font-weight: 500; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.swarm-node small { font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.swarm-node-state { position: absolute; top: 10px; right: 10px; width: 7px; height: 7px; border-radius: 50%; background: var(--swarm-ready); }
+.swarm-node[data-state="running"], .swarm-card[data-state="running"] { border-left-color: var(--swarm-running); }
+.swarm-node[data-state="blocked"], .swarm-card[data-state="blocked"] { border-left-color: var(--swarm-blocked); }
+.swarm-node[data-state="review"], .swarm-card[data-state="review"] { border-left-color: var(--swarm-review); }
+.swarm-node[data-state="done"], .swarm-card[data-state="done"] { border-left-color: var(--swarm-done); }
+.swarm-node[data-state="cancelled"], .swarm-card[data-state="cancelled"] { border-left-color: var(--swarm-cancelled); opacity: .62; }
+.swarm-node[data-state="running"] .swarm-node-state { background: var(--swarm-running); }
+.swarm-node[data-state="blocked"] .swarm-node-state { background: var(--swarm-blocked); }
+.swarm-node[data-state="review"] .swarm-node-state { background: var(--swarm-review); }
+.swarm-node[data-state="done"] .swarm-node-state { background: var(--swarm-done); }
+.swarm-node-moved { box-shadow: 0 0 0 2px var(--accent); }
+.swarm-node-changed, .swarm-card-changed { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.swarm-board { display: flex; gap: 12px; flex: 1; min-height: 0; overflow-x: auto; padding-bottom: 6px; }
+.swarm-column { display: flex; flex-direction: column; min-height: 0; flex: 1 0 210px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius); }
+.swarm-column-head { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.swarm-column-head h3 { margin: 0; }
+.swarm-column-head small { grid-column: 1 / -1; font-size: 10px; line-height: 1.4; }
+.swarm-column-count { font-size: 12px; color: var(--text-dim); }
+.swarm-column-body { display: flex; flex-direction: column; gap: 8px; padding: 10px; overflow: auto; min-height: 60px; }
+.swarm-column-body .swarm-empty { padding: 6px 4px; font-size: 12px; }
+.swarm-card { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 10px 12px; color: var(--text); background: var(--bg-panel-solid); border: 1px solid var(--border); border-left: 3px solid var(--swarm-ready); border-radius: 9px; cursor: pointer; transition: transform .3s var(--ease-out), border-color .2s linear, box-shadow .3s linear; }
+.swarm-card:hover { border-color: var(--border-strong); }
+.swarm-card strong { font-size: 12px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
+.swarm-card span, .swarm-card small { font-size: 10px; overflow-wrap: anywhere; }
+.swarm-card-deps { color: var(--text-faint); }
+.swarm-card-arrived { box-shadow: 0 0 0 2px var(--accent); }
+@media (max-width: 768px) {
+  .swarm-canvas { min-height: 260px; }
+  .swarm-column { flex: 1 0 min(78vw, 250px); }
+  .swarm-canvas-bar, .swarm-board-bar { align-items: flex-start; }
+}
+
+/* C2: the usable surface - connection pickers, live states, readable
+   activity, accepted results, and reconciling a worker that never confirmed
+   it stopped. */
+.swarm-connection { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-width: 0; grid-column: 1 / -1; }
+.swarm-connection legend { color: var(--text-dim); font-size: 12px; padding: 0 5px; }
+.swarm-blockers { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.swarm-blockers li { color: var(--text); font-size: 13px; line-height: 1.5; }
+.swarm-pause-reason { margin: 0 0 6px; color: var(--text); }
+.swarm-notice p { margin: 0; }
+.swarm-agent-state { align-self: flex-start; font-size: 11px; border: 1px solid var(--border); border-radius: 20px; padding: 2px 9px; color: var(--text-dim); }
+.swarm-agent-state[data-tone="working"] { color: var(--accent); border-color: var(--accent); }
+.swarm-agent-state[data-tone="review"] { color: var(--swarm-review); border-color: var(--swarm-review); }
+.swarm-agent-state[data-tone="blocked"], .swarm-agent-state[data-tone="unknown"] { color: var(--danger); border-color: var(--danger); }
+.swarm-agent-task { color: var(--text); overflow-wrap: anywhere; }
+.swarm-activity { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.swarm-activity span { font-size: 10px; }
+.swarm-activity p { margin: 3px 0 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.swarm-unknown { border: 1px solid var(--danger); border-radius: var(--radius); padding: 14px; margin-bottom: 16px; }
+.swarm-unknown h3 { margin: 0 0 4px; color: var(--danger); }
+.swarm-unknown .swarm-record:last-child { border-bottom: 0; padding-bottom: 0; }
+.swarm-results { margin-top: 20px; border-top: 1px solid var(--border); padding-top: 14px; }
+.swarm-results h3 { margin: 0 0 10px; }
+.swarm-result { padding: 12px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.swarm-result p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.swarm-dialog textarea { width: 100%; resize: vertical; }
+@media (max-width: 768px) { .swarm-connection { grid-template-columns: 1fr; } }
+.swarm-conclusion { margin: 0 0 6px; color: var(--text); }
+.swarm-conclusion strong { color: var(--success); }

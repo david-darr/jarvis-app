@@ -8,6 +8,7 @@
 const S = 'fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"';
 
 export const ICONS = {
+  swarm: `<svg viewBox="0 0 24 24" ${S}><path d="M3 16c4 1 7 0 9-3L6 6l7 3 3-4 3 1 1 3 2 1-3 1c-1 6-5 9-11 8l-5 1 2-3z"/><path d="m12 13 4-1"/><circle cx="17.5" cy="7.5" r=".5" fill="currentColor" stroke="none"/></svg>`,
   home: `<svg viewBox="0 0 24 24" ${S}><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>`,
   newChat: `<svg viewBox="0 0 24 24" ${S}><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>`,
   search: `<svg viewBox="0 0 24 24" ${S}><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>`,

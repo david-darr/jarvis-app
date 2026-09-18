@@ -21,6 +21,7 @@ restoreSidebar();
 const NAV = [
   { id: "home", label: "Home", icon: "home" },
   { id: "chat", label: "Chats", icon: "chats" },
+  { id: "swarm", label: "Swarm", icon: "swarm" },
   { id: "notes", label: "Notes", icon: "notes" },
   { id: "library", label: "Library", icon: "library" },
   { id: "calendar", label: "Calendar", icon: "calendar" },
@@ -172,6 +173,7 @@ async function buildSidebar() {
   // Best-effort: a fetch failure here shouldn't break the built-in nav.
   const customTabs = await api("/api/system/custom-tabs").catch(() => []);
   for (const item of customTabs) {
+    if (NAV.some((builtIn) => builtIn.id === item.id)) continue;
     if (item.view_url) customViewUrls[item.id] = item.view_url;
     const navEl = document.createElement("button");
     navEl.type = "button";
@@ -205,7 +207,7 @@ async function buildSidebar() {
     if (item.dataset.tab === activeTab) item.setAttribute("aria-current", "page");
   });
   buildSidebarFooter();
-  return customTabs;
+  return customTabs.filter((item) => !NAV.some((builtIn) => builtIn.id === item.id));
 }
 
 // Settings' old nav-item slot replaced with the sidebar footer (David's ask

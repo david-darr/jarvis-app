@@ -33,9 +33,10 @@ from routes import (
     cookbook_routes,
     remote_routes,
     project_routes,
+    swarm_routes,
 )
 from core import llamacpp_engine
-from services import chat_service, skills_service
+from services import chat_service, skills_service, swarm_service
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
@@ -119,15 +120,19 @@ async def lifespan(_app: FastAPI):
     # (core/remote_access.py). Never raises — a machine that's dropped off
     # the tailnet must still boot normally.
     await remote_access.start_if_enabled()
-    yield
-    await remote_access.stop()
-    task_scheduler.stop()
-    await discord_channel.stop()
-    await chat_service.shutdown()
-    # Built-in local engine (David's ask 2026-09-01) runs as a real
-    # subprocess — never leave it orphaned on app shutdown, same reasoning
-    # as electron/main.js's own stopBackend().
-    llamacpp_engine.stop()
+    await swarm_service.startup(_app)
+    try:
+        yield
+    finally:
+        try:
+            await swarm_service.shutdown(_app)
+        finally:
+            await remote_access.stop()
+            task_scheduler.stop()
+            await discord_channel.stop()
+            await chat_service.shutdown()
+            # Do not leave the built-in model process orphaned at shutdown.
+            llamacpp_engine.stop()
 
 
 app = FastAPI(title="JARVIS", lifespan=lifespan)
@@ -154,6 +159,7 @@ app.include_router(vault_routes.router)
 app.include_router(cookbook_routes.router)
 app.include_router(remote_routes.router)
 app.include_router(project_routes.router)
+app.include_router(swarm_routes.router)
 
 # Developer Mode (David's ask 2026-09-01) — the only app.py edit a custom
 # tab ever needs. Every routes/tab_*.py found here gets mounted; adding a
