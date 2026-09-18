@@ -26,7 +26,7 @@ from claude_agent_sdk import (
     tool,
 )
 
-from . import MAX_TURNS, QUOTA_FRESHNESS_SECONDS, role_prompt, task_prompt
+from . import LEAD_MAX_TURNS, MAX_TURNS, QUOTA_FRESHNESS_SECONDS, role_prompt, task_prompt
 from ..models import EventKind, WorkerEvent
 from ..tools import ToolRejected
 
@@ -103,7 +103,7 @@ class ClaudeWorker:
             # permission file cannot widen an unattended worker.
             setting_sources=[],
             permission_mode="default",
-            max_turns=MAX_TURNS,
+            max_turns=LEAD_MAX_TURNS if self.context.is_lead else MAX_TURNS,
             model=self.context.model,
             effort=self.context.effort,
             env=dict(self.context.env),

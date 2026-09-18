@@ -16,7 +16,18 @@ from ..models import Capability
 
 # One place to change the shared step bounds. These are dispatch bounds, not a
 # claim about a provider's own billing.
+# How many exchanges one step may take before the provider ends it. A turn is
+# one message-and-response pair, and a tool call costs one: the model asks,
+# the tool answers, the model speaks again. Tokens are bounded separately by
+# the budget, so this only decides how many steps a worker gets inside that
+# spend, not how much it may spend.
+#
+# A lead needs more than a specialist, found on David's run: its step is read
+# the inbox, review what came back, then assign the next round, and it spent
+# its eight on reading plus two teammate messages before it had assigned
+# anything. A specialist's step is do one thing and submit it.
 MAX_TURNS = 8
+LEAD_MAX_TURNS = 20
 MAX_TOOL_ROUNDS = 8
 QUOTA_FRESHNESS_SECONDS = 900
 
@@ -103,6 +114,9 @@ def role_prompt(context: WorkerContext) -> str:
             "- You own the plan. Use assign_plan once you know what the work is, naming a teammate for each task. "
             "Depend a task on another only when it genuinely cannot start first.",
             "- Assign work to the teammates you actually have. Do not invent roles.",
+            "- Spend this step deciding. End it with assign_plan, review_work or finish_mission - those are what "
+            "move the company forward. Message a teammate only when your decision genuinely depends on their "
+            "answer, because a step that runs out of exchanges ends without deciding anything.",
         ]
     else:
         lines += [

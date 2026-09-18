@@ -353,6 +353,22 @@ class ClaudeScopingTests(unittest.TestCase):
                                 scratch_dir=self.root.name)
         return ClaudeWorker(context)._options(asyncio.Queue())
 
+    def test_a_lead_gets_more_exchanges_than_a_specialist(self):
+        """A lead's step is read, review, then assign; a specialist's is do one
+        thing and submit it. One ceiling for both is what ran David's lead out
+        before it had assigned anything."""
+        from core.swarm.adapters import LEAD_MAX_TURNS, MAX_TURNS
+        self.assertGreater(LEAD_MAX_TURNS, MAX_TURNS)
+        agent = self.fixture.team["Backend"]
+        lead = self.fixture.team["PM"]
+        system = self.fixture.store.get_system(self.fixture.system_id)
+        def options_for(who):
+            context = WorkerContext(endpoint={"kind": "claude_cli", "model": None}, agent=who, system=system,
+                                    tool_service=self.fixture.service_for(who["name"]), scratch_dir=self.root.name)
+            return ClaudeWorker(context)._options(asyncio.Queue())
+        self.assertEqual(options_for(agent).max_turns, MAX_TURNS)
+        self.assertEqual(options_for(lead).max_turns, LEAD_MAX_TURNS)
+
     def test_a_worker_gets_swarm_tools_and_nothing_else(self):
         options = self.options()
         self.assertTrue(all(name.startswith("mcp__swarm__") for name in options.allowed_tools))
