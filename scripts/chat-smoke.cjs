@@ -57,6 +57,7 @@ const chats = {
   s2: { id: 's2', title: 'Another conversation', model_endpoint_id: 'codex', messages: [] },
 };
 let pending = null;
+const answers = [];
 let deferFirstChunk = false;
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -145,6 +146,10 @@ const server = http.createServer(async (req, res) => {
       if (!deferFirstChunk) res.write('data: ' + JSON.stringify({ chunk: text }) + '\r\n\r\n');
       pending = { res, sid: data.session_id, text };
       return;
+    }
+    if (url.pathname.startsWith('/api/permissions')) {
+      if (url.pathname.endsWith('/answer')) { answers.push({ path: url.pathname, choice: data.choice }); return json({ status: 'answered' }); }
+      return json({ rules: [], audit: [] });
     }
     res.writeHead(404); json({ detail: 'Missing fixture: ' + url.pathname }); return;
   }
@@ -650,6 +655,40 @@ app.whenReady().then(async () => {
     await waitFor("document.querySelectorAll('.chat-prose p').length > 20");
     assert.deepEqual(requests.filter(r=>r.path==='/api/chat/stream').at(-1).data.attachment_ids, ['staged-test']);
     assert.equal(requests.filter(r=>r.path==='/api/chat/stream').at(-1).data.message, 'Keep this draft');
+    // A tool asks for something it has not been granted, mid-reply. The prompt
+    // must appear in the chat that asked, show the request as text, and refuse
+    // by default if it is dismissed.
+    pending.res.write('data: ' + JSON.stringify({ permission: {
+      id: 'req-1', tool: 'Bash', target: 'npm test',
+      title: 'Run a command', description: 'npm test -- --watch',
+      arguments: '{"command": "npm test -- --watch <img src=x onerror=alert(1)>"}',
+      choices: [
+        { id: 'once', label: 'Allow once', behavior: 'allow', scope: 'once' },
+        { id: 'session', label: 'Always in this chat (npm test)', behavior: 'allow', scope: 'session' },
+        { id: 'forever', label: 'Always allow npm test', behavior: 'allow', scope: 'forever' },
+        { id: 'reject', label: 'Reject', behavior: 'deny', scope: 'once' },
+      ] } }) + '\r\n\r\n');
+    await waitFor("!!document.querySelector('.permission-dialog[open]')");
+    assert.equal(await js("document.querySelector('.permission-target').textContent"), 'npm test', 'The prompt states what a grant would cover');
+    assert.equal(await js("document.querySelectorAll('.permission-dialog img').length"), 0, 'A request is shown as text, never as markup');
+    assert.equal(await js("document.querySelectorAll('.permission-choices button').length"), 4);
+    await js("document.querySelector('.permission-choices [data-choice=once]').click()");
+    await waitFor("!document.querySelector('.permission-dialog')");
+    assert.deepEqual(answers.map(a => a.choice), ['once'], 'The answer reaches the server');
+
+    // Dismissing without choosing refuses rather than hanging.
+    pending.res.write('data: ' + JSON.stringify({ permission: {
+      id: 'req-2', tool: 'Bash', target: 'rm -rf', title: 'Run a command', description: '',
+      arguments: '{"command": "rm -rf /"}',
+      choices: [
+        { id: 'once', label: 'Allow once', behavior: 'allow', scope: 'once' },
+        { id: 'reject', label: 'Reject', behavior: 'deny', scope: 'once' },
+      ] } }) + '\r\n\r\n');
+    await waitFor("!!document.querySelector('.permission-dialog[open]')");
+    await js("document.querySelector('.permission-dialog').close()");
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.deepEqual(answers.map(a => a.choice), ['once', 'reject'], 'Closing the prompt refuses');
+
     pending.res.end('data: {"done":true}\n\n'); pending = null;
     await waitFor("document.querySelector('#chat-send').dataset.mode!=='stop'");
     await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });

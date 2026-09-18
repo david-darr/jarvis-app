@@ -6,6 +6,7 @@ import { openBrowser, closeBrowser } from "../browserPane.js";
 import { createRecorder, transcribeBlob, getSpeechStatus, isRecordingSupported } from "../voiceInput.js";
 import { createOpenMic } from "../openMic.js";
 import { createChatActivity } from '../chatActivity.js';
+import { showPermissionPrompt, dismissPermissionPrompt } from '../permissionPrompt.js';
 
 // Composer rebuilt to match Odysseus's actual chat-input-bar structure
 // (David's ask 2026-08-31, cross-checked against the real repo at
@@ -81,6 +82,7 @@ let stagedAttachments = []; // [{id, filename}]
 // chatStream.js's docstring) — without this, leaving Chat mid-reattachment
 // would keep a listener alive pointing at DOM this view already discarded.
 let activeUnsubscribers = [];
+let shownPermission = null;
 
 // Drives a reply card's DOM from chatStream's shared state instead of a
 // local fetch loop (David's ask 2026-09-12) — used both right after
@@ -100,6 +102,12 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
 
   const paint = (entry) => {
     activity.update(entry);
+    // A tool asked for something it has not been granted. Show it here, in
+    // the chat that asked, while the reply is still being produced.
+    if (entry.permission && entry.permission.id !== shownPermission) {
+      shownPermission = entry.permission.id;
+      showPermissionPrompt(entry.permission, () => { entry.permission = null; });
+    }
     const follow = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 100;
     const current = sessionId === activeSessionId && replyCard.isConnected;
     if (current) syncChatBusy(entry.status === 'processing');

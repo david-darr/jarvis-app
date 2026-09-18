@@ -10,6 +10,7 @@ model_endpoint_id; now that's just "nothing chosen yet," and a message sent
 before the user has added any model in Settings gets a canned reply telling
 them to go add one, instead of silently spending a real Claude turn.
 """
+import asyncio
 import logging
 import time
 from typing import AsyncIterator, Optional, Union
@@ -18,7 +19,7 @@ from fastapi import HTTPException
 
 from claude_agent_sdk import CLIJSONDecodeError
 
-from core import attachments, model_catalog, model_endpoints, token_usage
+from core import attachments, model_catalog, model_endpoints, permissions, token_usage
 from core.brain import Brain
 from core.codex_brain import CodexBrain
 from core.external_brain import ExternalBrain
@@ -274,9 +275,10 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
         brain, just_created = await _get_brain(session_id, endpoint, is_admin)
         full_text = _prime_with_history(session_id, just_created, endpoint, full_text)
         full_text = _apply_open_mic_discipline(session_id, full_text)
-        async for chunk in brain.run_turn_stream(full_text):
-            reply_parts.append(chunk)
-            yield chunk
+        async for item in _stream_with_permission_prompts(session_id, brain, full_text):
+            if isinstance(item, str):
+                reply_parts.append(item)
+            yield item
     except CLIJSONDecodeError:
         await close_session_brain(session_id)
         reply_parts.append(ATTACHMENT_TOO_LARGE_MESSAGE)
@@ -289,6 +291,42 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
 
     _record_turn_telemetry(session_id, endpoint, brain)
     session_manager.append_message(session_id, "assistant", "".join(reply_parts))
+
+
+async def _stream_with_permission_prompts(session_id: str, brain, full_text: str):
+    """Reply text, plus any permission request raised while producing it.
+
+    A model waiting on approval produces nothing, so simply iterating the
+    reply would sit silent until the request timed out. Watching the brain and
+    the request queue together is what lets the prompt reach the person during
+    the turn it belongs to. Text is yielded as a string exactly as before; a
+    request is yielded as a dict, and only routes/chat_routes.py consumes this.
+    """
+    queue = permissions.open_channel(f"chat:{session_id}")
+    replies = brain.run_turn_stream(full_text).__aiter__()
+    next_chunk = asyncio.ensure_future(anext(replies))
+    next_ask = asyncio.ensure_future(queue.get())
+    try:
+        while True:
+            done, _ = await asyncio.wait({next_chunk, next_ask}, return_when=asyncio.FIRST_COMPLETED)
+            if next_ask in done:
+                yield {"permission": next_ask.result()}
+                next_ask = asyncio.ensure_future(queue.get())
+            if next_chunk in done:
+                try:
+                    chunk = next_chunk.result()
+                except StopAsyncIteration:
+                    return
+                yield chunk
+                next_chunk = asyncio.ensure_future(anext(replies))
+    finally:
+        next_ask.cancel()
+        if not next_chunk.done():
+            next_chunk.cancel()
+        # Closing denies anything still waiting: a window that went away
+        # cannot approve, and silence must never mean yes.
+        permissions.close_channel(f"chat:{session_id}")
+        await asyncio.gather(next_ask, next_chunk, return_exceptions=True)
 
 
 def _record_turn_telemetry(session_id: str, endpoint: dict, brain) -> None:

@@ -103,7 +103,9 @@ const SECTION_GROUPS = [
   {
     id: "administration", label: "Administration", admin: true, sections: [
       { id: "agent-tools", label: "Agent Tools", render: renderAgentToolsPanel,
-        keywords: ["bash", "shell", "permissions", "disabled tools", "allowed tools", "capabilities"] },
+        keywords: ["bash", "shell", "disabled tools", "allowed tools", "capabilities"] },
+      { id: "permissions", label: "Permissions", render: renderPermissionsPanel,
+        keywords: ["permission", "allow", "always allow", "approval", "grant", "revoke", "prompt", "asked"] },
       { id: "users", label: "Users", render: renderUsersPanel,
         keywords: ["accounts", "add user", "roles", "admin", "people"] },
       { id: "system", label: "System", render: renderSystemPanel,
@@ -1940,4 +1942,49 @@ async function renderCustomTabsPanel(content) {
     list.lastChild.querySelector("span[style*='inline-flex']").innerHTML = tab.icon_svg || "";
   });
   content.appendChild(list);
+}
+
+
+// Every standing grant, and a way to take it back. An "always" that cannot be
+// found later is a trap, so this lists what was granted, how wide it is, and
+// when - including the built-in grants that used to be invisible in code.
+async function renderPermissionsPanel(content) {
+  const { rules, audit } = await api("/api/permissions");
+  content.innerHTML = "";
+  content.append(el("p", { class: "meta", text:
+    "What models may do without asking again. Anything not listed here is asked for when it comes up, "
+    + "in whichever feature is asking." }));
+
+  if (!rules.length) content.append(el("p", { class: "meta", text: "Nothing is granted yet." }));
+  for (const rule of rules) {
+    const scope = rule.scope === "session" ? "this chat only" : "everywhere";
+    const row = el("div", { class: "settings-row" }, [
+      el("div", {}, [
+        el("div", { text: rule.content ? `${rule.tool} — ${rule.content}` : rule.tool }),
+        el("div", { class: "meta", text:
+          `${rule.behavior === "allow" ? "Allowed" : "Denied"} ${scope}`
+          + (rule.source === "built-in" ? " · built in" : rule.granted_by ? ` · granted by ${rule.granted_by}` : "")
+          + (rule.granted_at ? ` · ${new Date(rule.granted_at * 1000).toLocaleString()}` : "") }),
+      ]),
+      el("button", { class: "btn danger", text: "Revoke", onclick: async (event) => {
+        event.currentTarget.disabled = true;
+        try {
+          await api(`/api/permissions/${encodeURIComponent(rule.id)}`, { method: "DELETE" });
+          renderPermissionsPanel(content);
+        } catch (problem) { toast(problem.message, "error"); event.currentTarget.disabled = false; }
+      } }),
+    ]);
+    content.append(row);
+  }
+
+  if (audit.length) {
+    const log = el("details", { class: "disclosure-panel" }, [el("summary", { text: "Recent decisions" })]);
+    for (const entry of [...audit].reverse()) {
+      log.append(el("div", { class: "meta", text:
+        `${new Date(entry.at * 1000).toLocaleString()} · ${entry.decision}`
+        + (entry.tool ? ` · ${entry.tool}` : "") + (entry.content ? ` (${entry.content})` : "")
+        + (entry.by ? ` · ${entry.by}` : "") }));
+    }
+    content.append(log);
+  }
 }

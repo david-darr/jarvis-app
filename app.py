@@ -34,6 +34,7 @@ from routes import (
     remote_routes,
     project_routes,
     swarm_routes,
+    permission_routes,
 )
 from core import llamacpp_engine
 from services import chat_service, skills_service, swarm_service
@@ -160,6 +161,7 @@ app.include_router(cookbook_routes.router)
 app.include_router(remote_routes.router)
 app.include_router(project_routes.router)
 app.include_router(swarm_routes.router)
+app.include_router(permission_routes.router)
 
 # Developer Mode (David's ask 2026-09-01) — the only app.py edit a custom
 # tab ever needs. Every routes/tab_*.py found here gets mounted; adding a

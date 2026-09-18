@@ -20,12 +20,14 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    PermissionResultAllow,
+    PermissionResultDeny,
     ResultMessage,
     TextBlock,
 )
 from claude_agent_sdk.types import StreamEvent
 
-from core import hive_mind_server, image_gen, integrations, projects, settings as settings_store, system_prompt
+from core import hive_mind_server, image_gen, integrations, permissions, projects, settings as settings_store, system_prompt
 from core.constants import REPO_CODE_DIRS
 from core.vault import resolve_vault_dir
 
@@ -95,6 +97,11 @@ class Brain:
         # given chat in the project is actually pinned to (see
         # core/projects.py's project_addendum()).
         self.project_id = project_id
+        # Which surface a permission request should appear on. A session id is
+        # the natural handle: the chat that asked is the chat that answers. A
+        # turn with no session (a scheduled task, say) has no one watching, so
+        # the broker denies rather than hanging - see core/permissions.py.
+        self.surface = f"chat:{session_id}" if session_id else "none"
         self._client: ClaudeSDKClient | None = None
 
     def _options(self) -> ClaudeAgentOptions:
@@ -198,7 +205,18 @@ class Brain:
         # the SDK will grant access to it.
         os.makedirs(image_gen.GENERATED_FILES_DIR, exist_ok=True)
 
+        # App-wide approval (David's ask 2026-09-18). The pre-approved list
+        # above keeps working exactly as before - it is now written into the
+        # permission store as visible, revocable rules rather than staying
+        # invisible in code. Anything outside it used to hang on a prompt
+        # nothing could answer; it now reaches the person instead. Bash is
+        # deliberately never seeded: being asked before a command runs is the
+        # whole point, and the admin gate above still decides whether it can
+        # be asked for at all.
+        permissions.ensure_seeded(allowed_tools)
+
         return ClaudeAgentOptions(
+            can_use_tool=self._permission,
             cwd=self.cwd_override or self.vault_dir,
             # Full read/write on jarvis-app's own source (David's ask
             # 2026-09-01) — cwd stays the vault (memory is still the core
@@ -235,6 +253,37 @@ class Brain:
             # memory.
             system_prompt={"type": "preset", "preset": "claude_code", "append": system_prompt.for_claude(self.is_admin) + projects.project_addendum(self.project_id)},
         )
+
+    async def _permission(self, tool_name: str, arguments: dict, context):
+        """Ask the person, using the SDK's own idea of what a grant covers.
+
+        `context.suggestions` is what Claude Code shows as "always allow this
+        command" - the SDK proposes the rule, so the scope offered here is the
+        one the model's own permission system would apply rather than a
+        guess made in this app. Falling back to a derived scope keeps the
+        prompt useful when no suggestion arrives.
+        """
+        rule_content = None
+        for suggestion in getattr(context, "suggestions", None) or []:
+            for rule in getattr(suggestion, "rules", None) or []:
+                if getattr(rule, "tool_name", None) == tool_name and getattr(rule, "rule_content", None):
+                    rule_content = rule.rule_content
+                    break
+            if rule_content:
+                break
+        decision = await permissions.decide(
+            surface=self.surface,
+            tool=tool_name,
+            arguments=arguments if isinstance(arguments, dict) else {},
+            target=rule_content or permissions.derive_target(tool_name, arguments),
+            title=getattr(context, "title", None) or getattr(context, "display_name", None) or tool_name,
+            description=getattr(context, "description", None) or getattr(context, "decision_reason", None) or "",
+        )
+        if decision.behavior == "allow":
+            return PermissionResultAllow()
+        # The reason goes into the transcript, so the model is told it was
+        # refused and why rather than silently failing or trying again.
+        return PermissionResultDeny(message=decision.reason, interrupt=False)
 
     async def connect(self) -> None:
         self._client = ClaudeSDKClient(options=self._options())

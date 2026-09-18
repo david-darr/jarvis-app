@@ -105,8 +105,12 @@ async def stream_chat_message(body: ChatRequest, user: str = Depends(require_use
 
     async def event_source():
         try:
-            async for chunk in chat_service.stream_message(body.session_id, body.message, body.attachment_ids, is_admin):
-                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            async for item in chat_service.stream_message(body.session_id, body.message, body.attachment_ids, is_admin):
+                # A dict is a typed event - today, a permission request raised
+                # while the reply was being produced. Text stays exactly as it
+                # was, so nothing about the existing protocol changes.
+                payload = item if isinstance(item, dict) else {"chunk": item}
+                yield f"data: {json.dumps(payload)}\n\n"
             yield "data: {\"done\": true}\n\n"
         except Exception:
             yield f"data: {json.dumps({'error': 'The response was interrupted. Check the selected model and CLI connection, then try again. Any partial reply has been saved.'})}\n\n"

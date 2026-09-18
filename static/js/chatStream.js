@@ -111,6 +111,13 @@ async function _runTurn(sessionId, entry, text, attachmentIds) {
           entry.text += payload.chunk;
           _notify(sessionId);
         }
+        if (payload.permission) {
+          // Held on the entry rather than shown from here: this module is
+          // transport only, and a request must survive the user switching
+          // tabs and coming back mid-turn.
+          entry.permission = payload.permission;
+          _notify(sessionId);
+        }
       }
       if (done) break;
     }
