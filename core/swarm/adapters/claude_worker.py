@@ -149,6 +149,7 @@ class ClaudeWorker:
     async def _consume(self, assignment, queue):
         service = self.context.tool_service
         usage_reported = False
+        bounded = None
         try:
             self.client = ClaudeSDKClient(options=self._options(queue))
             await self.client.connect()
@@ -172,7 +173,19 @@ class ClaudeWorker:
                         await _hand_off(queue, WorkerEvent(EventKind.USAGE, f"{assignment.attempt_id}:result",
                                                            {"units": total}))
                     if message.is_error and service.terminal is None:
-                        raise RuntimeError("Claude reported an unsuccessful turn")
+                        # Found on David's run: this raised one generic
+                        # RuntimeError, which paused his whole company, left an
+                        # attempt needing reconciliation, and threw away every
+                        # field that said why. Running out of turns is a normal
+                        # bounded outcome, not a failure - it ends the step as
+                        # incomplete, with the reason, and the company carries
+                        # on. Only a real fault still raises, and now it says
+                        # what happened.
+                        detail = _failure_detail(message)
+                        if _is_bounded(message):
+                            bounded = detail
+                            break
+                        raise RuntimeError(detail)
                     break
                 elif type(message).__name__ == "RateLimitEvent":
                     quota = _quota_event(message)
@@ -184,7 +197,7 @@ class ClaudeWorker:
             self.produced_result = True
             await queue.put((WorkerEvent(EventKind.RESULT, f"{assignment.attempt_id}:final", {
                 "result": service.terminal or {"status": "incomplete",
-                                               "reason": "The step ended without submitting a result or a blocker."},
+                                               "reason": bounded or "The step ended without submitting a result or a blocker."},
                 "usage_complete": usage_reported,
             }), None))
         finally:
@@ -235,6 +248,42 @@ class ClaudeWorker:
         # interrupt is evidence the CLI itself stopped, so an unacknowledged
         # one stays unconfirmed and the attempt is recorded as unknown.
         return bool(acknowledged)
+
+
+def _is_bounded(message) -> bool:
+    """Did the step run out of room, rather than fail?
+
+    A turn or budget ceiling is a bound this app set, so hitting one is an
+    ordinary outcome. A transport fault or an API error is not.
+    """
+    subtype = (getattr(message, "subtype", "") or "").lower()
+    reason = (getattr(message, "stop_reason", "") or "").lower()
+    if getattr(message, "api_error_status", None):
+        return False
+    return "max_turns" in subtype or "budget" in subtype or "max_turns" in reason
+
+
+def _failure_detail(message) -> str:
+    """Everything the SDK said about why, instead of one generic sentence."""
+    parts = []
+    subtype = getattr(message, "subtype", None)
+    if subtype:
+        parts.append(str(subtype))
+    turns = getattr(message, "num_turns", None)
+    if turns:
+        parts.append(f"after {turns} turns")
+    for field in ("stop_reason", "terminal_reason", "result"):
+        value = getattr(message, field, None)
+        if value:
+            parts.append(str(value)[:200])
+            break
+    status = getattr(message, "api_error_status", None)
+    if status:
+        parts.append(f"API status {status}")
+    errors = getattr(message, "errors", None)
+    if errors:
+        parts.append("; ".join(str(item)[:120] for item in errors[:2]))
+    return "Claude ended the turn: " + (", ".join(parts) if parts else "no reason reported")
 
 
 async def _settled(task):

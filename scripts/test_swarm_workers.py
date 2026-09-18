@@ -366,6 +366,39 @@ class ClaudeScopingTests(unittest.TestCase):
         self.assertNotIn("claude_code", str(options.system_prompt))
         self.assertGreater(options.max_turns, 0)
 
+    def test_a_turn_ceiling_is_an_outcome_and_a_real_fault_is_not(self):
+        """The fields David's failure threw away.
+
+        Running out of turns is a bound this app set, so it ends the step
+        rather than raising. An API error is a fault and still raises - with
+        what the SDK actually said, instead of one generic sentence.
+        """
+        from core.swarm.adapters.claude_worker import _failure_detail, _is_bounded
+
+        class Ended:
+            subtype = "error_max_turns"
+            stop_reason = None
+            terminal_reason = None
+            result = None
+            num_turns = 8
+            api_error_status = None
+            errors = None
+
+        self.assertTrue(_is_bounded(Ended()))
+        detail = _failure_detail(Ended())
+        self.assertIn("error_max_turns", detail)
+        self.assertIn("8 turns", detail)
+
+        class Failed(Ended):
+            subtype = "error_during_execution"
+            api_error_status = 529
+            errors = ["overloaded_error"]
+
+        self.assertFalse(_is_bounded(Failed()), "an API error is a fault, not a ceiling")
+        detail = _failure_detail(Failed())
+        self.assertIn("529", detail)
+        self.assertIn("overloaded_error", detail)
+
     def test_quota_readings_scale_and_stay_honest_about_the_unknown(self):
         class Info:
             status = "allowed_warning"
@@ -641,6 +674,38 @@ class CycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(store.blocked_for_owner(system_id), "the held work was released")
         done = store.db.execute("SELECT COUNT(*) FROM tasks WHERE system_id=? AND state='done'", (system_id,)).fetchone()[0]
         self.assertGreater(done, 0, "work actually finished after the answer")
+
+    async def test_a_lead_that_runs_out_of_turns_is_retried_then_conceded(self):
+        """From David's run: the lead spent its turns messaging teammates and
+        hit the ceiling. That used to raise, pause the whole company and leave
+        an attempt needing reconciliation. It is a bounded outcome: retry once,
+        then stop with a reason rather than wedging."""
+        state = {"lead_steps": 0}
+
+        def script(body):
+            is_lead = "the lead of" in body["messages"][0]["content"]
+            used_a_tool = any(message["role"] == "tool" for message in body["messages"])
+            if not is_lead:
+                return reply(calls=[("submit_result", {"summary": "s", "output": "o"})]) if used_a_tool \
+                    else reply(calls=[("get_assigned_work", {})])
+            if not used_a_tool:
+                return reply(calls=[("get_assigned_work", {})])
+            state["lead_steps"] += 1
+            # Never assigns, never finishes - it just talks, like a lead that
+            # burns its turns on messages.
+            return reply(calls=[("send_message", {"to": "Backend", "body": "thinking out loud"})])
+
+        system_id = await self.run_autonomous(script)
+        store = self.service.store
+        seeded = store.db.execute(
+            "SELECT id FROM tasks WHERE system_id=? ORDER BY created_at LIMIT 1", (system_id,)).fetchone()["id"]
+        self.assertGreaterEqual(store.attempt_count(seeded), 2, "the exhausted step was retried once")
+        self.assertIsNotNone(store.mission_concluded(system_id), "and then the company said why it stopped")
+        self.assertEqual(store.get_system(system_id)["state"], "active",
+                         "an exhausted lead is not a fault, so nothing is paused")
+        unknown = store.db.execute(
+            "SELECT COUNT(*) FROM attempts WHERE system_id=? AND state='unknown'", (system_id,)).fetchone()[0]
+        self.assertEqual(unknown, 0, "a bounded outcome must not leave work needing reconciliation")
 
     async def test_a_stopped_company_can_be_started_again(self):
         endpoint = {"id": "endpoint-a", "name": "Stub", "kind": "api",

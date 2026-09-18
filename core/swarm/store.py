@@ -786,6 +786,25 @@ class SwarmStore:
                 self._event(db, system_id, "mission.reopened", system_id, {"note": (note or "")[:2000]})
             return len(rows)
 
+    def retry_task(self, task_id, note):
+        """Send a step that ran out of room back to be attempted again.
+
+        Distinct from a revision: nobody judged the work, it simply did not
+        get to finish. The note rides on the checkpoint so the next attempt
+        knows what happened rather than repeating it blindly.
+        """
+        with self.transaction() as db:
+            task = self._one(db, "tasks", task_id)
+            if task["state"] != "review":
+                raise Conflict("That task is not waiting")
+            db.execute("UPDATE tasks SET state='ready',checkpoint=?,revision=revision+1 WHERE id=?",
+                       (_json({"retry_note": (note or "")[:2000]}), task_id))
+            self._event(db, task["system_id"], "task.retried", task_id, {"note": (note or "")[:2000]})
+
+    def attempt_count(self, task_id):
+        with self._lock:
+            return self.db.execute("SELECT COUNT(*) FROM attempts WHERE task_id=?", (task_id,)).fetchone()[0]
+
     def reopen_for_start(self, system_id):
         """A stopped company can be started again.
 

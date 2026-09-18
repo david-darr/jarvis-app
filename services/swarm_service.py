@@ -225,13 +225,28 @@ class SwarmService:
         # and everything stopped in silence. Specialists' blockers stay
         # reviewable, so the lead still gets one chance to reassign or work
         # around one - the digest below makes it exactly one.
-        def is_blocked(task):
+        def status_of(task):
             try:
-                return json.loads(task["result"] or "{}").get("status") == "blocked"
+                return json.loads(task["result"] or "{}").get("status")
             except ValueError:
-                return False
+                return None
 
-        waiting = [task for task in waiting if not (task["agent_id"] == lead["id"] and is_blocked(task))]
+        # A lead step that ran out of turns did not fail and was not judged -
+        # it simply did not get to finish. Found on David's run, where the
+        # lead spent its turns messaging two teammates and then hit the
+        # ceiling. One more attempt is fair; a second would be a loop, so
+        # after that it stops counting as the lead being busy and the company
+        # concludes instead of wedging.
+        for task in list(waiting):
+            if task["agent_id"] != lead["id"] or status_of(task) != "incomplete":
+                continue
+            if self.store.attempt_count(task["id"]) < 2:
+                self.store.retry_task(task["id"], json.loads(task["result"] or "{}").get("reason", ""))
+                return True
+            waiting.remove(task)
+
+        waiting = [task for task in waiting
+                   if not (task["agent_id"] == lead["id"] and status_of(task) == "blocked")]
         if any(task["agent_id"] == lead["id"] for task in waiting):
             return False
         if not waiting:
