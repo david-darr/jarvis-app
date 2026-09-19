@@ -213,6 +213,49 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item["id"] for item in snapshot["unknown_attempts"]], [stuck],
                          "the held worker is still offered for reconciliation")
 
+    async def test_drafting_a_team_needs_a_real_connection_and_creates_nothing(self):
+        """Opt-in, paid for by a named connection, and only ever a proposal."""
+        before = self.service.store.db.execute("SELECT COUNT(*) FROM systems").fetchone()[0]
+        missing = await self.call("POST", "/draft-team", body={"description": "Launch a channel",
+                                                               "endpoint_id": "nope"})
+        self.assertEqual(missing.status_code, 404)
+
+        endpoint = {"id": "e1", "name": "Stub", "kind": "api", "base_url": "http://stub/v1",
+                    "model": "m", "api_key": None, "num_ctx": None}
+        drafted = {"rationale": "Small team.",
+                   "lead": {"name": "Mo", "role": "Producer", "instructions": "Coordinates."},
+                   "specialists": [{"name": "Rae", "role": "Researcher", "instructions": "Finds angles."}]}
+
+        async def fake_draft(_endpoint, goal):
+            self.assertIn("channel", goal)
+            return drafted
+
+        with patch.object(SwarmService, "_resolved", staticmethod(lambda endpoint_id: endpoint)), \
+             patch("services.swarm_service.architect.draft", fake_draft):
+            response = await self.call("POST", "/draft-team",
+                                       body={"description": "Launch a channel", "endpoint_id": "e1"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["lead"]["name"], "Mo")
+        self.assertEqual(self.service.store.db.execute("SELECT COUNT(*) FROM systems").fetchone()[0], before,
+                         "a draft is a proposal; nothing is created until the form is saved")
+        self.assertEqual((await self.call("POST", "/draft-team", user=None,
+                                          body={"description": "x", "endpoint_id": "e1"})).status_code, 401)
+
+    async def test_a_draft_that_fails_says_so_rather_than_half_filling(self):
+        from core.swarm.architect import DraftFailed
+
+        async def refuse(_endpoint, _goal):
+            raise DraftFailed("The model returned nothing.")
+
+        endpoint = {"id": "e1", "name": "Stub", "kind": "api", "base_url": "http://stub/v1",
+                    "model": "m", "api_key": None, "num_ctx": None}
+        with patch.object(SwarmService, "_resolved", staticmethod(lambda endpoint_id: endpoint)), \
+             patch("services.swarm_service.architect.draft", refuse):
+            response = await self.call("POST", "/draft-team",
+                                       body={"description": "Launch a channel", "endpoint_id": "e1"})
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("returned nothing", response.json()["detail"])
+
     async def test_foreign_system_all_surfaces_not_found(self):
         system = await self.create()
         checkpoint = (await self.call("POST", f"/systems/{system}/checkpoints", body={"command_id": "save"})).json()["id"]

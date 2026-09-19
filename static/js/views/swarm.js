@@ -155,6 +155,44 @@ export function render(root, _tab, options = {}) {
           : "No model connections are available to you. Add one in Settings (or ask an admin) before this company can run." }));
       const members = [];
       const teamHost = el("div", { class: "swarm-form-team" });
+
+      // For someone who knows the goal but not the shape. Opt-in per click,
+      // because it spends tokens - saving a company never calls a model.
+      function designer() {
+        const usable = connections.filter(item => item.kind !== "local" || item.model);
+        const pick = el("select", { "aria-label": "Connection to draft with" },
+          usable.map(item => el("option", { value: item.id, text: `${item.name} · ${KINDS[item.kind] || item.kind}` })));
+        const goal = el("textarea", { rows: "2", maxlength: "4000",
+          placeholder: "What should this company get done? e.g. plan and draft a YouTube channel launch" });
+        const note = el("p", { class: "muted", text: "Makes one call on the connection you pick, so it costs tokens. "
+          + "Nothing is created - the draft fills this form for you to edit." });
+        const status = el("p", { role: "status", class: "muted" });
+        const draw = button("Draft a team", async (event) => {
+          const node = event.currentTarget;
+          if (!goal.value.trim()) { status.textContent = "Describe the goal first."; return; }
+          node.disabled = true; status.textContent = "Designing…";
+          try {
+            const draft = await mutate("/draft-team", { description: goal.value.trim(), endpoint_id: pick.value });
+            applyDraft(draft);
+            status.textContent = draft.rationale || "Drafted. Edit anything below before saving.";
+          } catch (problem) { status.textContent = problem.message; }
+          finally { node.disabled = false; }
+        });
+        if (!usable.length) return el("p", { class: "muted", text: "Add a model connection to have a team drafted for you." });
+        return el("details", { class: "disclosure-panel swarm-designer" }, [
+          el("summary", { text: "Not sure who you need? Design the team for me" }),
+          note, label("The goal", goal), label("Draft with", pick), el("div", { class: "swarm-actions" }, [draw]), status,
+        ]);
+      }
+
+      function applyDraft(draft) {
+        // Replace the roster, keep everything the owner already chose:
+        // allocations, connections and the mission stay theirs.
+        for (const item of [...members]) { if (!item.isLead) { members.splice(members.indexOf(item), 1); item.node.remove(); } }
+        const lead = members.find(item => item.isLead);
+        lead?.fill(draft.lead);
+        for (const person of draft.specialists) memberFields({ ...person, id: null }, false);
+      }
       function memberFields(data, isLead) {
         const agentName = el("input", { required: true, maxlength: "120", value: data?.name || (isLead ? "CEO / PM" : "") });
         const role = el("input", { required: true, maxlength: "120", value: data?.role || (isLead ? "Lead" : "") });
@@ -164,7 +202,14 @@ export function render(root, _tab, options = {}) {
         const connection = connectionFields(data);
         const row = el("fieldset", { class: "swarm-member-form" }, [el("legend", { text: isLead ? "Lead agent" : "Specialist" }),
           label("Name", agentName), label("Role", role), label("Responsibilities", instructions), connection.node, limits.node]);
-        const item = { node: row, isLead, read: () => ({ id: data?.id || null, name: agentName.value.trim(), role: role.value.trim(), instructions: instructions.value, limit: limits.read(), ...connection.read() }) };
+        const item = { node: row, isLead,
+          fill: (person) => {
+            if (!person) return;
+            agentName.value = person.name || agentName.value;
+            role.value = person.role || role.value;
+            instructions.value = person.instructions || instructions.value;
+          },
+          read: () => ({ id: data?.id || null, name: agentName.value.trim(), role: role.value.trim(), instructions: instructions.value, limit: limits.read(), ...connection.read() }) };
         members.push(item);
         if (!isLead) row.append(button("Remove specialist", () => { members.splice(members.indexOf(item), 1); row.remove(); }));
         teamHost.append(row);
@@ -177,7 +222,7 @@ export function render(root, _tab, options = {}) {
         systemLimit.node, runLimit.node, label("Shared allocation group", pool), poolWrap]);
       const status = el("p", { role: "alert", class: "swarm-error" });
       const save = el("button", { type: "submit", class: "btn primary", text: "Save system" });
-      form.append(teamHost, add, limits, status, el("div", { class: "swarm-actions" }, [button("Cancel", close), save]));
+      form.append(designer(), teamHost, add, limits, status, el("div", { class: "swarm-actions" }, [button("Cancel", close), save]));
       let pendingCommand = null, pendingPayload = null;
       form.addEventListener("submit", async (event) => {
         event.preventDefault(); if (save.disabled) return;

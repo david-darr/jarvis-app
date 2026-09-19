@@ -166,3 +166,7 @@
 .swarm-needs { border: 1px solid var(--accent); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
 .swarm-needs strong { color: var(--accent); }
 .swarm-needs p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.swarm-designer { margin-bottom: 4px; }
+.swarm-designer .swarm-field { margin-top: 10px; }
+.swarm-designer .swarm-actions { margin-top: 10px; }
+.swarm-designer p { margin: 8px 0 0; font-size: 12px; }

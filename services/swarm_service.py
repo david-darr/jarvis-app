@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from core import model_catalog, model_endpoints
-from core.swarm import accounts
+from core.swarm import accounts, architect
 from core.swarm.adapters import WorkerContext, build_worker, capability_for
 from core.swarm.budget import BudgetLimit
 from core.swarm.checkpoints import download_handoff
@@ -120,6 +120,24 @@ class SwarmService:
             if reason:
                 problems.append(f"{agent['name']} ({endpoint['name']}): {reason}")
         return problems
+
+    async def draft_team(self, owner, description, endpoint_id):
+        """Propose a roster for someone who knows the goal, not the shape.
+
+        Deliberately outside the setup path: saving a company never calls a
+        model, and this only runs when the owner asks for it and names the
+        connection that should pay for it. What comes back is a proposal to
+        edit - nothing is created, and no connection is assigned, because
+        which model an agent may run on is a capability decision rather than
+        a suggestion.
+        """
+        self.ready()
+        endpoint = self._resolved(endpoint_id)
+        if endpoint is None:
+            raise NotFound("That model connection does not exist")
+        draft = await architect.draft(endpoint, description)
+        logger.info("swarm: drafted a team of %d for %s", len(draft["specialists"]), owner)
+        return draft
 
     def account_for(self, endpoint_id):
         """The pool identity for a connection, for the setup path."""

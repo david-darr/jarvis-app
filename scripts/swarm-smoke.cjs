@@ -107,6 +107,16 @@ const server = http.createServer(async (req, res) => {
     if (unavailable) return json({ detail: 'Fixture storage unavailable' }, 503);
     if (url.pathname === '/api/swarm/status') return json(availability);
     if (url.pathname === '/api/swarm/pools') return json(systems.map(c => ({ id: c.agents[0].pool_id, name: c.system.name + ' allocation' })));
+    if (url.pathname === '/api/swarm/draft-team') {
+      let raw = ''; for await (const chunk of req) raw += chunk;
+      const asked = JSON.parse(raw || '{}');
+      writes.push({ path: url.pathname, body: asked });
+      if (!asked.description) return json({ detail: 'Describe the goal first.' }, 422);
+      return json({ rationale: 'Research, then write.',
+        lead: { name: 'Mo', role: 'Producer', instructions: 'Coordinates the work.' },
+        specialists: [{ name: 'Rae', role: 'Researcher', instructions: 'Finds the angles.' },
+                      { name: 'Kit', role: 'Writer', instructions: 'Drafts the script.' }] });
+    }
     let body = {};
     if (req.method !== 'GET') { let data = ''; for await (const chunk of req) data += chunk; body = JSON.parse(data || '{}'); writes.push({ path: url.pathname, body }); }
     if (url.pathname === '/api/swarm/systems') {
@@ -212,6 +222,24 @@ app.whenReady().then(async () => {
     await until("document.body.textContent.includes('Your first team starts here')");
     await capture('desktop-empty'); await click('Create system');
     await until("!!document.querySelector('dialog[open]')");
+    // Not sure who you need: a drafted roster fills the form, and nothing is
+    // created until the form is saved.
+    await js("document.querySelector('.swarm-designer').open = true");
+    await js("document.querySelector('.swarm-designer textarea').value = 'Launch a YouTube channel'");
+    await click('Draft a team');
+    await until("document.querySelectorAll('.swarm-member-form').length === 3");
+    assert.equal(await js("document.querySelectorAll('.swarm-member-form input')[0].value"), 'Mo', 'The lead is filled in');
+    assert.ok(await js("document.body.textContent.includes('Research, then write.')"), 'It says why that shape');
+    assert.equal(systems.length, 0, 'Drafting creates nothing');
+    const drafted = writes.find(w => w.path === '/api/swarm/draft-team');
+    assert.equal(drafted.body.description, 'Launch a YouTube channel');
+    assert.ok(drafted.body.endpoint_id, 'The owner names the connection that pays for it');
+    await capture('desktop-designer');
+    // Back to a hand-built team for the rest of the run.
+    await js(`{ const rows=[...document.querySelectorAll('.swarm-member-form')];
+      rows.slice(1).forEach(row => [...row.querySelectorAll('button')].find(b=>b.textContent==='Remove specialist')?.click()); }`);
+    await until("document.querySelectorAll('.swarm-member-form').length === 1");
+
     await click('Add specialist');
     await js(`document.querySelector('[name=name]').value='App studio'; document.querySelector('[name=mission]').value='Build a thoughtful project tracker'; const row=document.querySelectorAll('.swarm-member-form')[1]; row.querySelectorAll('input')[0].value='Backend'; row.querySelectorAll('input')[1].value='Developer';`);
     assert.equal(await js("document.querySelectorAll('[aria-label=\"Model connection\"]').length"), 2, 'Every teammate picks its own connection');

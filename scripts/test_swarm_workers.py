@@ -336,6 +336,55 @@ class OpenAIWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(worker.cancelled)
 
 
+class ArchitectTests(unittest.TestCase):
+    """A model writes this roster, so the parsing is the boundary."""
+
+    def test_the_prompt_tells_the_model_what_these_workers_cannot_do(self):
+        from core.swarm import architect
+        prompt = architect._prompt("Launch a YouTube channel")
+        for forbidden in ("run commands", "read or write files", "browse the web"):
+            self.assertIn(forbidden, prompt)
+        self.assertIn("Launch a YouTube channel", prompt)
+        self.assertIn("paste in", prompt, "outside material has to become something the owner supplies")
+
+    def test_a_team_is_pulled_out_of_whatever_the_model_said(self):
+        from core.swarm import architect
+        raw = ('Sure! Here is a team:\n```json\n'
+               '{"rationale": "Research then write.",'
+               ' "lead": {"name": "Mo", "role": "Producer", "instructions": "Coordinates."},'
+               ' "specialists": [{"name": "Rae", "role": "Researcher", "instructions": "Finds angles."}]}\n```')
+        draft = architect.parse(raw)
+        self.assertEqual(draft["lead"]["name"], "Mo")
+        self.assertEqual([person["name"] for person in draft["specialists"]], ["Rae"])
+        self.assertEqual(draft["rationale"], "Research then write.")
+
+    def test_a_roster_cannot_run_away_or_repeat_a_name(self):
+        from core.swarm import architect
+        people = [{"name": f"P{index}", "role": "Writer", "instructions": ""} for index in range(12)]
+        people.append({"name": "P0", "role": "Duplicate", "instructions": ""})
+        draft = architect.parse(json.dumps({
+            "lead": {"name": "Lead", "role": "Lead", "instructions": ""}, "specialists": people}))
+        self.assertLessEqual(len(draft["specialists"]), architect.MAX_SPECIALISTS)
+        names = [person["name"] for person in draft["specialists"]]
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_a_specialist_sharing_the_leads_name_is_dropped(self):
+        from core.swarm import architect
+        draft = architect.parse(json.dumps({
+            "lead": {"name": "Sam", "role": "Lead", "instructions": ""},
+            "specialists": [{"name": "sam", "role": "Writer", "instructions": ""},
+                            {"name": "Kit", "role": "Writer", "instructions": ""}]}))
+        self.assertEqual([person["name"] for person in draft["specialists"]], ["Kit"],
+                         "two teammates with one name cannot be addressed")
+
+    def test_junk_changes_nothing(self):
+        from core.swarm import architect
+        for raw in ("", "I'd love to help!", "{not json}", json.dumps({"lead": {"name": "A", "role": "B"}}),
+                    json.dumps({"specialists": [{"name": "A", "role": "B"}]})):
+            with self.assertRaises(architect.DraftFailed):
+                architect.parse(raw)
+
+
 class ClaudeScopingTests(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.TemporaryDirectory(dir=environment.name)

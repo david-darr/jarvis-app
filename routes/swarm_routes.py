@@ -9,6 +9,7 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from core.middleware import require_user
+from core.swarm import architect
 from core.swarm.budget import BudgetLimit
 from core.swarm.models import Conflict, NotFound, PersistenceFault
 
@@ -93,6 +94,11 @@ class Lifecycle(Command):
     expected_revision: int = Field(strict=True, ge=0)
 
 
+class DraftTeam(StrictModel):
+    description: str = Field(min_length=1, max_length=4000)
+    endpoint_id: ID
+
+
 class Reconcile(Command):
     evidence: str = Field(min_length=1, max_length=4000)
 
@@ -118,6 +124,8 @@ def service(request: Request):
 def domain(call):
     try:
         return call()
+    except architect.DraftFailed as exc:
+        raise HTTPException(422, str(exc))
     except NotFound:
         raise HTTPException(404, "System or resource not found")
     except Conflict as exc:
@@ -131,7 +139,7 @@ def domain(call):
 async def mutation(operation):
     try:
         return await operation
-    except (NotFound, Conflict, PersistenceFault, ValueError) as exc:
+    except (NotFound, Conflict, PersistenceFault, ValueError, architect.DraftFailed) as exc:
         def raise_error():
             raise exc
         return domain(raise_error)
@@ -178,6 +186,13 @@ async def update(system_id: str, body: Update, owner=Depends(human), svc=Depends
 @router.post("/systems/{system_id}/messages", status_code=202)
 async def message(system_id: str, body: Message, owner=Depends(human), svc=Depends(service)):
     return await mutation(svc.message(owner, system_id, body.body, body.command_id))
+
+
+@router.post("/draft-team")
+async def draft_team(body: DraftTeam, owner=Depends(human), svc=Depends(service)):
+    """Spends tokens on the named connection, and only when asked. Creates
+    nothing: the reply is a proposal for the setup form."""
+    return await mutation(svc.draft_team(owner, body.description, body.endpoint_id))
 
 
 @router.post("/systems/{system_id}/attempts/{attempt_id}/reconcile")
