@@ -118,6 +118,15 @@ async def stream_chat_message(body: ChatRequest, user: str = Depends(require_use
     return StreamingResponse(event_source(), media_type="text/event-stream")
 
 
+class CompactRequest(BaseModel):
+    session_id: str
+
+
+@router.post("/compact")
+async def compact_chat(body: CompactRequest, user: str = Depends(require_user)) -> dict:
+    return await chat_service.compact_session(body.session_id)
+
+
 @router.post("/attachments")
 async def upload_attachment(file: UploadFile, user: str = Depends(require_user)) -> dict:
     content = await file.read(_MAX_ATTACHMENT_BYTES + 1)

@@ -238,6 +238,70 @@ class SessionManager:
         self._save_index()
         return session
 
+    def effective_messages(self, session_id: Optional[str], exclude_last: bool = False) -> list[dict]:
+        """What a brain should treat as this session's prior conversation:
+        the full stored transcript, or — once compact_session() has run —
+        the latest compaction's summary followed by the messages after its
+        boundary. Every one of chat_service.py's/core/codex_brain.py's three
+        history-injection points calls this instead of reading
+        session["messages"] directly, so "compact this chat" only has to be
+        taught here once.
+
+        Never a destructive view: the messages before the boundary are still
+        sitting in the session's stored list (just flagged archived by
+        compact_session), this only decides what gets sent to the model.
+
+        exclude_last drops the most-recently-appended message — the current
+        turn's own user message, already saved by the time a brain asks for
+        "prior" history — matching the "[:-1]" convention both call sites
+        used before this existed.
+        """
+        session = self.get_session(session_id) if session_id else None
+        if session is None:
+            return []
+        messages = session.get("messages", [])
+        compactions = session.get("compactions") or []
+        if compactions:
+            latest = compactions[-1]
+            summary_note = {
+                "role": "assistant",
+                "content": (
+                    "[Earlier parts of this conversation were compacted to save context space. "
+                    "Summary of what happened before this point:]\n\n" + latest["summary"]
+                ),
+            }
+            result = [summary_note] + messages[latest["through_index"]:]
+        else:
+            result = list(messages)
+        if exclude_last and result:
+            result = result[:-1]
+        return result
+
+    def compact_session(self, session_id: str, through_index: int, summary: str) -> dict:
+        """Records a compaction checkpoint without deleting or rewriting any
+        stored message. Messages before through_index get an in-place
+        "archived" flag (still in session["messages"], still visible in the
+        transcript, still exported/searched) purely as a record of what a
+        compaction folded in — effective_messages() above is what actually
+        changes future turns' behavior, using through_index/summary, not
+        this flag. Appends to session["compactions"] rather than overwriting
+        it, so a chat can be compacted more than once over its life; only
+        the latest entry is ever read back."""
+        if session_id not in self._index:
+            raise KeyError(f"no such session: {session_id}")
+        session = self.get_session(session_id)
+        messages = session.get("messages", [])
+        through_index = max(0, min(through_index, len(messages)))
+        for m in messages[:through_index]:
+            m["archived"] = True
+        compactions = session.setdefault("compactions", [])
+        compactions.append({"through_index": through_index, "summary": summary, "created_at": time.time()})
+        session["updated_at"] = time.time()
+        write_json_atomic(_session_path(session_id), session)
+        self._index[session_id]["updated_at"] = session["updated_at"]
+        self._save_index()
+        return session
+
     def replace_messages(self, session_id: str, start_index: int, replacement: list) -> dict:
         """Swaps a run of messages for a shorter stand-in, keeping everything
         before it untouched.

@@ -200,8 +200,7 @@ class CodexBrain:
         # prior instructions either).
         if is_fresh_thread:
             prompt_text = system_prompt.for_codex(sys.executable, HIVE_MIND_CLI_PATH, self.is_admin) + projects.project_addendum(self.project_id)
-            session = session_manager.get_session(self.session_id) if self.session_id else None
-            prior = (session or {}).get("messages", [])[:-1]
+            prior = session_manager.effective_messages(self.session_id, exclude_last=True)
             if prior:
                 transcript = "\n\n".join(f'{m["role"]}: {m["content"]}' for m in prior)
                 prompt_text += f"\n\n[Earlier conversation, for context:]\n{transcript}\n[End of earlier conversation]"

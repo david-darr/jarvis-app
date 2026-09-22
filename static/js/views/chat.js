@@ -39,6 +39,8 @@ const ICON_COPY = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" s
 const ICON_PLUG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6"/><path d="M15 2v6"/><path d="M12 17v5"/><path d="M6 8h12a2 2 0 0 1 2 2v2a6 6 0 0 1-6 6h-4a6 6 0 0 1-6-6v-2a2 2 0 0 1 2-2z"/></svg>';
 const ICON_GLOBE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
 const ICON_CHATS = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4V5z"/></svg>';
+// Compact (David's ask 2026-09-21) — inward-pointing arrows, "shrink this".
+const ICON_COMPACT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>';
 // "Done" marker (David's ask 2026-09-02: a clear indicator for when a reply
 // has fully finished, distinct from mid-turn pauses that can look frozen).
 const ICON_DONE = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
@@ -347,11 +349,21 @@ export async function render(container, tabId, options = {}) {
   // cumulative token spend. Hidden until a turn actually reports usable
   // usage, so it never occupies the composer with a placeholder.
   const contextPill = el("div", { id: "context-pill", class: "context-pill", hidden: true, role: "status" });
+  // Compact (David's ask 2026-09-21) — appears once the context meter above
+  // shows this chat getting full. Shrinks what gets sent to the model on
+  // future turns; never deletes anything already saved (see
+  // core/session_manager.py's compact_session/effective_messages).
+  const compactBtn = el("button", {
+    type: "button", class: "input-icon-btn", id: "chat-compact", title: "Compact this chat",
+    "aria-label": "Compact this chat to free up context", hidden: true,
+    onclick: () => runCompact(compactBtn),
+  });
+  compactBtn.insertAdjacentHTML("beforeend", ICON_COMPACT);
 
   const sendBtn = el("button", { class: "btn", id: "chat-send", title: "Send" });
   sendBtn.insertAdjacentHTML("beforeend", ICON_SEND);
 
-  const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, workspacePill, contextPill]);
+  const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, workspacePill, contextPill, compactBtn]);
   // Dictation (David's ask 2026-09-15). Hidden outright when the browser
   // cannot record, rather than offered and then failing on click.
   const micBtn = el("button", { type: "button", class: "input-icon-btn chat-mic-btn", id: "chat-mic", title: "Dictate", "aria-label": "Dictate a message" });
@@ -978,20 +990,31 @@ function formatTokens(n) {
   return String(n);
 }
 
+// Same "getting full" threshold the pill already turns amber at — the
+// button offers the fix for the state the meter is already warning about,
+// rather than a separately-tuned number.
+const COMPACT_SHOW_THRESHOLD = 70;
+
 async function refreshContextMeter(sessionId) {
   const pill = document.getElementById('context-pill');
+  const compactBtn = document.getElementById('chat-compact');
   if (!pill) return;
-  if (!sessionId) { pill.hidden = true; return; }
+  if (!sessionId) { pill.hidden = true; if (compactBtn) compactBtn.hidden = true; return; }
   let state = null;
   try { state = await api(`/api/sessions/${sessionId}/context`); } catch { /* a missing reading is not an error worth surfacing */ }
   // The chat may have been switched while that request was in flight — a
   // stale reading must never be painted onto a different session's composer.
   if (sessionId !== activeSessionId || !pill.isConnected) return;
-  if (!state || !state.available || !Number.isFinite(state.used_tokens)) { pill.hidden = true; return; }
+  if (!state || !state.available || !Number.isFinite(state.used_tokens)) {
+    pill.hidden = true;
+    if (compactBtn) compactBtn.hidden = true;
+    return;
+  }
 
   const used = state.used_tokens;
   const capacity = Number.isFinite(state.capacity_tokens) ? state.capacity_tokens : null;
   const percent = Number.isFinite(state.percent) ? state.percent : null;
+  if (compactBtn) compactBtn.hidden = !(percent !== null && percent >= COMPACT_SHOW_THRESHOLD);
   pill.replaceChildren();
   if (percent !== null && capacity) {
     const bar = el('div', { class: 'context-bar' }, [el('div', { class: 'context-bar-fill' })]);
@@ -1012,6 +1035,33 @@ async function refreshContextMeter(sessionId) {
       + `\nNo context capacity is published for this model, so no percentage is shown.`;
   }
   pill.hidden = false;
+}
+
+// Summarizes older turns so future messages send less context, WITHOUT
+// deleting anything: the full transcript (compacted turns included) stays
+// in the session's stored history and keeps rendering below exactly as
+// before — see core/session_manager.py's compact_session/effective_messages
+// for where the "nothing is lost" guarantee actually lives.
+async function runCompact(button) {
+  const sessionId = activeSessionId;
+  if (!sessionId || button.disabled) return;
+  button.disabled = true;
+  const previousTitle = button.title;
+  button.title = 'Compacting…';
+  try {
+    await api('/api/chat/compact', { method: 'POST', body: JSON.stringify({ session_id: sessionId }) });
+    toast('Chat compacted — nothing was deleted, it’s all still above.', 'success');
+    if (activeSessionId === sessionId) {
+      const sessionsList = document.getElementById('sessions-list');
+      const messages = document.getElementById('chat-messages');
+      if (sessionsList && messages) await openSession(sessionId, sessionsList, messages);
+    }
+  } catch (error) {
+    toast(error.message || 'Could not compact this chat.', 'error');
+  } finally {
+    button.disabled = false;
+    button.title = previousTitle;
+  }
 }
 
 function syncChatBusy(busy) {

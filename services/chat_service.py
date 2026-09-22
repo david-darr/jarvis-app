@@ -138,7 +138,7 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
                           model=cli_model or None, is_admin=is_admin, project_id=project_id,
                           effort=effort)
     base_url, model, api_key, num_ctx = model_endpoints.resolve_runtime(endpoint["id"])
-    return ExternalBrain(base_url, model, api_key, history=(session or {}).get("messages", []),
+    return ExternalBrain(base_url, model, api_key, history=session_manager.effective_messages(session_id),
                          session_id=session_id, num_ctx=num_ctx, is_admin=is_admin, project_id=project_id)
 
 
@@ -158,8 +158,7 @@ def _prime_with_history(session_id: str, just_created: bool, endpoint: dict, ful
     long-running session pays this cost only after it's actually needed."""
     if not just_created or endpoint["kind"] != "claude_cli":
         return full_text
-    session = session_manager.get_session(session_id) or {}
-    prior = session.get("messages", [])[:-1]  # exclude the message just appended for this turn
+    prior = session_manager.effective_messages(session_id, exclude_last=True)
     if not prior:
         return full_text
     transcript = "\n\n".join(f'{m["role"]}: {m["content"]}' for m in prior)
@@ -457,4 +456,92 @@ async def summarise_open_mic(session_id: str) -> dict:
     }])
     session_manager.set_open_mic(session_id, False)
     return {"summarised": True, "replaced": len(spoken)}
+
+# -- Compact (David's ask 2026-09-21) ----------------------------------------
+# A user-triggered "shrink this chat's context" action, distinct from Open
+# Mic's summary above in the one way that matters: nothing is ever deleted or
+# overwritten. session_manager.compact_session() only flags old messages
+# archived and appends a checkpoint; effective_messages() is what actually
+# changes what gets sent to the model on later turns. The full transcript —
+# archived messages included — stays exactly where it was, readable and
+# searchable, for the life of the chat.
+
+# Kept live/uncompacted on every compaction so the most recent exchange stays
+# exact rather than paraphrased, the same "protected tail" idea Hermes Agent's
+# own ContextCompressor uses (see Harness Architecture Ideas' independent
+# verification pass) — sized small since jarvis-app compaction is manual and
+# infrequent, not a per-turn budget walk.
+COMPACTION_TAIL_KEEP = 6
+
+COMPACTION_PROMPT = (
+    "Below is a conversation so far. Write a structured summary that preserves everything a later "
+    "reply would need to continue this conversation seamlessly: decisions made, facts established, "
+    "commitments made, questions still open, and any pending or unfinished work. Write it as reference "
+    "notes, not dialogue. Do not add anything that was not actually said or done. Be thorough - "
+    "nothing important should be lost, even if the summary runs long." + chr(10) * 2
+)
+
+
+async def compact_session(session_id: str) -> dict:
+    async with session_operation(session_id):
+        return await _compact_session(session_id)
+
+
+async def _compact_session(session_id: str) -> dict:
+    session = session_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    endpoint = _resolve_endpoint(session_id)
+    if endpoint is None:
+        raise HTTPException(status_code=400, detail="add a model to this chat before compacting it")
+
+    messages = session.get("messages", [])
+    compactions = session.get("compactions") or []
+    prior_through = compactions[-1]["through_index"] if compactions else 0
+    through_index = max(prior_through, len(messages) - COMPACTION_TAIL_KEEP)
+    if through_index <= prior_through:
+        raise HTTPException(status_code=400, detail="not enough new conversation to compact yet")
+
+    to_fold_in = messages[prior_through:through_index]
+    transcript = (chr(10) * 2).join(f'{m["role"]}: {m["content"]}' for m in to_fold_in if m.get("content"))
+    prompt = COMPACTION_PROMPT
+    if compactions:
+        prompt = (
+            f"[Summary of everything before this point:]\n{compactions[-1]['summary']}"
+            "\n\n[New conversation since then, to fold into that summary:]\n"
+        ) + prompt
+    prompt += transcript
+
+    # Detached brain, same reasoning as summarise_open_mic above: the live
+    # session brain already holds this conversation in its own state, so
+    # asking it to summarize itself would pollute that state and bias the
+    # summary toward what it remembers rather than what the transcript says.
+    brain = _build_brain(endpoint, session_id=None, is_admin=False)
+    try:
+        await brain.connect()
+        summary = (await brain.run_turn(prompt)).strip()
+    finally:
+        await brain.disconnect()
+    if not summary:
+        raise HTTPException(status_code=502, detail="the summary came back empty")
+
+    session_manager.compact_session(session_id, through_index, summary)
+    if endpoint["kind"] == "codex_cli":
+        # Codex CLI owns its own server-side thread and cannot be seeded with
+        # a summary mid-thread — the next turn starts a fresh one, primed
+        # with the new compaction summary through the existing fresh-thread
+        # path (core/codex_brain.py's is_fresh_thread branch, which already
+        # calls effective_messages() the same as the other two brain kinds).
+        session_manager.set_codex_thread_id(session_id, None)
+    # Evicts any live brain holding the old, uncompacted history in memory
+    # (ExternalBrain's message list; a connected Claude-CLI Brain) so the
+    # next turn rebuilds from effective_messages() instead of growing what
+    # it already had cached.
+    await close_session_brain(session_id)
+
+    session_manager.append_message(
+        session_id, "assistant",
+        "**Conversation compacted**" + chr(10) * 2 + summary,
+    )
+    return {"compacted_through": through_index, "archived": through_index - prior_through, "summary": summary}
 
