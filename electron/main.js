@@ -20,7 +20,7 @@
 // freeze (custom tabs are imported at runtime, so a frozen module graph
 // would break them).
 
-const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, shell, nativeImage } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, shell, nativeImage, screen } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -49,6 +49,57 @@ let backendProcess = null;
 let tray = null;
 let mainWindow = null;
 let isQuitting = false;
+let usageOverlay = null;
+let usageOverlayVisible = false;
+let usageOverlayCollapsed = false;
+let backendReady = false;
+
+function overlayPreferenceFile() { return path.join(app.getPath("userData"), "usage-overlay.json"); }
+function overlayState() { return { visible: usageOverlayVisible, supported: process.platform === "win32" }; }
+function notifyOverlayState() {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("usage-overlay:state", overlayState());
+  if (tray) updateTrayMenu();
+}
+function saveOverlayPreference() {
+  const file = overlayPreferenceFile();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = `${file}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify({ visible: usageOverlayVisible }));
+  fs.renameSync(temporary, file);
+}
+function overlayBounds(collapsed) {
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const width = Math.min(340, display.workArea.width - 20);
+  const height = Math.min(collapsed ? 65 : 500, display.workArea.height - 20);
+  return { x: display.workArea.x + display.workArea.width - width - 20,
+    y: display.workArea.y + 20, width, height };
+}
+async function setUsageOverlayVisible(visible) {
+  if (process.platform !== "win32") return overlayState();
+  usageOverlayVisible = !!visible;
+  saveOverlayPreference();
+  if (usageOverlayVisible && backendReady) {
+    if (!usageOverlay || usageOverlay.isDestroyed()) {
+      usageOverlay = new BrowserWindow({
+        ...overlayBounds(usageOverlayCollapsed), frame: false, transparent: true,
+        alwaysOnTop: true, skipTaskbar: true, resizable: false, show: false,
+        webPreferences: { contextIsolation: true, nodeIntegration: false,
+          preload: path.join(__dirname, "usage-overlay-preload.js") },
+      });
+      usageOverlay.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+      usageOverlay.webContents.on("will-navigate", (event, url) => {
+        if (url !== `${BACKEND_URL}/usage-overlay`) event.preventDefault();
+      });
+      usageOverlay.on("closed", () => { usageOverlay = null; });
+      await usageOverlay.loadURL(`${BACKEND_URL}/usage-overlay`);
+    }
+    usageOverlay.showInactive();
+  } else if (usageOverlay && !usageOverlay.isDestroyed()) {
+    usageOverlay.hide();
+  }
+  notifyOverlayState();
+  return overlayState();
+}
 
 // Lookup order, most-specific first:
 //   1. The bundled runtime (scripts/build_runtime.py) — what every packaged
@@ -186,12 +237,22 @@ function buildTray() {
   if (tray) return;
   tray = new Tray(trayIcon());
   tray.setToolTip("JARVIS — running in the background");
+  updateTrayMenu();
+  // Double-click is the convention people expect from a tray icon.
+  tray.on("double-click", showWindow);
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "Open JARVIS", click: showWindow },
     {
       label: "Open in browser",
       click: () => shell.openExternal(BACKEND_URL),
     },
+    { type: "separator" },
+    { label: "Show usage overlay", type: "checkbox", checked: usageOverlayVisible,
+      enabled: process.platform === "win32", click: (item) => setUsageOverlayVisible(item.checked).catch(console.error) },
     { type: "separator" },
     {
       // The only way to actually stop it. Spelled out because the whole
@@ -200,8 +261,6 @@ function buildTray() {
       click: () => { isQuitting = true; app.quit(); },
     },
   ]));
-  // Double-click is the convention people expect from a tray icon.
-  tray.on("double-click", showWindow);
 }
 
 async function createWindow() {
@@ -322,7 +381,9 @@ async function createWindow() {
     );
     return;
   }
+  backendReady = true;
   win.loadURL(BACKEND_URL);
+  if (usageOverlayVisible) setUsageOverlayVisible(true).catch(console.error);
 }
 
 // Brain's skill import and Library's document import used to need this kind
@@ -358,6 +419,24 @@ ipcMain.handle("pick-vault-folder", async () => {
 function fromAppWindow(event) {
   return !!mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents;
 }
+
+function fromOverlayWindow(event) {
+  return !!usageOverlay && !usageOverlay.isDestroyed() && event.sender === usageOverlay.webContents;
+}
+ipcMain.handle("usage-overlay:state", (event) => fromAppWindow(event) ? overlayState() : { visible: false, supported: false });
+ipcMain.handle("usage-overlay:set-visible", (event, visible) => {
+  if (!fromAppWindow(event)) return { visible: false, supported: false };
+  return setUsageOverlayVisible(visible);
+});
+ipcMain.on("usage-overlay:collapse", (event, collapsed) => {
+  if (!fromOverlayWindow(event)) return;
+  usageOverlayCollapsed = !!collapsed;
+  usageOverlay.setBounds(overlayBounds(usageOverlayCollapsed));
+});
+ipcMain.on("usage-overlay:hide", (event) => {
+  if (fromOverlayWindow(event)) setUsageOverlayVisible(false).catch(console.error);
+});
+ipcMain.on("usage-overlay:open-app", (event) => { if (fromOverlayWindow(event)) showWindow(); });
 
 ipcMain.handle("browser:open", (event, url, bounds) => {
   if (!fromAppWindow(event)) return { ok: false, reason: "denied" };
@@ -447,6 +526,8 @@ if (!gotTheLock) {
   app.on("second-instance", showWindow);
 
   app.whenReady().then(() => {
+    try { usageOverlayVisible = JSON.parse(fs.readFileSync(overlayPreferenceFile(), "utf8")).visible === true; }
+    catch { usageOverlayVisible = false; }
     launch();
     setupAutoUpdate();
 
@@ -466,5 +547,6 @@ app.on("before-quit", () => {
   isQuitting = true;
   // Destroyed, not hidden — a hidden view keeps running scripts and audio.
   sideBrowser.close();
+  if (usageOverlay && !usageOverlay.isDestroyed()) usageOverlay.destroy();
   stopBackend();
 });

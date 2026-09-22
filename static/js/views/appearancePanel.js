@@ -86,8 +86,37 @@ export function renderAppearancePanel(content) {
   const reset = el('button', { type: 'button', class: 'btn quiet', text: 'Reset appearance', onclick: async () => {
     try { await resetAppearance(); sync(); } catch { status.textContent = 'Appearance could not be reset. Try again.'; }
   } });
+  const overlay = window.jarvis?.usageOverlay;
+  const overlayToggle = el('input', { type: 'checkbox', id: 'usage-overlay-toggle' });
+  const overlayNote = el('p', { class: 'meta', text: 'Shows Claude Code and Codex account limits and JARVIS-recorded API/local tokens. Hidden by default.' });
+  const overlaySection = el('section', { class: 'appearance-overlay-setting' }, [
+    el('h3', { text: 'Desktop usage overlay' }),
+    el('label', { for: overlayToggle.id, class: 'appearance-motion' }, [overlayToggle, el('span', { text: 'Show above other windows' })]),
+    overlayNote,
+  ]);
+  if (overlay) {
+    const syncOverlay = state => {
+      overlayToggle.disabled = !state.supported;
+      overlayToggle.checked = !!state.visible;
+      if (!state.supported) overlayNote.textContent = 'The desktop overlay is currently available on Windows.';
+    };
+    overlay.state().then(syncOverlay).catch(() => { overlayNote.textContent = 'Overlay setting unavailable.'; });
+    const unsubscribe = overlay.onState(syncOverlay);
+    const observer = new MutationObserver(() => {
+      if (!root.isConnected) { unsubscribe(); observer.disconnect(); }
+    });
+    observer.observe(content, { childList: true });
+    overlayToggle.addEventListener('change', async () => {
+      overlayToggle.disabled = true;
+      try { syncOverlay(await overlay.setVisible(overlayToggle.checked)); }
+      catch { overlayNote.textContent = 'Could not change the overlay. Try again.'; overlayToggle.disabled = false; }
+    });
+  } else {
+    overlayToggle.disabled = true;
+    overlayNote.textContent = 'Open the Windows desktop app to use the overlay.';
+  }
   root.append(el('div', { class: 'appearance-heading' }, [el('div', {}, [el('h2', { text: 'Appearance' }),
-    el('p', { class: 'meta', text: 'A workspace that feels like yours.' })]), reset]), previewFrame, modes, palette, imageOptions, shaderOptions, status);
+    el('p', { class: 'meta', text: 'A workspace that feels like yours.' })]), reset]), previewFrame, modes, palette, imageOptions, shaderOptions, overlaySection, status);
   content.replaceChildren(root);
   function sync() {
     const value = getAppearance();

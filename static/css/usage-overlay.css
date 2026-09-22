@@ -1,0 +1,32 @@
+:root { color-scheme: dark; font: 13px/1.4 Inter, "Segoe UI", sans-serif; color: #eef1f7; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: transparent; }
+body { padding: 3px; }
+#panel { background: rgba(16, 20, 32, .96); border: 1px solid #35405a; border-radius: 15px;
+  box-shadow: 0 10px 30px #0008; overflow: hidden; }
+header { height: 58px; display: flex; align-items: center; justify-content: space-between;
+  padding: 0 14px; border-bottom: 1px solid #30394d; }
+.brand { font-size: 13px; font-weight: 800; letter-spacing: .13em; }
+.sub { color: #8493af; font-weight: 600; }
+.actions { display: flex; gap: 4px; }
+button { border: 0; border-radius: 7px; background: transparent; color: #bfc8da; padding: 5px 8px;
+  font: inherit; cursor: pointer; }
+button:hover, button:focus-visible { background: #303c56; color: white; outline: none; }
+#details { padding: 11px 14px 14px; max-height: 435px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #52607b transparent; }
+#message { margin: 4px 0 10px; color: #b5c0d3; }
+#message:empty { display: none; }
+.provider { margin: 0 0 13px; }
+.provider-title { display: flex; justify-content: space-between; align-items: baseline; font-weight: 700; }
+.status { font-size: 11px; color: #e4b46b; font-weight: 500; }
+.window { margin-top: 8px; }
+.window-head { display: flex; justify-content: space-between; font-size: 12px; }
+.window-head strong { font-variant-numeric: tabular-nums; }
+.track { margin-top: 5px; height: 5px; border-radius: 5px; background: #35425d; overflow: hidden; }
+.fill { height: 100%; background: #8c9ffc; border-radius: 5px; }
+.reset { color: #9daac2; font-size: 11px; margin-top: 3px; }
+#recorded:not(:empty) { border-top: 1px solid #30394d; padding-top: 10px; }
+#recorded h2 { margin: 0 0 5px; font-size: 12px; }
+.recorded-row { display: flex; justify-content: space-between; gap: 8px; color: #b5c0d3; margin-top: 4px; }
+.foot { margin: 12px 0 0; color: #8493af; font-size: 10px; }
+body.collapsed #details { display: none; }
+body.collapsed header { border-bottom: 0; }

@@ -19,6 +19,16 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("jarvis", {
   pickVaultFolder: () => ipcRenderer.invoke("pick-vault-folder"),
 
+  usageOverlay: {
+    state: () => ipcRenderer.invoke("usage-overlay:state"),
+    setVisible: (visible) => ipcRenderer.invoke("usage-overlay:set-visible", !!visible),
+    onState: (handler) => {
+      const wrapped = (_event, state) => handler(state);
+      ipcRenderer.on("usage-overlay:state", wrapped);
+      return () => ipcRenderer.removeListener("usage-overlay:state", wrapped);
+    },
+  },
+
   // Side browser (David's ask 2026-09-15). Controls only: nothing here can
   // read page content, and the main process re-validates every URL anyway
   // (electron/browser.js's safeUrl) rather than trusting this side.

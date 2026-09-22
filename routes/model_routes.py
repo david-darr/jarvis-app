@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from core import model_catalog, model_endpoints, token_usage
+from core import model_catalog, model_endpoints, quota_usage, token_usage
 from core.middleware import require_admin, require_user
 from core.providers import openai_compatible
 
@@ -66,6 +66,12 @@ async def get_usage(user: str = Depends(require_admin)) -> dict:
     share of usage across endpoints that have reported any, not a percentage
     of a fixed budget/cap this app doesn't have."""
     return token_usage.get_usage_summary()
+
+
+@router.get("/quotas")
+async def get_quotas(user: str = Depends(require_admin)) -> dict:
+    """Account quota windows plus separately labeled JARVIS token totals."""
+    return await quota_usage.get_usage_overlay_async()
 
 
 @router.post("")

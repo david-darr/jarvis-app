@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JARVIS usage</title>
+  <link rel="stylesheet" href="/static/css/usage-overlay.css">
+</head>
+<body>
+  <main id="panel">
+    <header>
+      <span class="brand">JARVIS <span class="sub">USAGE</span></span>
+      <div class="actions">
+        <button id="open-app" type="button" title="Open JARVIS">Open</button>
+        <button id="collapse" type="button" title="Collapse usage" aria-expanded="true">−</button>
+        <button id="hide" type="button" title="Hide overlay">×</button>
+      </div>
+    </header>
+    <div id="details">
+      <p id="message" role="status">Loading usage…</p>
+      <div id="providers"></div>
+      <div id="recorded"></div>
+      <p class="foot">Account limits refresh every 5 minutes while visible.</p>
+    </div>
+  </main>
+  <script src="/static/js/usage-overlay.js" defer></script>
+</body>
+</html>

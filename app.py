@@ -193,6 +193,11 @@ async def index() -> FileResponse:
     return FileResponse(f"{STATIC_DIR}/index.html")
 
 
+@app.get("/usage-overlay")
+async def usage_overlay_page() -> FileResponse:
+    return FileResponse(f"{STATIC_DIR}/usage-overlay.html")
+
+
 @app.get("/api/health")
 async def health() -> dict:
     return {"status": "ok"}
