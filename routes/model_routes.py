@@ -74,6 +74,22 @@ async def get_quotas(user: str = Depends(require_admin)) -> dict:
     return await quota_usage.get_usage_overlay_async()
 
 
+class RefreshQuotaRequest(BaseModel):
+    provider: str
+
+
+@router.post("/quotas/refresh")
+async def refresh_quota(body: RefreshQuotaRequest, user: str = Depends(require_admin)) -> dict:
+    """A click on one ring of the desktop usage overlay: read that provider
+    now rather than waiting for the cache, at most once per short interval."""
+    if body.provider not in quota_usage.READERS:
+        raise HTTPException(status_code=400, detail="unknown provider")
+    try:
+        return await quota_usage.get_usage_overlay_async(force_provider=body.provider)
+    except quota_usage.RefreshThrottled:
+        raise HTTPException(status_code=429, detail="refreshed moments ago")
+
+
 @router.post("")
 async def create_endpoint(body: CreateEndpointRequest, user: str = Depends(require_admin)) -> dict:
     try:

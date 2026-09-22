@@ -1,28 +1,38 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>JARVIS usage</title>
-  <link rel="stylesheet" href="/static/css/usage-overlay.css">
+<meta charset="utf-8">
+<title>JARVIS usage</title>
+<!-- Markup ported from CodeNotch (MIT, (c) 2026 Vinz): see static/css/usage-overlay.css for the notice. -->
+<link rel="stylesheet" href="/static/css/usage-overlay.css">
 </head>
-<body>
-  <main id="panel">
-    <header>
-      <span class="brand">JARVIS <span class="sub">USAGE</span></span>
-      <div class="actions">
-        <button id="open-app" type="button" title="Open JARVIS">Open</button>
-        <button id="collapse" type="button" title="Collapse usage" aria-expanded="true">−</button>
-        <button id="hide" type="button" title="Hide overlay">×</button>
-      </div>
-    </header>
-    <div id="details">
-      <p id="message" role="status">Loading usage…</p>
-      <div id="providers"></div>
-      <div id="recorded"></div>
-      <p class="foot">Account limits refresh every 5 minutes while visible.</p>
-    </div>
-  </main>
-  <script src="/static/js/usage-overlay.js" defer></script>
+<body class="folded">
+<div id="root">
+  <div id="card"></div>
+  <div id="tail"></div>
+  <div id="move" class="handle">
+    <svg class="h-rest" viewBox="-36 -36 72 72" aria-hidden="true">
+      <circle r="28.5" fill="none" stroke="#2e2e2e" stroke-width="8.8" stroke-linecap="round" stroke-dasharray="44.77 179.07"/>
+      <circle r="28.5" fill="none" stroke="#000" stroke-width="6.8" stroke-linecap="round" stroke-dasharray="44.77 179.07"/>
+    </svg>
+    <div class="h-disc"></div>
+    <!-- A hand, as on the Mac: the gesture is a carry, not a nudge, which is what arrows would say -->
+    <svg class="h-glyph" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M8 13V5.6a1.5 1.5 0 0 1 3 0V11h.6V3.5a1.5 1.5 0 0 1 3 0V11h.6V5a1.5 1.5 0 0 1 3 0v8.4c0 4.2-2 7.1-5.6 7.1-2.4 0-3.8-1-5.1-2.7l-3.8-5a1.5 1.5 0 0 1 2.2-2z"/>
+    </svg>
+  </div>
+  <div id="orb" class="handle">
+    <svg class="h-rest" viewBox="-36 -36 72 72" aria-hidden="true">
+      <circle r="28.5" fill="none" stroke="#2e2e2e" stroke-width="8.8" stroke-linecap="round" stroke-dasharray="44.77 179.07"/>
+      <circle r="28.5" fill="none" stroke="#000" stroke-width="6.8" stroke-linecap="round" stroke-dasharray="44.77 179.07"/>
+    </svg>
+    <div class="h-disc"></div>
+    <svg class="h-glyph" viewBox="0 0 12 12" aria-hidden="true"><path fill-rule="evenodd" d="M5.1.6h1.8l.3 1.5 1.1.5 1.3-.8 1.3 1.3-.8 1.3.5 1.1 1.5.3v1.8l-1.5.3-.5 1.1.8 1.3-1.3 1.3-1.3-.8-1.1.5-.3 1.5H5.1l-.3-1.5-1.1-.5-1.3.8-1.3-1.3.8-1.3-.5-1.1L.6 6.9V5.1l1.5-.3.5-1.1-.8-1.3 1.3-1.3 1.3.8 1.1-.5zM6 4.1a1.9 1.9 0 1 0 0 3.8 1.9 1.9 0 0 0 0-3.8z"/></svg>
+  </div>
+  <div id="pill"></div><!-- one .cell per provider, stacked vertically (upstream: data-driven, the same layout for 1–5 cells) -->
+  <div id="rest"></div><!-- after the pill, so its outline is drawn over the clipped pill -->
+  <div id="notice"></div>
+</div>
+<script src="/static/js/usage-overlay.js"></script>
 </body>
 </html>

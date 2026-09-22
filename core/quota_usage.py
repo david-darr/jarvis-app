@@ -23,8 +23,32 @@ from core import model_endpoints, token_usage
 
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 REFRESH_SECONDS = 300
+# A click on a ring forces a fresh reading, but never more often than this per
+# provider: the Claude endpoint rate-limits, and a click is not worth a 429.
+FORCED_REFRESH_SECONDS = 20
 _cache: dict[str, dict] = {}
 _retry_after: dict[str, float] = {}
+
+
+class SignInNeeded(RuntimeError):
+    """The CLI's own sign-in is missing, expired or refused."""
+
+
+class RateLimited(RuntimeError):
+    """The provider answered 429."""
+
+
+class RefreshThrottled(RuntimeError):
+    """A forced refresh arrived sooner than FORCED_REFRESH_SECONDS."""
+
+
+# Fixed wording only. Exceptions from HTTP and subprocesses can carry URLs or
+# account data, so none of their text ever reaches the response.
+NOTES = {
+    "needs_sign_in": "Sign-in has expired or is missing. Open the CLI once to renew it.",
+    "rate_limited": "The provider asked for a pause. Retrying shortly.",
+    "unavailable": "Usage could not be read right now.",
+}
 
 
 def _percent(value):
@@ -97,14 +121,16 @@ def _claude_windows():
     token = oauth.get("accessToken")
     expires = _unix_time(oauth.get("expiresAt"))
     if not token or (expires is not None and expires <= time.time()):
-        raise RuntimeError("Claude Code sign-in needs refresh")
+        raise SignInNeeded("Claude Code sign-in needs refresh")
     with httpx.Client(timeout=12) as client:
         response = client.get(CLAUDE_USAGE_URL, headers={
             "Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20",
         })
     if response.status_code == 429:
         _retry_after["claude"] = time.monotonic() + 300
-        raise RuntimeError("Claude usage is rate limited")
+        raise RateLimited("Claude usage is rate limited")
+    if response.status_code == 401:
+        raise SignInNeeded("Claude Code sign-in was refused")
     response.raise_for_status()
     return parse_claude_usage(response.json())
 
@@ -159,35 +185,56 @@ def _codex_windows():
         _kill_tree(process)
 
 
-def _provider(name, reader):
+def _failed(name, old, status):
+    if old:
+        return {**old["value"], "stale": True, "status": "stale", "note": NOTES[status]}
+    return {"provider": name, "windows": [], "stale": True, "status": status, "note": NOTES[status]}
+
+
+def _provider(name, reader, force=False):
+    """One provider's reading: cached for REFRESH_SECONDS, or fetched now when
+    `force` is set (a click on its ring). Every result carries a `status` -
+    ok, stale, needs_sign_in, rate_limited or unavailable - and a fixed note."""
     now = time.monotonic()
     old = _cache.get(name)
-    if old and now - old["checked"] < REFRESH_SECONDS:
+    if force and old and now - old["checked"] < FORCED_REFRESH_SECONDS:
+        raise RefreshThrottled(name)
+    if old and not force and now - old["checked"] < REFRESH_SECONDS:
         return {**old["value"], "stale": False}
     if now < _retry_after.get(name, 0):
-        return {**old["value"], "stale": True} if old else {"provider": name, "windows": [], "stale": True, "status": "Rate limited"}
+        return _failed(name, old, "rate_limited")
     try:
         windows = reader()
         if not windows:
             raise RuntimeError("No quota windows returned")
-        value = {"provider": name, "windows": windows, "updated_at": time.time(), "stale": False}
+        value = {"provider": name, "status": "ok", "note": "", "windows": windows,
+                 "updated_at": time.time(), "stale": False}
         _cache[name] = {"checked": now, "value": value}
         return value
+    except SignInNeeded:
+        # Sign-in problems are not retried on a timer: nothing changes until
+        # the person signs in again, which the next ordinary poll will see.
+        return {"provider": name, "windows": [], "stale": True, "status": "needs_sign_in", "note": NOTES["needs_sign_in"]}
+    except RateLimited:
+        return _failed(name, old, "rate_limited")
     except Exception:
-        # Exceptions from HTTP and subprocesses may contain URLs or account
-        # data. Keep the public response deliberately generic.
         _retry_after[name] = max(_retry_after.get(name, 0), now + 60)
-        return {**old["value"], "stale": True} if old else {"provider": name, "windows": [], "stale": True, "status": "Unavailable"}
+        return _failed(name, old, "unavailable")
 
 
-def get_usage_overlay():
+READERS = {"claude": ("claude_cli", lambda: _claude_windows()), "codex": ("codex_cli", lambda: _codex_windows())}
+
+
+def get_usage_overlay(force_provider=None):
+    """Readings for every subscription CLI endpoint that is connected.
+    `force_provider` refreshes that one now (raises RefreshThrottled if it was
+    read moments ago); the rest come from cache as usual."""
     endpoints = model_endpoints.list_endpoints()
     kinds = {endpoint["kind"] for endpoint in endpoints}
     providers = []
-    if "claude_cli" in kinds:
-        providers.append(_provider("claude", _claude_windows))
-    if "codex_cli" in kinds:
-        providers.append(_provider("codex", _codex_windows))
+    for name, (kind, reader) in READERS.items():
+        if kind in kinds:
+            providers.append(_provider(name, reader, force=(name == force_provider)))
     totals = token_usage.get_usage_summary()
     recorded = [{"name": ep["name"], "kind": ep["kind"],
                  "total_tokens": totals.get(ep["id"], {}).get("total_tokens")}
@@ -195,5 +242,5 @@ def get_usage_overlay():
     return {"providers": providers, "recorded": recorded}
 
 
-async def get_usage_overlay_async():
-    return await asyncio.to_thread(get_usage_overlay)
+async def get_usage_overlay_async(force_provider=None):
+    return await asyncio.to_thread(get_usage_overlay, force_provider)

@@ -1,32 +1,258 @@
-:root { color-scheme: dark; font: 13px/1.4 Inter, "Segoe UI", sans-serif; color: #eef1f7; }
-* { box-sizing: border-box; }
-html, body { margin: 0; background: transparent; }
-body { padding: 3px; }
-#panel { background: rgba(16, 20, 32, .96); border: 1px solid #35405a; border-radius: 15px;
-  box-shadow: 0 10px 30px #0008; overflow: hidden; }
-header { height: 58px; display: flex; align-items: center; justify-content: space-between;
-  padding: 0 14px; border-bottom: 1px solid #30394d; }
-.brand { font-size: 13px; font-weight: 800; letter-spacing: .13em; }
-.sub { color: #8493af; font-weight: 600; }
-.actions { display: flex; gap: 4px; }
-button { border: 0; border-radius: 7px; background: transparent; color: #bfc8da; padding: 5px 8px;
-  font: inherit; cursor: pointer; }
-button:hover, button:focus-visible { background: #303c56; color: white; outline: none; }
-#details { padding: 11px 14px 14px; max-height: 435px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #52607b transparent; }
-#message { margin: 4px 0 10px; color: #b5c0d3; }
-#message:empty { display: none; }
-.provider { margin: 0 0 13px; }
-.provider-title { display: flex; justify-content: space-between; align-items: baseline; font-weight: 700; }
-.status { font-size: 11px; color: #e4b46b; font-weight: 500; }
-.window { margin-top: 8px; }
-.window-head { display: flex; justify-content: space-between; font-size: 12px; }
-.window-head strong { font-variant-numeric: tabular-nums; }
-.track { margin-top: 5px; height: 5px; border-radius: 5px; background: #35425d; overflow: hidden; }
-.fill { height: 100%; background: #8c9ffc; border-radius: 5px; }
-.reset { color: #9daac2; font-size: 11px; margin-top: 3px; }
-#recorded:not(:empty) { border-top: 1px solid #30394d; padding-top: 10px; }
-#recorded h2 { margin: 0 0 5px; font-size: 12px; }
-.recorded-row { display: flex; justify-content: space-between; gap: 8px; color: #b5c0d3; margin-top: 4px; }
-.foot { margin: 12px 0 0; color: #8493af; font-size: 10px; }
-body.collapsed #details { display: none; }
-body.collapsed header { border-bottom: 0; }
+/* JARVIS desktop usage overlay - the notch.
+
+   Design ported from CodeNotch's Windows notch (windows/codenotch/ui/notch.html
+   at commit 117a38b, https://github.com/vinzdg/codenotch). The rules below are
+   CodeNotch's own, kept close to verbatim so a later version can be diffed in;
+   JARVIS-specific additions are at the end of this file. Its comments mention
+   "the Mac" and "Rust": those are CodeNotch's macOS original and its Tauri
+   host, whose roles electron/main.js plays here.
+
+   MIT License
+
+   Copyright (c) 2026 Vinz
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+*/
+
+.c-auth{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+.c-auth button{font:inherit;font-size:11px;color:#fff;background:#252525;border:1px solid #555;border-radius:7px;padding:6px 9px;cursor:pointer}
+.c-auth button:hover,.c-auth button:focus-visible{background:#383838;border-color:#aaa}
+.c-auth button:disabled{opacity:.5;cursor:wait}
+.c-auth-status{font-size:10px;line-height:1.4;color:#b9b9b9;margin-top:6px;overflow-wrap:anywhere}
+/* Visual reference: upstream docs/specs/2026-08-28-usage-notch-design.md, reproduced for Windows */
+*{box-sizing:border-box} /* content-box padding once pushed the card past the window's left edge */
+html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden;user-select:none}
+body{font-family:"Segoe UI",system-ui,sans-serif;color:#fff}
+#root{position:relative;width:100%;height:100%}
+
+/* The pill on the right edge */
+#pill{
+  position:absolute;right:0;top:50%;transform:translateY(-50%);
+  width:70px;padding:18px 0;background:#000;
+  border-radius:20px 0 0 20px;
+  /* Stays visible on dark wallpapers: a thin stroke plus a faint glow, the only outline when black sits on black */
+  border:1px solid #2e2e2e;border-right:none;
+  box-shadow:none;
+  display:flex;flex-direction:column;align-items:center;gap:14px;cursor:pointer;
+}
+/* Fillets: the concave arcs between the pill's top/bottom and the screen edge (the inverse rounded
+   corner in the upstream design frame). An R×R black square hugs the edge and a radial gradient
+   punches out the circle of radius R centred on its outer corner; what remains is the arc. A 1 px
+   ring in the stroke colour joins the pill's own stroke (the outline cue on black wallpapers). */
+#pill::before,#pill::after{
+  content:"";position:absolute;right:0;width:var(--fillet);height:var(--fillet);pointer-events:none;
+}
+/* The Mac's flare radius (38.7 pt against the same 70 pt body), so the settings orb that nests in
+   this pocket can be the Mac's own size */
+#pill{--fillet:38.7px}
+#pill::before{
+  top:calc(-1 * var(--fillet)); /* covers the 1 px stroke along the pill's top edge so there is no seam */
+  background:radial-gradient(circle at 0 0, transparent calc(var(--fillet) - 1.5px), #2e2e2e calc(var(--fillet) - 0.5px), #000 calc(var(--fillet) + 0.5px));
+}
+#pill::after{
+  bottom:calc(-1 * var(--fillet));
+  background:radial-gradient(circle at 0 100%, transparent calc(var(--fillet) - 1.5px), #2e2e2e calc(var(--fillet) - 0.5px), #000 calc(var(--fillet) + 0.5px));
+}
+.cell{display:flex;flex-direction:column;align-items:center;gap:6px}
+/* The ring takes the Mac's own share of the body, NotchLayout.ringDiameter against sideBodyDepth: 44 in
+   70. At 56 it left an outside weekly ring 2.8 px from the screen edge, where the Mac keeps it about 10
+   clear ("far enough in that the bezel is never touched"). The arcs are drawn in a 56-unit viewBox and
+   scale with the ring on their own; the glyphs are sized here in px, so they take the same factor. */
+:root{--ring:44px;--k:calc(44 / 56)}
+.ringwrap{position:relative;width:var(--ring);height:var(--ring);transition:transform .3s cubic-bezier(.34,1.4,.64,1)}
+.ringwrap.pressed{transform:scale(.93)}
+.ringwrap > svg.ring,.ringwrap > svg.reading,.ringwrap > svg.activity{position:absolute;inset:0;overflow:visible} /* pins only the ring itself; an inline logo svg must not match this or it ends up in the top-left corner */
+.glyph{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:calc(20px * var(--k));font-weight:700;color:#e8e8ea;letter-spacing:-.5px;
+}
+.glyph.small{font-size:calc(15px * var(--k))}
+/* Glyphs: mark = the provider's own brand mark (monochrome, shown white); appicon = the installed app's icon (colour, rounded and shrunk) */
+.glyph img,.glyph svg{display:block;pointer-events:none;user-select:none}
+.glyph .mark{display:block;width:calc(26px * var(--k));height:calc(26px * var(--k));color:#e8e8ea}
+.glyph .mark svg{width:calc(26px * var(--k));height:calc(26px * var(--k));fill:currentColor} /* inline SVG follows currentColor, so it dims together with the cell */
+.glyph img.png{width:calc(26px * var(--k));height:calc(26px * var(--k));object-fit:contain}
+.glyph img.appicon{width:calc(30px * var(--k));height:calc(30px * var(--k));border-radius:calc(8px * var(--k));object-fit:cover}
+.c-head .mark{display:inline-block;width:16px;height:16px;color:#e8e8ea;margin-right:2px}
+.c-head .mark svg{width:16px;height:16px;fill:currentColor}
+.pct{font-size:15px;font-weight:600;color:#fff;font-variant-numeric:tabular-nums}
+.dim{opacity:.55}
+/* A stale reading dims the reading only. The track, the week and the glyph are all saying the same
+   old thing, but whether an agent is running right now is current either way, so the activity arc
+   keeps its strength — the Mac puts its own ActivityArc outside the opacity it gives the stale
+   stack (ProviderRing), and TASKS.md says it outright: dimming applies to the usage reading. */
+.ringwrap.stale > svg.ring,.ringwrap.stale > svg.reading,.ringwrap.stale > .glyph{opacity:.55}
+/* Session arc animation */
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+/* A 60 fps SVG transform animation in a transparent always-on-top window slows the whole desktop
+   compositor (other apps stutter). steps() drops repaints to ~10 fps; it still reads as spinning/breathing. */
+.arc-spin{animation:spin 1.2s steps(12) infinite;transform-origin:center}
+.arc-pulse{animation:pulse 1.1s steps(6) infinite}
+/* Windows' Animation effects switch: a still arc and a solid ring, as on the Mac under Reduce Motion */
+@media (prefers-reduced-motion: reduce){.arc-spin,.arc-pulse{animation:none}.ringwrap{transition:none}}
+
+/* Hover card, shown to the left of the pill */
+#card{
+  position:absolute;left:10px;right:100px;top:50%;transform:translateY(-50%);
+  /* Anchored on both sides = fluid width: whatever the WebView's real logical width, the card cannot
+     extend past the window's left edge (a fixed max-width got clipped when the DPI disagreed).
+     The 246 cap matches the upstream spec. */
+  max-width:246px;margin-left:auto;background:#0a0a0a;border-radius:16px;padding:16px;
+  overflow-wrap:anywhere;min-width:0;
+  max-height:calc(100% - 16px);overflow-x:hidden;overflow-y:auto;scrollbar-width:thin; /* actions stay reachable in a tall card */
+  display:none;
+}
+#card.show{display:block}
+/* The tail, its point on the hovered ring: the Mac's curved wedge (TooltipTail), whose shoulders
+   leave the card tangent to its edge so the two read as one shape. An element of its own rather
+   than ::after, so the card's overflow cannot clip it and it can be reported as hot. It spans the
+   whole gap, its tip tucked 1 px under the pill's edge so the two meet. */
+#tail{
+  position:absolute;right:69px;width:32px;height:36px;background:#0a0a0a;display:none;
+  clip-path:path('M0 0C0 9 18.56 13.68 32 18C18.56 22.32 0 27 0 36Z');
+}
+#card.show + #tail{display:block}
+.c-head{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.c-title{font-size:14px;font-weight:700}
+.c-sub{font-size:11px;color:#808080;margin-bottom:10px}
+.win{margin-top:10px}
+.w-row{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;flex-wrap:wrap;column-gap:8px}
+.w-label{color:#e8e8ea;font-weight:600;white-space:nowrap}
+.w-reset{color:#808080;font-size:11px;white-space:nowrap;margin-left:auto} /* wrap as a whole when it does not fit; never break inside a word */
+.w-track{height:4px;border-radius:2px;background:#2d2d2d;margin:6px 0 4px;overflow:hidden}
+.w-fill{height:100%;border-radius:2px}
+.w-used{font-size:11px;color:#808080}
+.g-head{font-size:12px;font-weight:700;color:#e8e8ea;margin-top:12px}
+.g-box{border:1px solid #242424;border-radius:10px;padding:0 10px 8px;margin-top:6px}
+.c-note{font-size:12px;color:#c8c8c8;line-height:1.5;margin-top:6px}
+.c-sessions{margin-top:12px;border-top:1px solid #1e1e1e;padding-top:8px}
+.s-row{display:flex;align-items:center;gap:6px;font-size:11px;color:#b0b0b3;padding:2px 0}
+.s-dot{width:6px;height:6px;border-radius:3px;flex:0 0 auto}
+.s-more{font-size:11px;color:#808080;padding:2px 0}
+
+/* ---- The other three edges -------------------------------------------------
+   The rules above draw the right-hand edge, the original layout and still the default. Each block
+   below mirrors or rotates that one for another edge. Two things stay in JavaScript because they
+   depend on measurement: where the card and the tail sit along the pill (`placeCard`), and, on the
+   flat edges, how far down or up the card clears a pill whose thickness follows its contents.
+
+   The fillets follow one rule on every edge: the radial gradient is centred on the corner of the
+   R×R square *diagonally opposite* the corner where the pill meets the screen, so what stays black
+   is the concave arc between the two. */
+
+/* Left: the right-hand layout mirrored. */
+body[data-edge="left"] #pill{right:auto;left:0;border-radius:0 20px 20px 0;border-right:1px solid #2e2e2e;border-left:none}
+body[data-edge="left"] #pill::before,body[data-edge="left"] #pill::after{right:auto;left:0}
+body[data-edge="left"] #pill::before{background:radial-gradient(circle at 100% 0, transparent calc(var(--fillet) - 1.5px), #2e2e2e calc(var(--fillet) - 0.5px), #000 calc(var(--fillet) + 0.5px))}
+body[data-edge="left"] #pill::after{background:radial-gradient(circle at 100% 100%, transparent calc(var(--fillet) - 1.5px), #2e2e2e calc(var(--fillet) - 0.5px), #000 calc(var(--fillet) + 0.5px))}
+body[data-edge="left"] #card{left:100px;right:10px;margin-left:0;margin-right:auto}
+body[data-edge="left"] #tail{right:auto;left:69px;clip-path:path('M32 0C32 9 13.44 13.68 0 18C13.44 22.32 32 27 32 36Z')}
+
+/* Top and bottom: the pill lies flat, so it is a row and its thickness comes from the cells rather
+   than a fixed 70 px column. The card is centred under (or over) the hovered ring by `placeCard`. */
+body[data-edge="top"] #pill,body[data-edge="bottom"] #pill{
+  right:auto;left:50%;top:auto;transform:translateX(-50%);
+  flex-direction:row;width:auto;height:auto;padding:12px 18px;
+}
+body[data-edge="top"] #pill::before,body[data-edge="top"] #pill::after,
+body[data-edge="bottom"] #pill::before,body[data-edge="bottom"] #pill::after{right:auto;top:auto;bottom:auto}
+body[data-edge="top"] #pill{top:0;border-radius:0 0 20px 20px;border-top:none}
+body[data-edge="top"] #pill::before{top:0;left:calc(-1 * var(--fillet));background:radial-gradient(circle at 0 100%, transparent calc(var(--fillet) - 1.5px), #2e2e2e calc(var(--fillet) - 0.5px), #000 calc(var(--fillet) + 0.5px))}
+body[data-edge="top"] #pill::after{top:0;right:calc(-1 * var(--fillet));background:radial-gradient(circle at 100% 100%, transparent calc(var(--fillet) - 1.5px), #2e2e2e calc(var(--fillet) - 0.5px), #000 calc(var(--fillet) + 0.5px))}
+body[data-edge="bottom"] #pill{bottom:0;border-radius:20px 20px 0 0;border-bottom:none}
+body[data-edge="bottom"] #pill::before{bottom:0;left:calc(-1 * var(--fillet));background:radial-gradient(circle at 0 0, transparent calc(var(--fillet) - 1.5px), #2e2e2e calc(var(--fillet) - 0.5px), #000 calc(var(--fillet) + 0.5px))}
+body[data-edge="bottom"] #pill::after{bottom:0;right:calc(-1 * var(--fillet));background:radial-gradient(circle at 100% 0, transparent calc(var(--fillet) - 1.5px), #2e2e2e calc(var(--fillet) - 0.5px), #000 calc(var(--fillet) + 0.5px))}
+/* A fixed width here, not the fluid one the upright edges use: `placeCard` measures the card to
+   centre it, and a shrink-to-fit width would change as it moves. 246 is the upstream cap either way. */
+body[data-edge="top"] #card,body[data-edge="bottom"] #card{
+  left:8px;right:auto;top:0;transform:none;margin-left:0;
+  width:246px;max-height:calc(100% - 150px);
+}
+body[data-edge="top"] #tail,body[data-edge="bottom"] #tail{right:auto;width:36px;height:32px}
+body[data-edge="top"] #tail{clip-path:path('M0 32C9 32 13.68 13.44 18 0C22.32 13.44 27 32 36 32Z')}
+body[data-edge="bottom"] #tail{clip-path:path('M0 0C9 0 13.68 18.56 18 32C22.32 18.56 27 0 36 0Z')}
+
+/* Show on hover, the Mac's .onHover: folded, the notch rests as a small pill at the edge. Its size is
+   the Mac's NotchLayout.pillWidth × pillHeight, 26 × 210 of its design px — 10 × 79 of this page's,
+   the same unscaled measures the orb and the fillets use. The open pill keeps its whole layout and is
+   clipped down to that, so everything measured off it (the card's anchor, the handles, which ring is
+   under the pointer) stays true; `#rest` draws the outline the clip takes away, which is the only
+   thing that shows a black pill against a black wallpaper. */
+#pill{--clip-open:inset(-40px -1px -40px -1px round 0);
+  --clip-rest:inset(calc(50% - 39.5px) 0 calc(50% - 39.5px) calc(100% - 10px) round 6px 0 0 6px);
+  clip-path:var(--clip-open);transition:clip-path .36s cubic-bezier(.32,.72,.24,1)}
+body.folded #pill{clip-path:var(--clip-rest)}
+body[data-edge="left"] #pill{--clip-rest:inset(calc(50% - 39.5px) calc(100% - 10px) calc(50% - 39.5px) 0 round 0 6px 6px 0)}
+body[data-edge="top"] #pill,body[data-edge="bottom"] #pill{--clip-open:inset(-1px -40px -1px -40px round 0)}
+body[data-edge="top"] #pill{--clip-rest:inset(0 calc(50% - 39.5px) calc(100% - 10px) calc(50% - 39.5px) round 0 0 6px 6px)}
+body[data-edge="bottom"] #pill{--clip-rest:inset(calc(100% - 10px) calc(50% - 39.5px) 0 calc(50% - 39.5px) round 6px 6px 0 0)}
+#rest{position:absolute;box-sizing:border-box;background:#000;border:1px solid #2e2e2e;pointer-events:none;
+  right:0;top:50%;translate:0 -50%;width:10px;height:79px;border-right:none;border-radius:6px 0 0 6px;
+  opacity:0;transition:opacity .16s ease}
+body.folded #rest{opacity:1;transition:opacity .2s ease .18s} /* arrives as the clip does */
+body[data-edge="left"] #rest{right:auto;left:0;border-right:1px solid #2e2e2e;border-left:none;border-radius:0 6px 6px 0}
+body[data-edge="top"] #rest,body[data-edge="bottom"] #rest{right:auto;left:50%;top:auto;translate:-50% 0;width:79px;height:10px;border:1px solid #2e2e2e}
+body[data-edge="top"] #rest{top:0;border-top:none;border-radius:0 0 6px 6px}
+body[data-edge="bottom"] #rest{bottom:0;border-bottom:none;border-radius:6px 6px 0 0}
+/* The rings leave by fading and sliding a little toward the edge, one after another — the Mac's
+   NotchMotion.stagger, 28 of its design px (10 here), and no scaling: the clip does the concealing */
+.cell{transition:opacity .18s ease calc(var(--i,0) * 28ms),translate .3s cubic-bezier(.32,.72,.24,1) calc(var(--i,0) * 28ms)}
+body.folded .cell{opacity:0;translate:10px 0}
+body.folded[data-edge="left"] .cell{translate:-10px 0}
+body.folded[data-edge="top"] .cell{translate:0 -10px}
+body.folded[data-edge="bottom"] .cell{translate:0 10px}
+.handle{transition:opacity .2s ease}
+body.folded .handle{opacity:0;pointer-events:none}
+@media (prefers-reduced-motion: reduce){#pill,#rest,body.folded #rest,.cell,.handle{transition:none}}
+
+/* The two handles, one off each end of the pill, as on the Mac (SettingsOrb and MoveHandle):
+   settings past the far fillet, move past the near one. At rest each is a quarter arc tucked into
+   that fillet's pocket, concentric with it and a gap inside; under the pointer the same circle
+   fills in and takes its glyph. The Mac's measures, unscaled: arc radius 28.5, stroke 6.8, disc
+   46.6, glyph 21. `placeHandles` puts each box's centre on its fillet's centre. */
+.handle{position:absolute;width:57px;height:57px;display:none;--arc:270deg}
+.handle.placed{display:block}
+.handle.hover{cursor:pointer}
+.handle > *{position:absolute;left:50%;top:50%;pointer-events:none;transition:opacity .2s,transform .36s cubic-bezier(.34,1.3,.64,1)}
+.h-rest{width:72px;height:72px;margin:-36px 0 0 -36px;overflow:visible;transform:rotate(var(--arc)) scale(1)}
+.h-disc{width:46.6px;height:46.6px;margin:-23.3px 0 0 -23.3px;border-radius:50%;background:#000;border:1px solid #2e2e2e;opacity:0;transform:scale(1.1)}
+.h-glyph{width:21px;height:21px;margin:-10.5px 0 0 -10.5px;fill:#e8e8ea;opacity:0;
+  transform:rotate(calc(var(--spins,0) * 360deg - 60deg)) scale(.5);transition:opacity .2s,transform .55s cubic-bezier(.34,1.2,.64,1)}
+.handle.hover .h-rest{opacity:0;transform:rotate(var(--arc)) scale(.86)}
+.handle.hover .h-disc{opacity:1;transform:scale(1)}
+.handle.hover .h-glyph{opacity:1;transform:rotate(calc(var(--spins,0) * 360deg)) scale(1)}
+/* Carrying: the disc goes dashed and the hand stops turning — it is being held now, not offered */
+#move.armed .h-disc{border:2px dashed #e8e8ea;background:rgba(0,0,0,.72)}
+/* The quarter that faces the fillet: up and outward past the far end on the right, and the same two
+   directions mirrored along the stack at the near end */
+body[data-edge="left"] #orb,body[data-edge="top"] #orb{--arc:180deg}
+body[data-edge="bottom"] #orb{--arc:90deg}
+#move{--arc:0deg}
+body[data-edge="left"] #move{--arc:90deg}
+body[data-edge="top"] #move{--arc:270deg}
+@media (prefers-reduced-motion: reduce){.handle > *{transition:none}}
+
+/* ---- JARVIS additions ------------------------------------------------------ */
+/* A transient message on the page itself (CodeNotch styles its own elsewhere) */
+#notice{position:absolute;left:10px;right:100px;bottom:10px;margin-left:auto;max-width:246px;
+  background:#0a0a0a;border:1px solid #2e2e2e;border-radius:10px;padding:8px 10px;font-size:11px;color:#c8c8c8;
+  opacity:0;transition:opacity .2s;pointer-events:none}
+#notice.show{opacity:1}
+body[data-edge="left"] #notice{left:100px;right:10px;margin-left:0;margin-right:auto}

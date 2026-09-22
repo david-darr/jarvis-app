@@ -51,28 +51,50 @@ let mainWindow = null;
 let isQuitting = false;
 let usageOverlay = null;
 let usageOverlayVisible = false;
-let usageOverlayCollapsed = false;
 let backendReady = false;
+// The notch's own settings (Appearance): which screen edge it sits on, whether it
+// folds to a sliver until hovered, and where along the edge it was left.
+let overlayConfig = { edge: "right", foldOnHover: true, offset: 0.5 };
+let overlayDrag = null;
+
+// Window size from CodeNotch's upright notch (NOTCH_W x its height): room for
+// the 70 px pill against the edge and the 246 px card beside it.
+const NOTCH_WIDTH = 360;
+const NOTCH_HEIGHT = 460;
 
 function overlayPreferenceFile() { return path.join(app.getPath("userData"), "usage-overlay.json"); }
-function overlayState() { return { visible: usageOverlayVisible, supported: process.platform === "win32" }; }
+function overlayState() { return { visible: usageOverlayVisible, supported: process.platform === "win32", ...overlayConfig }; }
 function notifyOverlayState() {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("usage-overlay:state", overlayState());
+  if (usageOverlay && !usageOverlay.isDestroyed()) usageOverlay.webContents.send("usage-overlay:config", overlayConfig);
   if (tray) updateTrayMenu();
 }
 function saveOverlayPreference() {
   const file = overlayPreferenceFile();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify({ visible: usageOverlayVisible }));
+  fs.writeFileSync(temporary, JSON.stringify({ visible: usageOverlayVisible, ...overlayConfig }));
   fs.renameSync(temporary, file);
 }
-function overlayBounds(collapsed) {
-  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const width = Math.min(340, display.workArea.width - 20);
-  const height = Math.min(collapsed ? 65 : 500, display.workArea.height - 20);
-  return { x: display.workArea.x + display.workArea.width - width - 20,
-    y: display.workArea.y + 20, width, height };
+function loadOverlayPreference() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(overlayPreferenceFile(), "utf8"));
+    usageOverlayVisible = saved.visible === true;
+    overlayConfig = {
+      edge: saved.edge === "left" ? "left" : "right",
+      foldOnHover: saved.foldOnHover !== false,
+      offset: Number.isFinite(saved.offset) ? Math.min(1, Math.max(0, saved.offset)) : 0.5,
+    };
+  } catch { usageOverlayVisible = false; }
+}
+// Flush against the chosen edge of the primary display's work area (so the
+// taskbar is never covered), at the saved fraction of the way down it.
+function overlayBounds() {
+  const area = screen.getPrimaryDisplay().workArea;
+  const height = Math.min(NOTCH_HEIGHT, area.height);
+  const x = overlayConfig.edge === "left" ? area.x : area.x + area.width - NOTCH_WIDTH;
+  const travel = Math.max(0, area.height - height);
+  return { x, y: Math.round(area.y + travel * overlayConfig.offset), width: NOTCH_WIDTH, height };
 }
 async function setUsageOverlayVisible(visible) {
   if (process.platform !== "win32") return overlayState();
@@ -81,11 +103,16 @@ async function setUsageOverlayVisible(visible) {
   if (usageOverlayVisible && backendReady) {
     if (!usageOverlay || usageOverlay.isDestroyed()) {
       usageOverlay = new BrowserWindow({
-        ...overlayBounds(usageOverlayCollapsed), frame: false, transparent: true,
-        alwaysOnTop: true, skipTaskbar: true, resizable: false, show: false,
+        ...overlayBounds(), frame: false, transparent: true, hasShadow: false,
+        alwaysOnTop: true, skipTaskbar: true, resizable: false, movable: false,
+        focusable: false, show: false, backgroundColor: "#00000000",
         webPreferences: { contextIsolation: true, nodeIntegration: false,
           preload: path.join(__dirname, "usage-overlay-preload.js") },
       });
+      // Click-through by default; the page asks for clicks only while the pointer
+      // is over the pill or card. `forward` keeps mouse movement arriving, which is
+      // how the page knows the pointer has reached it.
+      usageOverlay.setIgnoreMouseEvents(true, { forward: true });
       usageOverlay.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
       usageOverlay.webContents.on("will-navigate", (event, url) => {
         if (url !== `${BACKEND_URL}/usage-overlay`) event.preventDefault();
@@ -97,6 +124,14 @@ async function setUsageOverlayVisible(visible) {
   } else if (usageOverlay && !usageOverlay.isDestroyed()) {
     usageOverlay.hide();
   }
+  notifyOverlayState();
+  return overlayState();
+}
+function setOverlayConfig(changes) {
+  if (changes && (changes.edge === "left" || changes.edge === "right")) overlayConfig.edge = changes.edge;
+  if (changes && typeof changes.foldOnHover === "boolean") overlayConfig.foldOnHover = changes.foldOnHover;
+  saveOverlayPreference();
+  if (usageOverlay && !usageOverlay.isDestroyed()) usageOverlay.setBounds(overlayBounds());
   notifyOverlayState();
   return overlayState();
 }
@@ -428,10 +463,37 @@ ipcMain.handle("usage-overlay:set-visible", (event, visible) => {
   if (!fromAppWindow(event)) return { visible: false, supported: false };
   return setUsageOverlayVisible(visible);
 });
-ipcMain.on("usage-overlay:collapse", (event, collapsed) => {
+ipcMain.handle("usage-overlay:set-config", (event, changes) => {
+  if (!fromAppWindow(event)) return overlayState();
+  return setOverlayConfig(changes);
+});
+ipcMain.handle("usage-overlay:config", (event) => fromOverlayWindow(event) ? overlayConfig : null);
+ipcMain.on("usage-overlay:interactive", (event, on) => {
   if (!fromOverlayWindow(event)) return;
-  usageOverlayCollapsed = !!collapsed;
-  usageOverlay.setBounds(overlayBounds(usageOverlayCollapsed));
+  if (on) usageOverlay.setIgnoreMouseEvents(false);
+  else usageOverlay.setIgnoreMouseEvents(true, { forward: true });
+});
+// The move handle slides the notch along its edge: the window follows the
+// pointer's screen y, clamped to the work area, and the place is remembered.
+ipcMain.on("usage-overlay:move-start", (event, screenY) => {
+  if (!fromOverlayWindow(event)) return;
+  overlayDrag = { startY: screenY, windowY: usageOverlay.getBounds().y };
+});
+ipcMain.on("usage-overlay:move-to", (event, screenY) => {
+  if (!fromOverlayWindow(event) || !overlayDrag) return;
+  const area = screen.getPrimaryDisplay().workArea;
+  const bounds = usageOverlay.getBounds();
+  const y = Math.min(area.y + area.height - bounds.height, Math.max(area.y, overlayDrag.windowY + (screenY - overlayDrag.startY)));
+  usageOverlay.setBounds({ ...bounds, y: Math.round(y) });
+});
+ipcMain.on("usage-overlay:move-end", (event) => {
+  if (!fromOverlayWindow(event) || !overlayDrag) return;
+  overlayDrag = null;
+  const area = screen.getPrimaryDisplay().workArea;
+  const bounds = usageOverlay.getBounds();
+  const travel = Math.max(1, area.height - bounds.height);
+  overlayConfig.offset = Math.min(1, Math.max(0, (bounds.y - area.y) / travel));
+  saveOverlayPreference();
 });
 ipcMain.on("usage-overlay:hide", (event) => {
   if (fromOverlayWindow(event)) setUsageOverlayVisible(false).catch(console.error);
@@ -526,8 +588,7 @@ if (!gotTheLock) {
   app.on("second-instance", showWindow);
 
   app.whenReady().then(() => {
-    try { usageOverlayVisible = JSON.parse(fs.readFileSync(overlayPreferenceFile(), "utf8")).visible === true; }
-    catch { usageOverlayVisible = false; }
+    loadOverlayPreference();
     launch();
     setupAutoUpdate();
 

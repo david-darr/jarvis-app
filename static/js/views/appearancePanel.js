@@ -88,16 +88,25 @@ export function renderAppearancePanel(content) {
   } });
   const overlay = window.jarvis?.usageOverlay;
   const overlayToggle = el('input', { type: 'checkbox', id: 'usage-overlay-toggle' });
-  const overlayNote = el('p', { class: 'meta', text: 'Shows Claude Code and Codex account limits and JARVIS-recorded API/local tokens. Hidden by default.' });
+  const overlayNote = el('p', { class: 'meta', text: 'A notch at the screen edge showing your Claude Code and Codex account limits. Hidden by default.' });
+  // The notch's edge and fold (design from CodeNotch; see static/css/usage-overlay.css)
+  const overlayEdge = el('select', { id: 'usage-overlay-edge' }, [
+    el('option', { value: 'right', text: 'Right edge' }), el('option', { value: 'left', text: 'Left edge' })]);
+  const overlayFold = el('input', { type: 'checkbox', id: 'usage-overlay-fold' });
   const overlaySection = el('section', { class: 'appearance-overlay-setting' }, [
     el('h3', { text: 'Desktop usage overlay' }),
     el('label', { for: overlayToggle.id, class: 'appearance-motion' }, [overlayToggle, el('span', { text: 'Show above other windows' })]),
+    el('label', { for: overlayEdge.id, class: 'appearance-motion' }, [el('span', { text: 'Screen edge' }), overlayEdge]),
+    el('label', { for: overlayFold.id, class: 'appearance-motion' }, [overlayFold, el('span', { text: 'Fold to a sliver until the pointer reaches it' })]),
     overlayNote,
   ]);
   if (overlay) {
     const syncOverlay = state => {
       overlayToggle.disabled = !state.supported;
       overlayToggle.checked = !!state.visible;
+      overlayEdge.disabled = overlayFold.disabled = !state.supported;
+      overlayEdge.value = state.edge === 'left' ? 'left' : 'right';
+      overlayFold.checked = state.foldOnHover !== false;
       if (!state.supported) overlayNote.textContent = 'The desktop overlay is currently available on Windows.';
     };
     overlay.state().then(syncOverlay).catch(() => { overlayNote.textContent = 'Overlay setting unavailable.'; });
@@ -111,8 +120,14 @@ export function renderAppearancePanel(content) {
       try { syncOverlay(await overlay.setVisible(overlayToggle.checked)); }
       catch { overlayNote.textContent = 'Could not change the overlay. Try again.'; overlayToggle.disabled = false; }
     });
+    const saveConfig = async (changes) => {
+      try { syncOverlay(await overlay.setConfig(changes)); }
+      catch { overlayNote.textContent = 'Could not change the overlay. Try again.'; }
+    };
+    overlayEdge.addEventListener('change', () => saveConfig({ edge: overlayEdge.value }));
+    overlayFold.addEventListener('change', () => saveConfig({ foldOnHover: overlayFold.checked }));
   } else {
-    overlayToggle.disabled = true;
+    overlayToggle.disabled = overlayEdge.disabled = overlayFold.disabled = true;
     overlayNote.textContent = 'Open the Windows desktop app to use the overlay.';
   }
   root.append(el('div', { class: 'appearance-heading' }, [el('div', {}, [el('h2', { text: 'Appearance' }),

@@ -3,13 +3,14 @@ Run: .venv/Scripts/python.exe scripts/test_usage_overlay.py
 """
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-data_dir = Path(__file__).resolve().parents[1] / "data"
-data_dir.mkdir(exist_ok=True)
-os.environ["JARVIS_DATA_DIR"] = str(data_dir)
+# A throwaway data directory: this suite must never touch the real data/ folder.
+_fixture = tempfile.TemporaryDirectory(prefix="jarvis-usage-overlay-test-")
+os.environ["JARVIS_DATA_DIR"] = _fixture.name
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import FastAPI
@@ -72,6 +73,43 @@ class QuotaUsageTests(unittest.TestCase):
             {"name": "API", "kind": "api", "total_tokens": 123},
             {"name": "Local", "kind": "local", "total_tokens": None},
         ])
+
+    def test_each_failure_says_what_kind_it_was_without_leaking_text(self):
+        def refused():
+            raise quota_usage.SignInNeeded("token abc123 expired")
+        def limited():
+            raise quota_usage.RateLimited("429 from https://internal.example/?t=abc123")
+        def broken():
+            raise RuntimeError("secret-token in a traceback")
+        for reader, status in ((refused, "needs_sign_in"), (limited, "rate_limited"), (broken, "unavailable")):
+            with self.subTest(status=status):
+                quota_usage._cache.clear(); quota_usage._retry_after.clear()
+                result = quota_usage._provider("claude", reader)
+                self.assertEqual(result["status"], status)
+                self.assertEqual(result["note"], quota_usage.NOTES[status])
+                self.assertNotIn("abc123", str(result)); self.assertNotIn("secret-token", str(result))
+
+    def test_a_click_reads_now_but_not_twice_in_a_row(self):
+        calls = []
+        def reader():
+            calls.append(1)
+            return [{"name": "5-hour", "used_percent": len(calls) * 10, "resets_at": None}]
+        quota_usage._provider("codex", reader)
+        self.assertEqual(quota_usage._provider("codex", reader)["windows"][0]["used_percent"], 10, "cached, not re-read")
+        with self.assertRaises(quota_usage.RefreshThrottled):
+            quota_usage._provider("codex", reader, force=True)
+        quota_usage._cache["codex"]["checked"] -= quota_usage.FORCED_REFRESH_SECONDS + 1
+        self.assertEqual(quota_usage._provider("codex", reader, force=True)["windows"][0]["used_percent"], 20)
+        self.assertEqual(len(calls), 2)
+
+    def test_refresh_route_rejects_unknown_providers_and_throttles(self):
+        app = FastAPI()
+        app.include_router(model_routes.router)
+        app.dependency_overrides[require_admin] = lambda: "admin"
+        with TestClient(app) as client:
+            self.assertEqual(client.post("/api/models/quotas/refresh", json={"provider": "cursor"}).status_code, 400)
+            with patch.object(quota_usage, "get_usage_overlay_async", side_effect=quota_usage.RefreshThrottled("claude")):
+                self.assertEqual(client.post("/api/models/quotas/refresh", json={"provider": "claude"}).status_code, 429)
 
     def test_route_requires_admin(self):
         app = FastAPI()
