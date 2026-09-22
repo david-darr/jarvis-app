@@ -1335,6 +1335,21 @@ class ClaudeResumeTests(unittest.TestCase):
                          (900, 40, 3))
 
 
+class ShellPermissionTests(unittest.TestCase):
+    """The SDK skips can_use_tool for anything on allowed_tools, so Bash on
+    that list meant an admin's shell ran without asking (verified live
+    2026-09-22). An admin must be asked; a non-admin must be refused."""
+
+    def test_an_admin_is_asked_before_bash_and_a_non_admin_is_refused(self):
+        vault = tempfile.mkdtemp(prefix="jarvis-shell-")
+        admin = Brain(vault_dir=vault, is_admin=True)._options()
+        self.assertNotIn("Bash", admin.allowed_tools)
+        self.assertNotIn("Bash", admin.disallowed_tools)
+        self.assertIsNotNone(admin.can_use_tool)
+        user = Brain(vault_dir=vault, is_admin=False)._options()
+        self.assertIn("Bash", user.disallowed_tools)
+
+
 class CacheTelemetryTests(unittest.TestCase):
     """Each provider reports the cache split in its own shape; what is not
     reported stays None rather than being guessed."""

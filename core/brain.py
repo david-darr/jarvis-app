@@ -145,13 +145,12 @@ class Brain:
         # Shell execution (David's ask 2026-09-02) — admin-only, modeled on
         # Odysseus's own agent-tool gate (their src/tool_security.py). No
         # command blocklist, matching their actual safety model — the admin
-        # check is the whole boundary. Claude already has a native Bash
-        # tool; the only gap is that acceptEdits only auto-approves file
-        # edits, so an un-pre-approved Bash call just hangs on a permission
-        # prompt nobody can answer headlessly, same class of bug the
-        # hive_mind tools below hit before they were pre-approved. A
-        # non-admin session gets Bash explicitly denied (not just omitted)
-        # so it fails closed immediately instead of hanging on that prompt.
+        # check decides whether shell can be asked for at all. Claude already
+        # has a native Bash tool. It used to be pre-approved for admins
+        # because an unapproved call once hung on a prompt nothing could
+        # answer; the permission broker (self._permission) now answers it,
+        # so an admin is asked instead. A non-admin session gets Bash
+        # explicitly denied (not just omitted) so it fails closed at once.
         allowed_tools = [
             "mcp__hive_mind__search_sessions",
             "mcp__hive_mind__list_skills",
@@ -204,9 +203,13 @@ class Brain:
         # Escape hatch for whatever this hardcoded baseline doesn't cover —
         # see core/settings.py's extra_allowed_tools for why this exists.
         allowed_tools.extend(settings_store.get_setting("extra_allowed_tools") or [])
-        if self.is_admin:
-            allowed_tools.append("Bash")
-        else:
+        # Bash is never pre-approved, admin or not. The SDK treats anything on
+        # allowed_tools as granted and skips can_use_tool entirely, so listing
+        # Bash here for admins meant their shell commands ran without asking,
+        # even after the permission broker shipped (verified live 2026-09-22).
+        # Left off the list, an admin's Bash call reaches self._permission and
+        # the person decides; a non-admin's is refused outright below.
+        if not self.is_admin:
             disabled = [*disabled, "Bash"]
 
         # A generated file needs somewhere to be built that isn't the vault
