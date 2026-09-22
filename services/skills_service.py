@@ -134,6 +134,8 @@ def seed_default_skills() -> list[str]:
                 if os.path.isfile(src) and not os.path.exists(dst):
                     shutil.copy2(src, dst)
             seeded.append(slug)
+            from services import skill_curator
+            skill_curator.record(slug, skill_curator.BUNDLED)
         except OSError:
             logger.exception("skills_service: couldn't seed bundled skill '%s'", slug)
 
@@ -177,6 +179,8 @@ def create_skill(name: str, description: str, body: str) -> dict:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(_render(description, body))
+    from services import skill_curator
+    skill_curator.record(slug, skill_curator.USER)
     return {"slug": slug, "description": description, "body": body}
 
 
@@ -193,7 +197,7 @@ def update_skill(slug: str, description: str, body: str) -> dict:
     return {"slug": slug, "description": description, "body": body}
 
 
-def import_skill(filename: str, raw_content: str) -> dict:
+def import_skill(filename: str, raw_content: str, confirmed: bool = False) -> dict:
     """Imports a skill from an arbitrary local file (Brain tab's "import from
     file" — David's ask, 2026-08-31, via Electron's native file picker;
     electron/main.js's ipcMain handler does the actual filesystem read, this
@@ -204,15 +208,26 @@ def import_skill(filename: str, raw_content: str) -> dict:
     a normal, expected action for a file-backed import flow, not an error.
     If the file already has SKILL.md-shaped frontmatter, its description is
     used; otherwise the whole file becomes the body with no description.
+
+    An imported file is untrusted: it is scanned before anything is written
+    (services/skill_curator.py), and skill_curator.SkillImportRefused is
+    raised if the scan does not allow it. ``confirmed`` is the user's
+    explicit "import anyway" after seeing a caution report; it never
+    overrides a dangerous verdict.
     """
+    from services import skill_curator
     name = os.path.splitext(os.path.basename(filename))[0]
     parsed = _parse(raw_content)
     slug = _slugify(name)
     path = _skill_path(slug)
+    rendered = _render(parsed["description"], parsed["body"], parsed.get("frontmatter", ""))
+    scan = skill_curator.check_import(slug, rendered, confirmed=confirmed)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        f.write(_render(parsed["description"], parsed["body"], parsed.get("frontmatter", "")))
-    return {"slug": slug, "description": parsed["description"], "body": parsed["body"]}
+        f.write(rendered)
+    skill_curator.record(slug, skill_curator.IMPORTED, origin=os.path.basename(filename))
+    return {"slug": slug, "description": parsed["description"], "body": parsed["body"],
+            "scan": scan["verdict"]}
 
 
 def delete_skill(slug: str) -> None:
@@ -222,3 +237,5 @@ def delete_skill(slug: str) -> None:
         skill_dir = os.path.dirname(path)
         if not os.listdir(skill_dir):
             os.rmdir(skill_dir)
+        from services import skill_curator
+        skill_curator.forget(slug)

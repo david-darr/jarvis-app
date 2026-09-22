@@ -130,8 +130,12 @@ def list_skills() -> list[dict]:
     vault cwd) can't see them without this being wired in explicitly, same
     real gap search_sessions closed for cross-session history. Returns
     name + one-line description only, not full bodies — read_skill (below)
-    is the deliberate second step."""
-    return skills_service.list_skills()
+    is the deliberate second step.
+
+    A skill whose content scans "dangerous" and has not been approved is left
+    out entirely (services/skill_curator.py)."""
+    from services import skill_curator
+    return [s for s in skills_service.list_skills() if skill_curator.model_visible(s["slug"])]
 
 
 # A safety stop, not a budget. Hermes's number: skill_manager_tool refuses
@@ -150,9 +154,15 @@ def read_skill(slug: str) -> str:
     one and never asks for page two. Past the hard limit it refuses outright
     rather than hand over a fragment.
     """
+    from services import skill_curator
     skill = skills_service.get_skill(slug)
     if skill is None:
         raise ValueError(f"no such skill: {slug}")
+    if not skill_curator.model_visible(slug):
+        raise ValueError(
+            f"skill '{slug}' is held back: its content scanned as dangerous and has not been "
+            "approved. The user can review and approve it in the Brain tab."
+        )
     text = skill["body"]
     if len(text) > SKILL_HARD_LIMIT_CHARS:
         raise ValueError(

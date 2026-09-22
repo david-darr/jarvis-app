@@ -84,6 +84,11 @@ async function renderSkillsSection(container) {
     el("div", { class: "card-row", style: "margin-top:8px;" }, [importBtn, importStatus, fileInput]),
   );
 
+  // An import the scan refused shows its report here, inline, rather than as a
+  // toast: the user needs to read what was found before deciding anything.
+  const importReview = el("div", { style: "margin-top:8px;" });
+  form.append(importReview);
+
   const list = el("div", { id: "skills-list", style: "margin-top:14px;" });
   container.append(form, list);
 
@@ -100,17 +105,59 @@ async function renderSkillsSection(container) {
     fileInput.value = "";
     if (!file) return;
     const content = await file.text();
-    importStatus.textContent = `Importing ${file.name}…`;
+    await importSkillFile(file.name, content, false);
+  });
+
+  // Imported skills are untrusted and scanned server-side before anything is
+  // written (services/skill_curator.py). Plain fetch rather than api(): a
+  // refusal comes back as a 409 carrying the scan report, which api() would
+  // flatten into a one-line toast.
+  async function importSkillFile(filename, content, confirmed) {
+    importReview.innerHTML = "";
+    importStatus.textContent = `Importing ${filename}…`;
+    let res;
     try {
-      await api("/api/skills/import", { method: "POST", body: JSON.stringify({ filename: file.name, content }) });
-      importStatus.textContent = "";
-      await refresh(list);
-      toast(`Imported ${file.name}`, "success");
+      res = await fetch("/api/skills/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename, content, confirmed }),
+      });
     } catch (e) {
       importStatus.textContent = "";
       toast(`Import failed: ${e.message}`, "error");
+      return;
     }
-  });
+    importStatus.textContent = "";
+    const payload = await res.json().catch(() => ({}));
+    if (res.ok) {
+      await refresh(list);
+      toast(`Imported ${filename}`, "success");
+      return;
+    }
+    const detail = payload.detail;
+    if (res.status !== 409 || typeof detail !== "object" || detail === null) {
+      toast(`Import failed: ${typeof detail === "string" ? detail : res.statusText}`, "error");
+      return;
+    }
+    const actions = [el("button", { class: "btn", text: "Cancel", onclick: () => { importReview.innerHTML = ""; } })];
+    if (detail.needs_confirmation) {
+      actions.unshift(el("button", {
+        class: "btn danger",
+        text: "Import anyway",
+        onclick: () => importSkillFile(filename, content, true),
+      }));
+    }
+    importReview.append(el("div", { class: "glass card" }, [
+      el("div", { class: "title", text: detail.needs_confirmation
+        ? `${filename} needs a look before importing`
+        : `${filename} was blocked` }),
+      el("div", { class: "meta", style: "margin:4px 0 8px;", text: detail.needs_confirmation
+        ? "The scan found things a skill can use to misdirect a model. Read the findings; import it only if you trust where it came from."
+        : "The scan found something dangerous. This cannot be overridden; fix the file or don't use it." }),
+      el("pre", { style: "white-space:pre-wrap;font-size:12px;max-height:240px;overflow:auto;margin:0;", text: detail.report || "" }),
+      el("div", { class: "card-row", style: "gap:6px;margin-top:10px;" }, actions),
+    ]));
+  }
 
   await refresh(list);
 }
@@ -159,11 +206,59 @@ async function buildSkillCard(skill, list) {
       el("div", {}, [
         el("div", { class: "title", text: skill.slug }),
         el("div", { class: "meta", text: skill.description || "No description" }),
+        ...curationDetails(skill, list),
       ]),
       el("div", { class: "row-actions" }, [editBtn, delBtn]),
     ]),
   ]);
   return card;
+}
+
+const SOURCE_LABELS = {
+  bundled: "Bundled with JARVIS",
+  user: "Written in JARVIS",
+  imported: "Imported",
+  unknown: "Origin unknown (created before curation)",
+};
+
+// Where a skill came from, what its scan found, and authoring advice
+// (services/skill_curator.py, skill_linter.py). All text is set via
+// textContent: findings quote the skill itself, which may be hostile.
+function curationDetails(skill, list) {
+  const c = skill.curation;
+  if (!c) return [];
+  const origin = c.origin ? ` from ${c.origin}` : "";
+  const scan = c.scan
+    ? `Scan: ${c.scan.verdict}${c.scan.findings.length ? ` (${c.scan.findings.length} finding${c.scan.findings.length === 1 ? "" : "s"})` : ""}`
+    : "Not scanned (trusted source)";
+  const parts = [el("div", { class: "meta", style: "margin-top:4px;", text: `${SOURCE_LABELS[c.source] || c.source}${origin} · ${scan}` })];
+
+  if (c.blocked_for_models) {
+    const approveBtn = el("button", { class: "btn danger", text: "Approve for models", onclick: async () => {
+      const ok = await confirmDialog({
+        title: "Let models use this skill?",
+        message: `"${skill.slug}" scanned as dangerous. Approving lets every model read and follow it as it is now; editing it later needs approving again.`,
+        confirmLabel: "Approve",
+      });
+      if (!ok) return;
+      await api(`/api/skills/${skill.slug}/approve`, { method: "POST" });
+      await refresh(list);
+      toast(`Approved ${skill.slug}`, "success");
+    } });
+    parts.push(el("div", { class: "meta", style: "color:var(--danger);margin-top:4px;", text: "Hidden from models: its content scanned as dangerous." }), approveBtn);
+  }
+
+  const notes = [
+    ...(c.scan ? c.scan.findings.map((f) => `${f.severity.toUpperCase()} ${f.file}:${f.line} ${f.description} - "${f.match}"`) : []),
+    ...c.lint.map((l) => `Advice: ${l.message}`),
+  ];
+  if (notes.length) {
+    const summary = el("summary", { class: "meta", text: `${notes.length} note${notes.length === 1 ? "" : "s"}` });
+    const details = el("details", { style: "margin-top:4px;" }, [summary]);
+    for (const note of notes) details.appendChild(el("div", { class: "meta", style: "margin-top:2px;", text: note }));
+    parts.push(details);
+  }
+  return parts;
 }
 
 function buildSkillEditor(skill, list) {
