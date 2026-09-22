@@ -2,36 +2,29 @@
 message history, matching the "multiple open chats you can enter into or
 search for/create" requirement from JARVIS Plan's tab-content scoping.
 
-JSON-file-backed for this phase (one file per session under data/sessions/,
-plus a small index file for listing without loading every session body) —
-consistent with the atomic-write pattern already used for auth. A real
-database is a later-phase concern if/when session volume or search needs
-outgrow this; not worth the added complexity yet.
+This module is the facade every other part of the app talks to; the storage
+lives in its sibling core/session_manager_store.py, which holds the SQLite
+schema, the FTS5 search index and the one-time JSON import. Nothing outside
+these two files should know how a session is stored.
+
+Storage moved from one-JSON-file-per-session to SQLite on 2026-09-22. The
+short version of why: the old layout wrote the session body and a separate
+`sessions_index.json` as two independent writes, and every read path gated
+on the index, so the two could disagree and strand a chat that was sitting
+right there on disk. The sibling's docstring has the full account. Public
+method signatures here did not change as part of that move.
 """
-import os
 import time
 import uuid
 from typing import Optional
 
-from core.atomic_io import read_json, write_json_atomic
-from core.constants import DATA_DIR
-
-SESSIONS_DIR = os.path.join(DATA_DIR, "sessions")
-SESSIONS_INDEX_FILE = os.path.join(DATA_DIR, "sessions_index.json")
-CHANNEL_SESSIONS_FILE = os.path.join(DATA_DIR, "channel_sessions.json")
-
-
-def _session_path(session_id: str) -> str:
-    return os.path.join(SESSIONS_DIR, f"{session_id}.json")
+from core import session_manager_store as store
 
 
 class SessionManager:
-    def __init__(self) -> None:
-        os.makedirs(SESSIONS_DIR, exist_ok=True)
-        self._index: dict = read_json(SESSIONS_INDEX_FILE, {})
-
-    def _save_index(self) -> None:
-        write_json_atomic(SESSIONS_INDEX_FILE, self._index)
+    # No __init__: the store opens lazily on first use and runs the legacy
+    # JSON import itself, so the migration doesn't depend on this class
+    # having been constructed (or on which module imported what first).
 
     def create_session(self, title: str = "New Chat") -> dict:
         session_id = uuid.uuid4().hex[:12]
@@ -64,63 +57,52 @@ class SessionManager:
             # just those ids.
             "enabled_integration_ids": None,
         }
-        write_json_atomic(_session_path(session_id), session)
-        self._index[session_id] = {
-            "title": title,
-            "starred": False,
-            "created_at": now,
-            "updated_at": now,
-            "message_count": 0,
-            "model_endpoint_id": None,
-            # Carried in the index (not just the full session file) so the
-            # sidebar can group sessions by project without a per-session
-            # fetch — same reasoning model_endpoint_id is already indexed.
-            "project_id": None,
-        }
-        self._save_index()
+        store.save_session(session)
         return session
 
     def list_sessions(self) -> list[dict]:
         """Starred first, then newest-first within each group — metadata only
-        (no message bodies). Right-click star/delete is David's ask, 2026-08-31."""
-        items = [{"id": sid, **meta} for sid, meta in self._index.items()]
-        return sorted(items, key=lambda s: (not s.get("starred", False), -s["updated_at"]))
+        (no message bodies). Right-click star/delete is David's ask, 2026-08-31.
+
+        The ordering is the store's index rather than a Python sort, and the
+        counts are derived from the stored messages on every write, so a
+        listing can no longer describe a session differently from its body.
+        """
+        return store.list_sessions()
 
     def set_starred(self, session_id: str, starred: bool) -> dict:
-        if session_id not in self._index:
-            raise KeyError(f"no such session: {session_id}")
-        session = self.get_session(session_id)
+        session = self._require(session_id)
         session["starred"] = starred
-        write_json_atomic(_session_path(session_id), session)
-        self._index[session_id]["starred"] = starred
-        self._save_index()
-        return session
+        return store.save_session(session)
 
     def get_session(self, session_id: str) -> Optional[dict]:
-        if session_id not in self._index:
-            return None
-        return read_json(_session_path(session_id), None)
+        return store.get_session(session_id)
 
-    def append_message(self, session_id: str, role: str, content: str, status: str = "complete") -> None:
-        session = self.get_session(session_id)
+    def _require(self, session_id: str) -> dict:
+        """Load a session or raise the KeyError every caller already expects.
+
+        The old code checked index membership first and then loaded, which
+        meant a session present in one and missing from the other produced
+        either a KeyError or a None depending on which method you called.
+        One lookup, one outcome.
+        """
+        session = store.get_session(session_id)
         if session is None:
             raise KeyError(f"no such session: {session_id}")
+        return session
+
+    def append_message(self, session_id: str, role: str, content: str, status: str = "complete") -> None:
+        session = self._require(session_id)
         session["messages"].append({"role": role, "content": content, "ts": time.time(), "status": status})
         session["updated_at"] = time.time()
 
         # Auto-title from the first user message, same idea as most chat UIs
         # (Odysseus included) — a session named "New Chat" forever isn't
-        # findable in a sidebar list. Set on the session dict itself before
-        # writing it, not just the index — the two must never disagree.
+        # findable in a sidebar list.
         if session["title"] == "New Chat" and role == "user":
             session["title"] = content[:60]
 
-        write_json_atomic(_session_path(session_id), session)
-
-        self._index[session_id]["title"] = session["title"]
-        self._index[session_id]["updated_at"] = session["updated_at"]
-        self._index[session_id]["message_count"] = len(session["messages"])
-        self._save_index()
+        store.save_session(session)
 
     def set_model_endpoint(self, session_id: str, model_endpoint_id: Optional[str], model_override: Optional[str] = None,
                            model_effort: Optional[str] = None) -> dict:
@@ -138,9 +120,7 @@ class SessionManager:
         its next turn — throwing the thread away would discard real
         conversation history to no purpose. The caller validates kind and
         holds the session operation guard."""
-        if session_id not in self._index:
-            raise KeyError(f"no such session: {session_id}")
-        session = self.get_session(session_id)
+        session = self._require(session_id)
         # Read both before either is overwritten — comparing after assignment
         # would make these checks dead code.
         endpoint_changed = session.get("model_endpoint_id") != model_endpoint_id
@@ -158,10 +138,7 @@ class SessionManager:
         session["model_endpoint_id"] = model_endpoint_id
         session["model_override"] = model_override
         session["model_effort"] = model_effort
-        write_json_atomic(_session_path(session_id), session)
-        self._index[session_id]["model_endpoint_id"] = model_endpoint_id
-        self._save_index()
-        return session
+        return store.save_session(session)
 
     def set_context_state(self, session_id: str, state: Optional[dict]) -> None:
         """Records this chat's CURRENT context occupancy (David's ask
@@ -179,36 +156,31 @@ class SessionManager:
         previous reading in place rather than blanking a good value. Never
         raises — a bookkeeping failure must not fail a turn that already
         succeeded."""
-        if state is None or session_id not in self._index:
+        if state is None:
             return
-        session = self.get_session(session_id)
+        session = store.get_session(session_id)
         if session is None:
             return
         session["context_state"] = state
-        write_json_atomic(_session_path(session_id), session)
+        store.save_session(session)
 
     def set_codex_thread_id(self, session_id: str, thread_id: Optional[str]) -> dict:
         """Records the Codex CLI thread id a session's first codex_cli turn
         created, so every later turn (including after a server restart)
         resumes the same server-side thread instead of starting a blank one.
-        Not surfaced in the index — internal bookkeeping only, not something
-        the UI lists sessions by."""
-        if session_id not in self._index:
-            raise KeyError(f"no such session: {session_id}")
-        session = self.get_session(session_id)
+        Not surfaced in the listing — internal bookkeeping only, not
+        something the UI lists sessions by."""
+        session = self._require(session_id)
         session["codex_thread_id"] = thread_id
-        write_json_atomic(_session_path(session_id), session)
-        return session
+        return store.save_session(session)
 
     def register_artifact(self, session_id: str, url: str) -> None:
         """Make a published file previewable before the turn finishes."""
-        session = self.get_session(session_id)
-        if session is None:
-            raise KeyError(f"no such session: {session_id}")
+        session = self._require(session_id)
         urls = session.setdefault("artifact_urls", [])
         if url not in urls:
             urls.append(url)
-            write_json_atomic(_session_path(session_id), session)
+            store.save_session(session)
 
     def set_open_mic(self, session_id: str, active: bool) -> dict:
         """Marks a session as an Open Mic conversation (David's ask
@@ -225,18 +197,13 @@ class SessionManager:
         cleared on exit so a later stretch cannot accidentally re-summarise an
         earlier one.
         """
-        if session_id not in self._index:
-            raise KeyError(f"no such session: {session_id}")
-        session = self.get_session(session_id)
+        session = self._require(session_id)
         session["open_mic"] = bool(active)
         if active:
             session.setdefault("open_mic_started_at", len(session.get("messages", [])))
         else:
             session.pop("open_mic_started_at", None)
-        write_json_atomic(_session_path(session_id), session)
-        self._index[session_id]["open_mic"] = bool(active)
-        self._save_index()
-        return session
+        return store.save_session(session)
 
     def effective_messages(self, session_id: Optional[str], exclude_last: bool = False) -> list[dict]:
         """What a brain should treat as this session's prior conversation:
@@ -248,8 +215,8 @@ class SessionManager:
         taught here once.
 
         Never a destructive view: the messages before the boundary are still
-        sitting in the session's stored list (just flagged archived by
-        compact_session), this only decides what gets sent to the model.
+        stored (just flagged archived by compact_session), this only decides
+        what gets sent to the model.
 
         exclude_last drops the most-recently-appended message — the current
         turn's own user message, already saved by the time a brain asks for
@@ -280,16 +247,14 @@ class SessionManager:
     def compact_session(self, session_id: str, through_index: int, summary: str) -> dict:
         """Records a compaction checkpoint without deleting or rewriting any
         stored message. Messages before through_index get an in-place
-        "archived" flag (still in session["messages"], still visible in the
-        transcript, still exported/searched) purely as a record of what a
-        compaction folded in — effective_messages() above is what actually
-        changes future turns' behavior, using through_index/summary, not
-        this flag. Appends to session["compactions"] rather than overwriting
-        it, so a chat can be compacted more than once over its life; only
-        the latest entry is ever read back."""
-        if session_id not in self._index:
-            raise KeyError(f"no such session: {session_id}")
-        session = self.get_session(session_id)
+        "archived" flag (still stored, still visible in the transcript,
+        still exported/searched) purely as a record of what a compaction
+        folded in — effective_messages() above is what actually changes
+        future turns' behavior, using through_index/summary, not this flag.
+        Appends to session["compactions"] rather than overwriting it, so a
+        chat can be compacted more than once over its life; only the latest
+        entry is ever read back."""
+        session = self._require(session_id)
         messages = session.get("messages", [])
         through_index = max(0, min(through_index, len(messages)))
         for m in messages[:through_index]:
@@ -297,10 +262,7 @@ class SessionManager:
         compactions = session.setdefault("compactions", [])
         compactions.append({"through_index": through_index, "summary": summary, "created_at": time.time()})
         session["updated_at"] = time.time()
-        write_json_atomic(_session_path(session_id), session)
-        self._index[session_id]["updated_at"] = session["updated_at"]
-        self._save_index()
-        return session
+        return store.save_session(session)
 
     def replace_messages(self, session_id: str, start_index: int, replacement: list) -> dict:
         """Swaps a run of messages for a shorter stand-in, keeping everything
@@ -311,18 +273,12 @@ class SessionManager:
         the long back-and-forth stops occupying the context while its substance
         is kept.
         """
-        if session_id not in self._index:
-            raise KeyError(f"no such session: {session_id}")
-        session = self.get_session(session_id)
+        session = self._require(session_id)
         messages = session.get("messages", [])
         start = max(0, min(start_index, len(messages)))
         session["messages"] = messages[:start] + replacement
         session["updated_at"] = time.time()
-        write_json_atomic(_session_path(session_id), session)
-        self._index[session_id]["message_count"] = len(session["messages"])
-        self._index[session_id]["updated_at"] = session["updated_at"]
-        self._save_index()
-        return session
+        return store.save_session(session)
 
     def set_project(self, session_id: str, project_id: Optional[str]) -> dict:
         """Assigns a session to a project (core/projects.py), or clears it
@@ -330,54 +286,34 @@ class SessionManager:
         closing any live brain afterward — same pattern as set_model_endpoint/
         set_workspace, since the project's instructions/documents are only
         injected at connection time."""
-        if session_id not in self._index:
-            raise KeyError(f"no such session: {session_id}")
-        session = self.get_session(session_id)
+        session = self._require(session_id)
         session["project_id"] = project_id
-        write_json_atomic(_session_path(session_id), session)
-        self._index[session_id]["project_id"] = project_id
-        self._save_index()
-        return session
+        return store.save_session(session)
 
     def set_workspace(self, session_id: str, workspace_dir: Optional[str]) -> dict:
         """Pin a session's agent tools to a specific folder (see
         core/workspace.py's vet_workspace — the caller must vet before
         calling this), or clear back to None for the default vault scope."""
-        if session_id not in self._index:
-            raise KeyError(f"no such session: {session_id}")
-        session = self.get_session(session_id)
+        session = self._require(session_id)
         session["workspace_dir"] = workspace_dir
-        write_json_atomic(_session_path(session_id), session)
-        return session
+        return store.save_session(session)
 
     def set_integrations(self, session_id: str, enabled_integration_ids: Optional[list[str]]) -> dict:
         """Restrict which MCP Tool Server integrations this chat can
         reference (David's ask 2026-08-31), or clear back to None for "all
         registered ones" — same distinction Claude's own per-conversation
         connector toggle makes."""
-        if session_id not in self._index:
-            raise KeyError(f"no such session: {session_id}")
-        session = self.get_session(session_id)
+        session = self._require(session_id)
         session["enabled_integration_ids"] = enabled_integration_ids
-        write_json_atomic(_session_path(session_id), session)
-        return session
+        return store.save_session(session)
 
     def rename_session(self, session_id: str, title: str) -> None:
-        if session_id not in self._index:
-            raise KeyError(f"no such session: {session_id}")
-        session = self.get_session(session_id)
+        session = self._require(session_id)
         session["title"] = title
-        write_json_atomic(_session_path(session_id), session)
-        self._index[session_id]["title"] = title
-        self._save_index()
+        store.save_session(session)
 
     def delete_session(self, session_id: str) -> None:
-        if session_id in self._index:
-            del self._index[session_id]
-            self._save_index()
-        path = _session_path(session_id)
-        if os.path.exists(path):
-            os.remove(path)
+        store.delete_session(session_id)
 
     def get_channel_session_id(self, channel_key: str) -> Optional[str]:
         """Look up a channel's already-pinned session without creating one
@@ -387,10 +323,12 @@ class SessionManager:
         conversation, exactly what David actually hit, kept whatever model
         it started with, silently ignoring the new Settings value). Used by
         routes/settings_routes.py to also push a model change onto an
-        existing session, not just future ones."""
-        mapping: dict = read_json(CHANNEL_SESSIONS_FILE, {})
-        session_id = mapping.get(channel_key)
-        return session_id if session_id and session_id in self._index else None
+        existing session, not just future ones.
+
+        A mapping pointing at a session that no longer exists reads as
+        absent, so a deleted chat can't strand a channel."""
+        session_id = store.get_channel_session(channel_key)
+        return session_id if session_id and store.session_exists(session_id) else None
 
     def get_or_create_channel_session(self, channel_key: str, title: str,
                                        model_endpoint_id: Optional[str] = None) -> str:
@@ -412,16 +350,14 @@ class SessionManager:
         default model later doesn't retroactively move an existing pinned
         session (matches the chat model picker's own "explicit pick,
         doesn't silently change" behavior)."""
-        mapping: dict = read_json(CHANNEL_SESSIONS_FILE, {})
-        session_id = mapping.get(channel_key)
-        if session_id and session_id in self._index:
-            return session_id
+        existing = self.get_channel_session_id(channel_key)
+        if existing:
+            return existing
 
         session = self.create_session(title)
         if model_endpoint_id:
             self.set_model_endpoint(session["id"], model_endpoint_id)
-        mapping[channel_key] = session["id"]
-        write_json_atomic(CHANNEL_SESSIONS_FILE, mapping)
+        store.set_channel_session(channel_key, session["id"])
         return session["id"]
 
 

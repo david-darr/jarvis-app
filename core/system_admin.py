@@ -13,10 +13,9 @@ import os
 import shutil
 import time
 
-from core import discord_bots_store, model_endpoints, settings as settings_store
+from core import discord_bots_store, model_endpoints, session_manager_store as session_store, settings as settings_store
 from core.atomic_io import write_json_atomic
 from core.constants import DATA_DIR
-from core.session_manager import SESSIONS_DIR, SESSIONS_INDEX_FILE
 from core.vault import resolve_vault_dir
 from services.notes_service import NOTES_FILE, notes_service
 from services.skills_service import SKILLS_DIR, create_skill, get_skill, list_skills
@@ -55,8 +54,7 @@ def diagnostics() -> dict:
 
 
 def _session_count() -> int:
-    from core.atomic_io import read_json
-    return len(read_json(SESSIONS_INDEX_FILE, {}))
+    return session_store.session_count()
 
 
 def export_backup() -> dict:
@@ -123,10 +121,12 @@ def wipe(kind: str) -> None:
         raise ValueError(f"unknown wipe kind: {kind}")
 
     if kind == "chats":
-        if os.path.isdir(SESSIONS_DIR):
-            shutil.rmtree(SESSIONS_DIR)
-        os.makedirs(SESSIONS_DIR, exist_ok=True)
-        write_json_atomic(SESSIONS_INDEX_FILE, {})
+        # Clears sessions, their derived message/search rows and the channel
+        # mappings in one transaction. The old version removed the sessions
+        # directory and blanked the index but left channel_sessions.json
+        # behind; that self-healed (a mapping to a missing session reads as
+        # absent) but left the file describing chats that no longer existed.
+        session_store.delete_all_sessions()
     elif kind == "notes":
         write_json_atomic(NOTES_FILE, [])
         notes_service._notes = {}

@@ -21,7 +21,7 @@ import os
 from typing import Optional
 
 from core.constants import BASE_DIR, REPO_CODE_DIRS
-from core.session_manager import session_manager
+from core import session_manager_store as store
 from core.vault import resolve_vault_dir
 from services import skills_service, documents_service
 from services.notes_service import notes_service
@@ -33,7 +33,6 @@ SPECS_DIR = os.path.join(BASE_DIR, "specs")
 MAX_LIST_ITEMS = 20  # same token-efficiency posture as everything else here
 
 SNIPPET_RADIUS = 200  # characters of context kept on each side of a match
-MAX_SESSIONS_SCANNED = 100  # newest-first cap so a huge session history stays bounded
 MAX_FILES_SCANNED = 500
 
 
@@ -46,33 +45,30 @@ def _snippet(text: str, idx: int, query_len: int) -> str:
 
 
 def search_sessions(query: str, exclude_session_id: Optional[str] = None, max_results: int = 5) -> list[dict]:
-    """Keyword search across every chat session's message content — the
-    "cross-session awareness" half. Newest-updated sessions scanned first,
-    capped at MAX_SESSIONS_SCANNED so this stays bounded regardless of how
-    much chat history exists. Returns short snippets, not full messages."""
-    query_lower = query.lower()
-    results = []
-    for meta in session_manager.list_sessions()[:MAX_SESSIONS_SCANNED]:
-        if meta["id"] == exclude_session_id:
-            continue
-        session = session_manager.get_session(meta["id"])
-        if not session:
-            continue
-        for msg in reversed(session.get("messages", [])):
-            content = msg.get("content", "")
-            idx = content.lower().find(query_lower)
-            if idx == -1:
-                continue
-            results.append({
-                "session_id": session["id"],
-                "session_title": session["title"],
-                "role": msg["role"],
-                "snippet": _snippet(content, idx, len(query)),
-            })
-            break  # one hit per session is enough to point back to it
-        if len(results) >= max_results:
-            break
-    return results
+    """Full-text search across every chat session's message content — the
+    "cross-session awareness" half. Returns short snippets, not full
+    messages, and at most one hit per session so a handful of results means
+    a handful of different conversations to look at.
+
+    Backed by the session store's FTS5 index (core/session_manager_store.py)
+    since 2026-09-22. What that changed, and why it was worth changing:
+
+    - **Multi-term queries work.** This was a substring match
+      (`content.lower().find(query)`), so a query only matched when its
+      words appeared adjacently in that exact order. Measured against real
+      history at the time: "about" returned 5 hits, "would" returned 5, and
+      "about would" returned 0. Every ordinary phrasing a model reaches for
+      ("the swarm budget decision") fell into that hole. Terms are now ANDed
+      and match in any order at any distance.
+    - **Results are ranked by relevance** (bm25) instead of by which session
+      happened to be touched most recently.
+    - **Nothing is skipped.** The old scan visited only the 100
+      newest-updated sessions and read each one's file in full to search it;
+      older chats were invisible with no indication. An index has no reason
+      to cap.
+    """
+    return store.search_messages(query, exclude_session_id=exclude_session_id,
+                                 max_results=max_results)
 
 
 def search_vault(query: str, vault_dir: Optional[str] = None, max_results: int = 5) -> list[dict]:

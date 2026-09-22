@@ -17,6 +17,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from core import attachments, chat_artifacts, image_gen, middleware
 from core.session_manager import session_manager, SessionManager
+from core import session_manager_store as session_store
+from core import memory_tools
+from core.atomic_io import read_json, write_json_atomic
 from core.codex_brain import CodexBrain
 from core.brain import Brain
 from claude_agent_sdk import AssistantMessage, TextBlock, ResultMessage
@@ -785,6 +788,264 @@ class OpenMicTests(unittest.TestCase):
         self.assertEqual(len(session_manager.get_session(self.sid)["messages"]), 2)
 
 
+class SessionStoreTests(unittest.TestCase):
+    """Contracts for the SQLite session store (core/session_manager_store.py).
+
+    These assert relationships rather than snapshots: that a listing agrees
+    with the body it describes, that a migration recovers what the old index
+    had lost, that search finds terms in any order. None of them freeze a
+    value that is expected to change.
+    """
+
+    def test_every_stored_field_round_trips(self):
+        """A session dict is not a fixed schema - fields accrete with
+        features, and several are written by a setter without ever appearing
+        in create_session(). The store keeps the document itself rather than
+        normalising it into columns, so this is the contract that matters:
+        what went in comes back out."""
+        sid = session_manager.create_session()["id"]
+        session_manager.append_message(sid, "user", "hello there")
+        session_manager.set_model_endpoint(sid, "ep-1", "model-1", "high")
+        session_manager.set_project(sid, "proj-1")
+        session_manager.set_workspace(sid, str(Path(fixture.name) / "ws"))
+        session_manager.set_integrations(sid, ["int-1", "int-2"])
+        session_manager.set_codex_thread_id(sid, "thread-9")
+        session_manager.register_artifact(sid, "/generated-files/a.md")
+        session_manager.set_context_state(sid, {"used": 10, "window": 100})
+        session_manager.set_starred(sid, True)
+
+        back = session_manager.get_session(sid)
+        self.assertEqual(back["model_endpoint_id"], "ep-1")
+        self.assertEqual(back["model_override"], "model-1")
+        self.assertEqual(back["model_effort"], "high")
+        self.assertEqual(back["project_id"], "proj-1")
+        self.assertEqual(back["enabled_integration_ids"], ["int-1", "int-2"])
+        self.assertEqual(back["codex_thread_id"], "thread-9")
+        self.assertEqual(back["artifact_urls"], ["/generated-files/a.md"])
+        self.assertEqual(back["context_state"], {"used": 10, "window": 100})
+        self.assertTrue(back["starred"])
+        self.assertEqual(back["title"], "hello there")
+
+    def test_listing_always_agrees_with_the_session_body(self):
+        """The bug that motivated this store: the sidebar listing and the
+        session body were two separate writes and could describe different
+        things. Derived-on-write means they cannot."""
+        sid = session_manager.create_session()["id"]
+        for i in range(5):
+            session_manager.append_message(sid, "user", f"message {i}")
+        meta = next(s for s in session_manager.list_sessions() if s["id"] == sid)
+        body = session_manager.get_session(sid)
+        self.assertEqual(meta["message_count"], len(body["messages"]))
+        self.assertEqual(meta["title"], body["title"])
+        self.assertEqual(meta["updated_at"], body["updated_at"])
+
+        session_manager.replace_messages(sid, 2, [{"role": "assistant", "content": "folded"}])
+        meta = next(s for s in session_manager.list_sessions() if s["id"] == sid)
+        body = session_manager.get_session(sid)
+        self.assertEqual(meta["message_count"], len(body["messages"]))
+
+    def test_a_session_is_never_reachable_by_one_path_and_not_another(self):
+        sid = session_manager.create_session()["id"]
+        self.assertIsNotNone(session_manager.get_session(sid))
+        self.assertIn(sid, [s["id"] for s in session_manager.list_sessions()])
+        session_manager.delete_session(sid)
+        self.assertIsNone(session_manager.get_session(sid))
+        self.assertNotIn(sid, [s["id"] for s in session_manager.list_sessions()])
+        with self.assertRaises(KeyError):
+            session_manager.rename_session(sid, "gone")
+
+    def test_search_finds_terms_in_any_order(self):
+        """The regression this store exists to fix. Search was a substring
+        match, so a two-word query only matched when those words were
+        adjacent in that order. Proven red against the old implementation on
+        real history: 'about' and 'would' each returned hits, 'about would'
+        returned none."""
+        sid = session_manager.create_session()["id"]
+        session_manager.append_message(
+            sid, "assistant", "we deferred the budget question for the swarm rollout")
+        for query in ("swarm budget", "budget swarm", "budget rollout", "swarm deferred"):
+            with self.subTest(query=query):
+                hits = memory_tools.search_sessions(query)
+                self.assertTrue(any(h["session_id"] == sid for h in hits),
+                                f"{query!r} should match a message containing all its terms")
+
+    def test_search_requires_every_term(self):
+        sid = session_manager.create_session()["id"]
+        session_manager.append_message(sid, "user", "kayak expedition notes")
+        self.assertTrue(memory_tools.search_sessions("kayak expedition"))
+        self.assertFalse(memory_tools.search_sessions("kayak helicopter"))
+
+    def test_search_returns_one_hit_per_session(self):
+        """Results should point at distinct conversations - five results
+        meaning five places to look, not five hits in one chat."""
+        sid = session_manager.create_session()["id"]
+        for i in range(4):
+            session_manager.append_message(sid, "user", f"recurring marker term {i}")
+        hits = memory_tools.search_sessions("recurring marker")
+        self.assertEqual(len([h for h in hits if h["session_id"] == sid]), 1)
+
+    def test_search_excludes_the_asking_session(self):
+        sid = session_manager.create_session()["id"]
+        session_manager.append_message(sid, "user", "distinctive pangolin phrasing")
+        self.assertTrue(memory_tools.search_sessions("distinctive pangolin"))
+        self.assertFalse(memory_tools.search_sessions("distinctive pangolin", exclude_session_id=sid))
+
+    def test_search_survives_fts_operators_in_ordinary_questions(self):
+        """FTS5 treats NOT/NEAR/^/*/parens/quotes as syntax. A user question
+        containing them must not raise mid-turn."""
+        sid = session_manager.create_session()["id"]
+        session_manager.append_message(sid, "user", "the release was NOT ready (again)")
+        for query in ('NOT ready', 'release (again)', 'he said "ready"', '^release', 'rel*', 'a NEAR b', ''):
+            with self.subTest(query=query):
+                self.assertIsInstance(memory_tools.search_sessions(query), list)
+
+    def test_deleting_a_session_removes_it_from_search(self):
+        sid = session_manager.create_session()["id"]
+        session_manager.append_message(sid, "user", "ephemeral quokka reference")
+        self.assertTrue(memory_tools.search_sessions("ephemeral quokka"))
+        session_manager.delete_session(sid)
+        self.assertFalse(memory_tools.search_sessions("ephemeral quokka"))
+
+    def test_rewriting_messages_updates_what_search_can_find(self):
+        sid = session_manager.create_session()["id"]
+        session_manager.append_message(sid, "user", "obsolete wombat statement")
+        session_manager.replace_messages(sid, 0, [{"role": "user", "content": "current badger statement"}])
+        self.assertFalse(memory_tools.search_sessions("obsolete wombat"))
+        self.assertTrue(memory_tools.search_sessions("current badger"))
+
+    def test_compacted_messages_stay_searchable(self):
+        """Compaction folds history out of what the model is sent, not out
+        of the user's own history - 'search my past chats' should still find
+        it."""
+        sid = session_manager.create_session()["id"]
+        session_manager.append_message(sid, "user", "early narwhal discussion")
+        session_manager.append_message(sid, "assistant", "later reply")
+        session_manager.compact_session(sid, 1, "summary of the start")
+        self.assertTrue(memory_tools.search_sessions("early narwhal"))
+
+    def test_compaction_view_is_unchanged_by_storage(self):
+        sid = session_manager.create_session()["id"]
+        session_manager.append_message(sid, "user", "one")
+        session_manager.append_message(sid, "assistant", "two")
+        session_manager.append_message(sid, "user", "three")
+        session_manager.compact_session(sid, 2, "the first two")
+        effective = session_manager.effective_messages(sid)
+        self.assertEqual(len(effective), 2)
+        self.assertIn("the first two", effective[0]["content"])
+        self.assertEqual(effective[1]["content"], "three")
+        # Nothing was destroyed to produce that view.
+        self.assertEqual(len(session_manager.get_session(sid)["messages"]), 3)
+        self.assertTrue(session_manager.get_session(sid)["messages"][0]["archived"])
+
+    def test_channel_mapping_heals_when_its_session_is_deleted(self):
+        first = session_manager.get_or_create_channel_session("test:chan", "Chan")
+        self.assertEqual(session_manager.get_or_create_channel_session("test:chan", "Chan"), first)
+        session_manager.delete_session(first)
+        self.assertIsNone(session_manager.get_channel_session_id("test:chan"))
+        second = session_manager.get_or_create_channel_session("test:chan", "Chan")
+        self.assertNotEqual(second, first)
+
+
+class SessionMigrationTests(unittest.TestCase):
+    """The one-time JSON import. Each test runs against its own temp data
+    directory with a real legacy layout, driving the real migration code."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="jarvis-migrate-")
+        self.dir = Path(self.tmp.name)
+        (self.dir / "sessions").mkdir()
+        self._saved = {k: getattr(session_store, k) for k in
+                       ("DB_FILE", "LEGACY_SESSIONS_DIR", "LEGACY_INDEX_FILE",
+                        "LEGACY_CHANNEL_FILE", "LEGACY_BACKUP_DIR")}
+        session_store.DB_FILE = str(self.dir / "sessions.db")
+        session_store.LEGACY_SESSIONS_DIR = str(self.dir / "sessions")
+        session_store.LEGACY_INDEX_FILE = str(self.dir / "sessions_index.json")
+        session_store.LEGACY_CHANNEL_FILE = str(self.dir / "channel_sessions.json")
+        session_store.LEGACY_BACKUP_DIR = str(self.dir / "sessions.pre-sqlite-backup")
+        session_store._reset_for_tests()
+
+    def tearDown(self):
+        session_store._reset_for_tests()
+        for k, v in self._saved.items():
+            setattr(session_store, k, v)
+        session_store._reset_for_tests()
+        self.tmp.cleanup()
+
+    def _legacy(self, sid, indexed=True, **fields):
+        doc = {"id": sid, "title": f"chat {sid}", "created_at": 1.0, "updated_at": 2.0,
+               "messages": [{"role": "user", "content": f"body of {sid}", "ts": 1.0}]}
+        doc.update(fields)
+        write_json_atomic(str(self.dir / "sessions" / f"{sid}.json"), doc)
+        if indexed:
+            index = read_json(str(self.dir / "sessions_index.json"), {})
+            index[sid] = {"title": doc["title"], "starred": False, "created_at": 1.0,
+                          "updated_at": 2.0, "message_count": 1, "model_endpoint_id": None,
+                          "project_id": None}
+            write_json_atomic(str(self.dir / "sessions_index.json"), index)
+
+    def test_migration_recovers_sessions_the_old_index_had_lost(self):
+        """A session file present on disk but missing from the index was
+        unreachable in the JSON store - no listing, no search, no open. The
+        migration globs the directory rather than reading the index, so the
+        move is the repair."""
+        self._legacy("aaa", indexed=True)
+        self._legacy("bbb", indexed=False)
+        result = session_store.last_migration()
+        self.assertEqual(result["migrated"], 2)
+        self.assertEqual(result["recovered_orphans"], ["bbb"])
+        self.assertIsNotNone(session_store.get_session("bbb"))
+        self.assertIn("bbb", [s["id"] for s in session_store.list_sessions()])
+
+    def test_migration_is_idempotent(self):
+        self._legacy("aaa")
+        self.assertEqual(session_store.last_migration()["migrated"], 1)
+        self.assertEqual(session_store.session_count(), 1)
+        again = session_store.migrate_from_json()
+        self.assertEqual(again["migrated"], 0)
+        self.assertEqual(session_store.session_count(), 1)
+
+    def test_migration_preserves_fields_the_store_knows_nothing_about(self):
+        """Forward compatibility is the reason the document is stored whole.
+        A field added by some future feature must survive the trip."""
+        self._legacy("aaa", some_future_field={"nested": [1, 2]}, model_effort="high")
+        session_store.last_migration()
+        back = session_store.get_session("aaa")
+        self.assertEqual(back["some_future_field"], {"nested": [1, 2]})
+        self.assertEqual(back["model_effort"], "high")
+
+    def test_migration_indexes_messages_for_search(self):
+        self._legacy("aaa", messages=[{"role": "user", "content": "migrated axolotl content"}])
+        session_store.last_migration()
+        self.assertTrue(session_store.search_messages("migrated axolotl"))
+
+    def test_migration_keeps_the_originals_and_carries_channel_mappings(self):
+        self._legacy("aaa")
+        write_json_atomic(str(self.dir / "channel_sessions.json"), {"discord:1": "aaa"})
+        session_store.last_migration()
+        self.assertEqual(session_store.get_channel_session("discord:1"), "aaa")
+        backup = self.dir / "sessions.pre-sqlite-backup"
+        self.assertTrue((backup / "sessions" / "aaa.json").exists(),
+                        "the original session files must be kept, not deleted")
+        self.assertFalse((self.dir / "sessions" / "aaa.json").exists(),
+                         "the legacy directory should be moved aside so it is not re-imported")
+
+    def test_an_unreadable_session_file_does_not_stop_the_migration(self):
+        self._legacy("aaa")
+        (self.dir / "sessions" / "bad.json").write_text("{not json", encoding="utf-8")
+        result = session_store.last_migration()
+        self.assertEqual(result["migrated"], 1)
+        self.assertEqual(result["unreadable"], ["bad"])
+        self.assertIsNotNone(session_store.get_session("aaa"))
+
+    def test_search_index_can_be_rebuilt_from_the_documents(self):
+        self._legacy("aaa", messages=[{"role": "user", "content": "rebuildable content"}])
+        session_store.last_migration()
+        session_store.connection().execute("DELETE FROM messages_fts")
+        self.assertFalse(session_store.search_messages("rebuildable"))
+        session_store.rebuild_search_index()
+        self.assertTrue(session_store.search_messages("rebuildable"))
+
+
 class RepoIntegrityTests(unittest.TestCase):
     """Guards against a corruption that has now happened twice.
 
@@ -825,4 +1086,5 @@ if __name__ == '__main__':
     try:
         unittest.main()
     finally:
+        session_store.close()
         fixture.cleanup()
