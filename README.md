@@ -69,9 +69,10 @@ Requirements: **Python 3.12+** and **Node 22.12+** (Node 24 recommended). The de
 
 **Backend:**
 ```
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.lock
 uvicorn app:app --host 127.0.0.1 --port 8420
 ```
+`requirements.lock` pins every package, dependencies included, to an exact version and file hash, and is what the installer's bundled runtime is built from. To change a dependency, edit `requirements.txt` (every line needs an upper bound), regenerate the lock with the command in its header, and commit both.
 Then open http://127.0.0.1:8420 — or start the desktop shell, which spawns the backend for you:
 
 **Desktop shell:**
@@ -88,7 +89,7 @@ In dev the shell uses your `.venv`; a packaged build uses its own bundled runtim
 cd electron
 npm run dist
 ```
-`predist` runs `scripts/build_runtime.py` first, which downloads an embeddable Python, installs `requirements.txt` into it, and verifies the result can import the app's dependency graph. That runtime (~400MB) is what gets bundled. Installed size is roughly 620MB.
+`predist` runs `scripts/build_runtime.py` first, which downloads an embeddable Python (checked against a pinned SHA-256), installs `requirements.lock` into it with `--require-hashes`, and verifies the result can import the app's dependency graph. That runtime (~400MB) is what gets bundled. Installed size is roughly 620MB.
 
 > **Windows note:** building the NSIS installer requires **Developer Mode** enabled (Settings → System → For developers), or an elevated terminal. electron-builder's signing toolchain contains macOS symlinks, and Windows blocks symlink creation for non-elevated users without it. This only affects *building* the installer — the app itself and `win-unpacked/` build fine either way.
 

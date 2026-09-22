@@ -1221,6 +1221,63 @@ class RepoIntegrityTests(unittest.TestCase):
                           f"Root package.json lost its vendored {dependency} dependency.")
 
 
+def _load_build_runtime():
+    import importlib.util
+    path = Path(__file__).resolve().parent / "build_runtime.py"
+    spec = importlib.util.spec_from_file_location("build_runtime", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class DependencyPinningTests(unittest.TestCase):
+    """The installer bundles a Python runtime built from requirements.lock, so
+    whatever the lock admits is signed and shipped to users. These drive the
+    build's own policy check rather than restating it, so the build and the
+    tests cannot disagree about what the policy is."""
+
+    def setUp(self):
+        self.build = _load_build_runtime()
+        self.tmp = tempfile.TemporaryDirectory(prefix="jarvis-pinning-")
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_the_repository_meets_the_pinning_policy(self):
+        self.build.check_pinning_policy()
+        with open(self.build.LOCKFILE, encoding="utf-8") as handle:
+            directives = [line.split()[0] for line in handle
+                          if line.startswith("--") and not line.startswith("--hash")]
+        self.assertEqual(
+            directives, ["--index-url"],
+            "requirements.lock must name PyPI as its only index. A second index "
+            "(--extra-index-url, --find-links) can serve any package in PyPI's place.",
+        )
+
+    def _policy_check(self, requirements, lock):
+        root = Path(self.tmp.name)
+        (root / "requirements.txt").write_text(requirements, encoding="utf-8")
+        (root / "requirements.lock").write_text(lock, encoding="utf-8")
+        self.build.REQUIREMENTS = str(root / "requirements.txt")
+        self.build.LOCKFILE = str(root / "requirements.lock")
+        self.build.check_pinning_policy()
+
+    def test_the_policy_refuses_what_would_let_an_unchecked_file_ship(self):
+        locked_httpx = "httpx==0.28.1 \\\n    --hash=sha256:" + "a" * 64 + "\n"
+        with self.assertRaisesRegex(RuntimeError, "without an upper bound"):
+            self._policy_check("httpx>=0.27\n", locked_httpx)
+        with self.assertRaisesRegex(RuntimeError, "does not hash-pin httpx"):
+            self._policy_check("httpx>=0.27,<1\n", "")
+        with self.assertRaisesRegex(RuntimeError, "does not hash-pin httpx"):
+            self._policy_check("httpx>=0.27,<1\n", "httpx==0.28.1\n")
+        # Bounded and hash-pinned passes, and so does an exact wheel file.
+        self._policy_check("httpx>=0.27,<1\n", locked_httpx)
+        self._policy_check(
+            "llama-cpp-python @ https://example.invalid/llama_cpp_python-0.3.35-py3-none-win_amd64.whl"
+            ' ; sys_platform == "win32"\n',
+            "llama-cpp-python @ https://example.invalid/llama_cpp_python-0.3.35-py3-none-win_amd64.whl"
+            " ; sys_platform == 'win32' \\\n    --hash=sha256:" + "b" * 64 + "\n",
+        )
+
+
 
 if __name__ == '__main__':
     try:

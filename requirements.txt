@@ -1,38 +1,55 @@
-fastapi>=0.115
-uvicorn[standard]>=0.30
-claude-agent-sdk
-pydantic>=2
-bcrypt>=4
-pyotp>=2.9
-cryptography>=42
-discord.py>=2.4
-httpx>=0.27
-python-pptx>=1.0  # Office file generation skill (David's ask 2026-09-10) — MIT licensed, pure Python, no LibreOffice/Node needed. Also reads slides back for the chat preview panel (2026-09-15).
+# Dependency policy (adopted from Hermes Agent's, 2026-09-22): every line
+# carries an upper bound - `>=floor,<next_major`, or `<0.(minor+2)` below 1.0 -
+# and nothing here is installed directly into a shipped runtime. The build
+# installs requirements.lock, which pins every package, transitive ones
+# included, to an exact version and file hash. A ceiling alone would not stop
+# a compromised patch release inside the range; the hashes do.
+#
+# After changing this file, regenerate the lock (command in its header) and
+# commit both. scripts/build_runtime.py refuses to build if they disagree.
+
+fastapi>=0.115,<0.143
+uvicorn[standard]>=0.30,<0.55
+claude-agent-sdk>=0.2,<0.4
+pydantic>=2,<3
+bcrypt>=4,<6
+pyotp>=2.9,<3
+cryptography>=42,<51
+discord.py>=2.4,<3
+httpx>=0.27,<1
+python-pptx>=1.0,<2  # Office file generation skill (David's ask 2026-09-10) — MIT licensed, pure Python, no LibreOffice/Node needed. Also reads slides back for the chat preview panel (2026-09-15).
 # Read-only Office previews in chat (David's ask 2026-09-15) — see
 # core/office_preview.py. Both are pure Python with no system dependency, so
 # the preview runs locally and no document is ever uploaded to an external
 # converter. openpyxl is MIT, python-docx is MIT.
-openpyxl>=3.1
-python-docx>=1.1
-pypdfium2>=4  # Split scanned PDF attachments into per-page images (David's ask 2026-09-13) — BSD-3-Clause/Apache-2.0, ships PDFium's binary in the wheel, no system Poppler/Tesseract install needed
+openpyxl>=3.1,<4
+python-docx>=1.1,<2
+pypdfium2>=4,<6  # Split scanned PDF attachments into per-page images (David's ask 2026-09-13) — BSD-3-Clause/Apache-2.0, ships PDFium's binary in the wheel, no system Poppler/Tesseract install needed
 
 # Cookbook's built-in local model engine (David's ask 2026-09-01 — a local
 # model option needing no separate app install, unlike Ollama). Real
 # prebuilt CPU wheels live on the project's own index, not plain PyPI's
 # source-only listing — verified live before adding this (a genuine
 # win_amd64 wheel, no C++ compiler required). GPU builds need a different
-# index/build flag and are a documented follow-up, not covered by this line.
---extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-llama-cpp-python[server]; sys_platform != "darwin"
+# build and are a documented follow-up, not covered here.
+#
+# Referenced as exact wheel files rather than through the project's own
+# package index (2026-09-22). That index publishes no hashes, so the lock
+# generator hashed whichever file it fetched first (a RISC-V Linux wheel) and
+# the hash-checked build refused the real one. A direct file reference gets
+# the hash of the file actually installed, and dropping --extra-index-url
+# means no second server can offer any other package in PyPI's place.
+# Changing the version means changing the URL - deliberately. Linux has never
+# been built, so it has no line.
+llama-cpp-python[server] @ https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.35/llama_cpp_python-0.3.35-py3-none-win_amd64.whl ; sys_platform == "win32"
 
-# macOS is pinned because the current release's macOS arm64 wheel is
-# genuinely corrupt upstream: llama_cpp_python-0.3.35-py3-none-macosx_11_0_arm64.whl
+# macOS stays on 0.3.19 because the 0.3.35 macOS arm64 wheel is genuinely
+# corrupt upstream: llama_cpp_python-0.3.35-py3-none-macosx_11_0_arm64.whl
 # fails CRC on lib/libggml-base.0.20.0.dylib. Confirmed by downloading and
 # unpacking it directly, not inferred from a CI failure — it breaks the same
 # way twice on a runner and once locally. 0.3.19 is the newest macOS wheel
-# that unpacks cleanly. Windows is unaffected and stays on the latest;
-# revisit when a fixed macOS wheel ships.
-llama-cpp-python[server]==0.3.19; sys_platform == "darwin"
+# that unpacks cleanly; revisit when a fixed macOS wheel ships.
+llama-cpp-python[server] @ https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.19/llama_cpp_python-0.3.19-cp312-cp312-macosx_11_0_arm64.whl ; sys_platform == "darwin"
 
 # Local speech-to-text for chat dictation and Open Mic (David's ask
 # 2026-09-15) - see core/speech.py. Deliberately pywhispercpp (a ~1.3 MB
@@ -40,4 +57,4 @@ llama-cpp-python[server]==0.3.19; sys_platform == "darwin"
 # first and pulled 206 MB of ctranslate2/onnxruntime/tokenizers/av into the
 # bundled runtime for the same job. Models are NOT bundled; one is downloaded
 # on first use, so the installer does not grow for an optional feature.
-pywhispercpp>=1.5
+pywhispercpp>=1.5,<2

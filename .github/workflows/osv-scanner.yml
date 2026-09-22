@@ -1,0 +1,63 @@
+name: OSV-Scanner
+
+# Adapted from Hermes Agent's .github/workflows/osv-scanner.yml
+# (https://github.com/NousResearch/hermes-agent), MIT License,
+# Copyright (c) 2025 Nous Research. The permission notice is reproduced at
+# the end of this file.
+#
+# Scans the lockfiles against the OSV vulnerability database, weekly and on
+# demand. Detection only: it never opens PRs or changes a pin, and it does
+# not fail on findings. It answers "has a version we already ship become
+# known-vulnerable", which is the gap a hash-locked build leaves by design -
+# the lock stops a new release getting in, so something has to say when an
+# old one goes bad. Findings land in the repo's Security tab (Code scanning).
+#
+# The reusable workflow is pinned by commit SHA, like every action here.
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  # Required to upload the SARIF results to code scanning.
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    name: Scan lockfiles
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+    with:
+      # Explicit lockfiles rather than a recursive scan, so vendored and
+      # build-output directories are skipped. requirements.lock is in pip's
+      # requirements format, which the prefix tells the scanner.
+      scan-args: |-
+        --lockfile=requirements.txt:requirements.lock
+        --lockfile=package-lock.json
+        --lockfile=electron/package-lock.json
+      results-file-name: osv-results.sarif
+      fail-on-vuln: false
+
+# MIT License
+#
+# Copyright (c) 2025 Nous Research
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.

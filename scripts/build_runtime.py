@@ -33,10 +33,17 @@ dynamic imports, subprocess spawning, and native wheels all behave the same.
 Idempotent: re-running with the runtime already present and healthy is a
 no-op unless --force is passed.
 
+Supply chain (2026-09-22, following Hermes Agent's pinning policy): every
+download is checked against a SHA-256 pinned here, and the app's packages are
+installed from requirements.lock with --require-hashes, so a swapped or
+tampered file fails the build instead of shipping inside a signed installer.
+Changing PYTHON_VERSION or PBS_RELEASE means updating the matching hashes.
+
 Usage:
     python scripts/build_runtime.py [--force]
 """
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -56,38 +63,65 @@ IS_MACOS = sys.platform == "darwin"
 # for exactly this.
 PYTHON_VERSION = "3.12.10"
 EMBED_URL = f"https://www.python.org/ftp/python/{PYTHON_VERSION}/python-{PYTHON_VERSION}-embed-amd64.zip"
+# python.org publishes only an MD5 for this file; this SHA-256 is of the
+# download whose MD5 matched its release record (fe8ef205f2e9c3ba44d0cf9954e1abd3).
+EMBED_SHA256 = "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
 
 # macOS: python.org ships no embeddable build, so use python-build-standalone
 # (maintained by Astral) — relocatable CPython with pip already inside. The
 # "install_only" tarball is the runtime-only variant, no build artefacts.
 PBS_RELEASE = "20260901"
 PBS_VERSION = "3.12.14"
+# From the release's own SHA256SUMS file.
+PBS_SHA256 = {
+    "aarch64": "3ee3ee547cedfeb7c2b16b2b7156039f7b470bb8f857e226fd3d2eb11db83c76",
+    "x86_64": "2e31b23f3f1319f707d0e620b48847a0046577541d357276821f9f1b5492e0ba",
+}
+
+
+def _pbs_arch() -> str:
+    return "aarch64" if platform.machine().lower() in ("arm64", "aarch64") else "x86_64"
 
 
 def _pbs_url() -> str:
-    arch = "aarch64" if platform.machine().lower() in ("arm64", "aarch64") else "x86_64"
     return (
         f"https://github.com/astral-sh/python-build-standalone/releases/download/"
-        f"{PBS_RELEASE}/cpython-{PBS_VERSION}+{PBS_RELEASE}-{arch}-apple-darwin-install_only.tar.gz"
+        f"{PBS_RELEASE}/cpython-{PBS_VERSION}+{PBS_RELEASE}-{_pbs_arch()}-apple-darwin-install_only.tar.gz"
     )
 
 
-GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
+# A fixed commit of pypa/get-pip rather than bootstrap.pypa.io's moving
+# "latest", so the script that runs during the build is a known file.
+GET_PIP_URL = ("https://raw.githubusercontent.com/pypa/get-pip/"
+               "f6f644156f23dfe9acc06e7b9ca75eee311f2e37/public/get-pip.py")
+GET_PIP_SHA256 = "fb24e693bab954209a063d90953621412ccad4a500905a726286e038f508ddf6"
+# The build's own installer, exact, per Hermes's rule for build-only tooling.
+# It is uninstalled from the shipped runtime once the packages are in.
+PIP_VERSION = "26.2.1"
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(SCRIPT_DIR)
 RUNTIME_DIR = os.path.join(BASE_DIR, "electron", "runtime")
 REQUIREMENTS = os.path.join(BASE_DIR, "requirements.txt")
+LOCKFILE = os.path.join(BASE_DIR, "requirements.lock")
 
 
 def log(msg: str) -> None:
     print(f"[build_runtime] {msg}", flush=True)
 
 
-def download(url: str) -> bytes:
+def download(url: str, sha256: str) -> bytes:
+    """Fetch url and refuse it unless its SHA-256 is the pinned one."""
     log(f"downloading {url}")
     with urllib.request.urlopen(url, timeout=180) as resp:
-        return resp.read()
+        data = resp.read()
+    actual = hashlib.sha256(data).hexdigest()
+    if actual != sha256:
+        raise RuntimeError(
+            f"checksum mismatch for {url}\n  expected {sha256}\n  got      {actual}\n"
+            "Refusing to build from a file that is not the one that was pinned."
+        )
+    return data
 
 
 def enable_site_packages(runtime_dir: str) -> None:
@@ -126,6 +160,94 @@ def run(python_exe: str, args: list[str]) -> None:
         raise RuntimeError(f"command failed ({result.returncode}): {' '.join(args)}")
 
 
+def _requirement_lines() -> list:
+    """requirements.txt's package lines, with comments and pip directives
+    (such as --extra-index-url) removed."""
+    lines = []
+    with open(REQUIREMENTS, encoding="utf-8") as handle:
+        for raw in handle:
+            line = raw.split("#", 1)[0].strip()
+            if line and not line.startswith("-"):
+                lines.append(line)
+    return lines
+
+
+def _normalise(name: str) -> str:
+    """PEP 503 normalisation, so discord.py, discord-py and discord_py match."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def unbounded_requirements() -> list:
+    """requirements.txt lines with no upper bound: neither `<`, `==`, nor a
+    direct reference to one exact wheel file (`name @ https://...whl`).
+
+    Hermes's rule, adopted as written: a bare `>=` lets any future release in,
+    including a compromised one.
+    """
+    unbounded = []
+    for line in _requirement_lines():
+        spec = line.split(";", 1)[0]
+        exact_file = re.search(r"@\s*https://\S+\.whl$", spec.strip())
+        if "<" not in spec and "==" not in spec and not exact_file:
+            unbounded.append(line)
+    return unbounded
+
+
+def locked_versions() -> dict:
+    """{normalised name: [versions]} for every entry in requirements.lock that
+    carries at least one hash. A package can be listed once per platform
+    marker (llama-cpp-python is), hence a list of versions."""
+    locked, current, hashed = {}, None, False
+
+    def close_entry():
+        if current and hashed:
+            locked.setdefault(current[0], []).append(current[1])
+
+    with open(LOCKFILE, encoding="utf-8") as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if raw[0].isspace():
+                if line.startswith("--hash=sha256:"):
+                    hashed = True
+                continue
+            if line.startswith("-"):
+                continue
+            close_entry()
+            spec = line.rstrip("\\").split(";", 1)[0].strip()
+            # `name==version`, or `name @ url` for a direct file reference,
+            # in which case the URL stands in for the version.
+            if " @ " in spec:
+                name, _, version = spec.partition(" @ ")
+            else:
+                name, _, version = spec.partition("==")
+            current = (_normalise(name.split("[", 1)[0]), version.strip()) if version else None
+            hashed = False
+    close_entry()
+    return locked
+
+
+def check_pinning_policy() -> None:
+    """Refuse to build unless requirements.txt is bounded and requirements.lock
+    hash-pins every package it names. A lock that has fallen behind the
+    requirements would otherwise build a runtime missing a package."""
+    unbounded = unbounded_requirements()
+    if unbounded:
+        raise RuntimeError(
+            "requirements.txt has lines without an upper bound: " + "; ".join(unbounded)
+        )
+    if not os.path.exists(LOCKFILE):
+        raise RuntimeError("requirements.lock is missing - regenerate it (command in its header)")
+    locked = locked_versions()
+    missing = [name for name in required_distributions() if name not in locked]
+    if missing:
+        raise RuntimeError(
+            "requirements.lock does not hash-pin " + ", ".join(missing)
+            + " - regenerate it (command in its header) and commit both files"
+        )
+
+
 def required_distributions() -> list:
     """Distribution names from requirements.txt.
 
@@ -140,16 +262,10 @@ def required_distributions() -> list:
     that actually goes wrong.
     """
     names = []
-    with open(REQUIREMENTS, encoding="utf-8") as handle:
-        for raw in handle:
-            line = raw.split("#", 1)[0].strip()
-            if not line or line.startswith("-"):
-                continue
-            line = line.split(";", 1)[0].strip()
-            line = re.split(r"[<>=!~\[]", line, maxsplit=1)[0]
-            name = line.strip().lower().replace("_", "-")
-            if name and name not in names:
-                names.append(name)
+    for line in _requirement_lines():
+        name = _normalise(re.split(r"[<>=!~\[;\s]", line, maxsplit=1)[0])
+        if name and name not in names:
+            names.append(name)
     return names
 
 
@@ -203,6 +319,8 @@ def main() -> int:
     parser.add_argument("--force", action="store_true", help="rebuild even if a runtime already exists")
     args = parser.parse_args()
 
+    check_pinning_policy()
+
     # electron/main.js's resolveBackendPython() looks in these exact places.
     python_exe = (os.path.join(RUNTIME_DIR, "python.exe") if IS_WINDOWS
                   else os.path.join(RUNTIME_DIR, "bin", "python3"))
@@ -231,7 +349,7 @@ def main() -> int:
     os.makedirs(RUNTIME_DIR, exist_ok=True)
 
     if IS_WINDOWS:
-        zip_bytes = download(EMBED_URL)
+        zip_bytes = download(EMBED_URL, EMBED_SHA256)
         log(f"extracting embeddable Python {PYTHON_VERSION}")
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             zf.extractall(RUNTIME_DIR)
@@ -241,13 +359,13 @@ def main() -> int:
 
         get_pip = os.path.join(RUNTIME_DIR, "get-pip.py")
         with open(get_pip, "wb") as f:
-            f.write(download(GET_PIP_URL))
-        log("bootstrapping pip")
-        run(python_exe, [get_pip, "--no-warn-script-location"])
+            f.write(download(GET_PIP_URL, GET_PIP_SHA256))
+        log(f"bootstrapping pip {PIP_VERSION}")
+        run(python_exe, [get_pip, "--no-warn-script-location", f"pip=={PIP_VERSION}"])
         os.remove(get_pip)
     else:
         url = _pbs_url()
-        tar_bytes = download(url)
+        tar_bytes = download(url, PBS_SHA256[_pbs_arch()])
         log(f"extracting standalone CPython {PBS_VERSION} ({platform.machine()})")
         with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tf:
             tf.extractall(RUNTIME_DIR)
@@ -260,10 +378,15 @@ def main() -> int:
             os.rmdir(inner)
         if not os.path.exists(python_exe):
             raise RuntimeError(f"expected an interpreter at {python_exe} after extraction")
-        # This build already includes pip — no bootstrap needed.
+        # This build already includes pip; bring it to the same exact version.
+        run(python_exe, ["-m", "pip", "install", "--no-warn-script-location", f"pip=={PIP_VERSION}"])
 
-    log("installing requirements (this takes a few minutes)")
-    run(python_exe, ["-m", "pip", "install", "--no-warn-script-location", "-r", REQUIREMENTS])
+    # From the lock, never requirements.txt. --require-hashes makes pip refuse
+    # any file whose hash is not in the lock, and --no-deps stops it resolving
+    # anything the lock did not already name.
+    log("installing requirements.lock with hash checking (this takes a few minutes)")
+    run(python_exe, ["-m", "pip", "install", "--no-warn-script-location",
+                     "--require-hashes", "--no-deps", "-r", LOCKFILE])
 
     # pip itself is ~13MB and is never needed at runtime by the shipped app.
     log("removing pip/setuptools from the shipped runtime")
