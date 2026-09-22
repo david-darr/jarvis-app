@@ -66,6 +66,33 @@ HIVE_MIND_CLI_PATH = os.path.join(BASE_DIR, "mcp_servers", "hive_mind_cli.py")
 CODEX_MESSAGE_TIMEOUT_SECONDS = 180
 
 
+async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
+    """Kill proc and everything it spawned.
+
+    `codex exec` on Windows is a process tree (node -> codex.exe -> a cua-repl
+    node/node_repl pair -> codex-code-mode-host.exe), not a single process.
+    Windows does not cascade-kill children when a parent dies, so a plain
+    proc.kill() on timeout only kills the top node.exe and orphans the rest —
+    verified live: two timed-out turns left 5-process trees still running and
+    holding their thread's ~/.codex/thread-writer-locks/<id>.lock file over
+    8 hours later, permanently wedging that session (every future resume on
+    the same thread_id fails to acquire the lock). `taskkill /T /F` kills the
+    whole tree in one call; proc.kill() is the fallback for non-Windows or if
+    taskkill itself is unavailable.
+    """
+    if proc.returncode is not None:
+        return
+    if sys.platform == "win32" and proc.pid:
+        killer = await asyncio.create_subprocess_exec(
+            "taskkill", "/T", "/F", "/PID", str(proc.pid),
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        await killer.wait()
+    if proc.returncode is None:
+        proc.kill()
+    await proc.wait()
+
+
 class CodexBrain:
     """One CodexBrain per conversation session. Create one, call connect()
     once (a no-op — nothing to keep open between turns), then run_turn(text)/
@@ -209,9 +236,7 @@ class CodexBrain:
             async for chunk in self._consume_process(proc, stderr_task, is_fresh_thread, user_text):
                 yield chunk
         finally:
-            if proc.returncode is None:
-                proc.kill()
-                await proc.wait()
+            await _kill_process_tree(proc)
             if not stderr_task.done():
                 stderr_task.cancel()
             await asyncio.gather(stderr_task, return_exceptions=True)
@@ -271,17 +296,18 @@ class CodexBrain:
 
         rc = await proc.wait()
         if rc != 0:
-            stderr = (await stderr_task).decode(errors="replace")[:500].strip()
-            # Self-heal a stale resume target (verified live: codex reports
-            # exactly this "no rollout found" message when a persisted
-            # thread_id has since been archived/deleted/pruned on the codex
-            # side) — without this, every future turn in this session would
-            # keep resuming the same dead id and fail the same way forever.
-            # Clear it and retry once as a brand-new thread rather than
-            # leaving the session permanently stuck; only fires when this
-            # was actually a resume attempt, so a genuinely fresh thread
-            # that fails for some other reason isn't retried into a loop.
-            if not is_fresh_thread and "no rollout found" in stderr.lower():
+            # Self-heal any failed resume — not just the "no rollout found"
+            # case (a persisted thread_id archived/deleted/pruned on the
+            # codex side), but also a thread wedged by a lock a prior killed
+            # process never released (see _kill_process_tree's docstring):
+            # that failure mode's stderr text isn't guaranteed to be stable,
+            # and a permanently-stuck session is strictly worse than losing
+            # thread continuity once. Without this, every future turn in
+            # this session would keep resuming the same broken id and fail
+            # the same way forever. Only fires when this was actually a
+            # resume attempt, so a genuinely fresh thread that fails for
+            # some other reason isn't retried into a loop.
+            if not is_fresh_thread:
                 self.thread_id = None
                 if self.session_id:
                     session_manager.set_codex_thread_id(self.session_id, None)
