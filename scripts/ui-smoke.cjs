@@ -84,7 +84,12 @@ function fixture(url) {
     claude_cli: [{ id: "workspace-large", display_name: "Workspace Large", description: "Most capable model for complex work.", alias: null, default_effort: null, supported_efforts: ["low", "high"].map(effort => ({ effort, description: effort + " reasoning" })), context_window: 200000, effective_context_percent: null, source: "curated", estimated: true }],
     codex_cli: [{ id: "workspace-fast", display_name: "Workspace Fast", description: "Balances speed and reasoning depth.", alias: null, default_effort: "medium", supported_efforts: ["low", "medium", "high"].map(effort => ({ effort, description: effort + " reasoning" })), context_window: 272000, effective_context_percent: 95, source: "cli_cache", estimated: false }],
   };
-  if (route === "/api/models/usage") return { m1: { percentage: 18 } };
+  // A subscription CLI (m1) must show no JARVIS-derived "% used"; a local
+  // model (m3) shows tokens spent through JARVIS with cache reuse kept apart.
+  if (route === "/api/models/usage") return {
+    m1: { fresh_tokens: 1200000, cache_read_tokens: 95000000, unsplit_tokens: 0, total_tokens: 96200000 },
+    m3: { fresh_tokens: 842000, cache_read_tokens: 0, unsplit_tokens: 0, total_tokens: 842000 },
+  };
   if (route === "/api/documents") return list(docs);
   if (route === "/api/documents/search") return list(docs.filter(d => d.title.toLowerCase().includes(url.searchParams.get("q").toLowerCase())));
   if (route.startsWith("/api/documents/")) return { ...docs[0], content: "# Design principles\n\nMake the important things easy to find." };
@@ -227,7 +232,14 @@ app.whenReady().then(async () => {
       await delay(100);
       for (const tab of ["home", "chat", "notes", "library", "calendar", "tasks", "email", "brain", "cookbook", "school"]) {
         await navigate(tab, tab === "brain" ? { section: "skills" } : {});
-        if (tab === "home") await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
+        if (tab === "home") {
+          await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
+          await waitFor("document.querySelectorAll('.dashboard-model-usage').length > 0");
+          // Only the local model carries a usage label, and it is tokens
+          // spent, never a "% used" figure that reads like a quota.
+          const labels = await js("[...document.querySelectorAll('.dashboard-model-usage')].map(n => n.textContent)");
+          assert.deepEqual(labels, ["842K tokens via JARVIS"], label + " home model usage labels");
+        }
         assert.deepEqual(await overflow(), [], label + " overflow in " + tab);
         await capture(label + "-" + tab);
       }

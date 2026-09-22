@@ -1350,6 +1350,36 @@ class ShellPermissionTests(unittest.TestCase):
         self.assertIn("Bash", user.disallowed_tools)
 
 
+class UsageTotalsTests(unittest.TestCase):
+    """Lifetime totals keep cache reads apart from fresh tokens, and never
+    produce a percentage that could be read as a quota."""
+
+    def setUp(self):
+        from core import token_usage
+        self.usage = token_usage
+        self.tmp = tempfile.TemporaryDirectory(prefix="jarvis-usage-")
+        self.addCleanup(self.tmp.cleanup)
+        saved = token_usage.USAGE_FILE
+        token_usage.USAGE_FILE = str(Path(self.tmp.name) / "token_usage.json")
+        self.addCleanup(setattr, token_usage, "USAGE_FILE", saved)
+
+    def test_cache_reads_are_counted_apart_from_fresh_tokens(self):
+        self.usage.record_usage("claude", {"input_tokens": 10, "cache_read_input_tokens": 30000,
+                                           "cache_creation_input_tokens": 500, "output_tokens": 90})
+        self.usage.record_usage("codex", {"total_tokens": 1100, "input_tokens": 1000, "cached_input_tokens": 800,
+                                          "output_tokens": 100})
+        summary = self.usage.get_usage_summary()
+        self.assertEqual((summary["claude"]["fresh_tokens"], summary["claude"]["cache_read_tokens"]), (600, 30000))
+        self.assertEqual((summary["codex"]["fresh_tokens"], summary["codex"]["cache_read_tokens"]), (300, 800))
+        self.assertNotIn("percentage", summary["claude"])
+
+    def test_totals_from_before_the_split_are_kept_not_guessed_apart(self):
+        write_json_atomic(self.usage.USAGE_FILE, {"old": 96901309})
+        self.usage.record_usage("old", {"prompt_tokens": 50, "completion_tokens": 10, "total_tokens": 60})
+        entry = self.usage.get_usage_summary()["old"]
+        self.assertEqual((entry["unsplit_tokens"], entry["fresh_tokens"], entry["cache_read_tokens"]), (96901309, 60, 0))
+
+
 class CacheTelemetryTests(unittest.TestCase):
     """Each provider reports the cache split in its own shape; what is not
     reported stays None rather than being guessed."""

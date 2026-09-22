@@ -150,26 +150,45 @@ def build_context_state(usage: dict | None, capacity: dict | None, model_id: str
     return state
 
 
+def _entry(value) -> dict:
+    """One endpoint's stored totals. A bare integer is the format before
+    2026-09-22, when fresh input and cache reads were summed together; it is
+    kept as "unsplit" rather than guessed apart."""
+    if isinstance(value, dict):
+        return {k: int(value.get(k) or 0) for k in ("fresh_tokens", "cache_read_tokens", "unsplit_tokens")}
+    return {"fresh_tokens": 0, "cache_read_tokens": 0, "unsplit_tokens": int(value or 0)}
+
+
 def record_usage(endpoint_id: str, usage: dict | None) -> None:
-    tokens = _extract_total_tokens(usage or {})
-    if tokens <= 0:
+    """Add one turn to an endpoint's lifetime totals, keeping cache reads
+    apart from fresh tokens (new input, cache writes, output). A cache read
+    is the provider reusing a prompt it already has, at a fraction of the
+    price, so summing it in made a long, cache-warm Claude chat look like
+    ten times the spend it was."""
+    total = _extract_total_tokens(usage or {})
+    if total <= 0:
         return
+    cache_read = extract_cache_tokens(usage).get("cache_read_tokens") or 0
     data = read_json(USAGE_FILE, {})
-    data[endpoint_id] = data.get(endpoint_id, 0) + tokens
+    entry = _entry(data.get(endpoint_id))
+    entry["cache_read_tokens"] += cache_read
+    entry["fresh_tokens"] += max(total - cache_read, 0)
+    data[endpoint_id] = entry
     write_json_atomic(USAGE_FILE, data)
 
 
 def get_usage_summary() -> dict[str, dict]:
-    """{endpoint_id: {"total_tokens": int, "percentage": float}} — percentage
-    is this endpoint's share of the combined total across every endpoint
-    that has ever reported usage, not a percentage of any fixed budget/cap
-    (this app doesn't have one). An endpoint that's never reported usage
-    (or was just added) is simply absent, not shown at 0%."""
-    data = read_json(USAGE_FILE, {})
-    grand_total = sum(data.values())
-    if grand_total <= 0:
-        return {}
-    return {
-        endpoint_id: {"total_tokens": tokens, "percentage": round(tokens / grand_total * 100, 1)}
-        for endpoint_id, tokens in data.items()
-    }
+    """{endpoint_id: {"fresh_tokens", "cache_read_tokens", "unsplit_tokens",
+    "total_tokens"}} - tokens this JARVIS install has sent and received
+    through each endpoint. There is deliberately no percentage: the old one
+    was each endpoint's share of the combined total, which the Home card
+    labelled "% used" as if it were a quota. A subscription's real quota
+    comes from the provider, never from these counts. An endpoint that has
+    never reported usage is absent, not shown at zero."""
+    summary = {}
+    for endpoint_id, value in read_json(USAGE_FILE, {}).items():
+        entry = _entry(value)
+        entry["total_tokens"] = sum(entry.values())
+        if entry["total_tokens"] > 0:
+            summary[endpoint_id] = entry
+    return summary

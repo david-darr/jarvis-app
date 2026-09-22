@@ -30,6 +30,31 @@ function row(title, detail, iconName, onclick) {
     ]), ...(onclick ? [el("span", { class: "dashboard-row-arrow", text: "↗", "aria-hidden": "true" })] : []),
   ]);
 }
+function compactTokens(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "K";
+  return String(n);
+}
+
+// What a model row may honestly claim (2026-09-22). This used to show each
+// model's share of all JARVIS-recorded tokens labelled "% used", which read
+// as a quota and was inflated by cache reads. A subscription CLI's real usage
+// comes only from the provider's own limits, so those rows show nothing here
+// until that source is wired in (the parked desktop usage overlay reads it).
+// Everything else shows tokens actually spent through JARVIS, with cache
+// reuse - cheap re-reads of a prompt the provider already holds - kept apart.
+function usageLabel(endpoint, usage) {
+  if (!usage || endpoint.kind === "claude_cli" || endpoint.kind === "codex_cli") return null;
+  const spent = usage.fresh_tokens + usage.unsplit_tokens;
+  if (!spent) return null;
+  const cached = usage.cache_read_tokens ? ` · ${compactTokens(usage.cache_read_tokens)} reused from cache` : "";
+  return {
+    text: `${compactTokens(spent)} tokens via JARVIS${cached}`,
+    title: "Tokens this JARVIS install sent and received through this model: new input, cache writes and output. Not a quota.",
+  };
+}
+
 function relativeTime(timestamp) {
   const minutes = Math.max(0, Math.floor((Date.now() - timestamp * 1000) / 60000));
   if (minutes < 1) return "Just now";
@@ -142,9 +167,9 @@ export function render(container) {
     models.body.replaceChildren();
     if (!endpoints?.length) empty(models.body, "Connect a model in Settings to get started.", endpoints === null);
     else endpoints.forEach((endpoint) => {
-      const pct = usage?.[endpoint.id]?.percentage;
       const modelRow = row(endpoint.name, endpoint.model || endpoint.kind.replaceAll("_", " "), "brain", () => navigate("settings"));
-      if (typeof pct === "number" && Number.isFinite(pct)) modelRow.append(el("span", { class: "dashboard-model-usage", text: Math.round(pct) + "% used" }));
+      const label = usageLabel(endpoint, usage?.[endpoint.id]);
+      if (label) modelRow.append(el("span", { class: "dashboard-model-usage", text: label.text, title: label.title }));
       models.body.append(modelRow);
     });
     activity.body.replaceChildren();
