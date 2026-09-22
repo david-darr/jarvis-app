@@ -59,19 +59,15 @@ def capability_for(endpoint: dict) -> Capability:
     explicitly rather than silently retrying without tools the way ordinary
     Chats do (core/providers/openai_compatible.py).
 
-    `codex_cli`: the installed CLI takes structured tools only through MCP
-    servers it launches itself. A Swarm tool server for Codex needs the
-    authenticated per-attempt worker bridge from section 10 of the spec, which
-    is its own change set. Until that exists this reports no structured tools,
-    so admission blocks it with a specific reason instead of running a worker
-    that can talk but cannot act.
+    `codex_cli`: typed tools use an authenticated, attempt-scoped MCP bridge.
+    Installation and model availability are checked separately at admission.
     """
     kind = (endpoint or {}).get("kind") or "api"
     if kind == "claude_cli":
         return Capability(structured_tools=True, bounded_output=True, cancellable=True,
                           reports_usage=True, reports_quota=True)
     if kind == "codex_cli":
-        return Capability(structured_tools=False, bounded_output=True, cancellable=True,
+        return Capability(structured_tools=True, bounded_output=True, cancellable=True,
                           reports_usage=True, reports_quota=False)
     return Capability(structured_tools=True, bounded_output=True, cancellable=True,
                       reports_usage=True, reports_quota=False)
@@ -92,9 +88,9 @@ def build_worker(context: WorkerContext):
 def role_prompt(context: WorkerContext) -> str:
     """The worker's whole idea of who it is. Not JARVIS's landing zone.
 
-    A Swarm worker is not the owner's assistant: it has no vault, no chat
-    history and no repository. Saying so plainly is what stops it burning a
-    step trying to read files it cannot reach.
+    A Swarm worker is not the owner's assistant: it has no raw vault, chat
+    history or repository access. An opted-in company may receive bounded,
+    read-only memory tools instead.
     """
     agent, system = context.agent, context.system
     role = "lead" if context.is_lead else agent.get("role") or "specialist"
@@ -103,12 +99,17 @@ def role_prompt(context: WorkerContext) -> str:
         f"The team's mission: {system['mission']}",
         "",
         "How you work:",
-        "- You have no shell, no file system, no repository and no vault access. "
+        "- You have no shell, raw file system, repository or unrestricted vault access. "
         "Your only actions are the tools you were given. Do not claim to have run, read or written anything.",
         "- Call get_assigned_work first. It carries your objective, finished upstream work, your teammates' names, and unread messages.",
         "- Ask a teammate with send_message rather than assuming their interface or decision.",
         "- Think in the reply text if it helps, but every real action is a tool call.",
     ]
+    if getattr(context.tool_service, "memory", None) and context.tool_service.memory.enabled:
+        lines += [
+            "- search_memory and read_memory are bounded, read-only access to the JARVIS memory sources the owner enabled. "
+            "Search only when prior context would materially improve the work, and cite the returned reference in your result.",
+        ]
     if context.is_lead:
         lines += [
             "- You own the plan. Use assign_plan once you know what the work is, naming a teammate for each task. "
@@ -118,6 +119,11 @@ def role_prompt(context: WorkerContext) -> str:
             "move the company forward. Message a teammate only when your decision genuinely depends on their "
             "answer, because a step that runs out of exchanges ends without deciding anything.",
         ]
+        if getattr(context.tool_service, "scheduled", False):
+            lines += [
+                "- This is a continuing scheduled company. Use finish_shift when this work period has no more actionable work, "
+                "and preserve a handoff for the next shift. Use finish_mission only when the continuing mission itself is complete.",
+            ]
     else:
         lines += [
             "- Finish with submit_result when the objective is met, or report_blocker when it genuinely cannot be. One of the two ends your step.",

@@ -17,7 +17,7 @@ export function render(root, _tab, options = {}) {
   let disposed = false, version = 0, selected = null, current = null, unsubscribe = null, refreshTimer = null;
   let modal = null, panel = "tasks", pages = {}, ui = null;
   let workView = "chat", board = null, graph = null;
-  let connections = null, catalog = null;
+  let connections = null, catalog = null, projects = null;
   const request = (path, opts = {}) => api("/api/swarm" + path, { ...opts, signal: abort.signal });
   const mutate = (path, body, method = "POST") => request(path, { method, body: JSON.stringify(body) });
   const clearStream = () => { unsubscribe?.(); unsubscribe = null; clearTimeout(refreshTimer); };
@@ -42,7 +42,8 @@ export function render(root, _tab, options = {}) {
     dialog.addEventListener("close", () => {
       dialog.remove(); if (modal === dialog) modal = null;
       const replacement = previous?.dataset.focusKey && root.querySelector(`[data-focus-key="${CSS.escape(previous.dataset.focusKey)}"]`);
-      (previous?.isConnected ? previous : replacement)?.focus();
+      const focusTarget = previous?.isConnected ? previous : replacement;
+      setTimeout(() => focusTarget?.focus(), 0);
     });
     root.append(dialog);
     build(body, () => dialog.close());
@@ -65,6 +66,11 @@ export function render(root, _tab, options = {}) {
       catalog = models && typeof models === "object" ? models : {};
     }
     return connections;
+  }
+
+  async function loadProjects() {
+    if (projects === null) projects = await api("/api/projects", { signal: abort.signal }).catch(() => []);
+    return projects;
   }
 
   const connectionName = (id) => (connections || []).find(item => item.id === id)?.name || null;
@@ -116,20 +122,30 @@ export function render(root, _tab, options = {}) {
 
   function limitFields(title, value) {
     value ||= initialLimit();
-    const ceiling = el("input", { type: "number", min: "2", max: "1000000000", step: "1", value: value.ceiling, required: true });
+    const uncapped = el("input", { type: "checkbox", checked: value.ceiling == null });
+    const ceiling = el("input", { type: "number", min: "2", max: "1000000000", step: "1", value: value.ceiling ?? 25000, required: true });
     const threshold = el("input", { type: "number", min: "1", max: "100", step: "1", value: value.pause_percent, required: true });
     const reserve = el("input", { type: "number", min: "0", step: "1", value: value.checkpoint_reserve, required: true });
+    const update = () => {
+      ceiling.disabled = uncapped.checked;
+      reserve.disabled = uncapped.checked;
+      if (uncapped.checked) reserve.value = "0";
+    };
+    uncapped.addEventListener("change", update); update();
     return {
-      node: el("fieldset", { class: "swarm-limits" }, [el("legend", { text: title }), label("Token ceiling", ceiling), label("Pause at %", threshold), label("Checkpoint reserve", reserve)]),
-      read: () => ({ ceiling: Number(ceiling.value), pause_percent: Number(threshold.value), checkpoint_reserve: Number(reserve.value) }),
+      node: el("fieldset", { class: "swarm-limits" }, [el("legend", { text: title }),
+        label("No cumulative ceiling", uncapped), label("Token ceiling", ceiling), label("Pause at %", threshold),
+        label("Checkpoint reserve", reserve)]),
+      read: () => ({ ceiling: uncapped.checked ? null : Number(ceiling.value), pause_percent: Number(threshold.value),
+        checkpoint_reserve: uncapped.checked ? 0 : Number(reserve.value) }),
     };
   }
 
   async function setup(snapshot = null) {
     const setupVersion = version;
     const editingId = snapshot?.system.id;
-    let pools;
-    try { [pools] = await Promise.all([request("/pools"), loadConnections()]); }
+    let pools, availableProjects;
+    try { [pools, , availableProjects] = await Promise.all([request("/pools"), loadConnections(), loadProjects()]); }
     catch (problem) { toast(problem.message, "error"); return; }
     if (disposed || setupVersion !== version) return;
     showDialog(snapshot ? "Edit system" : "Create system", (host, close) => {
@@ -137,8 +153,41 @@ export function render(root, _tab, options = {}) {
       const name = el("input", { name: "name", required: true, maxlength: "120", value: snapshot?.system.name || "" });
       const mission = el("textarea", { name: "mission", required: true, maxlength: "10000", rows: "3" });
       mission.value = snapshot?.system.mission || "";
-      const mode = el("select", { name: "mode" }, [el("option", { value: "guided", text: "Guided" }), el("option", { value: "autonomous", text: "Autonomous" })]);
+      const mode = el("select", { name: "mode" }, [el("option", { value: "guided", text: "Guided" }),
+        el("option", { value: "autonomous", text: "Autonomous" }), el("option", { value: "scheduled", text: "Scheduled shifts" })]);
       mode.value = snapshot?.system.configuration.mode || "autonomous";
+      const savedSchedule = snapshot?.system.configuration.schedule || {};
+      const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      const days = dayNames.map((day, index) => {
+        const input = el("input", { type: "checkbox", value: String(index), checked: (savedSchedule.days || [0, 1, 2, 3, 4]).includes(index) });
+        return { input, node: label(day, input) };
+      });
+      const shiftStart = el("input", { type: "time", value: savedSchedule.start_time || "09:00", required: true });
+      const shiftEnd = el("input", { type: "time", value: savedSchedule.end_time || "17:00", required: true });
+      const maxCycles = el("input", { type: "number", min: "1", max: "50", step: "1", value: savedSchedule.max_cycles || 5, required: true });
+      const scheduledSpend = el("input", { type: "checkbox", checked: !!savedSchedule.auto_spend_confirmed });
+      const scheduleBox = el("fieldset", { class: "swarm-schedule" }, [el("legend", { text: "Scheduled work period" }),
+        el("p", { class: "muted", text: "JARVIS starts one durable shift in each local-time window while the app is running. Waiting costs no model tokens." }),
+        el("div", { class: "swarm-days" }, days.map(item => item.node)), label("Local start", shiftStart),
+        label("Local end", shiftEnd), label("Maximum cycles per shift", maxCycles),
+        label("Allow automatic provider spending during these shifts", scheduledSpend)]);
+      const updateSchedule = () => { scheduleBox.hidden = mode.value !== "scheduled"; };
+      mode.addEventListener("change", updateSchedule); updateSchedule();
+
+      const savedMemory = snapshot?.system.configuration.memory || {};
+      const memorySources = [["vault", "Vault notes"], ["sessions", "Past chats"], ["library", "Library documents"], ["project", "JARVIS Project"]]
+        .map(([source, text]) => {
+          const input = el("input", { type: "checkbox", value: source, checked: (savedMemory.sources || []).includes(source) });
+          return { source, input, node: label(text, input) };
+        });
+      const project = el("select", { "aria-label": "JARVIS Project" }, [el("option", { value: "", text: "Choose a project" }),
+        ...availableProjects.map(item => el("option", { value: item.id, text: item.name }))]);
+      project.value = savedMemory.project_id || "";
+      const maxMemory = el("input", { type: "number", min: "1", max: "5", step: "1", value: savedMemory.max_results || 5, required: true });
+      const memoryBox = el("fieldset", { class: "swarm-memory" }, [el("legend", { text: "JARVIS memory" }),
+        el("p", { class: "muted", text: "Workers can keyword-search only the sources you select, then read one bounded result. Every search and read is audited." }),
+        el("div", { class: "swarm-memory-sources" }, memorySources.map(item => item.node)), label("Project", project),
+        label("Maximum search results", maxMemory)]);
       const findLimit = (scope, id) => snapshot?.budgets.find(b => b.scope === scope && b.target === id);
       const systemLimit = limitFields("Company allocation", findLimit("system", editingId) || initialLimit(100000));
       const runLimit = limitFields("Per-run allocation", snapshot?.system.configuration.run_limit || initialLimit());
@@ -149,9 +198,20 @@ export function render(root, _tab, options = {}) {
       const poolWrap = el("div", {}, [poolLimit.node]);
       const updatePool = () => { poolWrap.hidden = !!snapshot || !!pool.value; };
       pool.addEventListener("change", updatePool); updatePool();
-      form.append(label("System name", name), label("Mission", mission), label("Intended operating mode", mode),
+      const existingPoolLimits = [];
+      if (snapshot) {
+        for (const poolId of [...new Set(snapshot.agents.map(agent => agent.pool_id))]) {
+          const currentLimit = findLimit("pool", poolId);
+          if (!currentLimit) continue;
+          const record = pools.find(item => item.id === poolId);
+          const fields = limitFields(`${record?.name || "Provider account"} (shared provider account)`, currentLimit);
+          fields.node.dataset.poolId = poolId;
+          existingPoolLimits.push({ id: poolId, fields });
+        }
+      }
+      form.append(label("System name", name), label("Mission", mission), label("Intended operating mode", mode), scheduleBox, memoryBox,
         el("p", { class: "muted", text: connections.length
-          ? "Give every teammate a connection. Workers have no shell, file or vault access - they plan, research, review and write. A connection that cannot take actions is flagged on the company once you save."
+          ? "Give every teammate a connection. Workers have no shell or raw file access. Enabled JARVIS memory is read-only and bounded."
           : "No model connections are available to you. Add one in Settings (or ask an admin) before this company can run." }));
       const members = [];
       const teamHost = el("div", { class: "swarm-form-team" });
@@ -198,10 +258,14 @@ export function render(root, _tab, options = {}) {
         const role = el("input", { required: true, maxlength: "120", value: data?.role || (isLead ? "Lead" : "") });
         const instructions = el("textarea", { rows: "2", maxlength: "10000" });
         instructions.value = data?.instructions || "";
-        const limits = limitFields("Agent allocation", findLimit("agent", data?.id) || initialLimit());
+        const memberLimit = findLimit("agent", data?.id) || initialLimit();
+        const limits = limitFields("Agent allocation", memberLimit);
+        const defaultStep = memberLimit.ceiling == null ? 50000 : Math.max(500, Math.floor(memberLimit.ceiling / 4));
+        const stepLimit = el("input", { type: "number", min: "500", max: "1000000000", step: "1", value: data?.step_limit || defaultStep, required: true });
         const connection = connectionFields(data);
         const row = el("fieldset", { class: "swarm-member-form" }, [el("legend", { text: isLead ? "Lead agent" : "Specialist" }),
-          label("Name", agentName), label("Role", role), label("Responsibilities", instructions), connection.node, limits.node]);
+          label("Name", agentName), label("Role", role), label("Responsibilities", instructions), connection.node,
+          label("Maximum tokens per worker step", stepLimit), limits.node]);
         const item = { node: row, isLead,
           fill: (person) => {
             if (!person) return;
@@ -209,7 +273,8 @@ export function render(root, _tab, options = {}) {
             role.value = person.role || role.value;
             instructions.value = person.instructions || instructions.value;
           },
-          read: () => ({ id: data?.id || null, name: agentName.value.trim(), role: role.value.trim(), instructions: instructions.value, limit: limits.read(), ...connection.read() }) };
+          read: () => ({ id: data?.id || null, name: agentName.value.trim(), role: role.value.trim(), instructions: instructions.value,
+            step_limit: Number(stepLimit.value), limit: limits.read(), ...connection.read() }) };
         members.push(item);
         if (!isLead) row.append(button("Remove specialist", () => { members.splice(members.indexOf(item), 1); row.remove(); }));
         teamHost.append(row);
@@ -217,9 +282,13 @@ export function render(root, _tab, options = {}) {
       memberFields(lead, true);
       for (const agent of snapshot?.agents.filter(a => !a.is_lead && a.enabled) || []) memberFields(agent, false);
       const add = button("Add specialist", () => { if (members.length < 21) memberFields(null, false); });
+      const poolControls = snapshot ? [
+        el("p", { class: "muted", text: "Changing a shared provider-account allocation affects every company that uses that provider account." }),
+        ...existingPoolLimits.map(item => item.fields.node),
+      ] : [label("Shared allocation group", pool), poolWrap];
       const limits = el("details", { class: "disclosure-panel" }, [el("summary", { text: "Usage limits" }),
         el("p", { class: "muted", text: "These are local token allocations, not your provider's remaining allowance. Provider quota is unavailable until connected. Sharing a group combines its allocation across your systems." }),
-        systemLimit.node, runLimit.node, label("Shared allocation group", pool), poolWrap]);
+        systemLimit.node, runLimit.node, ...poolControls]);
       const status = el("p", { role: "alert", class: "swarm-error" });
       const save = el("button", { type: "submit", class: "btn primary", text: "Save system" });
       form.append(designer(), teamHost, add, limits, status, el("div", { class: "swarm-actions" }, [button("Cancel", close), save]));
@@ -228,8 +297,16 @@ export function render(root, _tab, options = {}) {
         event.preventDefault(); if (save.disabled) return;
         const payload = { name: name.value.trim(), mission: mission.value.trim(), mode: mode.value,
           system_limit: systemLimit.read(), run_limit: runLimit.read(), pool_limit: poolLimit.read(), pool_id: pool.value || null,
+          schedule: { enabled: mode.value === "scheduled", days: days.filter(item => item.input.checked).map(item => Number(item.input.value)),
+            start_time: shiftStart.value, end_time: shiftEnd.value, max_cycles: Number(maxCycles.value),
+            auto_spend_confirmed: mode.value === "scheduled" && scheduledSpend.checked },
+          memory: { sources: memorySources.filter(item => item.input.checked).map(item => item.source),
+            project_id: project.value || null, max_results: Number(maxMemory.value) },
           lead: members.find(m => m.isLead).read(), specialists: members.filter(m => !m.isLead).map(m => m.read()) };
-        if (snapshot) payload.expected_revision = snapshot.system.revision;
+        if (snapshot) {
+          payload.expected_revision = snapshot.system.revision;
+          payload.pool_limits = existingPoolLimits.map(item => ({ id: item.id, limit: item.fields.read() }));
+        }
         const encoded = JSON.stringify(payload);
         if (pendingPayload !== encoded) { pendingCommand = command(); pendingPayload = encoded; }
         save.disabled = true; status.textContent = "";
@@ -293,20 +370,62 @@ export function render(root, _tab, options = {}) {
 
   async function lifecycle(action) {
     const id = selected, snapshot = current, token = version;
-    async function perform() {
+    async function perform(extra = {}) {
       if (!ui || token !== version || ui.busy) return;
       ui.busy = true;
       try {
-        await mutate(`/systems/${id}/${action}`, { command_id: command(), expected_revision: snapshot.system.revision });
+        await mutate(`/systems/${id}/${action}`, { command_id: command(), expected_revision: snapshot.system.revision, ...extra });
         await refresh(token);
       } catch (problem) { if (token === version) ui.notice.textContent = problem.message; }
       finally { if (ui && token === version) ui.busy = false; }
     }
-    if (action === "stop" || action === "archive") showDialog(action === "stop" ? "Stop this run?" : "Archive this system?", (host, close) => {
+    if (action === "start" || action === "resume") showDialog(action === "start" ? "Start this company?" : "Resume this company?", (host, close) => {
+      const systemLimit = snapshot.budgets.find(item => item.scope === "system" && item.target === id);
+      const runLimit = [...snapshot.budgets].reverse().find(item => item.scope === "run") || snapshot.system.configuration.run_limit;
+      const allocation = (name, value) => el("li", { text: `${name}: ${value.ceiling == null ? "no cumulative ceiling" : Number(value.ceiling).toLocaleString() + " tokens"}, pauses at ${value.pause_percent}%` });
+      const team = snapshot.agents.filter(agent => agent.enabled).map(agent => {
+        const connection = connectionName(agent.endpoint_id) || "Missing connection";
+        return el("li", { text: `${agent.name}: ${connection} · ${agent.model || "connection default"} · ${agent.effort || "default effort"}` });
+      });
+      host.append(
+        el("p", { text: "This can spend allowance on the providers below. JARVIS allocations pause local work; they are not provider billing caps." }),
+        el("h3", { text: "Local allocations" }),
+        el("ul", {}, [systemLimit ? allocation("Company", systemLimit) : null, runLimit ? allocation("This run", runLimit) : null]),
+        el("h3", { text: "Enabled teammates" }), el("ul", {}, team),
+        el("div", { class: "swarm-actions" }, [button("Cancel", close), button(action === "start" ? "Start and spend" : "Resume and spend", () => { close(); perform({ spend_confirmed: true }); }, { class: "btn primary" })]),
+      );
+    });
+    else if (action === "stop" || action === "archive") showDialog(action === "stop" ? "Stop this run?" : "Archive this system?", (host, close) => {
       host.append(el("p", { text: action === "stop" ? "The current run will be cancelled. Saved work and uncertain actions remain available." : "The system becomes read-only until restored." }),
         button("Cancel", close), button(action === "stop" ? "Stop run" : "Archive", () => { close(); perform(); }, { class: "btn danger" }));
     });
     else await perform();
+  }
+
+  function deleteSystem(event) {
+    const id = selected, snapshot = current, token = version;
+    const trigger = event?.currentTarget;
+    showDialog("Delete this company permanently?", (host, close) => {
+      const cancel = () => {
+        close();
+        setTimeout(() => (trigger?.isConnected ? trigger : root.querySelector('[data-focus-key="Delete"]'))?.focus(), 0);
+      };
+      const confirmation = el("input", { autocomplete: "off", "aria-label": "Type company name", placeholder: snapshot.system.name });
+      const remove = button("Delete permanently", async () => {
+        if (confirmation.value !== snapshot.system.name || token !== version) return;
+        remove.disabled = true;
+        try {
+          await mutate(`/systems/${id}`, { command_id: command(), expected_revision: snapshot.system.revision, confirmation: confirmation.value }, "DELETE");
+          close(); clearStream(); dropViews(); selected = null; current = null; ui = null; await home();
+        } catch (problem) { remove.disabled = false; host.querySelector('[role="alert"]').textContent = problem.message; }
+      }, { class: "btn danger", disabled: true });
+      confirmation.addEventListener("input", () => { remove.disabled = confirmation.value !== snapshot.system.name; });
+      host.append(el("p", { text: "This permanently removes the company, its messages, tasks, runs, usage records, and saved checkpoint records from JARVIS." }),
+        el("p", { text: `Type ${snapshot.system.name} to continue.` }), label("Company name", confirmation),
+        el("p", { role: "alert", class: "swarm-error" }),
+        el("div", { class: "swarm-actions" }, [button("Cancel", cancel), remove]));
+      queueMicrotask(() => confirmation.focus());
+    });
   }
 
   function workspace() {
@@ -453,6 +572,14 @@ export function render(root, _tab, options = {}) {
     if (mode === "autonomous" && snapshot.cycles) {
       ui.notice.append(el("p", { class: "muted", text: `Autonomous · ${snapshot.cycles} cycle${snapshot.cycles === 1 ? "" : "s"} so far` }));
     }
+    if (mode === "scheduled") {
+      const schedule = system.configuration.schedule || {};
+      const shift = pages.shifts?.items?.[0];
+      const detail = shift?.state === "open" ? `Shift open · ${shift.cycles} of ${schedule.max_cycles} cycles`
+        : shift ? `Last shift ${shift.state} · ${shift.cycles} cycle${shift.cycles === 1 ? "" : "s"}` : "Waiting for the first scheduled window";
+      ui.notice.append(el("p", { class: "muted", text: `Scheduled ${schedule.start_time}–${schedule.end_time} local time · ${detail}` }));
+      if (shift?.summary) ui.notice.append(el("p", { class: "swarm-conclusion", text: `Shift handoff — ${shift.summary}` }));
+    }
     const blockers = availability.blockers || [];
     if (blockers.length) {
       ui.notice.append(el("p", { text: "This company cannot start yet:" }),
@@ -460,14 +587,19 @@ export function render(root, _tab, options = {}) {
     } else {
       ui.notice.append(el("p", { text: availability.detail }));
     }
+    const focusedControl = ui.controls.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
     ui.controls.replaceChildren();
-    if (system.state === "archived") ui.controls.append(button("Restore", () => lifecycle("restore")));
+    if (system.state === "archived") ui.controls.append(button("Restore", () => lifecycle("restore")),
+      button("Delete", deleteSystem, { class: "btn danger" }));
     else {
       ui.controls.append(button("Edit setup", () => setup(current)),
         button(system.state === "paused" ? "Resume" : "Start", () => lifecycle(system.state === "paused" ? "resume" : "start"), { disabled: !availability.execution_available, title: availability.detail }),
         button("Pause", () => lifecycle("pause"), { disabled: system.state === "paused" || system.state === "pausing" || system.state === "stopped" }),
         button("Stop", () => lifecycle("stop"), { disabled: system.state === "stopped" }),
         button("Archive", () => lifecycle("archive")));
+    }
+    if (focusedControl && !modal) {
+      queueMicrotask(() => ui?.controls.querySelector(`[data-focus-key="${CSS.escape(focusedControl)}"]`)?.focus());
     }
     const waiting = snapshot.conclusion?.reason === "needs_owner";
     ui.composer.setAttribute("placeholder", waiting ? "Answer what the team asked for…" : "Give your lead an idea…");
@@ -572,6 +704,10 @@ export function render(root, _tab, options = {}) {
       case "system.created": return "Company created.";
       case "run.started": return `Run started: ${clip(data.objective)}`;
       case "run.completed": return "Cycle completed.";
+      case "shift.opened": return `Scheduled shift opened for ${clip(data.starts_at)}.`;
+      case "shift.finished": return `Shift finished: ${clip(data.summary) || data.reason}.`;
+      case "memory.search": return `${who} searched enabled JARVIS memory for ${clip(data.query)}.`;
+      case "memory.read": return `${who} read ${clip(data.ref)} from enabled JARVIS memory.`;
       case "task.unblocked": return `${who} can continue: ${clip(data.note)}`;
       case "mission.reopened": return "You answered, so the work started again.";
       case "system.reopened": return "The company was started again after being stopped.";
@@ -668,7 +804,7 @@ export function render(root, _tab, options = {}) {
       for (const budget of current.budgets) {
         const name = budget.scope === "agent" ? current.agents.find(a => a.id === budget.target)?.name : { system: "Company", run: "Run", pool: "Shared allocation group" }[budget.scope];
         const row = el("article", { class: "swarm-budget" }, [el("strong", { text: name || budget.scope }),
-          el("p", { text: `${budget.used.toLocaleString()} recorded + ${budget.held.toLocaleString()} held / ${budget.ceiling.toLocaleString()} tokens` }),
+          el("p", { text: `${budget.used.toLocaleString()} recorded + ${budget.held.toLocaleString()} held / ${budget.ceiling == null ? "no cumulative ceiling" : budget.ceiling.toLocaleString() + " tokens"}` }),
           el("small", { class: "muted", text: `Pause at ${budget.pause_percent}%; checkpoint reserve ${budget.checkpoint_reserve}` })]);
         host.append(row);
       }

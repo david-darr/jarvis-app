@@ -175,15 +175,51 @@ _LEAD = {
     },
 }
 
+_MEMORY = {
+    "search_memory": {
+        "description": "Search this company's enabled JARVIS memory sources. Returns a few short snippets and references. Use it only when prior context would materially help the assigned work.",
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    },
+    "read_memory": {
+        "description": "Read one bounded JARVIS memory item using a reference returned by search_memory.",
+        "parameters": {
+            "type": "object",
+            "properties": {"ref": {"type": "string"}},
+            "required": ["ref"],
+        },
+    },
+}
+
+_FINISH_SHIFT = {
+    "finish_shift": {
+        "description": "End this scheduled work shift because its useful work is complete or no actionable work remains. Preserve a concise handoff for the next shift without ending the continuing company mission.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string"},
+                "next": {"type": "string", "description": "The most useful next work, if any"},
+            },
+            "required": ["summary"],
+        },
+    },
+}
+
 
 class ToolService:
     """One instance per attempt. Holds no credential and no model state."""
 
-    def __init__(self, store, assignment=None, *, is_lead):
+    def __init__(self, store, assignment=None, *, is_lead, memory=None, scheduled=False):
         self.store = store
         self.assignment = assignment
         self.is_lead = is_lead
+        self.memory = memory
+        self.scheduled = scheduled
         self.terminal = None
+        self.memory_refs = set()
 
     def bind(self, assignment):
         """The runtime creates the assignment, so identity arrives here, once.
@@ -195,11 +231,17 @@ class ToolService:
             raise Conflict("A tool service cannot be reused across attempts")
         self.assignment = assignment
         self.terminal = None
+        self.memory_refs.clear()
         return self
 
     @property
     def definitions(self) -> dict:
-        return _LEAD if self.is_lead else _SPECIALIST
+        definitions = dict(_LEAD if self.is_lead else _SPECIALIST)
+        if self.memory and self.memory.enabled:
+            definitions.update(_MEMORY)
+        if self.is_lead and self.scheduled:
+            definitions.update(_FINISH_SHIFT)
+        return definitions
 
     def schemas(self) -> list[dict]:
         """OpenAI-shaped function definitions; adapters translate as needed."""
@@ -258,6 +300,9 @@ class ToolService:
                 for task in waiting:
                     lines.append(f"- {task['id']} — {task['objective']} (from {names.get(task['agent_id'], 'a teammate')}): "
                                  f"{_summarize(task.get('result'))}")
+            last_shift = self.store.latest_shift_summary(assignment.system_id)
+            if last_shift:
+                lines.append("Previous shift handoff: " + last_shift[:2000])
         messages = self.store.inbox(assignment.agent_id)
         if messages:
             names = {agent["id"]: agent["name"] for agent in team}
@@ -311,6 +356,35 @@ class ToolService:
         self.terminal = {"status": "concluded", "summary": summary, "delivered": delivered}
         return "Mission recorded as complete. No further cycles will start."
 
+    def _finish_shift(self, arguments):
+        if not self.is_lead or not self.scheduled:
+            raise ToolRejected("Only the lead of a scheduled company can end a shift.")
+        summary = _text(arguments.get("summary"), "summary", 4000)
+        next_work = (arguments.get("next") or "").strip()[:4000]
+        self.terminal = {"status": "shift_complete", "summary": summary, "next": next_work}
+        return "Shift handoff recorded. The continuing mission remains available for its next scheduled window."
+
+    def _search_memory(self, arguments):
+        if not self.memory or not self.memory.enabled:
+            raise ToolRejected("JARVIS memory is not enabled for this company.")
+        query = _text(arguments.get("query"), "query", 500)
+        results = self.memory.search(query)
+        self.memory_refs.update(item.get("ref") for item in results if item.get("ref"))
+        self.store.record_memory_access(self.assignment, "memory.search",
+                                        {"query": query, "results": len(results)})
+        return json.dumps(results, ensure_ascii=False)
+
+    def _read_memory(self, arguments):
+        if not self.memory or not self.memory.enabled:
+            raise ToolRejected("JARVIS memory is not enabled for this company.")
+        reference = _text(arguments.get("ref"), "ref", 1000)
+        if reference not in self.memory_refs:
+            raise ToolRejected("Read a reference returned by search_memory in this worker step.")
+        text = self.memory.read(reference)
+        self.store.record_memory_access(self.assignment, "memory.read",
+                                        {"ref": reference, "characters": len(text)})
+        return f"Source {reference}:\n{text}"
+
     def _review_work(self, arguments):
         if not self.is_lead:
             raise ToolRejected("Only the lead reviews submitted work.")
@@ -335,6 +409,22 @@ class ToolService:
     def _assign_plan(self, arguments):
         if not self.is_lead:
             raise ToolRejected("Only the lead assigns work.")
+        objective = self.assignment.objective if self.assignment else ""
+        review_step = objective.startswith("Review the ") and objective.endswith(
+            " submitted task(s) and decide on each one.")
+        if review_step and not self.store.tasks_in_review(self.assignment.system_id):
+            ending = "finish_mission, or finish_shift for a continuing scheduled mission"
+            raise ToolRejected(
+                "This review step has no submitted work remaining; its decisions were already recorded. "
+                f"Do not assign replacement work. If the mission is complete, call {ending}; "
+                "otherwise leave genuinely new work to the next company cycle.")
+        for task in self.store.tasks_in_review(self.assignment.system_id):
+            try:
+                status = json.loads(task.get("result") or "{}").get("status")
+            except (TypeError, ValueError):
+                status = None
+            if status == "submitted":
+                raise ToolRejected("Review submitted work with review_work before assigning more.")
         tasks = _as_list(arguments.get("tasks"), "tasks")
         if len(tasks) > MAX_TASKS:
             raise ToolRejected(f"Assign at most {MAX_TASKS} tasks at a time")

@@ -107,7 +107,7 @@ class StoreTests(Fixture, unittest.TestCase):
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             futures = [executor.submit(open_store) for _ in range(2)]
-            self.assertEqual([future.result() for future in futures], [3, 3])
+            self.assertEqual([future.result() for future in futures], [4, 4])
 
     def test_single_runtime_owner_and_expired_owner_fenced(self):
         self.own()
@@ -373,6 +373,29 @@ class StoreTests(Fixture, unittest.TestCase):
         self.assertTrue(limit.admits(20, 30, 20))
         self.assertFalse(limit.admits(20, 30, 21))
         self.assertTrue(limit.exhausted(70))
+        uncapped = BudgetLimit(None)
+        self.assertTrue(uncapped.admits(10**12, 10**12, 10**12))
+        self.assertFalse(uncapped.exhausted(10**12))
+        self.assertIsNone(uncapped.work_ceiling)
+        with self.assertRaises(ValueError):
+            BudgetLimit(None, checkpoint_reserve=1)
+
+    def test_scheduled_windows_are_durable_and_count_only_new_runs(self):
+        shift, created = self.store.ensure_shift(
+            self.system, "2026-09-21@09:00", "2026-09-21T09:00:00-04:00", "2026-09-21T17:00:00-04:00")
+        replay, created_again = self.store.ensure_shift(
+            self.system, "2026-09-21@09:00", "ignored", "ignored")
+        self.assertTrue(created)
+        self.assertFalse(created_again)
+        self.assertEqual(replay["id"], shift["id"])
+        self.store.db.execute("UPDATE runs SET state='completed' WHERE id=?", (self.run,))
+        self.store.db.execute("UPDATE systems SET state='idle' WHERE id=?", (self.system,))
+        run = self.store.create_run(self.system, "Scheduled work", BudgetLimit(None), shift_id=shift["id"])
+        self.store.count_shift_cycle(shift["id"])
+        self.assertEqual(self.store.active_shift(self.system)["cycles"], 1)
+        self.assertEqual(self.store.run_count(self.system, shift_id=shift["id"]), 1)
+        self.assertIsNone(self.store.db.execute(
+            "SELECT ceiling FROM budgets WHERE scope='run' AND target=?", (run,)).fetchone()[0])
 
 
 class FakeWorker:

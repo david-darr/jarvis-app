@@ -71,11 +71,14 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
-    async def action(self, system, action, command=None, revision=None, user="a"):
+    async def action(self, system, action, command=None, revision=None, user="a", spend_confirmed=None):
         if revision is None:
             revision = (await self.snapshot(system, user))["system"]["revision"]
+        if spend_confirmed is None:
+            spend_confirmed = action in ("start", "resume")
         return await self.call("POST", f"/systems/{system}/{action}", user=user,
-                               body={"command_id": command or action, "expected_revision": revision})
+                               body={"command_id": command or action, "expected_revision": revision,
+                                     "spend_confirmed": spend_confirmed})
 
     async def test_authentication_and_internal_tool_not_human(self):
         self.assertEqual((await self.call("GET", "/systems", user=None)).status_code, 401)
@@ -99,6 +102,31 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["availability"]["code"], "setup_blocked")
         self.assertEqual((await self.call("POST", "/systems", body={**setup_body(), "name": "Changed"})).status_code, 409)
         self.assertEqual((await self.call("GET", "/systems")).json()["total"], 1)
+
+    async def test_scheduled_uncapped_company_persists_shift_memory_and_step_bounds(self):
+        uncapped = {"ceiling": None, "pause_percent": 75, "checkpoint_reserve": 0}
+        schedule = {"enabled": True, "days": [0, 2, 4], "start_time": "09:30", "end_time": "13:00",
+                    "max_cycles": 7, "auto_spend_confirmed": True}
+        body = setup_body("scheduled-create")
+        body.update({"mode": "scheduled", "schedule": schedule,
+                     "memory": {"sources": ["vault", "sessions"], "project_id": None, "max_results": 3},
+                     "system_limit": uncapped, "run_limit": uncapped, "pool_limit": uncapped})
+        body["lead"] = {**body["lead"], "limit": uncapped, "step_limit": 12000}
+        body["specialists"] = [{**body["specialists"][0], "limit": uncapped, "step_limit": 8000}]
+        response = await self.call("POST", "/systems", body=body)
+        self.assertEqual(response.status_code, 201, response.text)
+        snapshot = await self.snapshot(response.json()["id"])
+        self.assertEqual(snapshot["system"]["configuration"]["schedule"], schedule)
+        self.assertEqual(snapshot["system"]["configuration"]["memory"]["sources"], ["vault", "sessions"])
+        self.assertTrue(all(limit["ceiling"] is None for limit in snapshot["budgets"]))
+        self.assertEqual(sorted(agent["step_limit"] for agent in snapshot["agents"]), [8000, 12000])
+
+        invalid = setup_body("bad-schedule")
+        invalid.update({"mode": "scheduled", "schedule": {**schedule, "auto_spend_confirmed": False}})
+        self.assertEqual((await self.call("POST", "/systems", body=invalid)).status_code, 422)
+        missing_project = setup_body("bad-project")
+        missing_project["memory"] = {"sources": ["project"], "project_id": "does-not-exist", "max_results": 2}
+        self.assertEqual((await self.call("POST", "/systems", body=missing_project)).status_code, 422)
 
     async def test_snapshot_dependencies_are_scoped_to_the_system(self):
         """The work graph's edges: both ends must resolve inside this system."""
@@ -138,6 +166,24 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         # The global reading stays about the coordinator, not any one team.
         self.assertTrue(self.service.status()["execution_available"])
         self.assertEqual(self.service.status()["blockers"], [])
+
+    async def test_codex_admission_names_missing_installation_and_model(self):
+        system = await self.create()
+        endpoint = {"id": "codex", "name": "Codex", "kind": "codex_cli", "model": "gpt-5.6-luna"}
+        with patch.object(SwarmService, "_connection", return_value=endpoint), \
+             patch("core.swarm.adapters.codex_worker.installation_blocker", return_value="Codex CLI executable not found."):
+            snapshot = await self.snapshot(system)
+            self.assertIn("PM (Codex): Codex CLI executable not found.", snapshot["availability"]["blockers"])
+            self.assertEqual((await self.action(system, "start")).status_code, 409)
+            self.assertEqual(self.service.store.db.execute("SELECT COUNT(*) FROM runs").fetchone()[0], 0)
+        with patch.object(SwarmService, "_connection", return_value=endpoint), \
+             patch("core.swarm.adapters.codex_worker.installation_blocker", return_value=None), \
+             patch("core.swarm.adapters.codex_worker.model_record", return_value=None):
+            self.assertIn("Choose an available model", (await self.snapshot(system))["availability"]["detail"])
+        with patch.object(SwarmService, "_connection", return_value=endpoint), \
+             patch("core.swarm.adapters.codex_worker.installation_blocker", return_value=None), \
+             patch("core.swarm.adapters.codex_worker.model_record", return_value={"slug": "gpt-5.6-luna"}):
+            self.assertTrue((await self.snapshot(system))["availability"]["execution_available"])
 
     async def test_reconcile_requires_evidence_and_an_unknown_worker(self):
         """The only route out of an unconfirmed stop, and its conditions."""
@@ -304,6 +350,159 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.call("PATCH", f"/systems/{system}", body=body)).status_code, 409)
         self.assertEqual((await self.snapshot(system))["system"]["name"], "Renamed")
 
+    async def test_edit_existing_shared_pool_limit_is_owned_scoped_and_idempotent(self):
+        system = await self.create()
+        snapshot = await self.snapshot(system)
+        pool_id = snapshot["agents"][0]["pool_id"]
+        peer = await self.create(command="peer", name="Peer company", pool_id=pool_id)
+        unrelated = await self.create(command="unrelated", name="Unrelated company")
+        unrelated_pool = (await self.snapshot(unrelated))["agents"][0]["pool_id"]
+        foreign = await self.create(user="b", command="foreign", name="Foreign company")
+        foreign_pool = (await self.snapshot(foreign, user="b"))["agents"][0]["pool_id"]
+
+        body = setup_body("raise-shared-pool")
+        body["expected_revision"] = snapshot["system"]["revision"]
+        body["lead"]["id"] = snapshot["agents"][0]["id"]
+        body["specialists"][0]["id"] = snapshot["agents"][1]["id"]
+        body["pool_limits"] = [{"id": pool_id, "limit": {
+            "ceiling": 30000, "pause_percent": 75, "checkpoint_reserve": 200}}]
+        for _ in range(2):
+            response = await self.call("PATCH", f"/systems/{system}", body=body)
+            self.assertEqual(response.status_code, 200, response.text)
+        shared = self.service.store.db.execute(
+            "SELECT * FROM budgets WHERE scope='pool' AND target=?", (pool_id,)).fetchone()
+        self.assertEqual((shared["ceiling"], shared["pause_percent"], shared["checkpoint_reserve"]),
+                         (30000, 75, 200))
+        peer_pool = next(item for item in (await self.snapshot(peer))["budgets"]
+                         if item["scope"] == "pool" and item["target"] == pool_id)
+        self.assertEqual(peer_pool["ceiling"], 30000, "a shared provider account has one allocation")
+
+        revision = (await self.snapshot(system))["system"]["revision"]
+        for command, limits, expected_status in (
+            ("duplicate-pool", [body["pool_limits"][0], body["pool_limits"][0]], 422),
+            ("unrelated-pool", [{"id": unrelated_pool, "limit": body["pool_limits"][0]["limit"]}], 404),
+            ("foreign-pool", [{"id": foreign_pool, "limit": body["pool_limits"][0]["limit"]}], 404),
+        ):
+            invalid = copy.deepcopy(body)
+            invalid.update(command_id=command, expected_revision=revision, name="Must roll back",
+                           pool_limits=limits)
+            response = await self.call("PATCH", f"/systems/{system}", body=invalid)
+            self.assertEqual(response.status_code, expected_status, response.text)
+            self.assertEqual((await self.snapshot(system))["system"]["name"], "App company")
+            self.assertEqual(self.service.store.db.execute(
+                "SELECT ceiling FROM budgets WHERE scope='pool' AND target=?", (pool_id,)).fetchone()[0], 30000)
+
+    async def budget_edit_fixture(self):
+        body = setup_body()
+        connection = patch.object(SwarmService, "_resolved", return_value={
+            "id": "fixture", "name": "Fixture", "kind": "api", "base_url": "http://fixture/v1",
+            "model": "fixture", "api_key": None, "num_ctx": None})
+        connection.start()
+        self.addCleanup(connection.stop)
+        roomy = {"ceiling": 200000, "pause_percent": 80, "checkpoint_reserve": 0}
+        body.update(mode="guided", system_limit=roomy, pool_limit=roomy,
+                    run_limit={**roomy, "ceiling": 25000})
+        body["lead"]["limit"] = body["specialists"][0]["limit"] = roomy
+        body["lead"]["endpoint_id"] = body["specialists"][0]["endpoint_id"] = "fixture"
+        response = await self.call("POST", "/systems", body=body)
+        self.assertEqual(response.status_code, 201, response.text)
+        system = response.json()["id"]
+        snapshot = await self.snapshot(system)
+        body["lead"]["id"] = snapshot["agents"][0]["id"]
+        body["specialists"][0]["id"] = snapshot["agents"][1]["id"]
+        return system, body, roomy
+
+    async def test_edit_run_allocation_unblocks_the_existing_paused_run(self):
+        system, body, roomy = await self.budget_edit_fixture()
+        store, runtime = self.service.store, self.service.runtime
+        lead = body["lead"]["id"]
+        # A genuine completed run establishes history that must stay unchanged.
+        closed = store.create_run(system, "Previous work", BudgetLimit(**body["run_limit"]))
+        old_task = store.create_task(system, closed, lead, "Previous task", command_id="old")
+        attempt = store.reserve(old_task, runtime.runtime_id, runtime.generation, 1000)
+        store.begin(attempt, runtime.runtime_id, runtime.generation)
+        store.record_usage(attempt, "old-usage", 1000)
+        store.finish(attempt, runtime.runtime_id, runtime.generation, {"done": True}, usage_complete=True)
+        store.accept_result(old_task, expected_revision=store.get_task(old_task)["revision"], evidence="Verified")
+        old_attempt = store.get_attempt(attempt)
+        old_budget = dict(store.db.execute("SELECT * FROM budgets WHERE scope='run' AND target=?", (closed,)).fetchone())
+        run = store.create_run(system, "Current work", BudgetLimit(**body["run_limit"]))
+        task = store.create_task(system, run, lead, "Current task", command_id="current")
+        self.assertIsNone(store.reserve(task, runtime.runtime_id, runtime.generation, 50000))
+        runtime._observe()
+        self.assertEqual(store.get_system(system)["state"], "paused")
+
+        body.update(command_id="raise-run", expected_revision=store.get_system(system)["revision"], run_limit=roomy)
+        for _ in range(2):  # replay is the same edit, not a second mutation
+            response = await self.call("PATCH", f"/systems/{system}", body=body)
+            self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(store.db.execute("SELECT ceiling FROM budgets WHERE scope='run' AND target=?", (run,)).fetchone()[0], 200000)
+        self.assertEqual(store.get_system(system)["state"], "paused", "saving does not spend or resume")
+        self.assertEqual(dict(store.db.execute("SELECT * FROM budgets WHERE scope='run' AND target=?", (closed,)).fetchone()), old_budget)
+        self.assertEqual(store.get_attempt(attempt), old_attempt)
+        with patch.object(SwarmService, "_connection", return_value={"name": "Fixture", "kind": "api"}), \
+             patch.object(self.service, "_dispatch"):
+            response = await self.action(system, "resume")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(store.open_run(system)["id"], run)
+        self.assertIsNotNone(store.reserve(task, runtime.runtime_id, runtime.generation, 50000))
+
+    async def test_run_limit_edit_preserves_usage_and_holds_and_rejects_underfunding(self):
+        system, body, roomy = await self.budget_edit_fixture()
+        store, runtime = self.service.store, self.service.runtime
+        run = store.create_run(system, "Interrupted work", BudgetLimit(**body["run_limit"]))
+        task = store.create_task(system, run, body["lead"]["id"], "Work", command_id="work")
+        attempt = store.reserve(task, runtime.runtime_id, runtime.generation, 10000)
+        store.begin(attempt, runtime.runtime_id, runtime.generation)
+        store.record_usage(attempt, "partial", 2000)
+        store.interrupt(attempt, runtime.runtime_id, runtime.generation, stopped=True, reason="manual_pause")
+        runtime._observe()
+        before = store.get_attempt(attempt)
+        self.assertEqual((before["used"], before["held"]), (2000, 8000))
+        revision = store.get_system(system)["revision"]
+        body.update(command_id="too-small", expected_revision=revision,
+                    name="Must roll back", run_limit={**roomy, "ceiling": 10000},
+                    system_limit={**roomy, "ceiling": 300000})
+        response = await self.call("PATCH", f"/systems/{system}", body=body)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("recorded and reserved usage", response.text)
+        self.assertEqual(store.get_system(system)["revision"], revision)
+        self.assertNotEqual(store.get_system(system)["name"], "Must roll back")
+        self.assertEqual(store.db.execute("SELECT ceiling FROM budgets WHERE scope='system' AND target=?", (system,)).fetchone()[0], 200000)
+        self.assertEqual(store.db.execute("SELECT ceiling FROM budgets WHERE scope='run' AND target=?", (run,)).fetchone()[0], 25000)
+        body.update(command_id="raise", run_limit=roomy)
+        response = await self.call("PATCH", f"/systems/{system}", body=body)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(store.get_attempt(attempt), before)
+        self.assertEqual(store.db.execute("SELECT ceiling FROM budgets WHERE scope='run' AND target=?", (run,)).fetchone()[0], 200000)
+
+    async def test_pool_limit_edit_rejects_underfunding_and_rolls_back_the_whole_update(self):
+        system, body, roomy = await self.budget_edit_fixture()
+        store, runtime = self.service.store, self.service.runtime
+        pool_id = (await self.snapshot(system))["agents"][0]["pool_id"]
+        run = store.create_run(system, "Interrupted work", BudgetLimit(**body["run_limit"]))
+        task = store.create_task(system, run, body["lead"]["id"], "Work", command_id="pool-work")
+        attempt = store.reserve(task, runtime.runtime_id, runtime.generation, 10000)
+        store.begin(attempt, runtime.runtime_id, runtime.generation)
+        store.record_usage(attempt, "partial", 2000)
+        store.interrupt(attempt, runtime.runtime_id, runtime.generation, stopped=True, reason="manual_pause")
+        runtime._observe()
+        before = store.get_attempt(attempt)
+        revision = store.get_system(system)["revision"]
+        body.update(command_id="underfund-pool", expected_revision=revision, name="Must roll back",
+                    system_limit={**roomy, "ceiling": 300000},
+                    pool_limits=[{"id": pool_id, "limit": {**roomy, "ceiling": 10000}}])
+        response = await self.call("PATCH", f"/systems/{system}", body=body)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("recorded and reserved usage", response.text)
+        self.assertEqual(store.get_system(system)["revision"], revision)
+        self.assertNotEqual(store.get_system(system)["name"], "Must roll back")
+        self.assertEqual(store.db.execute(
+            "SELECT ceiling FROM budgets WHERE scope='system' AND target=?", (system,)).fetchone()[0], 200000)
+        self.assertEqual(store.db.execute(
+            "SELECT ceiling FROM budgets WHERE scope='pool' AND target=?", (pool_id,)).fetchone()[0], 200000)
+        self.assertEqual(store.get_attempt(attempt), before)
+
     async def test_queued_messages_and_cursor_pagination(self):
         system = await self.create()
         first = (await self.snapshot(system))["event_cursor"]
@@ -330,6 +529,28 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.store.db.execute("SELECT COUNT(*) FROM runs").fetchone()[0], 0)
         self.assertEqual(self.service.cycles, {})
 
+    async def test_start_and_resume_require_explicit_spend_confirmation(self):
+        system, _, _ = await self.budget_edit_fixture()
+        connection = {"id": "fixture", "name": "Fixture", "kind": "api", "model": "fixture"}
+        with patch.object(SwarmService, "_connection", return_value=connection), \
+             patch.object(self.service, "_dispatch"):
+            revision = (await self.snapshot(system))["system"]["revision"]
+            response = await self.action(system, "start", command="unconfirmed-start", revision=revision,
+                                         spend_confirmed=False)
+            self.assertEqual(response.status_code, 409, response.text)
+            self.assertIn("Confirm provider spending", response.json()["detail"])
+            self.assertEqual(self.service.store.db.execute("SELECT COUNT(*) FROM runs").fetchone()[0], 0)
+            self.assertEqual((await self.action(system, "start", command="confirmed-start",
+                                                revision=revision)).status_code, 200)
+            await self.action(system, "pause", command="pause-for-confirmation")
+            revision = (await self.snapshot(system))["system"]["revision"]
+            response = await self.action(system, "resume", command="unconfirmed-resume", revision=revision,
+                                         spend_confirmed=False)
+            self.assertEqual(response.status_code, 409, response.text)
+            self.assertEqual((await self.snapshot(system))["system"]["state"], "paused")
+            self.assertEqual((await self.action(system, "resume", command="confirmed-resume",
+                                                revision=revision)).status_code, 200)
+
     async def test_pause_stop_archive_restore_and_retry(self):
         system = await self.create()
         self.assertEqual((await self.action(system, "pause")).status_code, 200)
@@ -345,6 +566,97 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.call("POST", f"/systems/{system}/checkpoints", body={"command_id": "archive-save"})).status_code, 409)
         self.assertEqual((await self.call("GET", f"/systems/{system}")).headers["cache-control"], "no-store")
         self.assertEqual((await self.action(system, "restore")).status_code, 200)
+
+    async def test_delete_requires_archived_owned_current_exact_confirmation(self):
+        system = await self.create(name="Exact company")
+        revision = (await self.snapshot(system))["system"]["revision"]
+        body = {"command_id": "delete", "expected_revision": revision, "confirmation": "Exact company"}
+        self.assertEqual((await self.call("DELETE", f"/systems/{system}", body=body)).status_code, 409)
+        self.assertEqual((await self.call("DELETE", f"/systems/{system}", user="b", body=body)).status_code, 404)
+        await self.action(system, "archive")
+        revision = (await self.snapshot(system))["system"]["revision"]
+        self.assertEqual((await self.call("DELETE", f"/systems/{system}", body={**body,
+            "command_id": "wrong-name", "expected_revision": revision, "confirmation": "exact company"})).status_code, 409)
+        self.assertEqual((await self.call("DELETE", f"/systems/{system}", body={**body,
+            "command_id": "stale-delete"})).status_code, 409)
+        self.assertEqual((await self.snapshot(system))["system"]["name"], "Exact company")
+
+    async def test_delete_cleans_company_data_replays_and_preserves_shared_pool(self):
+        shared = await self.create(command="shared", name="Shared company")
+        shared_pool = (await self.snapshot(shared))["agents"][0]["pool_id"]
+        peer = await self.create(command="peer", name="Peer company", pool_id=shared_pool)
+        private = await self.create(command="private", name="Private company")
+        private_snapshot = await self.snapshot(private)
+        private_pool = private_snapshot["agents"][0]["pool_id"]
+        store, runtime = self.service.store, self.service.runtime
+        lead = private_snapshot["agents"][0]["id"]
+        run = store.create_run(private, "Recorded work", BudgetLimit(10000))
+        task = store.create_task(private, run, lead, "Do work", command_id="delete-task")
+        attempt = store.reserve(task, runtime.runtime_id, runtime.generation, 500)
+        store.begin(attempt, runtime.runtime_id, runtime.generation)
+        store.worker_event(attempt, runtime.runtime_id, runtime.generation, "visible", "visible_text", {"text": "Working"})
+        store.worker_event(attempt, runtime.runtime_id, runtime.generation, "action-start", "action_started",
+                           {"action_id": "a1", "intent": {"kind": "review"}})
+        store.worker_event(attempt, runtime.runtime_id, runtime.generation, "action-finish", "action_finished",
+                           {"action_id": "a1", "result": {"ok": True}})
+        store.record_usage(attempt, "usage", 100)
+        store.finish(attempt, runtime.runtime_id, runtime.generation, {"done": True}, usage_complete=True)
+        store.accept_result(task, expected_revision=store.get_task(task)["revision"], evidence="Checked")
+        await self.call("POST", f"/systems/{private}/messages", body={"command_id": "delete-message", "body": "Keep this"})
+        await self.call("POST", f"/systems/{private}/checkpoints", body={"command_id": "delete-checkpoint"})
+        await self.action(private, "archive", command="archive-private")
+        revision = (await self.snapshot(private))["system"]["revision"]
+        delete = {"command_id": "delete-private", "expected_revision": revision, "confirmation": "Private company"}
+        first = await self.call("DELETE", f"/systems/{private}", body=delete)
+        second = await self.call("DELETE", f"/systems/{private}", body=delete)
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.json(), first.json())
+        self.assertEqual((await self.call("GET", f"/systems/{private}")).status_code, 404)
+        for table in ("systems", "agents", "agent_settings", "runs", "tasks", "attempts", "usage",
+                      "actions", "worker_events", "events", "messages", "checkpoints", "dependencies"):
+            if table == "systems":
+                count = store.db.execute("SELECT COUNT(*) FROM systems WHERE id=?", (private,)).fetchone()[0]
+            elif table in ("usage", "actions", "worker_events"):
+                count = store.db.execute(f"SELECT COUNT(*) FROM {table} WHERE attempt_id=?", (attempt,)).fetchone()[0]
+            elif table == "agent_settings":
+                count = store.db.execute("SELECT COUNT(*) FROM agent_settings WHERE agent_id=?", (lead,)).fetchone()[0]
+            elif table == "dependencies":
+                count = store.db.execute("SELECT COUNT(*) FROM dependencies WHERE task_id=? OR depends_on=?", (task, task)).fetchone()[0]
+            else:
+                count = store.db.execute(f"SELECT COUNT(*) FROM {table} WHERE system_id=?", (private,)).fetchone()[0]
+            self.assertEqual(count, 0, table)
+        self.assertEqual(store.db.execute("SELECT COUNT(*) FROM budgets WHERE target IN (?,?,?)",
+                                          (private, lead, run)).fetchone()[0], 0)
+        self.assertIsNone(store.db.execute("SELECT 1 FROM commands WHERE scope=?", (private,)).fetchone())
+        self.assertIsNone(store.db.execute("SELECT 1 FROM commands WHERE scope='owner:alice' AND json_extract(result, '$.id')=?",
+                                           (private,)).fetchone())
+        self.assertIsNotNone(store.db.execute("SELECT 1 FROM commands WHERE scope='owner-delete:alice' AND command_id='delete-private'").fetchone())
+        self.assertIsNone(store.db.execute("SELECT 1 FROM pools WHERE id=?", (private_pool,)).fetchone())
+
+        await self.action(shared, "archive", command="archive-shared")
+        revision = (await self.snapshot(shared))["system"]["revision"]
+        response = await self.call("DELETE", f"/systems/{shared}", body={"command_id": "delete-shared",
+            "expected_revision": revision, "confirmation": "Shared company"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIsNotNone(store.db.execute("SELECT 1 FROM pools WHERE id=?", (shared_pool,)).fetchone())
+        self.assertEqual((await self.snapshot(peer))["agents"][0]["pool_id"], shared_pool)
+
+    async def test_delete_refuses_an_archived_company_with_an_unfinished_worker(self):
+        system = await self.create(name="Held company")
+        snapshot = await self.snapshot(system)
+        store, runtime = self.service.store, self.service.runtime
+        run = store.create_run(system, "Held work", BudgetLimit(10000))
+        task = store.create_task(system, run, snapshot["agents"][0]["id"], "Hold", command_id="held-task")
+        attempt = store.reserve(task, runtime.runtime_id, runtime.generation, 100)
+        store.begin(attempt, runtime.runtime_id, runtime.generation)
+        store.db.execute("UPDATE runs SET state='completed' WHERE id=?", (run,))
+        store.db.execute("UPDATE systems SET state='archived',revision=revision+1 WHERE id=?", (system,))
+        revision = store.get_system(system)["revision"]
+        response = await self.call("DELETE", f"/systems/{system}", body={"command_id": "delete-held",
+            "expected_revision": revision, "confirmation": "Held company"})
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("unfinished workers", response.json()["detail"].lower())
+        self.assertIsNotNone(store.get_attempt(attempt))
 
     async def test_stop_preserves_unknown_worker_and_prevents_archive(self):
         system = await self.create()
@@ -459,7 +771,7 @@ class MigrationTests(unittest.TestCase):
             db.commit(); db.close()
             store = SwarmStore(path)
             try:
-                self.assertEqual(store.db.execute("PRAGMA user_version").fetchone()[0], 3)
+                self.assertEqual(store.db.execute("PRAGMA user_version").fetchone()[0], 4)
                 pools = {row["id"]: row["owner"] for row in store.db.execute("SELECT * FROM pools")}
                 self.assertEqual(pools, {"shared": None, "owned": "alice", "orphan": None})
                 self.assertEqual(store.owner_page("alice", "a", "messages")["items"][0]["body"], "Saved idea")

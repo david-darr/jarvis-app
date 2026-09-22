@@ -11,6 +11,7 @@ arrive for a given account, that killing a CLI kills its descendants, or what
 anything really costs. Those need the one live run.
 """
 import asyncio
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -19,7 +20,7 @@ import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 environment = tempfile.TemporaryDirectory(prefix="jarvis-swarm-workers-")
@@ -30,6 +31,7 @@ from core.swarm.adapters import WorkerContext, build_worker, capability_for
 from core.swarm.adapters.claude_worker import ClaudeWorker, _quota_event
 from core.swarm.adapters.openai_worker import OpenAIWorker, UnsupportedEndpoint
 from core.swarm.models import Assignment, EventKind
+from core.swarm.memory import SwarmMemory
 from core.swarm.tools import ToolRejected, ToolService
 from core.swarm.store import SwarmStore
 from services.swarm_service import SwarmService
@@ -144,8 +146,8 @@ class AccountTests(unittest.TestCase):
         self.assertIsNone(capability_for({"kind": "claude_cli"}).blocked_reason())
         self.assertIsNone(capability_for({"kind": "api"}).blocked_reason())
         codex = capability_for({"kind": "codex_cli"})
-        self.assertFalse(codex.structured_tools)
-        self.assertIn("structured tool", codex.blocked_reason())
+        self.assertTrue(codex.structured_tools)
+        self.assertIsNone(codex.blocked_reason())
 
 
 class ToolTests(unittest.TestCase):
@@ -169,6 +171,49 @@ class ToolTests(unittest.TestCase):
         for name in ("assign_plan", "review_work", "delete_everything"):
             with self.assertRaises(ToolRejected):
                 service.call(name, {"tasks": []})
+
+    def test_opted_in_memory_is_bounded_audited_and_read_only(self):
+        class Memory:
+            enabled = True
+
+            def search(self, query):
+                return [{"source": "vault", "ref": "vault:note.md", "title": "note.md", "snippet": query}]
+
+            def read(self, reference):
+                return "remembered context"
+
+        service, _ = self.bound("Backend")
+        service.memory = Memory()
+        self.fixture.store.record_memory_access = Mock()
+        with self.assertRaisesRegex(ToolRejected, "search_memory"):
+            service.call("read_memory", {"ref": "vault:guessed.md"})
+        result = json.loads(service.call("search_memory", {"query": "launch plan"}))
+        self.assertEqual(result[0]["ref"], "vault:note.md")
+        self.assertIn("remembered context", service.call("read_memory", {"ref": "vault:note.md"}))
+        kinds = [call.args[1] for call in self.fixture.store.record_memory_access.call_args_list]
+        self.assertEqual(kinds, ["memory.search", "memory.read"])
+        self.assertNotIn("finish_shift", service.definitions)
+
+        lead, _ = self.bound("PM")
+        lead.scheduled = True
+        self.assertIn("finish_shift", lead.definitions)
+        lead.call("finish_shift", {"summary": "Three listings drafted", "next": "Review thumbnails"})
+        self.assertEqual(lead.terminal["status"], "shift_complete")
+
+    def test_memory_gateway_uses_only_opted_in_sources_and_bounded_reads(self):
+        memory = SwarmMemory({"sources": ["vault"], "max_results": 1})
+        hits = [{"path": "one.md", "snippet": "first"}, {"path": "two.md", "snippet": "second"}]
+        with patch("core.swarm.memory.memory_tools.search_vault", return_value=hits) as search, \
+             patch("core.swarm.memory.documents_service.search_documents") as library:
+            result = memory.search("campaign")
+        self.assertEqual([item["ref"] for item in result], ["vault:one.md"])
+        search.assert_called_once_with("campaign", max_results=1)
+        library.assert_not_called()
+        with patch("core.swarm.memory.memory_tools.read_vault_file", return_value="bounded") as read:
+            self.assertEqual(memory.read("vault:one.md"), "bounded")
+            read.assert_called_once_with("one.md", max_chars=4000)
+        with self.assertRaisesRegex(ValueError, "not enabled"):
+            memory.read("document:secret")
 
     def test_messages_resolve_by_name_and_cannot_leave_the_company(self):
         service, _ = self.bound("Backend")
@@ -216,6 +261,42 @@ class ToolTests(unittest.TestCase):
             service.call("review_work", {"decisions": [{"task": "not-a-task", "verdict": "accept", "note": "ok"}]})
         service.call("review_work", {"decisions": [{"task": task_id, "verdict": "accept", "note": "Checked the output"}]})
         self.assertEqual(self.fixture.store.get_task(task_id)["state"], "done")
+
+    def test_lead_must_review_submitted_work_before_assigning_more(self):
+        task_id = self.fixture.task("Backend", "Submitted work")
+        self.fixture.store.db.execute("UPDATE tasks SET state='review',result=? WHERE id=?",
+                                      (json.dumps({"status": "submitted", "output": "done"}), task_id))
+        service, _ = self.bound("PM")
+        with self.assertRaisesRegex(ToolRejected, "review_work"):
+            service.call("assign_plan", {"tasks": [
+                {"key": "duplicate", "assignee": "Backend", "objective": "Do it again"}]})
+        self.assertEqual(self.fixture.store.db.execute(
+            "SELECT COUNT(*) FROM tasks WHERE objective='Do it again'").fetchone()[0], 0)
+        service.call("review_work", {"decisions": [
+            {"task": task_id, "verdict": "accept", "note": "Checked the submitted work"}]})
+        self.assertEqual(self.fixture.store.get_task(task_id)["state"], "done")
+
+    def test_retried_review_cannot_duplicate_already_accepted_work(self):
+        submitted = self.fixture.task("Backend", "Submitted work")
+        self.fixture.store.db.execute("UPDATE tasks SET state='review',result=? WHERE id=?",
+                                      (json.dumps({"status": "submitted", "output": "done"}), submitted))
+        objective = "Review the 1 submitted task(s) and decide on each one."
+        review = self.fixture.task("PM", objective)
+        first = self.fixture.service_for("PM")
+        first.bind(self.fixture.assignment("PM", review, objective))
+        first.call("review_work", {"decisions": [
+            {"task": submitted, "verdict": "accept", "note": "Checked the submitted work"}]})
+        self.assertEqual(self.fixture.store.get_task(submitted)["state"], "done")
+
+        retried = self.fixture.service_for("PM")
+        retried.bind(self.fixture.assignment("PM", review, objective))
+        with self.assertRaisesRegex(ToolRejected, "finish_mission"):
+            retried.call("assign_plan", {"tasks": [
+                {"key": "duplicate", "assignee": "Backend", "objective": "Do it again"}]})
+        self.assertEqual(self.fixture.store.db.execute(
+            "SELECT COUNT(*) FROM tasks WHERE objective='Do it again'").fetchone()[0], 0)
+        retried.call("finish_mission", {"summary": "The accepted result completes the mission."})
+        self.assertEqual(retried.terminal["status"], "concluded")
 
     def test_a_revision_returns_the_task_and_tells_its_owner_why(self):
         task_id = self.fixture.task("Backend", "Needs work")
@@ -487,54 +568,22 @@ class ClaudeScopingTests(unittest.TestCase):
         self.assertEqual(event.data["status"], "rejected")
 
 
-class CodexEnvironmentTests(unittest.IsolatedAsyncioTestCase):
-    async def test_the_internal_admin_token_never_reaches_a_worker(self):
-        from core.swarm.adapters.codex_worker import CodexWorker
+class CodexEnvironmentTests(unittest.TestCase):
+    def test_the_internal_admin_token_never_reaches_a_worker(self):
+        from core.swarm.adapters.codex_worker import CodexWorker, worker_environment
         root = tempfile.TemporaryDirectory(dir=environment.name)
         fixture = Fixture(root.name)
         try:
-            captured = {}
-
-            class FakeProcess:
-                returncode = 0
-                pid = 4242
-
-                def __init__(self):
-                    self.stdin = self
-                    self.stdout = self
-
-                def write(self, _data):
-                    pass
-
-                def write_eof(self):
-                    pass
-
-                async def readline(self):
-                    return b""
-
-                async def wait(self):
-                    return 0
-
-            async def fake_exec(*args, **kwargs):
-                captured["env"] = kwargs.get("env") or {}
-                captured["args"] = args
-                return FakeProcess()
-
             context = WorkerContext(endpoint={"kind": "codex_cli", "model": None},
                                     agent=fixture.team["Backend"],
                                     system=fixture.store.get_system(fixture.system_id),
                                     tool_service=fixture.service_for("Backend"), scratch_dir=root.name)
             worker = CodexWorker(context)
             task_id = fixture.task("Backend")
-            with patch("asyncio.create_subprocess_exec", fake_exec), \
-                 patch("shutil.which", return_value="codex"), \
-                 patch.dict(os.environ, {"JARVIS_INTERNAL_TOKEN": "super-secret"}):
-                events = [event async for event in worker.events(fixture.assignment("Backend", task_id))]
-            self.assertNotIn("JARVIS_INTERNAL_TOKEN", captured["env"])
-            self.assertNotIn("super-secret", json.dumps(captured["env"]))
-            self.assertIn(root.name, captured["args"])
-            self.assertNotIn("--add-dir", captured["args"])
-            self.assertEqual(events[-1].data["result"]["status"], "incomplete")
+            with patch.dict(os.environ, {"JARVIS_INTERNAL_TOKEN": "super-secret"}):
+                self.assertNotIn("super-secret", json.dumps(worker_environment()))
+            with self.assertRaisesRegex(RuntimeError, "Choose a model"):
+                worker._args("codex", root.name, fixture.assignment("Backend", task_id))
         finally:
             fixture.close()
             root.cleanup()
@@ -559,6 +608,51 @@ class CycleTests(unittest.IsolatedAsyncioTestCase):
     def endpoint(self):
         return {"id": "endpoint-a", "name": "Stub", "kind": "api",
                 "base_url": self.server.base_url, "model": "stub", "api_key": None, "num_ctx": None}
+
+    async def test_schedule_tick_opens_one_durable_shift_and_one_cycle(self):
+        endpoint = {"id": "endpoint-a", "name": "Stub", "kind": "api", "model": "stub"}
+        payload = {**setup_payload(), "mode": "scheduled",
+                   "schedule": {"enabled": True, "days": [0], "start_time": "09:00", "end_time": "17:00",
+                                "max_cycles": 3, "auto_spend_confirmed": True}}
+        now = datetime.fromisoformat("2026-09-21T10:00:00-04:00")
+        with patch.object(SwarmService, "_resolved", staticmethod(lambda endpoint_id: endpoint)), \
+             patch.object(SwarmService, "_connection", staticmethod(lambda endpoint_id: endpoint)):
+            created = await self.service.create("alice", payload, "scheduled-create")
+            dispatched = Mock()
+            with patch.object(self.service, "_dispatch", dispatched):
+                await self.service.tick_schedules(now)
+                await self.service.tick_schedules(now)
+        system_id = created["id"]
+        shifts = self.service.store.owner_page("alice", system_id, "shifts", 0, 10)["items"]
+        self.assertEqual(len(shifts), 1)
+        self.assertEqual(shifts[0]["cycles"], 1)
+        self.assertEqual(self.service.store.run_count(system_id, shift_id=shifts[0]["id"]), 1)
+        dispatched.assert_called_once_with(system_id)
+
+    async def test_scheduled_lead_finishes_shift_without_ending_company_mission(self):
+        def script(body):
+            if any(message["role"] == "tool" for message in body["messages"]):
+                return reply(calls=[("finish_shift", {"summary": "Drafted three product names",
+                                                       "next": "Validate the strongest name"})])
+            return reply(calls=[("get_assigned_work", {})])
+
+        self.server = StubServer(script)
+        endpoint = self.endpoint()
+        payload = {**setup_payload(), "mode": "scheduled",
+                   "schedule": {"enabled": True, "days": [0], "start_time": "09:00", "end_time": "17:00",
+                                "max_cycles": 3, "auto_spend_confirmed": True}}
+        now = datetime.fromisoformat("2026-09-21T10:00:00-04:00")
+        with patch.object(SwarmService, "_resolved", staticmethod(lambda endpoint_id: endpoint)), \
+             patch.object(SwarmService, "_connection", staticmethod(lambda endpoint_id: endpoint)):
+            created = await self.service.create("alice", payload, "scheduled-finish")
+            await self.service.tick_schedules(now)
+            cycle = self.service.cycles.get(created["id"])
+            if cycle:
+                await asyncio.wait_for(cycle, timeout=30)
+        shifts = self.service.store.owner_page("alice", created["id"], "shifts", 0, 10)["items"]
+        self.assertEqual(shifts[0]["state"], "completed")
+        self.assertIn("Validate the strongest name", shifts[0]["summary"])
+        self.assertIsNone(self.service.store.mission_concluded(created["id"]))
 
     async def test_lead_plans_specialist_works_lead_reviews(self):
         def script(body):
@@ -588,7 +682,8 @@ class CycleTests(unittest.IsolatedAsyncioTestCase):
             system_id = created["id"]
             await self.service.message("alice", system_id, "Build a tracker", "idea")
             revision = self.service.store.get_system(system_id)["revision"]
-            result = await self.service.lifecycle("alice", system_id, "start", "go", revision)
+            result = await self.service.lifecycle("alice", system_id, "start", "go", revision,
+                                                  spend_confirmed=True)
             self.assertEqual(result["status"], "active", result)
             cycle = self.service.cycles.get(system_id)
             self.assertIsNotNone(cycle, "start dispatches a backend-owned cycle")
@@ -641,7 +736,8 @@ class CycleTests(unittest.IsolatedAsyncioTestCase):
             created = await self.service.create("alice", payload, "create")
             system_id = created["id"]
             revision = self.service.store.get_system(system_id)["revision"]
-            await self.service.lifecycle("alice", system_id, "start", "go", revision)
+            await self.service.lifecycle("alice", system_id, "start", "go", revision,
+                                         spend_confirmed=True)
             cycle = self.service.cycles.get(system_id)
             if cycle:
                 await asyncio.wait_for(cycle, timeout=120)
@@ -679,7 +775,8 @@ class CycleTests(unittest.IsolatedAsyncioTestCase):
             created = await self.service.create("alice", {**setup_payload(), "name": "Guided"}, "guided-create")
             guided = created["id"]
             revision = store.get_system(guided)["revision"]
-            await self.service.lifecycle("alice", guided, "start", "go-guided", revision)
+            await self.service.lifecycle("alice", guided, "start", "go-guided", revision,
+                                         spend_confirmed=True)
             cycle = self.service.cycles.get(guided)
             if cycle:
                 await asyncio.wait_for(cycle, timeout=120)
@@ -781,14 +878,16 @@ class CycleTests(unittest.IsolatedAsyncioTestCase):
             system_id = created["id"]
             store = self.service.store
             revision = store.get_system(system_id)["revision"]
-            await self.service.lifecycle("alice", system_id, "start", "one", revision)
+            await self.service.lifecycle("alice", system_id, "start", "one", revision,
+                                         spend_confirmed=True)
             if self.service.cycles.get(system_id):
                 await asyncio.wait_for(self.service.cycles[system_id], timeout=60)
             revision = store.get_system(system_id)["revision"]
             await self.service.lifecycle("alice", system_id, "stop", "stop", revision)
             self.assertEqual(store.get_system(system_id)["state"], "stopped")
             revision = store.get_system(system_id)["revision"]
-            result = await self.service.lifecycle("alice", system_id, "start", "two", revision)
+            result = await self.service.lifecycle("alice", system_id, "start", "two", revision,
+                                                  spend_confirmed=True)
         self.assertEqual(result["status"], "active", result)
         self.assertEqual(store.run_count(system_id), 2, "a second run really opened")
 
@@ -809,7 +908,8 @@ class CycleTests(unittest.IsolatedAsyncioTestCase):
             payload = setup_payload(lead_endpoint=None, specialist_endpoint=None)
             created = await self.service.create("alice", payload, "create")
             revision = self.service.store.get_system(created["id"])["revision"]
-            result = await self.service.lifecycle("alice", created["id"], "start", "go", revision)
+            result = await self.service.lifecycle("alice", created["id"], "start", "go", revision,
+                                                  spend_confirmed=True)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["code"], "setup_blocked")
         self.assertIn("PM has no model connection", result["detail"])

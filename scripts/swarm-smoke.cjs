@@ -26,7 +26,8 @@ const CONNECTIONS = [
 ];
 const CATALOG = {
   claude_cli: [{ id: 'claude-opus-5', display_name: 'Opus 5', supported_efforts: [{ effort: 'low' }, { effort: 'high' }] }],
-  codex_cli: [{ id: 'gpt-5.5', display_name: 'GPT-5.5', supported_efforts: [] }],
+  codex_cli: [{ id: 'gpt-5.6-luna', display_name: 'Luna', supported_efforts: [{ effort: 'low' }, { effort: 'medium' }, { effort: 'high' }] },
+    { id: 'gpt-5.6-sol', display_name: 'Sol', supported_efforts: [{ effort: 'low' }, { effort: 'medium' }, { effort: 'high' }] }],
 };
 const now = () => Date.now() / 1000;
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -43,12 +44,13 @@ function createCompany(body) {
   const agents = [body.lead, ...body.specialists].map((a, i) => ({ ...a, id: id + '-agent-' + i,
     system_id: id, pool_id: id + '-pool', is_lead: i === 0 ? 1 : 0, enabled: 1 }));
   const company = { system: { id, name: body.name, mission: body.mission, owner: 'fixture', state: 'idle', revision: 0,
-    reason: null, created_at: now(), configuration: { mode: body.mode, run_limit: body.run_limit } }, agents,
+    reason: null, created_at: now(), configuration: { mode: body.mode, run_limit: body.run_limit,
+      schedule: body.schedule, memory: body.memory } }, agents,
     budgets: [{ ...body.system_limit, scope: 'system', target: id, used: 0, held: 0 },
       { ...body.pool_limit, scope: 'pool', target: id + '-pool', used: 0, held: 0 },
       ...agents.map(a => ({ ...a.limit, scope: 'agent', target: a.id, used: 0, held: 0 }))],
     quotas: [], dependencies: [], allocation_ownership_unresolved: false, event_cursor: 0, availability,
-    pages: Object.fromEntries(['tasks', 'messages', 'runs', 'attempts', 'events', 'checkpoints'].map(key => [key, { items: [], total: 0, offset: 0 }])) };
+    pages: Object.fromEntries(['tasks', 'messages', 'runs', 'attempts', 'events', 'checkpoints', 'shifts'].map(key => [key, { items: [], total: 0, offset: 0 }])) };
   emit(company, 'system.created'); systems.push(company); return company;
 }
 // Work fixture for the swimlane graph and the board: a dependency chain that
@@ -101,6 +103,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/models') return json(CONNECTIONS);
     if (url.pathname === '/api/models/catalog') return json(CATALOG);
     if (url.pathname === '/api/models/usage') return json({});
+    if (url.pathname === '/api/projects') return json([{ id: 'project-1', name: 'Launch memory' }]);
     return json([]);
   }
   if (url.pathname.startsWith('/api/swarm')) {
@@ -118,7 +121,7 @@ const server = http.createServer(async (req, res) => {
                       { name: 'Kit', role: 'Writer', instructions: 'Drafts the script.' }] });
     }
     let body = {};
-    if (req.method !== 'GET') { let data = ''; for await (const chunk of req) data += chunk; body = JSON.parse(data || '{}'); writes.push({ path: url.pathname, body }); }
+    if (req.method !== 'GET') { let data = ''; for await (const chunk of req) data += chunk; body = JSON.parse(data || '{}'); writes.push({ path: url.pathname, body, method: req.method }); }
     if (url.pathname === '/api/swarm/systems') {
       if (req.method === 'POST') return json({ id: createCompany(body).system.id }, 201);
       return json({ items: systems.map(c => ({ ...c.system, active_tasks: 0 })), total: systems.length, offset: 0 });
@@ -128,9 +131,24 @@ const server = http.createServer(async (req, res) => {
     if (!company) return json({ detail: 'Not found' }, 404);
     const action = segments[4];
     if (!action) {
+      if (req.method === 'DELETE') {
+        if (company.system.state !== 'archived') return json({ detail: 'Archive the company before deleting it' }, 409);
+        if (body.confirmation !== company.system.name) return json({ detail: 'Type the company name exactly to delete it' }, 409);
+        systems.splice(systems.indexOf(company), 1);
+        return json({ status: 'deleted', id: company.system.id });
+      }
       if (req.method === 'PATCH') {
         assert.equal(body.expected_revision, company.system.revision);
-        company.system.name = body.name; company.system.mission = body.mission; company.system.revision++;
+        company.system.name = body.name; company.system.mission = body.mission;
+        company.system.configuration = { mode: body.mode, run_limit: body.run_limit,
+          schedule: body.schedule, memory: body.memory };
+        Object.assign(company.budgets.find(item => item.scope === 'system' && item.target === company.system.id), body.system_limit);
+        for (const change of body.pool_limits || []) {
+          const budget = company.budgets.find(item => item.scope === 'pool' && item.target === change.id);
+          assert.ok(budget, 'edited allocation belongs to this company');
+          Object.assign(budget, change.limit);
+        }
+        company.system.revision++;
         return json({ id: company.system.id });
       }
       snapshotCalls++; if (snapshotDelay) await wait(snapshotDelay);
@@ -168,8 +186,8 @@ const server = http.createServer(async (req, res) => {
       return json(checkpoint, 201);
     }
     if (req.method === 'POST') {
-      if (['start', 'resume'].includes(action)) return json({ detail: availability.detail }, 409);
-      company.system.state = { pause: 'paused', stop: 'stopped', archive: 'archived', restore: 'stopped' }[action];
+      if (['start', 'resume'].includes(action) && !body.spend_confirmed) return json({ detail: 'Confirm provider spending' }, 409);
+      company.system.state = { start: 'active', resume: 'active', pause: 'paused', stop: 'stopped', archive: 'archived', restore: 'stopped' }[action];
       company.system.reason = JSON.stringify(['manual_' + action]); company.system.revision++;
       emit(company, 'system.' + action); return json({ status: company.system.state });
     }
@@ -253,9 +271,17 @@ app.whenReady().then(async () => {
       e.value='high'; }`);
     await js(`{ const codex=[...document.querySelectorAll('[aria-label="Model connection"]')][1];
       codex.value='codex-1'; codex.dispatchEvent(new Event('change')); }`);
-    assert.equal(await js("[...document.querySelectorAll('[aria-label=\"Reasoning effort\"]')][1].disabled"), true, 'A model with no efforts disables the control');
-    await js(`{ const codex=[...document.querySelectorAll('[aria-label="Model connection"]')][1];
-      codex.value='claude-1'; codex.dispatchEvent(new Event('change')); }`);
+    assert.ok(await js("[...document.querySelectorAll('[aria-label=\"Model\"]')][1].textContent.includes('Sol')"), 'Codex catalog offers Sol');
+    await js(`{ const model=[...document.querySelectorAll('[aria-label="Model"]')][1];
+      model.value='gpt-5.6-luna'; model.dispatchEvent(new Event('change'));
+      [...document.querySelectorAll('[aria-label="Reasoning effort"]')][1].value='low'; }`);
+    await js(`{ const mode=document.querySelector('[name=mode]'); mode.value='scheduled'; mode.dispatchEvent(new Event('change'));
+      [...document.querySelectorAll('.swarm-schedule label')].find(n=>n.textContent.includes('automatic provider spending')).querySelector('input').checked=true;
+      [...document.querySelectorAll('.swarm-memory-sources label')].filter(n=>['Vault notes','JARVIS Project'].includes(n.textContent.trim())).forEach(n=>n.querySelector('input').checked=true);
+      document.querySelector('[aria-label="JARVIS Project"]').value='project-1';
+      const run=[...document.querySelectorAll('.swarm-limits')].find(n=>n.querySelector('legend').textContent==='Per-run allocation');
+      run.querySelector('input[type=checkbox]').click(); }`);
+    assert.equal(await js("document.querySelector('.swarm-schedule').hidden"), false, 'Scheduled mode exposes its work window');
     await capture('desktop-setup');
     await js("document.querySelector('.swarm-setup').requestSubmit()");
     await until("document.querySelector('.swarm-header h1')?.textContent==='App studio'");
@@ -264,8 +290,15 @@ app.whenReady().then(async () => {
     assert.equal(setupWrite.body.lead.endpoint_id, 'claude-1', 'The chosen connection is saved');
     assert.equal(setupWrite.body.lead.model, 'claude-opus-5');
     assert.equal(setupWrite.body.lead.effort, 'high');
-    assert.equal(setupWrite.body.specialists[0].model, null, 'An unpinned model stays the connection default');
-    assert.equal(setupWrite.body.specialists[0].endpoint_id, 'claude-1');
+    assert.equal(setupWrite.body.specialists[0].model, 'gpt-5.6-luna');
+    assert.equal(setupWrite.body.specialists[0].effort, 'low');
+    assert.equal(setupWrite.body.specialists[0].endpoint_id, 'codex-1');
+    assert.equal(setupWrite.body.mode, 'scheduled');
+    assert.equal(setupWrite.body.schedule.auto_spend_confirmed, true, 'Scheduled provider spending is explicit');
+    assert.equal(setupWrite.body.run_limit.ceiling, null, 'A cumulative allocation can be uncapped');
+    assert.deepEqual(setupWrite.body.memory.sources, ['vault', 'project']);
+    assert.equal(setupWrite.body.memory.project_id, 'project-1');
+    assert.equal(setupWrite.body.lead.step_limit, 6250, 'Each worker step remains finite');
     assert.equal(await js("[...document.querySelectorAll('button')].find(b=>b.textContent==='Start').disabled"), true);
     await until("document.body.textContent.includes('Live updates connected')");
     const company = systems[0];
@@ -283,12 +316,25 @@ app.whenReady().then(async () => {
     await until("document.body.textContent.includes('Live updates connected')");
     assert.ok(streamOpens > opens, 'EventSource reconnects');
     company.availability = { execution_available: false, code: 'setup_blocked', blockers: [
-      'Backend (Codex): This endpoint does not support structured tool calls, so it cannot take actions.'] };
+      'Backend (Codex): Codex CLI executable not found. Install Codex CLI and sign in before using Swarm.'] };
     emit(company, 'system.updated'); await wait(300);
     await until("!!document.querySelector('.swarm-blockers li')");
-    assert.ok(await js("document.querySelector('.swarm-blockers li').textContent.includes('cannot take actions')"), 'A capability problem is named before Start');
-    delete company.availability;
+    assert.ok(await js("document.querySelector('.swarm-blockers li').textContent.includes('executable not found')"), 'A Codex installation problem is named before Start');
+    company.availability = { execution_available: true, code: 'ready', blockers: [],
+      detail: 'Workers have no shell, file or vault access. They can plan, research, review and write.' };
     emit(company, 'system.updated'); await wait(300);
+    const starts = writes.filter(w => w.path.endsWith('/start')).length;
+    await click('Start'); await until("!!document.querySelector('dialog[open]')");
+    assert.ok(await js("document.querySelector('.swarm-dialog-body').textContent.includes('not provider billing caps')"), 'Start names the provider-spend boundary');
+    assert.ok(await js("document.querySelector('.swarm-dialog-body').textContent.includes('100,000 tokens')"), 'Start shows the company allocation');
+    assert.ok(await js("document.querySelector('.swarm-dialog-body').textContent.includes('Claude Code') && document.querySelector('.swarm-dialog-body').textContent.includes('gpt-5.6-luna')"), 'Start shows enabled teammate connections and models');
+    await capture('desktop-start-confirmation');
+    await click('Cancel'); await until("!document.querySelector('dialog')");
+    assert.equal(writes.filter(w => w.path.endsWith('/start')).length, starts, 'Cancelling Start sends no request');
+    assert.equal(await js('document.activeElement.textContent'), 'Start', 'Start cancellation restores focus');
+    await click('Start'); await click('Start and spend');
+    await until("document.querySelector('.swarm-state')?.textContent==='active'");
+    assert.equal(writes.findLast(w => w.path.endsWith('/start')).body.spend_confirmed, true);
 
     await click('Usage'); await until("document.body.textContent.includes('No provider allowance has been observed')");
     await capture('desktop-workspace');
@@ -384,9 +430,25 @@ app.whenReady().then(async () => {
     assert.ok(await js("[...document.querySelectorAll('a[download]')].every(a=>a.pathname.startsWith('/api/swarm/systems/'))"));
     await click('Pause'); await until("document.querySelector('.swarm-state')?.textContent==='paused'");
     await capture('desktop-paused');
+    const resumes = writes.filter(w => w.path.endsWith('/resume')).length;
+    await click('Resume'); await until("!!document.querySelector('dialog[open]')");
+    assert.ok(await js("document.querySelector('.swarm-dialog-body').textContent.includes('Resume this company?') || document.querySelector('.swarm-dialog-header').textContent.includes('Resume this company?')"));
+    await click('Cancel'); await until("!document.querySelector('dialog')");
+    assert.equal(writes.filter(w => w.path.endsWith('/resume')).length, resumes, 'Cancelling Resume sends no request');
+    await click('Resume'); await click('Resume and spend');
+    await until("document.querySelector('.swarm-state')?.textContent==='active'");
+    assert.equal(writes.findLast(w => w.path.endsWith('/resume')).body.spend_confirmed, true);
+    await click('Pause'); await until("document.querySelector('.swarm-state')?.textContent==='paused'");
     await click('Edit setup'); await until("!!document.querySelector('dialog[open]')");
-    await js("document.querySelector('[name=name]').value='Updated studio';document.querySelector('.swarm-setup').requestSubmit()");
+    assert.ok(await js("document.querySelector('.swarm-setup').textContent.includes('affects every company that uses that provider account')"),
+      'Edit setup explains the shared provider-account effect');
+    assert.equal(await js("document.querySelector('[data-pool-id] input[type=number]').value"), '200000');
+    await js("document.querySelector('[name=name]').value='Updated studio';document.querySelector('[data-pool-id] input[type=number]').value='450000';document.querySelector('.swarm-setup').requestSubmit()");
     await until("document.querySelector('.swarm-header h1')?.textContent==='Updated studio'");
+    const setupPatch = writes.findLast(write => write.method === 'PATCH' && write.path === `/api/swarm/systems/${company.system.id}`);
+    assert.deepEqual(setupPatch.body.pool_limits, [{ id: company.agents[0].pool_id,
+      limit: { ceiling: 450000, pause_percent: 80, checkpoint_reserve: 0 } }]);
+    assert.equal(company.budgets.find(item => item.scope === 'pool').ceiling, 450000);
     await click('Stop'); await until("!!document.querySelector('dialog[open]')");
     await click('Stop run'); await until("document.querySelector('.swarm-state')?.textContent==='stopped'");
     await click('Archive'); await until("!!document.querySelector('dialog[open]')");
@@ -443,9 +505,34 @@ app.whenReady().then(async () => {
     await fits(); await capture('full-app-mobile');
     await js("import('/static/js/app.js').then(m=>m.switchTab('home'))");
     await wait(150); assert.equal(streams.size, 0, 'App navigation cleans up Swarm');
+    await js("import('/static/js/app.js').then(m=>m.switchTab('swarm'))");
+    await until("!!document.querySelector('.swarm-system-card')");
+    await js("document.querySelector('.swarm-system-card').click()");
+    await until("document.querySelector('.swarm-header h1')?.textContent==='Updated studio'");
+    await click('Archive'); await until("!!document.querySelector('dialog[open]')");
+    await js("document.querySelector('dialog .btn.danger').click()");
+    await until("document.querySelector('.swarm-state')?.textContent==='archived'");
+    const deletes = writes.filter(w => w.method === 'DELETE').length;
+    await click('Delete'); await until("!!document.querySelector('dialog[open]')");
+    assert.equal(await js("document.activeElement.getAttribute('aria-label')"), 'Type company name', 'Delete starts in the confirmation field');
+    await click('Cancel'); await until("!document.querySelector('dialog')");
+    assert.equal(writes.filter(w => w.method === 'DELETE').length, deletes, 'Cancelling Delete sends no request');
+    await until("document.activeElement.textContent==='Delete'");
+    assert.equal(await js('document.activeElement.textContent'), 'Delete', 'Delete cancellation restores focus');
+    await click('Delete');
+    await js("{ const input=document.querySelector('[aria-label=\"Type company name\"]'); input.value='Updated'; input.dispatchEvent(new Event('input')); }");
+    assert.equal(await js("[...document.querySelectorAll('button')].find(b=>b.textContent==='Delete permanently').disabled"), true, 'Partial company name cannot delete');
+    await js("{ const input=document.querySelector('[aria-label=\"Type company name\"]'); input.value='Updated studio'; input.dispatchEvent(new Event('input')); }");
+    assert.equal(await js("[...document.querySelectorAll('button')].find(b=>b.textContent==='Delete permanently').disabled"), false, 'Exact company name enables delete');
+    await fits(); await capture('mobile-delete');
+    await click('Delete permanently');
+    await until("document.body.textContent.includes('Your first team starts here')");
+    assert.equal(systems.length, 0);
+    assert.equal(writes.findLast(w => w.method === 'DELETE').body.confirmation, 'Updated studio');
+    assert.equal(streams.size, 0, 'Deletion closes the company event stream');
     assert.deepEqual(errors, []);
-    fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: true, checks: ['empty/setup/edit', 'queued message and literal HTML', 'draft retained', 'SSE reconnect/dedup/unmount', 'usage unavailable', 'handoff links', 'pause/stop/archive/restore', 'desktop/mobile overflow', 'Escape/focus', 'reduced motion', 'late responses', 'failure state', 'swimlane graph layering/edges/lanes', 'graph keyboard travel and detail', 'board columns from real states', 'card movement on a real event', 'reduced-motion highlight without travel', 'per-teammate connection/model/effort pickers', 'named capability blockers', 'live agent states', 'readable activity', 'accepted results', 'reconcile requires evidence'], writes }, null, 2));
-    console.log('PASS: Swarm desktop/mobile UI, setup, inbox, lifecycle, usage, handoffs, SSE, swimlane graph, board movement, focus, reduced motion and error handling.');
+    fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: true, checks: ['empty/setup/edit', 'existing shared allocation edit and warning', 'queued message and literal HTML', 'draft retained', 'SSE reconnect/dedup/unmount', 'usage unavailable', 'handoff links', 'spend confirmation for start/resume', 'pause/stop/archive/restore', 'typed permanent deletion', 'desktop/mobile overflow', 'Escape/focus', 'reduced motion', 'late responses', 'failure state', 'swimlane graph layering/edges/lanes', 'graph keyboard travel and detail', 'board columns from real states', 'card movement on a real event', 'reduced-motion highlight without travel', 'per-teammate connection/model/effort pickers', 'named capability blockers', 'live agent states', 'readable activity', 'accepted results', 'reconcile requires evidence'], writes }, null, 2));
+    console.log('PASS: Swarm UI, spend confirmation, deletion, lifecycle, handoffs, SSE, graph, board, focus, reduced motion and error handling.');
     console.log('Screenshots: ' + output);
   } catch (error) {
     await capture('failure').catch(() => {});

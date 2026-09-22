@@ -45,8 +45,13 @@
 .swarm-field textarea { resize: vertical; }
 .swarm-member-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 16px; min-width: 0; }
 .swarm-member-form > .swarm-field:nth-of-type(3), .swarm-member-form > .swarm-limits { grid-column: 1 / -1; }
-.swarm-member-form legend, .swarm-limits legend { color: var(--text-dim); font-size: 12px; padding: 0 5px; }
-.swarm-limits { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; border: 0; padding: 12px 0; min-width: 0; }
+.swarm-member-form legend, .swarm-limits legend, .swarm-schedule legend, .swarm-memory legend { color: var(--text-dim); font-size: 12px; padding: 0 5px; }
+.swarm-limits { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; border: 0; padding: 12px 0; min-width: 0; }
+.swarm-schedule, .swarm-memory { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 16px; min-width: 0; }
+.swarm-schedule > p, .swarm-memory > p, .swarm-days, .swarm-memory-sources { grid-column: 1 / -1; margin: 0; }
+.swarm-days, .swarm-memory-sources { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+.swarm-days .swarm-field, .swarm-memory-sources .swarm-field, .swarm-limits .swarm-field:has(input[type="checkbox"]) { flex-direction: row; align-items: center; }
+.swarm-days input[type="checkbox"], .swarm-memory-sources input[type="checkbox"], .swarm-limits input[type="checkbox"] { width: auto; }
 .swarm-error { color: var(--danger); }
 .swarm-view :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .swarm-mobile-tabs { display: none; }
@@ -63,7 +68,7 @@
   .swarm-layout[data-mobile-panel="inbox"] > .swarm-conversation { display: flex; }
   .swarm-dialog-body { padding: 16px; }
   .swarm-member-form { grid-template-columns: 1fr; }
-  .swarm-limits { grid-template-columns: 1fr; }
+  .swarm-limits, .swarm-schedule, .swarm-memory { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { .swarm-view *, .swarm-dialog * { animation: none !important; transition: none !important; } }
 

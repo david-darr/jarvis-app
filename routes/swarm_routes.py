@@ -35,7 +35,7 @@ class StrictModel(BaseModel):
 
 
 class Limit(StrictModel):
-    ceiling: int = Field(strict=True, ge=2, le=1_000_000_000)
+    ceiling: int | None = Field(default=None, strict=True, ge=2, le=1_000_000_000)
     pause_percent: int = Field(default=80, strict=True, ge=1, le=100)
     checkpoint_reserve: int = Field(default=0, strict=True, ge=0, le=1_000_000_000)
 
@@ -57,18 +57,62 @@ class Member(StrictModel):
     endpoint_id: ID | None = None
     model: Annotated[str, Field(max_length=200)] | None = None
     effort: Annotated[str, Field(max_length=40)] | None = None
+    step_limit: int | None = Field(default=None, strict=True, ge=500, le=1_000_000_000)
+
+
+class ShiftSchedule(StrictModel):
+    enabled: bool = Field(default=False, strict=True)
+    days: list[int] = Field(default_factory=list, max_length=7)
+    start_time: str = Field(default="09:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    end_time: str = Field(default="17:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    max_cycles: int = Field(default=5, strict=True, ge=1, le=50)
+    auto_spend_confirmed: bool = Field(default=False, strict=True)
+
+    @model_validator(mode="after")
+    def valid_schedule(self):
+        if len(self.days) != len(set(self.days)) or any(day < 0 or day > 6 for day in self.days):
+            raise ValueError("Shift days must be unique values from 0 through 6")
+        if self.enabled and not self.days:
+            raise ValueError("Choose at least one shift day")
+        if self.enabled and self.start_time == self.end_time:
+            raise ValueError("Shift start and end times must differ")
+        if self.enabled and not self.auto_spend_confirmed:
+            raise ValueError("Confirm scheduled provider spending before enabling shifts")
+        return self
+
+
+class MemorySettings(StrictModel):
+    sources: list[Literal["vault", "sessions", "library", "project"]] = Field(default_factory=list, max_length=4)
+    project_id: ID | None = None
+    max_results: int = Field(default=5, strict=True, ge=1, le=5)
+
+    @model_validator(mode="after")
+    def valid_memory(self):
+        if len(self.sources) != len(set(self.sources)):
+            raise ValueError("Memory sources must be unique")
+        if "project" in self.sources and not self.project_id:
+            raise ValueError("Choose a JARVIS Project before enabling project memory")
+        return self
 
 
 class Setup(StrictModel):
     name: Name
     mission: str = Field(min_length=1, max_length=10000)
-    mode: Literal["guided", "autonomous"] = "guided"
+    mode: Literal["guided", "autonomous", "scheduled"] = "guided"
     system_limit: Limit
     run_limit: Limit
     pool_limit: Limit
     pool_id: ID | None = None
     lead: Member
     specialists: list[Member] = Field(default_factory=list, max_length=20)
+    schedule: ShiftSchedule = Field(default_factory=ShiftSchedule)
+    memory: MemorySettings = Field(default_factory=MemorySettings)
+
+    @model_validator(mode="after")
+    def valid_mode(self):
+        if (self.mode == "scheduled") != self.schedule.enabled:
+            raise ValueError("Scheduled mode and its shift schedule must be enabled together")
+        return self
 
 
 class Create(Setup):
@@ -81,9 +125,15 @@ class Create(Setup):
         return self
 
 
+class PoolLimit(StrictModel):
+    id: ID
+    limit: Limit
+
+
 class Update(Setup):
     command_id: ID
     expected_revision: int = Field(strict=True, ge=0)
+    pool_limits: list[PoolLimit] = Field(default_factory=list, max_length=21)
 
 
 class Command(StrictModel):
@@ -92,6 +142,12 @@ class Command(StrictModel):
 
 class Lifecycle(Command):
     expected_revision: int = Field(strict=True, ge=0)
+    spend_confirmed: bool = Field(default=False, strict=True)
+
+
+class DeleteSystem(Command):
+    expected_revision: int = Field(strict=True, ge=0)
+    confirmation: Name
 
 
 class DraftTeam(StrictModel):
@@ -183,6 +239,11 @@ async def update(system_id: str, body: Update, owner=Depends(human), svc=Depends
     return await mutation(svc.update(owner, system_id, body.model_dump(exclude={"command_id", "expected_revision"}), body.command_id, body.expected_revision))
 
 
+@router.delete("/systems/{system_id}")
+async def delete(system_id: str, body: DeleteSystem, owner=Depends(human), svc=Depends(service)):
+    return await mutation(svc.delete(owner, system_id, body.confirmation, body.command_id, body.expected_revision))
+
+
 @router.post("/systems/{system_id}/messages", status_code=202)
 async def message(system_id: str, body: Message, owner=Depends(human), svc=Depends(service)):
     return await mutation(svc.message(owner, system_id, body.body, body.command_id))
@@ -246,7 +307,7 @@ async def events(system_id: str, request: Request, after: int = Query(0, ge=0), 
 
 
 @router.get("/systems/{system_id}/{collection}")
-async def page(system_id: str, collection: Literal["tasks", "messages", "runs", "attempts", "activity", "checkpoints"],
+async def page(system_id: str, collection: Literal["tasks", "messages", "runs", "attempts", "activity", "checkpoints", "shifts"],
                offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200), owner=Depends(human), svc=Depends(service)):
     collection = "events" if collection == "activity" else collection
     return domain(lambda: ready(svc).owner_page(owner, system_id, collection, offset, limit))
@@ -255,7 +316,8 @@ async def page(system_id: str, collection: Literal["tasks", "messages", "runs", 
 @router.post("/systems/{system_id}/{action}")
 async def lifecycle(system_id: str, action: Literal["start", "pause", "stop", "resume", "archive", "restore"],
                     body: Lifecycle, owner=Depends(human), svc=Depends(service)):
-    result = await mutation(svc.lifecycle(owner, system_id, action, body.command_id, body.expected_revision))
+    result = await mutation(svc.lifecycle(owner, system_id, action, body.command_id, body.expected_revision,
+                                          spend_confirmed=body.spend_confirmed))
     if result["status"] == "blocked":
         return JSONResponse({**result, "detail": result["detail"]}, status_code=409)
     return result

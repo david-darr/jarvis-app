@@ -3,30 +3,31 @@ import asyncio
 import hashlib
 import json
 import logging
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
-from core import model_catalog, model_endpoints
+from core import model_catalog, model_endpoints, projects
 from core.swarm import accounts, architect
 from core.swarm.adapters import WorkerContext, build_worker, capability_for
 from core.swarm.budget import BudgetLimit
 from core.swarm.checkpoints import download_handoff
 from core.swarm.models import Conflict, NotFound, PersistenceFault
+from core.swarm.memory import SwarmMemory
 from core.swarm.runtime import SwarmRuntime
 from core.swarm.store import SwarmStore
 from core.swarm.tools import ToolService
 
 logger = logging.getLogger(__name__)
 
-# A single step's dispatch ceiling, derived from the smallest allocation in
-# play so one worker cannot spend a whole company's budget in one turn. This
-# is a local bound on what Swarm will admit, not a claim about provider
-# billing.
-STEP_SHARE = 4
+# A single step always keeps its own finite dispatch ceiling, even when every
+# cumulative company allocation is uncapped. This is a local admission bound,
+# not a claim about provider billing.
 MIN_STEP_UNITS = 500
 # How many cycles an autonomous company may open before it must stop and say
 # so. Novelty alone must not keep a company spending: this is a backstop
 # behind the lead's own judgement, the budgets, and the no-progress check.
 MAX_CYCLES = 5
+SCHEDULE_POLL_SECONDS = 15
 
 
 class SwarmService:
@@ -37,6 +38,7 @@ class SwarmService:
         self.fault = None
         self.lock = asyncio.Lock()
         self.cycles = {}
+        self.scheduler = None
 
     async def start(self):
         try:
@@ -48,6 +50,7 @@ class SwarmService:
             # rather than waiting for an acknowledgement that never comes.
             self.runtime = SwarmRuntime(self.store, self.directory / "systems", poll_interval=1, stop_timeout=12)
             await self.runtime.start()
+            self.scheduler = asyncio.create_task(self._schedule_loop())
         except Exception as exc:
             self.fault = exc
             logger.exception("Swarm unavailable; other app features remain available")
@@ -65,8 +68,12 @@ class SwarmService:
                     "detail": "Swarm storage or coordinator is unavailable. Check the backend log.",
                     "blockers": []}
         result = {"available": True, "execution_available": True, "code": "ready", "blockers": [],
-                  "detail": "Workers have no shell, file or vault access. They can plan, research, review and write."}
+                  "detail": "Workers have no shell, raw file or JARVIS memory access unless the company explicitly enables bounded read-only retrieval."}
         if system_id:
+            system = self.store.get_system(system_id)
+            configuration = json.loads(system.get("configuration") or "{}")
+            if (configuration.get("memory") or {}).get("sources"):
+                result["detail"] = "Workers have no shell or raw file access. Enabled JARVIS memory is read-only, bounded and audited."
             problems = self.agent_blockers(system_id)
             if problems:
                 result.update({"execution_available": False, "code": "setup_blocked",
@@ -103,7 +110,7 @@ class SwarmService:
         if record is None:
             return None
         return {"id": endpoint_id, "name": record.get("name") or endpoint_id,
-                "kind": record.get("kind") or "api"}
+                "kind": record.get("kind") or "api", "model": record.get("model")}
 
     def agent_blockers(self, system_id):
         """Why this company cannot run, per teammate, in the owner's words."""
@@ -117,6 +124,11 @@ class SwarmService:
                                 else f"{agent['name']}'s model connection no longer exists.")
                 continue
             reason = capability_for(endpoint).blocked_reason()
+            if not reason and endpoint.get("kind") == "codex_cli":
+                from core.swarm.adapters.codex_worker import installation_blocker, model_record
+                reason = installation_blocker()
+                if not reason and model_record(agent.get("model") or endpoint.get("model")) is None:
+                    reason = "Choose an available model from the Codex CLI catalog."
             if reason:
                 problems.append(f"{agent['name']} ({endpoint['name']}): {reason}")
         return problems
@@ -151,14 +163,16 @@ class SwarmService:
         for agent in self.store.team(system_id):
             if not agent["enabled"]:
                 continue
-            row = self.store.db.execute("SELECT ceiling FROM budgets WHERE scope='agent' AND target=?",
-                                        (agent["id"],)).fetchone()
-            if row and (smallest is None or row[0] < smallest):
-                smallest = row[0]
-        return max(MIN_STEP_UNITS, (smallest or MIN_STEP_UNITS * STEP_SHARE) // STEP_SHARE)
+            limit = agent.get("step_limit") or MIN_STEP_UNITS
+            if smallest is None or limit < smallest:
+                smallest = limit
+        return max(MIN_STEP_UNITS, smallest or MIN_STEP_UNITS)
 
     def _worker_factory(self, system_id):
         system = self.store.get_system(system_id)
+        configuration = json.loads(system.get("configuration") or "{}")
+        memory = SwarmMemory(configuration.get("memory"))
+        scheduled = configuration.get("mode") == "scheduled"
         scratch = self.directory / "systems" / system_id / "work"
         scratch.mkdir(parents=True, exist_ok=True)
 
@@ -169,7 +183,8 @@ class SwarmService:
                 raise PersistenceFault(f"{agent['name']} has no usable model connection")
             return build_worker(WorkerContext(
                 endpoint=endpoint, agent=agent, system=system,
-                tool_service=ToolService(self.store, is_lead=bool(agent["is_lead"])),
+                tool_service=ToolService(self.store, is_lead=bool(agent["is_lead"]),
+                                         memory=memory, scheduled=scheduled),
                 scratch_dir=str(scratch), model=agent.get("model") or endpoint.get("model") or None,
                 effort=agent.get("effort") or None, env={}))
 
@@ -179,14 +194,16 @@ class SwarmService:
     NEXT_OBJECTIVE = ("Review what this company has produced against its mission. If the mission is met, "
                       "call finish_mission. If useful work genuinely remains, assign it.")
 
-    def _seed_run(self, system_id, objective=None):
+    def _seed_run(self, system_id, objective=None, *, shift_id=None):
         """Open a run and give the lead the first task. No model call here."""
         system = self.store.get_system(system_id)
         configuration = json.loads(system.get("configuration") or "{}")
         run = self.store.open_run(system_id)
         if run is None:
             limit = configuration.get("run_limit") or {"ceiling": 25000, "pause_percent": 80, "checkpoint_reserve": 0}
-            run_id = self.store.create_run(system_id, system["mission"], BudgetLimit(**limit))
+            run_id = self.store.create_run(system_id, system["mission"], BudgetLimit(**limit), shift_id=shift_id)
+            if shift_id:
+                self.store.count_shift_cycle(shift_id)
         else:
             run_id = run["id"]
         lead = next(agent for agent in self.store.team(system_id) if agent["is_lead"])
@@ -230,6 +247,8 @@ class SwarmService:
                 evidence = f"Review recorded: {len(result.get('decisions') or [])} decision(s)."
             elif result.get("status") == "concluded":
                 evidence = "The lead ended the mission; its own record of that decision is the task's result."
+            elif result.get("status") == "shift_complete":
+                evidence = "The lead ended this scheduled shift and preserved a handoff for the next one."
             else:
                 continue
             self.store.review_task(task["id"], lead["id"], accept=True, note=evidence)
@@ -307,7 +326,9 @@ class SwarmService:
         because a loop quietly ran out.
         """
         system = self.store.get_system(system_id)
-        if json.loads(system.get("configuration") or "{}").get("mode") != "autonomous":
+        configuration = json.loads(system.get("configuration") or "{}")
+        mode = configuration.get("mode")
+        if mode not in ("autonomous", "scheduled"):
             return False, None           # guided: one cycle per Start, as before
         if self.store.mission_concluded(system_id):
             return False, None           # already recorded
@@ -331,6 +352,27 @@ class SwarmService:
             (system_id,)).fetchone()
         if finished:
             return False, ("mission_complete", json.loads(finished[0]).get("summary"))
+        if mode == "scheduled":
+            shift = self.store.active_shift(system_id)
+            if not shift:
+                return False, ("shift_ended", "The scheduled shift is no longer open.")
+            completed = self.store.db.execute(
+                """SELECT t.result FROM tasks t JOIN runs r ON r.id=t.run_id
+                   WHERE r.shift_id=? AND t.result IS NOT NULL AND json_valid(t.result)
+                   AND json_extract(t.result, '$.status')='shift_complete'
+                   ORDER BY t.created_at DESC LIMIT 1""", (shift["id"],)).fetchone()
+            if completed:
+                result = json.loads(completed[0])
+                summary = result.get("summary") or "Shift completed."
+                if result.get("next"):
+                    summary += "\nNext: " + result["next"]
+                return False, ("shift_complete", summary)
+            if datetime.now().astimezone() >= datetime.fromisoformat(shift["ends_at"]):
+                return False, ("shift_ended", "The scheduled work window ended.")
+            maximum = (configuration.get("schedule") or {}).get("max_cycles") or MAX_CYCLES
+            if shift["cycles"] >= maximum:
+                return False, ("cycle_limit", f"Reached the {maximum}-cycle limit for this shift.")
+            return True, None
         if self.store.run_count(system_id) >= MAX_CYCLES:
             return False, ("cycle_limit", f"Reached the {MAX_CYCLES}-cycle ceiling for one start.")
         return True, None
@@ -343,10 +385,19 @@ class SwarmService:
                 keep_going, ending = self._continue_reason(system_id)
                 if ending:
                     reason, summary = ending
-                    self.store.conclude_mission(system_id, reason=reason, summary=summary)
+                    system = self.store.get_system(system_id)
+                    mode = json.loads(system.get("configuration") or "{}").get("mode")
+                    if mode == "scheduled" and reason in ("shift_complete", "shift_ended", "cycle_limit", "stalled"):
+                        shift = self.store.active_shift(system_id)
+                        if shift:
+                            self.store.finish_shift(shift["id"], reason=reason, summary=summary)
+                    else:
+                        self.store.conclude_mission(system_id, reason=reason, summary=summary)
                 if not keep_going:
                     break
-                self._seed_run(system_id, self.NEXT_OBJECTIVE)
+                shift = self.store.active_shift(system_id) if json.loads(
+                    self.store.get_system(system_id).get("configuration") or "{}").get("mode") == "scheduled" else None
+                self._seed_run(system_id, self.NEXT_OBJECTIVE, shift_id=shift["id"] if shift else None)
         except Exception:
             logger.exception("Swarm cycle ended with an error; state is preserved")
         finally:
@@ -356,6 +407,73 @@ class SwarmService:
         if system_id in self.cycles:
             return
         self.cycles[system_id] = asyncio.create_task(self._cycle(system_id))
+
+    @staticmethod
+    def _active_window(schedule, now):
+        """Return the local scheduled window containing ``now``, if any."""
+        start_clock = time.fromisoformat(schedule["start_time"])
+        end_clock = time.fromisoformat(schedule["end_time"])
+        days = set(schedule.get("days") or ())
+        for date in (now.date(), now.date() - timedelta(days=1)):
+            if date.weekday() not in days:
+                continue
+            starts = datetime.combine(date, start_clock, tzinfo=now.tzinfo)
+            ends = datetime.combine(date, end_clock, tzinfo=now.tzinfo)
+            if ends <= starts:
+                ends += timedelta(days=1)
+            if starts <= now < ends:
+                return {
+                    "key": starts.strftime("%Y-%m-%d@%H:%M"),
+                    "starts_at": starts.isoformat(),
+                    "ends_at": ends.isoformat(),
+                }
+        return None
+
+    async def tick_schedules(self, now=None):
+        """Start eligible shifts once. Waiting itself never calls a model."""
+        now = now or datetime.now().astimezone()
+        if now.tzinfo is None:
+            now = now.astimezone()
+        async with self.lock:
+            self.ready()
+            for system in self.store.scheduled_systems():
+                schedule = (system["configuration"].get("schedule") or {})
+                if not schedule.get("enabled") or not schedule.get("auto_spend_confirmed"):
+                    continue
+                window = self._active_window(schedule, now)
+                open_shift = self.store.active_shift(system["id"])
+                if not window:
+                    if open_shift and system["state"] == "idle" and now >= datetime.fromisoformat(open_shift["ends_at"]):
+                        self.store.finish_shift(open_shift["id"], reason="shift_ended",
+                                                summary="The scheduled work window ended.")
+                    continue
+                shift, created = self.store.ensure_shift(system["id"], window["key"],
+                                                         window["starts_at"], window["ends_at"])
+                if not created and shift["state"] != "open":
+                    continue
+                fresh = self.store.get_system(system["id"])
+                if fresh["state"] == "paused" or self.store.mission_concluded(system["id"]):
+                    continue
+                if self.agent_blockers(system["id"]):
+                    continue
+                if fresh["state"] == "stopped":
+                    self.store.reopen_for_start(system["id"])
+                    fresh = self.store.get_system(system["id"])
+                if fresh["state"] != "idle" or system["id"] in self.cycles:
+                    continue
+                self._seed_run(system["id"], shift_id=shift["id"])
+                self._dispatch(system["id"])
+
+    async def _schedule_loop(self):
+        try:
+            while True:
+                try:
+                    await self.tick_schedules()
+                except Exception:
+                    logger.exception("Swarm schedule tick failed; persisted work remains available")
+                await asyncio.sleep(SCHEDULE_POLL_SECONDS)
+        except asyncio.CancelledError:
+            pass
 
     def ready(self):
         if not self.status()["available"]:
@@ -384,6 +502,9 @@ class SwarmService:
 
     def _prepare(self, data):
         pool_limit = data.get("pool_limit")
+        memory = data.get("memory") or {}
+        if "project" in (memory.get("sources") or ()) and not projects.get_project(memory.get("project_id")):
+            raise ValueError("That JARVIS Project does not exist")
         return {**data,
                 "lead": self._member(data["lead"], pool_limit),
                 "specialists": [self._member(member, pool_limit) for member in data["specialists"]]}
@@ -416,10 +537,11 @@ class SwarmService:
                 self._dispatch(system_id)
             return {**result, "resumed": resumed}
 
-    async def lifecycle(self, owner, system_id, action, command_id, revision):
+    async def lifecycle(self, owner, system_id, action, command_id, revision, *, spend_confirmed=False):
         async with self.lock:
             self.ready()
             blocked = None
+            scheduled_window = None
             if action in ("start", "resume"):
                 # Ownership is checked before anything else is revealed, so a
                 # setup problem cannot confirm that another owner's system exists.
@@ -427,24 +549,64 @@ class SwarmService:
                 problems = self.agent_blockers(system_id)
                 if problems:
                     blocked = {"code": "setup_blocked", "detail": " ".join(problems)}
-            result = self.store.owner_lifecycle(owner, system_id, action, command_id, revision, blocked=blocked)
+                system = self.store.get_system(system_id)
+                configuration = json.loads(system.get("configuration") or "{}")
+                if configuration.get("mode") == "scheduled":
+                    scheduled_window = self._active_window(configuration.get("schedule") or {},
+                                                           datetime.now().astimezone())
+                    if scheduled_window is None:
+                        blocked = {"code": "schedule_closed",
+                                   "detail": "This company is outside its scheduled work window."}
+                    else:
+                        existing_shift = self.store.shift_for_window(system_id, scheduled_window["key"])
+                        if existing_shift and existing_shift["state"] == "completed":
+                            blocked = {"code": "shift_complete",
+                                       "detail": "This scheduled shift has already finished."}
+            result = self.store.owner_lifecycle(owner, system_id, action, command_id, revision,
+                                                blocked=blocked, spend_confirmed=spend_confirmed)
             if result["status"] == "accepted":
                 if action == "stop":
                     await self.runtime.stop(system_id)
                 elif action == "pause":
                     await self.runtime.pause(system_id, "manual_pause")
+                    shift = self.store.active_shift(system_id)
+                    if shift:
+                        self.store.finish_shift(shift["id"], reason="manual_pause",
+                                                summary="The owner paused this scheduled shift.")
                 else:
+                    shift = None
+                    if scheduled_window:
+                        shift, _ = self.store.ensure_shift(system_id, scheduled_window["key"],
+                                                           scheduled_window["starts_at"], scheduled_window["ends_at"])
+                        if action == "resume" and shift["state"] == "skipped":
+                            self.store.reopen_shift(shift["id"])
+                            shift = self.store.active_shift(system_id)
+                        elif shift["state"] != "open":
+                            raise Conflict("This scheduled shift has already finished")
                     if action == "resume":
                         self.store.resume(system_id)
                     # A stopped company can be started again: stop leaves it
                     # stopped, and opening a run needs idle, so Start used to
                     # fail with a conflict and leave no way back.
                     self.store.reopen_for_start(system_id)
-                    self._seed_run(system_id)
+                    shift = shift or self.store.active_shift(system_id)
+                    self._seed_run(system_id, shift_id=shift["id"] if shift else None)
                     # Work runs in a backend-owned task: closing the tab, or
                     # this request returning, must not end the company's run.
                     self._dispatch(system_id)
                 result = self.store.complete_lifecycle(system_id, command_id)
+            return result
+
+    async def delete(self, owner, system_id, confirmation, command_id, revision):
+        async with self.lock:
+            self.ready()
+            cycle = self.cycles.get(system_id)
+            if cycle is not None:
+                if not cycle.done():
+                    raise Conflict("Stop this company and wait for its workers before deleting it")
+                self.cycles.pop(system_id, None)
+            result = self.store.owner_delete(owner, system_id, confirmation, command_id, revision)
+            self.runtime.handoffs.pop(system_id, None)
             return result
 
     async def reconcile(self, owner, system_id, attempt_id, evidence):
@@ -493,6 +655,10 @@ class SwarmService:
 
     async def close(self):
         try:
+            if self.scheduler:
+                self.scheduler.cancel()
+                await asyncio.gather(self.scheduler, return_exceptions=True)
+                self.scheduler = None
             cycles = list(self.cycles.values())
             for cycle in cycles:
                 cycle.cancel()

@@ -72,7 +72,7 @@ CREATE UNIQUE INDEX one_task_attempt ON attempts(task_id) WHERE state IN ('reser
 CREATE UNIQUE INDEX one_agent_attempt ON attempts(agent_id) WHERE state IN ('reserved','started','unknown');
 CREATE TABLE budgets (
  scope TEXT NOT NULL CHECK(scope IN ('system','agent','run','pool')),
- target TEXT NOT NULL, ceiling INTEGER NOT NULL, pause_percent INTEGER NOT NULL,
+ target TEXT NOT NULL, ceiling INTEGER, pause_percent INTEGER NOT NULL,
  checkpoint_reserve INTEGER NOT NULL, PRIMARY KEY(scope,target)
 );
 CREATE TABLE quotas (
@@ -164,7 +164,32 @@ class SwarmStore:
                 self.db.execute("ALTER TABLE agent_settings ADD COLUMN effort TEXT")
                 self.db.execute("ALTER TABLE pools ADD COLUMN account_key TEXT")
                 self.db.execute("PRAGMA user_version=3")
-            elif version != 3:
+                version = 3
+            if version == 3:
+                # Scheduled companies need durable window identity so a
+                # backend restart cannot start the same paid shift twice.
+                # step_limit stays finite even when cumulative allocations
+                # are uncapped. Rebuild budgets because SQLite cannot remove
+                # a NOT NULL constraint in place.
+                self.db.execute("ALTER TABLE agent_settings ADD COLUMN step_limit INTEGER NOT NULL DEFAULT 50000")
+                self.db.execute("ALTER TABLE runs ADD COLUMN shift_id TEXT")
+                self.db.execute("""CREATE TABLE shifts (
+                    id TEXT PRIMARY KEY, system_id TEXT NOT NULL REFERENCES systems(id),
+                    window_key TEXT NOT NULL, starts_at REAL NOT NULL, ends_at REAL NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'open', cycles INTEGER NOT NULL DEFAULT 0,
+                    summary TEXT, created_at REAL NOT NULL, finished_at REAL,
+                    UNIQUE(system_id,window_key))""")
+                self.db.execute("ALTER TABLE budgets RENAME TO budgets_v3")
+                self.db.execute("""CREATE TABLE budgets (
+                    scope TEXT NOT NULL CHECK(scope IN ('system','agent','run','pool')),
+                    target TEXT NOT NULL, ceiling INTEGER, pause_percent INTEGER NOT NULL,
+                    checkpoint_reserve INTEGER NOT NULL, PRIMARY KEY(scope,target))""")
+                self.db.execute("INSERT INTO budgets SELECT * FROM budgets_v3")
+                self.db.execute("DROP TABLE budgets_v3")
+                self.db.execute("CREATE INDEX system_shifts ON shifts(system_id,created_at)")
+                self.db.execute("PRAGMA user_version=4")
+                version = 4
+            elif version != 4:
                 raise PersistenceFault(f"Unsupported Swarm schema version: {version}")
             self.db.commit()
         except (sqlite3.Error, PersistenceFault) as exc:
@@ -264,13 +289,18 @@ class SwarmStore:
             self._event(db, system_id, "agent.created", agent_id, {"role": role})
         return agent_id
 
-    def create_run(self, system_id, objective, limit: BudgetLimit):
+    def create_run(self, system_id, objective, limit: BudgetLimit, *, shift_id=None):
         run_id = _id()
         with self.transaction() as db:
             system = self._one(db, "systems", system_id)
             if system["state"] != "idle":
                 raise Conflict("A run can start only in an idle system")
-            db.execute("INSERT INTO runs(id,system_id,objective) VALUES(?,?,?)", (run_id, system_id, objective))
+            if shift_id:
+                shift = self._one(db, "shifts", shift_id)
+                if shift["system_id"] != system_id or shift["state"] != "open":
+                    raise Conflict("Shift is not open for this company")
+            db.execute("INSERT INTO runs(id,system_id,objective,shift_id) VALUES(?,?,?,?)",
+                       (run_id, system_id, objective, shift_id))
             self._limit(db, "run", run_id, limit)
             db.execute("UPDATE systems SET state='active',revision=revision+1 WHERE id=?", (system_id,))
             self._event(db, system_id, "run.started", run_id, {"objective": objective})
@@ -506,6 +536,21 @@ class SwarmStore:
             raise Conflict("Attempt is stale")
         return attempt
 
+    def validate_worker_attempt(self, assignment):
+        """Recheck server-owned identity at the point a bridged tool executes."""
+        with self.transaction() as db:
+            attempt = self._one(db, "attempts", assignment.attempt_id)
+            self._live(db, attempt["id"], attempt["runtime_id"], attempt["generation"])
+            system = self._one(db, "systems", attempt["system_id"])
+            agent = self._one(db, "agents", attempt["agent_id"])
+            disabled = db.execute("SELECT 1 FROM agent_settings WHERE agent_id=? AND enabled=0", (agent["id"],)).fetchone()
+            if (attempt["state"] != "started" or system["state"] != "active" or disabled
+                    or attempt["epoch"] != system["pause_epoch"]
+                    or any(attempt[field] != getattr(assignment, field)
+                           for field in ("system_id", "run_id", "task_id", "agent_id"))):
+                raise Conflict("Worker attempt is no longer authorized")
+            return bool(agent["is_lead"])
+
     def begin(self, attempt_id, runtime_id, generation):
         with self.transaction() as db:
             attempt = self._live(db, attempt_id, runtime_id, generation)
@@ -740,9 +785,112 @@ class SwarmStore:
                 (system_id,)).fetchone()
             return json.loads(row[1]) if row and row[0] == "mission.concluded" else None
 
-    def run_count(self, system_id):
+    def run_count(self, system_id, *, shift_id=None):
         with self._lock:
+            if shift_id:
+                return self.db.execute("SELECT COUNT(*) FROM runs WHERE system_id=? AND shift_id=?",
+                                       (system_id, shift_id)).fetchone()[0]
             return self.db.execute("SELECT COUNT(*) FROM runs WHERE system_id=?", (system_id,)).fetchone()[0]
+
+    def ensure_shift(self, system_id, window_key, starts_at, ends_at):
+        """Create one durable scheduled window, or return its replay."""
+        with self.transaction() as db:
+            self._one(db, "systems", system_id)
+            row = db.execute("SELECT * FROM shifts WHERE system_id=? AND window_key=?",
+                             (system_id, window_key)).fetchone()
+            if row:
+                return dict(row), False
+            shift_id = _id()
+            db.execute("""INSERT INTO shifts(id,system_id,window_key,starts_at,ends_at,created_at)
+                          VALUES(?,?,?,?,?,?)""",
+                       (shift_id, system_id, window_key, starts_at, ends_at, self.clock()))
+            self._event(db, system_id, "shift.opened", shift_id,
+                        {"window_key": window_key, "starts_at": starts_at, "ends_at": ends_at})
+            return dict(self._one(db, "shifts", shift_id)), True
+
+    def active_shift(self, system_id):
+        with self._lock:
+            row = self.db.execute(
+                "SELECT * FROM shifts WHERE system_id=? AND state='open' ORDER BY created_at DESC LIMIT 1",
+                (system_id,)).fetchone()
+            return dict(row) if row else None
+
+    def shift_for_window(self, system_id, window_key):
+        with self._lock:
+            row = self.db.execute("SELECT * FROM shifts WHERE system_id=? AND window_key=?",
+                                  (system_id, window_key)).fetchone()
+            return dict(row) if row else None
+
+    def reopen_shift(self, shift_id):
+        """An explicit Resume may override a manual pause in this window."""
+        with self.transaction() as db:
+            shift = self._one(db, "shifts", shift_id)
+            if shift["state"] != "skipped":
+                raise Conflict("That scheduled shift has already finished")
+            if db.execute("SELECT 1 FROM shifts WHERE system_id=? AND state='open' AND id!=?",
+                          (shift["system_id"], shift_id)).fetchone():
+                raise Conflict("Another scheduled shift is already open")
+            db.execute("UPDATE shifts SET state='open',summary=NULL,finished_at=NULL WHERE id=?", (shift_id,))
+            self._event(db, shift["system_id"], "shift.reopened", shift_id, {})
+
+    def finish_shift(self, shift_id, *, reason, summary=""):
+        with self.transaction() as db:
+            shift = self._one(db, "shifts", shift_id)
+            if shift["state"] != "open":
+                return False
+            state = "skipped" if reason == "manual_pause" else "completed"
+            db.execute("UPDATE shifts SET state=?,summary=?,finished_at=? WHERE id=?",
+                       (state, (summary or "")[:4000], self.clock(), shift_id))
+            if reason == "stalled" and not db.execute(
+                    "SELECT 1 FROM attempts WHERE system_id=? AND state IN ('reserved','started','unknown')",
+                    (shift["system_id"],)).fetchone():
+                db.execute("""UPDATE tasks SET state='cancelled',revision=revision+1 WHERE run_id IN
+                    (SELECT id FROM runs WHERE shift_id=?) AND state NOT IN ('done','cancelled')""", (shift_id,))
+                db.execute("UPDATE runs SET state='completed' WHERE shift_id=? AND state='running'", (shift_id,))
+                db.execute("UPDATE systems SET state='idle',revision=revision+1 WHERE id=? AND state='active'",
+                           (shift["system_id"],))
+            self._event(db, shift["system_id"], "shift.finished", shift_id,
+                        {"reason": reason, "summary": (summary or "")[:4000]})
+            return True
+
+    def count_shift_cycle(self, shift_id):
+        with self.transaction() as db:
+            shift = self._one(db, "shifts", shift_id)
+            if shift["state"] != "open":
+                raise Conflict("Shift is closed")
+            db.execute("UPDATE shifts SET cycles=cycles+1 WHERE id=?", (shift_id,))
+
+    def scheduled_systems(self):
+        with self._lock:
+            rows = self.db.execute("SELECT * FROM systems WHERE json_extract(configuration, '$.mode')='scheduled'")
+            values = []
+            for row in rows:
+                value = dict(row)
+                value["configuration"] = json.loads(value["configuration"])
+                values.append(value)
+            return values
+
+    def latest_shift_summary(self, system_id):
+        with self._lock:
+            row = self.db.execute(
+                "SELECT summary FROM shifts WHERE system_id=? AND summary IS NOT NULL ORDER BY created_at DESC LIMIT 1",
+                (system_id,)).fetchone()
+            return row[0] if row and row[0] else None
+
+    def record_memory_access(self, assignment, kind, data):
+        """Audit a bounded read against the same live attempt identity."""
+        if kind not in ("memory.search", "memory.read"):
+            raise ValueError("Unknown memory event")
+        with self.transaction() as db:
+            attempt = self._one(db, "attempts", assignment.attempt_id)
+            self._live(db, attempt["id"], attempt["runtime_id"], attempt["generation"])
+            system = self._one(db, "systems", attempt["system_id"])
+            if attempt["state"] != "started" or system["state"] != "active" \
+                    or attempt["epoch"] != system["pause_epoch"] \
+                    or any(attempt[field] != getattr(assignment, field)
+                           for field in ("system_id", "run_id", "task_id", "agent_id")):
+                raise Conflict("Worker attempt is no longer authorized")
+            self._event(db, assignment.system_id, kind, assignment.attempt_id, data)
 
     def eligible_tasks(self, system_id):
         """Ready work that could actually be claimed right now.
@@ -922,14 +1070,14 @@ class SwarmStore:
         with self._lock:
             return [dict(row) for row in self.db.execute("""SELECT a.*,
                     COALESCE(s.instructions,'') AS instructions, COALESCE(s.enabled,1) AS enabled,
-                    s.endpoint_id, s.model, s.effort FROM agents a
+                    s.endpoint_id, s.model, s.effort, s.step_limit FROM agents a
                     LEFT JOIN agent_settings s ON s.agent_id=a.id
                     WHERE a.system_id=? ORDER BY a.is_lead DESC,a.rowid""", (system_id,))]
 
     def agent_config(self, agent_id):
         with self._lock:
             row = self.db.execute("""SELECT a.*, COALESCE(s.instructions,'') AS instructions,
-                    COALESCE(s.enabled,1) AS enabled, s.endpoint_id, s.model, s.effort
+                    COALESCE(s.enabled,1) AS enabled, s.endpoint_id, s.model, s.effort, s.step_limit
                     FROM agents a LEFT JOIN agent_settings s ON s.agent_id=a.id WHERE a.id=?""",
                                   (agent_id,)).fetchone()
             if row is None:
@@ -1053,7 +1201,7 @@ class SwarmStore:
                 raise Conflict("Restore the system before saving a new handoff")
             cursor = db.execute("SELECT COALESCE(MAX(id),0) FROM events WHERE system_id=?", (system_id,)).fetchone()[0]
             snapshot = {"system": system, "event_cursor": cursor, "saved_at": self.clock()}
-            for table in ("agents", "runs", "tasks", "attempts", "messages"):
+            for table in ("agents", "runs", "tasks", "attempts", "messages", "shifts"):
                 snapshot[table] = [dict(row) for row in db.execute(f"SELECT * FROM {table} WHERE system_id=? ORDER BY id", (system_id,))]
             snapshot["actions"] = [dict(row) for row in db.execute("SELECT a.* FROM actions a JOIN attempts p ON p.id=a.attempt_id WHERE p.system_id=?", (system_id,))]
             snapshot["dependencies"] = [dict(row) for row in db.execute("SELECT d.* FROM dependencies d JOIN tasks t ON t.id=d.task_id WHERE t.system_id=?", (system_id,))]
@@ -1157,13 +1305,26 @@ class SwarmStore:
             agent_id = _id()
             db.execute("INSERT INTO agents VALUES(?,?,?,?,?,?)",
                        (agent_id, system_id, data["name"], data["role"], int(is_lead), target_pool))
-        db.execute("""INSERT INTO agent_settings(agent_id,instructions,enabled,endpoint_id,model,effort)
-            VALUES(?,?,1,?,?,?) ON CONFLICT(agent_id) DO UPDATE SET
+        ceiling = data["limit"].get("ceiling")
+        step_limit = data.get("step_limit") or max(500, (ceiling or 200000) // 4)
+        units(step_limit, "step_limit", positive=True)
+        db.execute("""INSERT INTO agent_settings(agent_id,instructions,enabled,endpoint_id,model,effort,step_limit)
+            VALUES(?,?,1,?,?,?,?) ON CONFLICT(agent_id) DO UPDATE SET
             instructions=excluded.instructions, enabled=1, endpoint_id=excluded.endpoint_id,
-            model=excluded.model, effort=excluded.effort""",
-                   (agent_id, data["instructions"], data.get("endpoint_id"), data.get("model"), data.get("effort")))
+            model=excluded.model, effort=excluded.effort, step_limit=excluded.step_limit""",
+                   (agent_id, data["instructions"], data.get("endpoint_id"), data.get("model"),
+                    data.get("effort"), step_limit))
         self._replace_limit(db, "agent", agent_id, data["limit"])
         return agent_id
+
+    @staticmethod
+    def _configuration(data):
+        return {
+            "mode": data["mode"],
+            "run_limit": data["run_limit"],
+            "schedule": data.get("schedule") or {"enabled": False},
+            "memory": data.get("memory") or {"sources": [], "project_id": None, "max_results": 5},
+        }
 
     def owner_create(self, owner, data, command_id):
         with self.transaction() as db:
@@ -1179,7 +1340,7 @@ class SwarmStore:
                 db.execute("INSERT INTO pools VALUES(?,?,?,NULL)", (pool_id, data["name"] + " allocation", owner))
                 self._limit(db, "pool", pool_id, BudgetLimit(**data["pool_limit"]))
             system_id = _id()
-            configuration = {"mode": data["mode"], "run_limit": data["run_limit"]}
+            configuration = self._configuration(data)
             db.execute("INSERT INTO systems(id,owner,name,mission,created_at,configuration) VALUES(?,?,?,?,?,?)",
                        (system_id, owner, data["name"], data["mission"], self.clock(), _json(configuration)))
             self._limit(db, "system", system_id, BudgetLimit(**data["system_limit"]))
@@ -1208,6 +1369,18 @@ class SwarmStore:
             self._owned_pool(db, owner, pool_id)
             if data.get("pool_id") not in (None, pool_id):
                 raise Conflict("Changing allocation groups requires usage reconciliation")
+            pool_limits = data.get("pool_limits") or []
+            pool_ids = [item["id"] for item in pool_limits]
+            if len(pool_ids) != len(set(pool_ids)):
+                raise ValueError("Allocation group IDs must be unique")
+            for item in pool_limits:
+                self._owned_pool(db, owner, item["id"])
+                if not db.execute(
+                    "SELECT 1 FROM agents WHERE system_id=? AND pool_id=?",
+                    (system_id, item["id"]),
+                ).fetchone():
+                    raise NotFound("Allocation group not found")
+                self._replace_limit(db, "pool", item["id"], item["limit"])
             members = [data["lead"], *data["specialists"]]
             retained = [member["id"] for member in members if member.get("id")]
             if len(retained) != len(set(retained)):
@@ -1224,8 +1397,12 @@ class SwarmStore:
             self._team_member(db, owner, system_id, pool_id, data["lead"], True, existing=True)
             for member in data["specialists"]:
                 self._team_member(db, owner, system_id, pool_id, member, False, existing=True)
+            # Resume reuses the paused run. Apply its edited allocation now,
+            # preserving usage/holds and leaving closed-run budgets untouched.
+            for run in db.execute("SELECT id FROM runs WHERE system_id=? AND state='paused'", (system_id,)).fetchall():
+                self._replace_limit(db, "run", run["id"], data["run_limit"])
             db.execute("UPDATE systems SET name=?,mission=?,configuration=?,revision=revision+1 WHERE id=?",
-                       (data["name"], data["mission"], _json({"mode": data["mode"], "run_limit": data["run_limit"]}), system_id))
+                       (data["name"], data["mission"], _json(self._configuration(data)), system_id))
             self._event(db, system_id, "system.updated", system_id, {})
             result = {"id": system_id, "revision": expected_revision + 1}
             self._remember(db, system_id, command_id, payload, result)
@@ -1249,7 +1426,8 @@ class SwarmStore:
             self._remember(db, system_id, command_id, payload, result)
             return result
 
-    def owner_lifecycle(self, owner, system_id, action, command_id, expected_revision, *, blocked=None):
+    def owner_lifecycle(self, owner, system_id, action, command_id, expected_revision, *, blocked=None,
+                        spend_confirmed=False):
         """`blocked` is the service's capability verdict, or None to proceed.
 
         The store never decides whether a provider can execute; it only
@@ -1259,7 +1437,7 @@ class SwarmStore:
         """
         with self.transaction() as db:
             system = self._owned(db, owner, system_id)
-            payload = ["lifecycle", action, expected_revision]
+            payload = ["lifecycle", action, expected_revision, spend_confirmed]
             replay = self._replay(db, system_id, command_id, payload)
             if replay is not None:
                 return replay
@@ -1268,6 +1446,8 @@ class SwarmStore:
                 if blocked is not None:
                     result = {"status": "blocked", **blocked}
                 else:
+                    if spend_confirmed is not True:
+                        raise Conflict("Confirm provider spending before starting or resuming this company")
                     required = ("idle", "stopped") if action == "start" else ("paused",)
                     if system["state"] not in required:
                         raise Conflict("The system is not in a state that allows this action")
@@ -1300,6 +1480,65 @@ class SwarmStore:
             self._remember(db, system_id, command_id, payload, result)
             return result
 
+    def owner_delete(self, owner, system_id, confirmation, command_id, expected_revision):
+        """Permanently remove one archived company and its private records.
+
+        The owner-scoped command record deliberately survives the company so
+        a retried DELETE remains idempotent after the system row is gone.
+        Allocation groups survive whenever another company still uses them.
+        """
+        scope = "owner-delete:" + owner
+        payload = ["delete_system", system_id, confirmation, expected_revision]
+        with self.transaction() as db:
+            replay = self._replay(db, scope, command_id, payload)
+            if replay is not None:
+                return replay
+            system = self._owned(db, owner, system_id)
+            self._revision(system, expected_revision)
+            if system["state"] != "archived":
+                raise Conflict("Archive the company before deleting it")
+            if confirmation != system["name"]:
+                raise Conflict("Type the company name exactly to delete it")
+            if db.execute("SELECT 1 FROM attempts WHERE system_id=? AND state IN ('reserved','started','unknown')",
+                          (system_id,)).fetchone():
+                raise Conflict("Reconcile unfinished workers before deleting this company")
+            if db.execute("SELECT 1 FROM runs WHERE system_id=? AND state IN ('running','paused')",
+                          (system_id,)).fetchone():
+                raise Conflict("Stop the current run before deleting this company")
+
+            pool_ids = [row[0] for row in db.execute(
+                "SELECT DISTINCT pool_id FROM agents WHERE system_id=?", (system_id,)).fetchall()]
+            db.execute("DELETE FROM worker_events WHERE attempt_id IN (SELECT id FROM attempts WHERE system_id=?)", (system_id,))
+            db.execute("DELETE FROM actions WHERE attempt_id IN (SELECT id FROM attempts WHERE system_id=?)", (system_id,))
+            db.execute("DELETE FROM usage WHERE attempt_id IN (SELECT id FROM attempts WHERE system_id=?)", (system_id,))
+            db.execute("DELETE FROM attempts WHERE system_id=?", (system_id,))
+            db.execute("""DELETE FROM dependencies WHERE
+                task_id IN (SELECT id FROM tasks WHERE system_id=?) OR
+                depends_on IN (SELECT id FROM tasks WHERE system_id=?)""", (system_id, system_id))
+            db.execute("DELETE FROM messages WHERE system_id=?", (system_id,))
+            db.execute("DELETE FROM tasks WHERE system_id=?", (system_id,))
+            db.execute("DELETE FROM checkpoints WHERE system_id=?", (system_id,))
+            db.execute("DELETE FROM events WHERE system_id=?", (system_id,))
+            db.execute("DELETE FROM budgets WHERE scope='system' AND target=?", (system_id,))
+            db.execute("DELETE FROM budgets WHERE scope='agent' AND target IN (SELECT id FROM agents WHERE system_id=?)", (system_id,))
+            db.execute("DELETE FROM budgets WHERE scope='run' AND target IN (SELECT id FROM runs WHERE system_id=?)", (system_id,))
+            db.execute("DELETE FROM agent_settings WHERE agent_id IN (SELECT id FROM agents WHERE system_id=?)", (system_id,))
+            db.execute("DELETE FROM commands WHERE scope=?", (system_id,))
+            db.execute("DELETE FROM commands WHERE scope=? AND json_extract(result, '$.id')=?", ("owner:" + owner, system_id))
+            db.execute("DELETE FROM agents WHERE system_id=?", (system_id,))
+            db.execute("DELETE FROM runs WHERE system_id=?", (system_id,))
+            db.execute("DELETE FROM shifts WHERE system_id=?", (system_id,))
+            db.execute("DELETE FROM systems WHERE id=?", (system_id,))
+            for pool_id in pool_ids:
+                if db.execute("SELECT 1 FROM agents WHERE pool_id=?", (pool_id,)).fetchone():
+                    continue
+                db.execute("DELETE FROM quotas WHERE pool_id=?", (pool_id,))
+                db.execute("DELETE FROM budgets WHERE scope='pool' AND target=?", (pool_id,))
+                db.execute("DELETE FROM pools WHERE id=?", (pool_id,))
+            result = {"status": "deleted", "id": system_id}
+            self._remember(db, scope, command_id, payload, result)
+            return result
+
     def finalize_stop(self, system_id):
         with self.transaction() as db:
             system = self._one(db, "systems", system_id)
@@ -1329,7 +1568,7 @@ class SwarmStore:
         with self.transaction() as db:
             return [dict(row) for row in db.execute("SELECT id,name FROM pools WHERE owner=? ORDER BY name,id", (owner,))]
 
-    COLLECTIONS = {"tasks", "messages", "runs", "attempts", "events", "checkpoints"}
+    COLLECTIONS = {"tasks", "messages", "runs", "attempts", "events", "checkpoints", "shifts"}
 
     def _page(self, db, system_id, collection, offset, limit):
         if collection not in self.COLLECTIONS:
@@ -1354,7 +1593,7 @@ class SwarmStore:
             # connection" for an agent that has one. Identifiers and public
             # model names only - no URL, no key.
             agents = [dict(row) for row in db.execute("""SELECT a.*,COALESCE(s.instructions,'') AS instructions,
-                COALESCE(s.enabled,1) AS enabled, s.endpoint_id, s.model, s.effort
+                COALESCE(s.enabled,1) AS enabled, s.endpoint_id, s.model, s.effort, s.step_limit
                 FROM agents a LEFT JOIN agent_settings s ON s.agent_id=a.id
                 WHERE a.system_id=? ORDER BY a.is_lead DESC,a.rowid""", (system_id,))]
             budgets = [dict(row) for row in db.execute("""SELECT b.* FROM budgets b WHERE
