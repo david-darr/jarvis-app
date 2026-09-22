@@ -122,5 +122,56 @@ class QuotaUsageTests(unittest.TestCase):
                 self.assertEqual(client.get("/api/models/quotas").json(), {"providers": [], "recorded": []})
 
 
+class ModelMarkTests(unittest.TestCase):
+    """Each added model shows its provider's logo, or none: a wrong logo is
+    worse than the generic icon."""
+
+    def test_provider_is_recognised_from_kind_model_and_host(self):
+        from core.model_marks import mark_for
+        cases = {
+            "claude": [{"kind": "claude_cli"}, {"kind": "api", "base_url": "https://openrouter.ai/api/v1", "model": "anthropic/claude-3.5-sonnet"}],
+            "openai": [{"kind": "codex_cli"}, {"kind": "api", "base_url": "https://api.openai.com/v1", "model": "gpt-5"}],
+            "grok": [{"kind": "api", "base_url": "https://api.x.ai/v1", "model": "grok-4"}],
+            "perplexity": [{"kind": "api", "base_url": "https://api.perplexity.ai", "model": "sonar-pro"}],
+            "deepseek": [{"kind": "api", "base_url": "https://api.deepseek.com", "model": "deepseek-chat"}],
+            "gemini": [{"kind": "api", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "model": "gemini-2.5-pro"}],
+            "meta": [{"kind": "local", "base_url": "http://localhost:11434/v1", "model": "llama3.1:8b"}],
+            "qwen": [{"kind": "local", "base_url": "http://localhost:11434/v1", "model": "Qwen 3.8"}],
+            "ollama": [{"kind": "local", "base_url": "http://localhost:11434/v1", "model": "mystery-model"}],
+            "openrouter": [{"kind": "api", "base_url": "https://openrouter.ai/api/v1", "model": "vendor/unknown"}],
+        }
+        for mark, endpoints in cases.items():
+            for endpoint in endpoints:
+                with self.subTest(endpoint=endpoint):
+                    self.assertEqual(mark_for(endpoint), mark)
+
+    def test_no_match_is_no_logo_not_a_wrong_one(self):
+        from core.model_marks import mark_for
+        for endpoint in ({"kind": "api", "base_url": "https://example.com/v1", "model": "graphite"},
+                         {"kind": "api", "base_url": "https://evilx.ai.example.com", "model": "helper"},
+                         {"kind": "api", "base_url": "not a url", "model": ""}):
+            with self.subTest(endpoint=endpoint):
+                self.assertIsNone(mark_for(endpoint))
+
+    def test_every_mark_has_its_logo_file_and_the_files_are_inert(self):
+        from core.model_marks import MARKS
+        folder = Path(__file__).resolve().parents[1] / "static" / "img" / "model-marks"
+        self.assertTrue((folder / "NOTICE.md").exists())
+        for mark in MARKS:
+            with self.subTest(mark=mark):
+                svg = (folder / f"{mark}.svg").read_text(encoding="utf-8")
+                self.assertIn('fill="currentColor"', svg)
+                self.assertNotRegex(svg.lower(), r"<script|on[a-z]+=|href=")
+
+    def test_the_model_list_carries_each_models_mark(self):
+        app = FastAPI()
+        app.include_router(model_routes.router)
+        app.dependency_overrides[require_admin] = lambda: "admin"
+        endpoints = [{"id": "a", "name": "Grok", "kind": "api", "base_url": "https://api.x.ai/v1", "model": "grok-4"},
+                     {"id": "b", "name": "Mine", "kind": "api", "base_url": "https://example.com", "model": "x"}]
+        with TestClient(app) as client, patch.object(model_routes.model_endpoints, "list_endpoints", return_value=endpoints):
+            self.assertEqual([e["mark"] for e in client.get("/api/models").json()], ["grok", None])
+
+
 if __name__ == "__main__":
     unittest.main()

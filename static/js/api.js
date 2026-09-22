@@ -154,6 +154,17 @@ export function iconButton(iconSvg, title, onclick, { danger = false } = {}) {
 // Bare "Nothing here yet." sentences replaced with a real icon + hint, and
 // optionally a primary action so an empty list is a starting point rather
 // than a dead end (David's ask 2026-09-03).
+// A model provider's logo (static/img/model-marks/, LobeHub, MIT), or null when
+// core/model_marks.py found none and the caller keeps its generic icon. Drawn as a
+// mask in the current text colour, so it follows the theme; `mark` only ever comes
+// from the server's fixed list, and is checked here anyway before it reaches a URL.
+export function modelMark(mark, label = "") {
+  if (!mark || !/^[a-z0-9-]+$/.test(mark)) return null;
+  const node = el("span", { class: "model-mark", role: "img", "aria-label": label || mark });
+  node.style.setProperty("--mark", `url('/static/img/model-marks/${mark}.svg')`);
+  return node;
+}
+
 export function emptyState({ icon, title, hint, actionLabel, onAction }) {
   const node = el("div", { class: "empty-state empty-state-rich" });
   if (icon) {

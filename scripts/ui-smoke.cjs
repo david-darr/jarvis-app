@@ -17,9 +17,9 @@ const writes = [];
 const now = Date.now() / 1000;
 const future = (hours) => new Date(Date.now() + hours * 3600000).toISOString();
 const models = [
-  { id: "m1", name: "Claude", model: "Sonnet", kind: "claude_cli" },
-  { id: "m2", name: "Codex", model: "Default", kind: "codex_cli" },
-  { id: "m3", name: "Local workspace", model: "Local model", kind: "local" },
+  { id: "m1", name: "Claude", model: "Sonnet", kind: "claude_cli", mark: "claude" },
+  { id: "m2", name: "Codex", model: "Default", kind: "codex_cli", mark: "openai" },
+  { id: "m3", name: "Local workspace", model: "Local model", kind: "local", mark: null },
 ];
 const sessions = [
   { id: "s1", title: "A clearer direction for the workspace", updated_at: now - 1200, project_id: "p1" },
@@ -239,6 +239,9 @@ app.whenReady().then(async () => {
           // spent, never a "% used" figure that reads like a quota.
           const labels = await js("[...document.querySelectorAll('.dashboard-model-usage')].map(n => n.textContent)");
           assert.deepEqual(labels, ["842K tokens via JARVIS"], label + " home model usage labels");
+          // Provider logos where known (core/model_marks.py); the generic icon where not.
+          const marks = await js("[...document.querySelectorAll('.dashboard-row > .model-mark')].map(n => n.getAttribute('aria-label'))");
+          assert.deepEqual(marks, ["Claude", "Codex"], label + " home model logos");
         }
         assert.deepEqual(await overflow(), [], label + " overflow in " + tab);
         await capture(label + "-" + tab);

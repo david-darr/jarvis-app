@@ -23,7 +23,8 @@ contextBridge.exposeInMainWorld("jarvis", {
     state: () => ipcRenderer.invoke("usage-overlay:state"),
     setVisible: (visible) => ipcRenderer.invoke("usage-overlay:set-visible", !!visible),
     setConfig: (changes) => ipcRenderer.invoke("usage-overlay:set-config", {
-      edge: changes && changes.edge, foldOnHover: changes && changes.foldOnHover }),
+      edge: changes && changes.edge, foldOnHover: changes && changes.foldOnHover,
+      offset: changes && changes.offset, displayId: changes && changes.displayId }),
     onState: (handler) => {
       const wrapped = (_event, state) => handler(state);
       ipcRenderer.on("usage-overlay:state", wrapped);

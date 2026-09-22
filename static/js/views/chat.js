@@ -1,4 +1,4 @@
-import { api, el, toast, confirmDialog } from "../api.js";
+import { api, el, toast, confirmDialog, modelMark } from "../api.js";
 import { runSlashCommand } from "../slashCommands.js";
 import * as chatStream from "../chatStream.js";
 import { renderMessageBody, copyText, closeArtifact } from "../chatContent.js";
@@ -1110,6 +1110,7 @@ async function refreshModelPicker(currentEndpointId, modelOverride = null, model
 
   const options = endpoints.map((ep) => ({
     id: ep.id,
+    mark: ep.mark,
     name: ep.kind === "claude_cli" || ep.kind === "codex_cli" ? `${ep.name} (${ep.model || "CLI default"})` : `${ep.name} (${ep.model})`,
   }));
   if (options.length === 0) {
@@ -1136,6 +1137,8 @@ async function refreshModelPicker(currentEndpointId, modelOverride = null, model
         } catch (_) { /* api() displays the mutation error */ }
       },
     });
+    const itemMark = modelMark(opt.mark, opt.name);
+    if (itemMark) item.prepend(itemMark);
     menu.appendChild(item);
   }
   const active = options.find((o) => o.id === currentEndpointId);

@@ -256,3 +256,8 @@ body[data-edge="top"] #move{--arc:270deg}
   opacity:0;transition:opacity .2s;pointer-events:none}
 #notice.show{opacity:1}
 body[data-edge="left"] #notice{left:100px;right:10px;margin-left:0;margin-right:auto}
+
+/* Provider logos as masks in the text colour (static/img/model-marks/, LobeHub,
+   MIT). CodeNotch inlines the SVG; a mask keeps SVG markup out of the page. The
+   sizes above (.glyph .mark, .c-head .mark) are CodeNotch's own. */
+.mark{background:currentColor;-webkit-mask:var(--mark) center/contain no-repeat;mask:var(--mark) center/contain no-repeat}

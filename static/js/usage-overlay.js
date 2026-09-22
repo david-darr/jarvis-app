@@ -43,10 +43,15 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s || 
    shape - {status, windows:[{id, label, used 0..1, resets_at ms}], fetched_at
    ms, note} - so readings are converted once, here, and everything below is
    CodeNotch's code reading CodeNotch's shape. */
+// `mark` is the provider's logo in static/img/model-marks/ (LobeHub, MIT; see the
+// NOTICE there): Codex shows the OpenAI mark, as CodeNotch's ring does.
 const PROVIDERS = [
-  { id: 'claude', name: 'Claude', glyph: 'C' },
-  { id: 'codex', name: 'Codex', glyph: 'Cx' },
+  { id: 'claude', name: 'Claude', mark: 'claude' },
+  { id: 'codex', name: 'Codex', mark: 'openai' },
 ];
+// A mark is drawn as a mask in the current text colour, so it is white on the
+// pill like CodeNotch's, and no SVG markup is ever put into the page.
+function markHtml(mark) { return `<span class="mark" style="--mark:url('/static/img/model-marks/${mark}.svg')"></span>`; }
 const WINDOW_IDS = { '5-hour': 'session', 'Weekly': 'weekly' };
 const WINDOW_LABELS = { '5-hour': '5-hour limit', 'Weekly': 'Weekly limit' };
 const STATUS = { ok: 'ok', stale: 'stale', needs_sign_in: 'needsAuth', rate_limited: 'stale', unavailable: 'stale' };
@@ -101,7 +106,7 @@ function renderRing() {
   const want = ps.map(p => p.id).join(',');
   if (pill.dataset.cells !== want) {
     pill.innerHTML = ps.map((p, i) => `<div class="cell" data-p="${p.id}" style="--i:${i}">
-      <div class="ringwrap"><svg class="ring" viewBox="0 0 56 56"></svg><svg class="reading" viewBox="0 0 56 56"></svg><svg class="activity" viewBox="0 0 56 56"></svg><div class="glyph ${p.glyph.length > 1 ? 'small' : ''}">${esc(p.glyph)}</div></div>
+      <div class="ringwrap"><svg class="ring" viewBox="0 0 56 56"></svg><svg class="reading" viewBox="0 0 56 56"></svg><svg class="activity" viewBox="0 0 56 56"></svg><div class="glyph">${markHtml(p.mark)}</div></div>
       <div class="pct">—</div></div>`).join('');
     pill.dataset.cells = want;
   }
@@ -155,7 +160,7 @@ function renderCard() {
   const p = providers().find(x => x.id === hoverId) || providers()[0];
   if (!p) { hideCard(); return; }
   const snap = p.snap;
-  let html = `<div class="c-head"><span class="c-title">${esc(p.name + ' Usage')}</span></div>`;
+  let html = `<div class="c-head">${markHtml(p.mark)}<span class="c-title">${esc(p.name + ' Usage')}</span></div>`;
   if (staleOf(snap) && snap.fetched_at) html += `<div class="c-sub">Updated ${ago(snap.fetched_at)}</div>`;
   if (snap.status === 'needsAuth') {
     html += `<div class="c-note">${esc(SIGN_IN[p.id] || '')}<br>${esc(snap.note)}</div>`;
@@ -174,19 +179,35 @@ function renderCard() {
   card.innerHTML = html;
   placeCard();
 }
-// The card follows the hovered cell, centred on it along the pill and kept inside the window
+function edgeIsVertical() { return notchEdge === 'left' || notchEdge === 'right'; }
+// The card follows the hovered cell (CodeNotch's placeCard): on the upright edges
+// it is centred on the cell's height; lying flat, on its width, and pushed clear
+// of the pill with the tail spanning the 30 px gap.
 function placeCard() {
   const cell = pill.querySelector(`.cell[data-p="${hoverId}"]`) || pill;
   const cr = cell.getBoundingClientRect();
   const rr = (cell.querySelector('.ringwrap') || cell).getBoundingClientRect();
   card.style.transform = 'none';
-  const cy = cr.top + cr.height / 2;
-  const H = innerHeight, ch = card.offsetHeight || 0;
-  let top = Math.round(cy - ch / 2); top = Math.max(8, Math.min(top, H - ch - 8));
-  card.style.top = top + 'px'; card.style.left = '';
-  const ry = rr.top + rr.height / 2;
-  const th = tail.offsetHeight || 36, ty = Math.max(top + 16 + th / 2, Math.min(top + ch - 16 - th / 2, ry));
-  tail.style.top = Math.round(ty - th / 2) + 'px'; tail.style.left = '';
+  if (edgeIsVertical()) {
+    const cy = cr.top + cr.height / 2;
+    const H = innerHeight, ch = card.offsetHeight || 0;
+    let top = Math.round(cy - ch / 2); top = Math.max(8, Math.min(top, H - ch - 8));
+    card.style.top = top + 'px'; card.style.left = '';
+    const ry = rr.top + rr.height / 2;
+    const th = tail.offsetHeight || 36, ty = Math.max(top + 16 + th / 2, Math.min(top + ch - 16 - th / 2, ry));
+    tail.style.top = Math.round(ty - th / 2) + 'px'; tail.style.left = '';
+  } else {
+    const pr = pill.getBoundingClientRect();
+    const cx = cr.left + cr.width / 2;
+    const W = innerWidth, cw = card.offsetWidth || 0, ch = card.offsetHeight || 0;
+    let left = Math.round(cx - cw / 2); left = Math.max(8, Math.min(left, W - cw - 8));
+    card.style.left = left + 'px';
+    const rx = rr.left + rr.width / 2;
+    const tw = tail.offsetWidth || 36, tx = Math.max(left + 16 + tw / 2, Math.min(left + cw - 16 - tw / 2, rx));
+    tail.style.left = Math.round(tx - tw / 2) + 'px';
+    if (notchEdge === 'top') { card.style.top = Math.round(pr.bottom + 30) + 'px'; tail.style.top = Math.round(pr.bottom - 1) + 'px'; }
+    else { card.style.top = Math.round(pr.top - 30 - ch) + 'px'; tail.style.top = Math.round(pr.top - 31) + 'px'; }
+  }
 }
 
 /* Hover: stays open while the pill or the card is under the pointer; closes after CodeNotch's 250 ms grace */
@@ -218,7 +239,10 @@ let interactive = null, lastPointer = null;
 const WAKE_BAND = 34;  // CodeNotch's pillHotZone: the folded pill is small, the place that opens it should not be
 function wakeHit(x, y) {
   const r = document.getElementById('rest').getBoundingClientRect();
+  // Deepened into the screen from whichever edge the notch is on
   const band = notchEdge === 'left' ? { left: r.left, top: r.top, right: r.right + WAKE_BAND, bottom: r.bottom }
+    : notchEdge === 'top' ? { left: r.left, top: r.top, right: r.right, bottom: r.bottom + WAKE_BAND }
+    : notchEdge === 'bottom' ? { left: r.left, top: r.top - WAKE_BAND, right: r.right, bottom: r.bottom }
     : { left: r.left - WAKE_BAND, top: r.top, right: r.right, bottom: r.bottom };
   return inRect(x, y, band, 0);
 }
@@ -284,8 +308,11 @@ function placeHandles() {
   const r = pill.getBoundingClientRect();
   if (!r.width) return false;
   const R = parseFloat(getComputedStyle(pill).getPropertyValue('--fillet')) || 38.7;
-  const far = notchEdge === 'left' ? [r.left + R, r.bottom + R] : [r.right - R, r.bottom + R];
-  const near = notchEdge === 'left' ? [r.left + R, r.top - R] : [r.right - R, r.top - R];
+  // Each fillet's centre: the corner of its square diagonally opposite the one on the screen edge
+  const far = notchEdge === 'left' ? [r.left + R, r.bottom + R] : notchEdge === 'top' ? [r.right + R, r.top + R]
+    : notchEdge === 'bottom' ? [r.right + R, r.bottom - R] : [r.right - R, r.bottom + R];
+  const near = notchEdge === 'left' ? [r.left + R, r.top - R] : notchEdge === 'top' ? [r.left - R, r.top + R]
+    : notchEdge === 'bottom' ? [r.left - R, r.bottom - R] : [r.right - R, r.top - R];
   orbAt = put(orb, far[0], far[1]);
   moveAt = put(moveHandle, near[0], near[1]);
   return true;
@@ -328,7 +355,7 @@ function scheduleFold() {
 let press = null;
 document.addEventListener('mousemove', e => {
   lastPointer = { x: e.clientX, y: e.clientY };
-  if (carrying) { bridge.moveTo && bridge.moveTo(e.screenY); return; }
+  if (carrying) { bridge.moveTo && bridge.moveTo(e.screenX, e.screenY); return; }
   const over = overNotch(e.clientX, e.clientY);
   if (over && folded) { pointerIn = true; unfold(); }
   pointerIn = over || pointerInHot(e.clientX, e.clientY);
@@ -371,7 +398,7 @@ moveHandle.addEventListener('mousedown', e => {
   moveHandle.classList.add('armed', 'hover');
   moveHandle.style.setProperty('--spins', ++moveSpins);
   clearTimeout(hideTimer); hideCard();
-  bridge.moveStart && bridge.moveStart(e.screenY);
+  bridge.moveStart && bridge.moveStart(e.screenX, e.screenY);
   updateInteractive();
 });
 document.addEventListener('contextmenu', e => e.preventDefault());
@@ -379,7 +406,7 @@ document.addEventListener('contextmenu', e => e.preventDefault());
 /* ---- Edge and settings, from the main process --------------------------------- */
 let notchEdge = 'right';
 function applyConfig(config) {
-  const edge = config && config.edge === 'left' ? 'left' : 'right';
+  const edge = config && ['left', 'top', 'bottom'].includes(config.edge) ? config.edge : 'right';
   notchEdge = edge;
   document.body.dataset.edge = edge;
   onHover = !(config && config.foldOnHover === false);

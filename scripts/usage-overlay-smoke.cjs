@@ -41,11 +41,19 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify(quota()));
     return;
   }
+  const markMatch = /^\/static\/img\/model-marks\/([a-z0-9-]+\.svg)$/.exec(req.url);
+  if (markMatch) {
+    servedMarks.push(markMatch[1]);
+    res.writeHead(200, { 'Content-Type': 'image/svg+xml' });
+    res.end(fs.readFileSync(path.join(root, 'static/img/model-marks', markMatch[1])));
+    return;
+  }
   const file = files[req.url];
   if (!file) { res.writeHead(404); res.end(); return; }
   res.writeHead(200, { 'Content-Type': file[1] });
   res.end(fs.readFileSync(path.join(root, file[0])));
 });
+const servedMarks = [];
 const interactive = [];
 let openedApp = 0;
 ipcMain.on('usage-overlay:interactive', (_e, on) => interactive.push(on));
@@ -120,9 +128,34 @@ async function run() {
   await move(ring[0], ring[1]);
   await waitFor("document.getElementById('card').innerText.includes('Sign in to Claude Code')");
 
+  // Real logos, not letters: Claude's mark and the OpenAI mark for Codex, loaded and in use.
+  assert.deepEqual([...new Set(servedMarks)].sort(), ['claude.svg', 'openai.svg']);
+  assert.match(await js("getComputedStyle(document.querySelector('.cell[data-p=codex] .mark')).maskImage"), /openai\.svg/);
+  assert.match(await js("document.querySelector('#card .c-head .mark').style.getPropertyValue('--mark')"), /claude\.svg/);
+
+  // Every edge: the pill against that edge and the card fully inside the window, never clipped.
+  for (const [edge, width, height] of [['left', 360, 650], ['top', 650, 650], ['bottom', 650, 650], ['right', 360, 650]]) {
+    win.setContentSize(width, height);
+    win.webContents.send('usage-overlay:config', { edge, foldOnHover: false });
+    await waitFor(`document.body.dataset.edge === '${edge}' && !document.body.classList.contains('folded')`);
+    await delay(450);
+    const ringAt = await js("(r => [r.left + r.width / 2, r.top + r.height / 2])(document.querySelector('.cell[data-p=codex] .ringwrap').getBoundingClientRect())");
+    await move(ringAt[0], ringAt[1]);
+    await waitFor("document.getElementById('card').classList.contains('show') && document.getElementById('card').innerText.includes('Codex Usage')");
+    await delay(300);
+    const geometry = await js(`(() => { const box = el => { const r = document.getElementById(el).getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom }; };
+      return { W: innerWidth, H: innerHeight, pill: box('pill'), card: box('card') }; })()`);
+    const { W, H, pill, card } = geometry;
+    const touching = { left: Math.round(pill.l) === 0, right: Math.round(pill.r) === W, top: Math.round(pill.t) === 0, bottom: Math.round(pill.b) === H }[edge];
+    assert.ok(touching, `${edge}: pill is flush against its edge ${JSON.stringify(geometry)}`);
+    assert.ok(card.l >= 0 && card.t >= 0 && card.r <= W && card.b <= H, `${edge}: card inside the window ${JSON.stringify(geometry)}`);
+    fs.writeFileSync(path.join(output, `edge-${edge}.png`), (await win.webContents.capturePage()).toPNG());
+    await move(-1, -1);
+  }
+
   // Nothing the page renders may come from a script-capable source.
   assert.equal(await js("document.querySelectorAll('#card script, #card img, #card iframe').length"), 0);
-  console.log('PASS: usage notch folded/unfold, card, click-through, ring refresh, signed-out state. Screenshots: ' + output);
+  console.log('PASS: usage notch folded/unfold, card, click-through, ring refresh, signed-out state, logos, all four edges. Screenshots: ' + output);
 }
 run().then(() => exitAfterFlush(0), (error) => { console.error(error); exitAfterFlush(1); }).finally(() => {
   if (win && !win.isDestroyed()) win.destroy();

@@ -1245,6 +1245,10 @@ input[type="checkbox"]:checked::after { border-color: #141318; }
 .dashboard-section-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .dashboard-section-header h2 { font-size: 13px; font-weight: 500; margin: 0; color: var(--text); }
 .dashboard-section-header .btn { font-size: 10px; padding: 4px 0 4px 8px; }
+/* Model provider logos (see modelMark in static/js/api.js). */
+.model-mark { display: inline-block; flex: none; width: 1em; height: 1em; vertical-align: -0.14em; background: currentColor; -webkit-mask: var(--mark) center/contain no-repeat; mask: var(--mark) center/contain no-repeat; }
+.dashboard-row > .model-mark { width: 18px; height: 18px; color: var(--text); }
+.model-picker-item .model-mark, .model-row-title .model-mark { margin-right: 7px; }
 .dashboard-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 8px; background: transparent; border: none; border-radius: 8px; color: var(--text-dim); text-align: left; }
 button.dashboard-row { cursor: pointer; }
 button.dashboard-row:hover { background: rgba(255,255,255,.035); }

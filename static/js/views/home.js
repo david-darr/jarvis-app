@@ -1,4 +1,4 @@
-import { api, el } from "../api.js";
+import { api, el, modelMark } from "../api.js";
 import { ICONS } from "../icons.js";
 import { mount as mountCore } from "../core3d.js";
 import { listInFlight, subscribeAll } from "../chatStream.js";
@@ -168,6 +168,9 @@ export function render(container) {
     if (!endpoints?.length) empty(models.body, "Connect a model in Settings to get started.", endpoints === null);
     else endpoints.forEach((endpoint) => {
       const modelRow = row(endpoint.name, endpoint.model || endpoint.kind.replaceAll("_", " "), "brain", () => navigate("settings"));
+      // The provider's own logo in place of the generic brain icon, when one is known
+      const mark = modelMark(endpoint.mark, endpoint.name);
+      if (mark) modelRow.firstElementChild.replaceWith(mark);
       const label = usageLabel(endpoint, usage?.[endpoint.id]);
       if (label) modelRow.append(el("span", { class: "dashboard-model-usage", text: label.text, title: label.title }));
       models.body.append(modelRow);

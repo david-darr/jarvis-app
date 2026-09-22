@@ -1,4 +1,4 @@
-import { api, el, customSelect, toast, confirmDialog } from "../api.js";
+import { api, el, customSelect, toast, confirmDialog, modelMark } from "../api.js";
 import { suppressBrowser, releaseBrowser } from "../browserPane.js";
 import { renderSpeechPanel } from "./speechPanel.js";
 import { renderAppearancePanel } from './appearancePanel.js';
@@ -594,7 +594,7 @@ async function renderAddedModelsPanel(content) {
       : `${ep.model} · ${ep.base_url}${ep.has_api_key ? " · key saved" : ""}${ep.kind === "local" && ep.num_ctx ? ` · ctx ${ep.num_ctx}` : ""}`;
     const row = el("div", { class: "card-row", style: "justify-content:space-between;align-items:center;margin-top:8px;" }, [
       el("div", {}, [
-        el("div", { class: "title", style: "font-size:12.5px;", text: ep.name }),
+        el("div", { class: "title model-row-title", style: "font-size:12.5px;" }, [modelMark(ep.mark, ep.name), ep.name].filter(Boolean)),
         el("div", { class: "meta", text: metaText }),
       ]),
       el("div", { class: "card-row", style: "gap:6px;" }, [resultEl, testBtn, delBtn]),

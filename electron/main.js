@@ -52,18 +52,33 @@ let isQuitting = false;
 let usageOverlay = null;
 let usageOverlayVisible = false;
 let backendReady = false;
-// The notch's own settings (Appearance): which screen edge it sits on, whether it
-// folds to a sliver until hovered, and where along the edge it was left.
-let overlayConfig = { edge: "right", foldOnHover: true, offset: 0.5 };
+// The notch's own settings (Appearance): which monitor and screen edge it sits
+// on, where along that edge (0 = top/left end, 1 = bottom/right end), and
+// whether it folds to a sliver until hovered. displayId null = the main display.
+const placement = require("./usage-overlay-placement");
+const OVERLAY_EDGES = placement.EDGES;
+let overlayConfig = { edge: "right", displayId: null, offset: 0.5, foldOnHover: true };
 let overlayDrag = null;
 
-// Window size from CodeNotch's upright notch (NOTCH_W x its height): room for
-// the 70 px pill against the edge and the 246 px card beside it.
-const NOTCH_WIDTH = 360;
-const NOTCH_HEIGHT = 460;
+// Size and position live in electron/usage-overlay-placement.js, pure and tested.
+function overlayVertical() { return placement.isVertical(overlayConfig.edge); }
+// The chosen monitor, or the main one when it is unset or no longer plugged in.
+function overlayDisplay() {
+  return placement.chooseDisplay(screen.getAllDisplays(), overlayConfig.displayId, screen.getPrimaryDisplay().id);
+}
+function overlayDisplays() {
+  const primaryId = screen.getPrimaryDisplay().id;
+  return screen.getAllDisplays().map((d, i) => ({
+    id: d.id,
+    label: `Display ${i + 1}: ${Math.round(d.size.width * d.scaleFactor)}x${Math.round(d.size.height * d.scaleFactor)}${d.id === primaryId ? " (main)" : ""}`,
+  }));
+}
 
 function overlayPreferenceFile() { return path.join(app.getPath("userData"), "usage-overlay.json"); }
-function overlayState() { return { visible: usageOverlayVisible, supported: process.platform === "win32", ...overlayConfig }; }
+function overlayState() {
+  return { visible: usageOverlayVisible, supported: process.platform === "win32", ...overlayConfig,
+    displays: overlayDisplays() };
+}
 function notifyOverlayState() {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("usage-overlay:state", overlayState());
   if (usageOverlay && !usageOverlay.isDestroyed()) usageOverlay.webContents.send("usage-overlay:config", overlayConfig);
@@ -81,21 +96,14 @@ function loadOverlayPreference() {
     const saved = JSON.parse(fs.readFileSync(overlayPreferenceFile(), "utf8"));
     usageOverlayVisible = saved.visible === true;
     overlayConfig = {
-      edge: saved.edge === "left" ? "left" : "right",
-      foldOnHover: saved.foldOnHover !== false,
+      edge: OVERLAY_EDGES.includes(saved.edge) ? saved.edge : "right",
+      displayId: Number.isFinite(saved.displayId) ? saved.displayId : null,
       offset: Number.isFinite(saved.offset) ? Math.min(1, Math.max(0, saved.offset)) : 0.5,
+      foldOnHover: saved.foldOnHover !== false,
     };
   } catch { usageOverlayVisible = false; }
 }
-// Flush against the chosen edge of the primary display's work area (so the
-// taskbar is never covered), at the saved fraction of the way down it.
-function overlayBounds() {
-  const area = screen.getPrimaryDisplay().workArea;
-  const height = Math.min(NOTCH_HEIGHT, area.height);
-  const x = overlayConfig.edge === "left" ? area.x : area.x + area.width - NOTCH_WIDTH;
-  const travel = Math.max(0, area.height - height);
-  return { x, y: Math.round(area.y + travel * overlayConfig.offset), width: NOTCH_WIDTH, height };
-}
+function overlayBounds() { return placement.boundsFor(overlayConfig, overlayDisplay()); }
 async function setUsageOverlayVisible(visible) {
   if (process.platform !== "win32") return overlayState();
   usageOverlayVisible = !!visible;
@@ -128,8 +136,12 @@ async function setUsageOverlayVisible(visible) {
   return overlayState();
 }
 function setOverlayConfig(changes) {
-  if (changes && (changes.edge === "left" || changes.edge === "right")) overlayConfig.edge = changes.edge;
+  if (changes && OVERLAY_EDGES.includes(changes.edge)) overlayConfig.edge = changes.edge;
   if (changes && typeof changes.foldOnHover === "boolean") overlayConfig.foldOnHover = changes.foldOnHover;
+  if (changes && Number.isFinite(changes.offset)) overlayConfig.offset = Math.min(1, Math.max(0, changes.offset));
+  if (changes && (changes.displayId === null || screen.getAllDisplays().some((d) => d.id === changes.displayId))) {
+    overlayConfig.displayId = changes.displayId;
+  }
   saveOverlayPreference();
   if (usageOverlay && !usageOverlay.isDestroyed()) usageOverlay.setBounds(overlayBounds());
   notifyOverlayState();
@@ -475,25 +487,22 @@ ipcMain.on("usage-overlay:interactive", (event, on) => {
 });
 // The move handle slides the notch along its edge: the window follows the
 // pointer's screen y, clamped to the work area, and the place is remembered.
-ipcMain.on("usage-overlay:move-start", (event, screenY) => {
+// Along the edge means y on the left and right edges, x on the top and bottom.
+ipcMain.on("usage-overlay:move-start", (event, point) => {
   if (!fromOverlayWindow(event)) return;
-  overlayDrag = { startY: screenY, windowY: usageOverlay.getBounds().y };
+  const b = usageOverlay.getBounds();
+  overlayDrag = { start: overlayVertical() ? point.y : point.x, window: overlayVertical() ? b.y : b.x };
 });
-ipcMain.on("usage-overlay:move-to", (event, screenY) => {
+ipcMain.on("usage-overlay:move-to", (event, point) => {
   if (!fromOverlayWindow(event) || !overlayDrag) return;
-  const area = screen.getPrimaryDisplay().workArea;
-  const bounds = usageOverlay.getBounds();
-  const y = Math.min(area.y + area.height - bounds.height, Math.max(area.y, overlayDrag.windowY + (screenY - overlayDrag.startY)));
-  usageOverlay.setBounds({ ...bounds, y: Math.round(y) });
+  usageOverlay.setBounds(placement.dragTo(overlayConfig.edge, usageOverlay.getBounds(), overlayDisplay(), overlayDrag, point));
 });
 ipcMain.on("usage-overlay:move-end", (event) => {
   if (!fromOverlayWindow(event) || !overlayDrag) return;
   overlayDrag = null;
-  const area = screen.getPrimaryDisplay().workArea;
-  const bounds = usageOverlay.getBounds();
-  const travel = Math.max(1, area.height - bounds.height);
-  overlayConfig.offset = Math.min(1, Math.max(0, (bounds.y - area.y) / travel));
+  overlayConfig.offset = placement.offsetOf(overlayConfig.edge, usageOverlay.getBounds(), overlayDisplay());
   saveOverlayPreference();
+  notifyOverlayState();  // the Appearance slider follows the handle
 });
 ipcMain.on("usage-overlay:hide", (event) => {
   if (fromOverlayWindow(event)) setUsageOverlayVisible(false).catch(console.error);
@@ -589,6 +598,13 @@ if (!gotTheLock) {
 
   app.whenReady().then(() => {
     loadOverlayPreference();
+    const replaceOverlay = () => {
+      if (usageOverlay && !usageOverlay.isDestroyed()) usageOverlay.setBounds(overlayBounds());
+      notifyOverlayState();
+    };
+    screen.on("display-added", replaceOverlay);
+    screen.on("display-removed", replaceOverlay);
+    screen.on("display-metrics-changed", replaceOverlay);
     launch();
     setupAutoUpdate();
 

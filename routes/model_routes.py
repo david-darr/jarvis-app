@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from core import model_catalog, model_endpoints, quota_usage, token_usage
+from core import model_catalog, model_endpoints, model_marks, quota_usage, token_usage
 from core.middleware import require_admin, require_user
 from core.providers import openai_compatible
 
@@ -36,7 +36,9 @@ class CreateEndpointRequest(BaseModel):
 
 @router.get("")
 async def list_endpoints(user: str = Depends(require_admin)) -> list[dict]:
-    return model_endpoints.list_endpoints()
+    # `mark` names the provider logo the UI shows beside each model
+    # (core/model_marks.py); None keeps the generic icon.
+    return [{**endpoint, "mark": model_marks.mark_for(endpoint)} for endpoint in model_endpoints.list_endpoints()]
 
 
 @router.get("/catalog")
