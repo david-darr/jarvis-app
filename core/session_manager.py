@@ -73,7 +73,7 @@ class SessionManager:
     def set_starred(self, session_id: str, starred: bool) -> dict:
         session = self._require(session_id)
         session["starred"] = starred
-        return store.save_session(session)
+        return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def get_session(self, session_id: str) -> Optional[dict]:
         return store.get_session(session_id)
@@ -92,17 +92,31 @@ class SessionManager:
         return session
 
     def append_message(self, session_id: str, role: str, content: str, status: str = "complete") -> None:
-        session = self._require(session_id)
-        session["messages"].append({"role": role, "content": content, "ts": time.time(), "status": status})
-        session["updated_at"] = time.time()
+        """Add one turn to a conversation.
+
+        Deliberately never loads the transcript to do it: the store hands
+        back the session's own fields plus a count, and one row is written.
+        Reading the whole conversation in order to append to it is what made
+        this cost grow with the conversation's length — at 800 messages a
+        single append took 66 ms, against 6 ms for the JSON store this
+        replaced. It is now flat.
+        """
+        header = store.get_session_header(session_id)
+        if header is None:
+            raise KeyError(f"no such session: {session_id}")
+        session, count = header
+
+        now = time.time()
+        message = {"role": role, "content": content, "ts": now, "status": status}
+        session["updated_at"] = now
 
         # Auto-title from the first user message, same idea as most chat UIs
         # (Odysseus included) — a session named "New Chat" forever isn't
         # findable in a sidebar list.
-        if session["title"] == "New Chat" and role == "user":
+        if session.get("title") == "New Chat" and role == "user":
             session["title"] = content[:60]
 
-        store.save_session(session)
+        store.append_message(session_id, count, message, session)
 
     def set_model_endpoint(self, session_id: str, model_endpoint_id: Optional[str], model_override: Optional[str] = None,
                            model_effort: Optional[str] = None) -> dict:
@@ -138,7 +152,7 @@ class SessionManager:
         session["model_endpoint_id"] = model_endpoint_id
         session["model_override"] = model_override
         session["model_effort"] = model_effort
-        return store.save_session(session)
+        return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def set_context_state(self, session_id: str, state: Optional[dict]) -> None:
         """Records this chat's CURRENT context occupancy (David's ask
@@ -162,7 +176,7 @@ class SessionManager:
         if session is None:
             return
         session["context_state"] = state
-        store.save_session(session)
+        store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def set_codex_thread_id(self, session_id: str, thread_id: Optional[str]) -> dict:
         """Records the Codex CLI thread id a session's first codex_cli turn
@@ -172,7 +186,7 @@ class SessionManager:
         something the UI lists sessions by."""
         session = self._require(session_id)
         session["codex_thread_id"] = thread_id
-        return store.save_session(session)
+        return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def register_artifact(self, session_id: str, url: str) -> None:
         """Make a published file previewable before the turn finishes."""
@@ -180,7 +194,7 @@ class SessionManager:
         urls = session.setdefault("artifact_urls", [])
         if url not in urls:
             urls.append(url)
-            store.save_session(session)
+            store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def set_open_mic(self, session_id: str, active: bool) -> dict:
         """Marks a session as an Open Mic conversation (David's ask
@@ -203,7 +217,7 @@ class SessionManager:
             session.setdefault("open_mic_started_at", len(session.get("messages", [])))
         else:
             session.pop("open_mic_started_at", None)
-        return store.save_session(session)
+        return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def effective_messages(self, session_id: Optional[str], exclude_last: bool = False) -> list[dict]:
         """What a brain should treat as this session's prior conversation:
@@ -262,7 +276,14 @@ class SessionManager:
         compactions = session.setdefault("compactions", [])
         compactions.append({"through_index": through_index, "summary": summary, "created_at": time.time()})
         session["updated_at"] = time.time()
-        return store.save_session(session)
+        # The `archived` flag is written onto the messages themselves, and a
+        # message is its own stored row — so the rows do have to be rewritten.
+        # (This said MESSAGES_UNCHANGED while transcripts still lived inside
+        # the session document, where the flag rode along for free. Moving
+        # them out made that false; the rebuild-equivalence test caught it.)
+        # Compaction is a deliberate, occasional action rather than a
+        # per-turn cost, so rebuilding the whole transcript here is fine.
+        return store.save_session(session, rebuild_messages_from=store.ALL_MESSAGES)
 
     def replace_messages(self, session_id: str, start_index: int, replacement: list) -> dict:
         """Swaps a run of messages for a shorter stand-in, keeping everything
@@ -278,7 +299,9 @@ class SessionManager:
         start = max(0, min(start_index, len(messages)))
         session["messages"] = messages[:start] + replacement
         session["updated_at"] = time.time()
-        return store.save_session(session)
+        # Everything from the splice point on is new, and there may now be
+        # fewer messages than before; the store deletes the stale tail.
+        return store.save_session(session, rebuild_messages_from=start)
 
     def set_project(self, session_id: str, project_id: Optional[str]) -> dict:
         """Assigns a session to a project (core/projects.py), or clears it
@@ -288,7 +311,7 @@ class SessionManager:
         injected at connection time."""
         session = self._require(session_id)
         session["project_id"] = project_id
-        return store.save_session(session)
+        return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def set_workspace(self, session_id: str, workspace_dir: Optional[str]) -> dict:
         """Pin a session's agent tools to a specific folder (see
@@ -296,7 +319,7 @@ class SessionManager:
         calling this), or clear back to None for the default vault scope."""
         session = self._require(session_id)
         session["workspace_dir"] = workspace_dir
-        return store.save_session(session)
+        return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def set_integrations(self, session_id: str, enabled_integration_ids: Optional[list[str]]) -> dict:
         """Restrict which MCP Tool Server integrations this chat can
@@ -305,12 +328,12 @@ class SessionManager:
         connector toggle makes."""
         session = self._require(session_id)
         session["enabled_integration_ids"] = enabled_integration_ids
-        return store.save_session(session)
+        return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def rename_session(self, session_id: str, title: str) -> None:
         session = self._require(session_id)
         session["title"] = title
-        store.save_session(session)
+        store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def delete_session(self, session_id: str) -> None:
         store.delete_session(session_id)

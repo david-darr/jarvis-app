@@ -937,6 +937,100 @@ class SessionStoreTests(unittest.TestCase):
         self.assertEqual(len(session_manager.get_session(sid)["messages"]), 3)
         self.assertTrue(session_manager.get_session(sid)["messages"][0]["archived"])
 
+    def test_incremental_writes_match_a_full_rebuild(self):
+        """The guard on the incremental message-write path.
+
+        save_session() only re-derives the message and FTS rows a caller says
+        it changed, because rebuilding all of them on every append made a
+        turn cost grow with the length of the chat (255 ms/message at 800
+        messages, worse than the JSON store it replaced). The risk that buys
+        is a search index quietly describing an older transcript, so this
+        drives a mixed run of every edit shape and asserts the derived rows
+        are byte-identical to what a from-scratch rebuild produces.
+        """
+        sid = session_manager.create_session()["id"]
+        for i in range(6):
+            session_manager.append_message(sid, "user" if i % 2 == 0 else "assistant", f"turn {i} content")
+        session_manager.compact_session(sid, 2, "summary of the first two")
+        session_manager.append_message(sid, "user", "after the compaction")
+        session_manager.replace_messages(sid, 4, [{"role": "assistant", "content": "spliced replacement"}])
+        session_manager.append_message(sid, "user", "after the splice")
+        session_manager.set_starred(sid, True)
+        session_manager.rename_session(sid, "renamed")
+
+        def derived():
+            conn = session_store.connection()
+            msgs = conn.execute(
+                "SELECT idx, role, content, ts FROM messages WHERE session_id = ? ORDER BY idx", (sid,)
+            ).fetchall()
+            fts = conn.execute(
+                "SELECT idx, role, content FROM messages_fts WHERE session_id = ? ORDER BY idx", (sid,)
+            ).fetchall()
+            return [tuple(r) for r in msgs], [tuple(r) for r in fts]
+
+        incremental_msgs, incremental_fts = derived()
+        session_store.rebuild_search_index()
+        rebuilt_msgs, rebuilt_fts = derived()
+
+        self.assertEqual(incremental_msgs, rebuilt_msgs)
+        self.assertEqual(incremental_fts, rebuilt_fts)
+        # And the rows actually describe the transcript, not a stale version.
+        stored = [(m.get("role"), m.get("content")) for m in session_manager.get_session(sid)["messages"]]
+        self.assertEqual([(r[1], r[2]) for r in rebuilt_msgs], stored)
+
+    def test_message_level_fields_survive_every_edit_shape(self):
+        """Each message is its own stored row, so a field written onto a
+        message — not onto the session — only persists if that row is
+        rewritten. Compaction's `archived` flag was lost exactly this way
+        when transcripts moved out of the session document, and the rebuild
+        -equivalence test alone could NOT have caught it: once rows are the
+        source of truth, a rebuild reproduces the same stale rows. This
+        asserts against what a caller reads back instead.
+        """
+        sid = session_manager.create_session()["id"]
+        session_manager.append_message(sid, "user", "first", status="complete")
+        session_manager.append_message(sid, "assistant", "second", status="interrupted")
+        session_manager.append_message(sid, "user", "third")
+
+        # A per-message field set at append time.
+        self.assertEqual(
+            [m["status"] for m in session_manager.get_session(sid)["messages"]],
+            ["complete", "interrupted", "complete"])
+
+        # A per-message field written by a later operation.
+        session_manager.compact_session(sid, 2, "folded the first two")
+        messages = session_manager.get_session(sid)["messages"]
+        self.assertTrue(messages[0].get("archived"))
+        self.assertTrue(messages[1].get("archived"))
+        self.assertFalse(messages[2].get("archived", False))
+        # Statuses were not collateral damage of that rewrite.
+        self.assertEqual([m["status"] for m in messages], ["complete", "interrupted", "complete"])
+
+        # A metadata-only edit must not disturb any of it.
+        session_manager.set_starred(sid, True)
+        session_manager.set_project(sid, "p1")
+        messages = session_manager.get_session(sid)["messages"]
+        self.assertTrue(messages[0].get("archived"))
+        self.assertEqual([m["status"] for m in messages], ["complete", "interrupted", "complete"])
+        self.assertEqual([m["content"] for m in messages], ["first", "second", "third"])
+
+    def test_a_shrinking_transcript_leaves_no_stale_rows(self):
+        """replace_messages() can leave fewer messages than were there
+        before; the tail must not survive in the index and keep answering
+        searches for text the user no longer has."""
+        sid = session_manager.create_session()["id"]
+        for word in ("alpha", "bravo", "charlie", "delta"):
+            session_manager.append_message(sid, "user", f"{word} marker")
+        session_manager.replace_messages(sid, 1, [{"role": "assistant", "content": "condensed"}])
+        self.assertEqual(len(session_manager.get_session(sid)["messages"]), 2)
+        rows = session_store.connection().execute(
+            "SELECT COUNT(*) AS n FROM messages WHERE session_id = ?", (sid,)).fetchone()["n"]
+        self.assertEqual(rows, 2)
+        self.assertTrue(memory_tools.search_sessions("alpha marker"))
+        for gone in ("bravo", "charlie", "delta"):
+            with self.subTest(word=gone):
+                self.assertFalse(memory_tools.search_sessions(f"{gone} marker"))
+
     def test_channel_mapping_heals_when_its_session_is_deleted(self):
         first = session_manager.get_or_create_channel_session("test:chan", "Chan")
         self.assertEqual(session_manager.get_or_create_channel_session("test:chan", "Chan"), first)
