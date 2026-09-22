@@ -75,6 +75,9 @@ LEGACY_BACKUP_DIR = os.path.join(DATA_DIR, "sessions.pre-sqlite-backup")
 
 SCHEMA_VERSION = 2
 
+# meta key written as the import's last step; see _legacy_import_done().
+LEGACY_IMPORT_MARKER = "legacy_json_import_completed_at"
+
 _LOCK = threading.RLock()
 
 # The columns mirrored out of `doc` on every write. Kept in one place so
@@ -574,13 +577,26 @@ def _migrate_if_needed(conn: sqlite3.Connection) -> None:
     checks because the public helpers would re-enter _connect().
     """
     global _last_migration
+    if _legacy_import_done(conn):
+        return
     if not os.path.isdir(LEGACY_SESSIONS_DIR):
         return
     if not _legacy_session_ids():
         return
-    if conn.execute("SELECT COUNT(*) AS n FROM sessions").fetchone()["n"] > 0:
-        return
     _last_migration = _import_legacy_json(conn)
+
+
+def _legacy_import_done(conn: sqlite3.Connection) -> bool:
+    """Whether a JSON import has run to completion.
+
+    The gate is this marker rather than "the database is empty": each session
+    is saved in its own transaction, so an import interrupted part-way leaves
+    a non-empty database, and an emptiness check would then skip the rest for
+    good — the chats not yet copied stranded in a directory nothing reads.
+    """
+    return conn.execute(
+        "SELECT 1 FROM meta WHERE key = ?", (LEGACY_IMPORT_MARKER,)
+    ).fetchone() is not None
 
 
 def last_migration() -> Optional[dict]:
@@ -595,12 +611,12 @@ def last_migration() -> Optional[dict]:
 def migrate_from_json() -> dict:
     """Import the JSON store into SQLite, once.
 
-    Safe to call at any time: it returns immediately unless legacy files are
-    present AND the database has no sessions yet, so a partially completed
-    run simply repeats from the start rather than double-importing or
-    resuming into an inconsistent half-state. The legacy files are MOVED to
-    a backup directory and never deleted, so reverting this change means
-    moving them back.
+    Safe to call at any time: it returns immediately once an import has
+    completed or when there are no legacy files. An interrupted run resumes
+    rather than restarting — sessions already in the database are skipped,
+    and since each one was saved in a single transaction, one that is there
+    is there whole. The legacy files are MOVED to a backup directory and
+    never deleted, so reverting this change means moving them back.
 
     In practice the first _connect() has already done this; the explicit
     call is here for a manual re-run and returns the same shape.
@@ -611,8 +627,8 @@ def migrate_from_json() -> dict:
         return {"migrated": 0, "skipped": "no legacy session files"}
     with _LOCK:
         conn = _connect()
-        if conn.execute("SELECT COUNT(*) AS n FROM sessions").fetchone()["n"] > 0:
-            return {"migrated": 0, "skipped": "database already populated"}
+        if _legacy_import_done(conn):
+            return {"migrated": 0, "skipped": "import already completed"}
         return _import_legacy_json(conn)
 
 
@@ -620,9 +636,13 @@ def _import_legacy_json(conn: sqlite3.Connection) -> dict:
     """The import itself. Preconditions are the caller's job."""
     legacy_ids = _legacy_session_ids()
     indexed = set(read_json(LEGACY_INDEX_FILE, {}) or {})
-    migrated, recovered, unreadable = 0, [], []
+    migrated, recovered, unreadable, resumed = 0, [], [], 0
 
     for sid in legacy_ids:
+        if conn.execute("SELECT 1 FROM sessions WHERE id = ?", (sid,)).fetchone():
+            # Copied by an earlier run that was interrupted before finishing.
+            resumed += 1
+            continue
         path = os.path.join(LEGACY_SESSIONS_DIR, f"{sid}.json")
         doc = read_json(path, None)
         if not isinstance(doc, dict):
@@ -658,16 +678,26 @@ def _import_legacy_json(conn: sqlite3.Connection) -> dict:
             continue
         shutil.move(src, dest)
 
+    # Last, so any interruption above leaves the import to be resumed.
+    with conn:
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (LEGACY_IMPORT_MARKER, str(time.time())),
+        )
+
     result = {
         "migrated": migrated,
+        "resumed_from_earlier_run": resumed,
         "recovered_orphans": recovered,
         "unreadable": unreadable,
         "backup_dir": LEGACY_BACKUP_DIR,
     }
     logger.info(
-        "session store: migrated %d session(s) from JSON to SQLite; "
-        "recovered %d not present in the old index (%s); %d unreadable. Backup: %s",
-        migrated, len(recovered), ", ".join(recovered) or "none",
+        "session store: migrated %d session(s) from JSON to SQLite (%d already "
+        "copied by an interrupted earlier run); recovered %d not present in the "
+        "old index (%s); %d unreadable. Backup: %s",
+        migrated, resumed, len(recovered), ", ".join(recovered) or "none",
         len(unreadable), LEGACY_BACKUP_DIR,
     )
     return result

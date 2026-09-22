@@ -2,6 +2,7 @@
 Run: .venv/Scripts/python.exe scripts/test_chat.py
 """
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -1097,6 +1098,51 @@ class SessionMigrationTests(unittest.TestCase):
         again = session_store.migrate_from_json()
         self.assertEqual(again["migrated"], 0)
         self.assertEqual(session_store.session_count(), 1)
+
+    def test_an_interrupted_migration_is_finished_on_the_next_launch(self):
+        """Each session is saved in its own transaction, so a crash part-way
+        leaves some chats copied and the rest still on disk. The next launch
+        must pick those up; gating on "is the database empty" skipped them
+        for good."""
+        for sid in ("aaa", "bbb", "ccc", "ddd"):
+            self._legacy(sid)
+        real_save, calls = session_store.save_session, []
+
+        def crash_on_third(doc, *args, **kwargs):
+            calls.append(doc["id"])
+            if len(calls) == 3:
+                raise RuntimeError("simulated crash mid-migration")
+            return real_save(doc, *args, **kwargs)
+
+        session_store.save_session = crash_on_third
+        try:
+            with self.assertRaises(RuntimeError):
+                session_store.last_migration()
+        finally:
+            session_store.save_session = real_save
+        session_store._reset_for_tests()  # the next launch
+
+        result = session_store.last_migration()
+        self.assertEqual(result["migrated"], 2)
+        self.assertEqual(result["resumed_from_earlier_run"], 2)
+        self.assertEqual(sorted(s["id"] for s in session_store.list_sessions()),
+                         ["aaa", "bbb", "ccc", "ddd"])
+        self.assertTrue((self.dir / "sessions.pre-sqlite-backup" / "sessions" / "ddd.json").exists())
+
+    def test_a_completed_migration_never_runs_again(self):
+        """The completion marker, not the database's contents, decides. If
+        the legacy files were somehow left in place, a chat the user deleted
+        after migrating must not come back on the next launch."""
+        self._legacy("aaa")
+        self._legacy("bbb")
+        session_store.last_migration()
+        backup = self.dir / "sessions.pre-sqlite-backup"
+        shutil.copytree(backup / "sessions", self.dir / "sessions", dirs_exist_ok=True)
+        session_store.delete_session("bbb")
+        session_store._reset_for_tests()
+        self.assertIsNone(session_store.last_migration())
+        self.assertIsNone(session_store.get_session("bbb"))
+        self.assertEqual(session_store.migrate_from_json()["skipped"], "import already completed")
 
     def test_migration_preserves_fields_the_store_knows_nothing_about(self):
         """Forward compatibility is the reason the document is stored whole.
