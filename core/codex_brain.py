@@ -14,10 +14,11 @@ thread_id on every later turn (not whatever id that resume call itself
 re-emits in its own thread.started event) correctly recalls earlier
 context. The thread_id is persisted onto the session record
 (session_manager.set_codex_thread_id), not just held in memory, so this
-survives an app restart — real continuity Brain's Claude-CLI path doesn't
-have (see chat_service.py's _prime_with_history docstring: the Claude Agent
-SDK exposes no equivalent resume-by-id mechanism, hence that text-replay
-workaround).
+survives an app restart. The Claude path now does the same with the Claude
+Agent SDK's own `resume` option (session_manager.set_claude_session); this
+note used to say that SDK had no resume-by-id, which stopped being true, and
+the whole-transcript replay that claim justified cost a full prompt-cache
+miss on every reconnect.
 
 Verified live, not guessed:
 - `codex exec --json` / `codex exec resume <id> --json` emit clean JSONL

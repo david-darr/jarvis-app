@@ -78,6 +78,46 @@ def extract_context_tokens(usage: dict | None) -> int | None:
     return total or None
 
 
+def _int(value) -> int | None:
+    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def extract_cache_tokens(usage: dict | None) -> dict:
+    """How the last turn's prompt split between the prompt cache and fresh
+    input (the prompt-cache audit, 2026-09-22: JARVIS kept no record of
+    cache reads at all, so a miss was invisible). Each value is None when the
+    provider did not report it, never a guess.
+
+    - Claude Agent SDK: `input_tokens` is already the uncached remainder;
+      reads and writes are reported separately.
+    - Codex: `input_tokens` is the whole input and `cached_input_tokens` a
+      subset of it; writes are not reported.
+    - OpenAI-style: `prompt_tokens_details.cached_tokens` is a subset of
+      `prompt_tokens`. DeepSeek reports `prompt_cache_hit_tokens` and
+      `prompt_cache_miss_tokens` instead.
+    """
+    empty = {"cache_read_tokens": None, "cache_write_tokens": None, "uncached_input_tokens": None}
+    if not usage:
+        return empty
+    if "cache_read_input_tokens" in usage or "cache_creation_input_tokens" in usage:
+        return {"cache_read_tokens": _int(usage.get("cache_read_input_tokens")),
+                "cache_write_tokens": _int(usage.get("cache_creation_input_tokens")),
+                "uncached_input_tokens": _int(usage.get("input_tokens"))}
+    if "cached_input_tokens" in usage:
+        read, total = _int(usage.get("cached_input_tokens")), _int(usage.get("input_tokens"))
+        return {"cache_read_tokens": read, "cache_write_tokens": None,
+                "uncached_input_tokens": None if read is None or total is None else max(total - read, 0)}
+    if "prompt_cache_hit_tokens" in usage or "prompt_cache_miss_tokens" in usage:
+        return {"cache_read_tokens": _int(usage.get("prompt_cache_hit_tokens")), "cache_write_tokens": None,
+                "uncached_input_tokens": _int(usage.get("prompt_cache_miss_tokens"))}
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict) and "cached_tokens" in details:
+        read, total = _int(details.get("cached_tokens")), _int(usage.get("prompt_tokens"))
+        return {"cache_read_tokens": read, "cache_write_tokens": None,
+                "uncached_input_tokens": None if read is None or total is None else max(total - read, 0)}
+    return empty
+
+
 def build_context_state(usage: dict | None, capacity: dict | None, model_id: str | None) -> dict | None:
     """Assemble what the chat header renders, or None when there's nothing
     honest to show. `percent` is present only when BOTH a real measurement
@@ -98,6 +138,8 @@ def build_context_state(usage: dict | None, capacity: dict | None, model_id: str
         "estimated_capacity": False,
         "capacity_source": None,
         "updated_at": time.time(),
+        # Last turn's prompt-cache split; see extract_cache_tokens().
+        **extract_cache_tokens(usage),
     }
     if capacity and capacity.get("effective"):
         effective = int(capacity["effective"])

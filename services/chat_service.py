@@ -102,7 +102,20 @@ async def _get_brain(session_id: str, endpoint: dict, is_admin: bool = False) ->
         return brain, False
 
     brain = _build_brain(endpoint, session_id=session_id, is_admin=is_admin)
-    await brain.connect()
+    try:
+        await brain.connect()
+    except Exception:
+        if not (isinstance(brain, Brain) and brain.resume_session_id):
+            raise
+        # The CLI refused the resume (session pruned, or started in another
+        # working folder). Forget it and start fresh: _prime_with_history
+        # then replays the saved transcript, exactly as before resume
+        # existed, so the chat never gets stuck on a dead session id.
+        logger.warning("claude resume of %s failed for chat %s; starting a fresh CLI session",
+                       brain.resume_session_id, session_id)
+        session_manager.set_claude_session(session_id, None)
+        brain = _build_brain(endpoint, session_id=session_id, is_admin=is_admin)
+        await brain.connect()
     _brains[session_id] = brain
     return brain, True
 
@@ -132,7 +145,8 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
     if endpoint["kind"] == "claude_cli":
         return Brain(cwd_override=workspace_dir, integration_ids=integration_ids,
                      session_id=session_id, model=cli_model or None, is_admin=is_admin,
-                     project_id=project_id, effort=effort)
+                     project_id=project_id, effort=effort,
+                     resume_session_id=(session or {}).get("claude_session_id"))
     if endpoint["kind"] == "codex_cli":
         return CodexBrain(cwd_override=workspace_dir, session_id=session_id,
                           model=cli_model or None, is_admin=is_admin, project_id=project_id,
@@ -142,7 +156,8 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
                          session_id=session_id, num_ctx=num_ctx, is_admin=is_admin, project_id=project_id)
 
 
-def _prime_with_history(session_id: str, just_created: bool, endpoint: dict, full_text: str) -> str:
+def _prime_with_history(session_id: str, just_created: bool, endpoint: dict, full_text: str,
+                        brain: Optional[AnyBrain] = None) -> str:
     """A freshly (re)connected Claude-CLI Brain starts with zero memory of
     this session's prior turns — the Claude Agent SDK only keeps conversation
     state in-process, so a server restart (or any brain eviction) silently
@@ -158,6 +173,21 @@ def _prime_with_history(session_id: str, just_created: bool, endpoint: dict, ful
     long-running session pays this cost only after it's actually needed."""
     if not just_created or endpoint["kind"] != "claude_cli":
         return full_text
+    if isinstance(brain, Brain) and brain.resume_session_id:
+        # Resumed: the CLI already holds the conversation up to the point it
+        # last saw. Hand over only what was saved after that without going
+        # through it - a seeded course note, a stopped reply - normally
+        # nothing. The current message (saved last) is excluded.
+        session = session_manager.get_session(session_id) or {}
+        unseen = session.get("messages", [])[session.get("claude_synced_through", 0):-1]
+        unseen = [m for m in unseen if m.get("content")]
+        if not unseen:
+            return full_text
+        transcript = "\n\n".join(f'{m["role"]}: {m["content"]}' for m in unseen)
+        return (
+            "[Messages added to this chat since your last turn, for context:]\n\n"
+            f"{transcript}\n\n[End of added messages. Current message:]\n{full_text}"
+        )
     prior = session_manager.effective_messages(session_id, exclude_last=True)
     if not prior:
         return full_text
@@ -167,6 +197,28 @@ def _prime_with_history(session_id: str, just_created: bool, endpoint: dict, ful
         f"earlier in this same conversation, for your reference:]\n\n{transcript}"
         f"\n\n[End of prior context. Current message:]\n{full_text}"
     )
+
+
+def _remember_claude_session(session_id: str, brain: Optional[AnyBrain], cancelled: bool = False,
+                             succeeded: bool = True) -> None:
+    """Record which CLI session a Claude chat's turns run in, and that it has
+    now seen every saved message, so the next connect resumes instead of
+    replaying. Called after a turn is saved.
+
+    A stopped turn still counts as seen: the CLI received the message. A
+    turn that failed on a resumed session that never completed a turn is
+    the one case that forgets the session, so a broken resume cannot keep
+    failing every message after it."""
+    if not isinstance(brain, Brain):
+        return
+    if not succeeded and not cancelled:
+        if brain.cli_session_id is None and brain.resume_session_id:
+            session_manager.set_claude_session(session_id, None)
+        return
+    cli_id = brain.cli_session_id or (brain.resume_session_id if cancelled else None)
+    if cli_id:
+        session = session_manager.get_session(session_id) or {}
+        session_manager.set_claude_session(session_id, cli_id, len(session.get("messages", [])))
 
 
 def _apply_attachments(session_id: str, text: str, attachment_ids: list[str] | None) -> str:
@@ -239,7 +291,7 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
 
     full_text = _apply_attachments(session_id, text, attachment_ids)
     brain, just_created = await _get_brain(session_id, endpoint, is_admin)
-    full_text = _prime_with_history(session_id, just_created, endpoint, full_text)
+    full_text = _prime_with_history(session_id, just_created, endpoint, full_text, brain)
     full_text = _apply_open_mic_discipline(session_id, full_text)
     try:
         reply = await brain.run_turn(full_text)
@@ -247,10 +299,12 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
         await close_session_brain(session_id)
         reply = ATTACHMENT_TOO_LARGE_MESSAGE
     except Exception:
+        _remember_claude_session(session_id, brain, succeeded=False)
         await close_session_brain(session_id)
         raise
     _record_turn_telemetry(session_id, endpoint, brain)
     session_manager.append_message(session_id, "assistant", reply)
+    _remember_claude_session(session_id, brain)
     return reply
 
 
@@ -269,10 +323,11 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
         return
 
     reply_parts: list[str] = []
+    brain = None
     try:
         full_text = _apply_attachments(session_id, text, attachment_ids)
         brain, just_created = await _get_brain(session_id, endpoint, is_admin)
-        full_text = _prime_with_history(session_id, just_created, endpoint, full_text)
+        full_text = _prime_with_history(session_id, just_created, endpoint, full_text, brain)
         full_text = _apply_open_mic_discipline(session_id, full_text)
         async for item in _stream_with_permission_prompts(session_id, brain, full_text):
             if isinstance(item, str):
@@ -282,14 +337,17 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
         await close_session_brain(session_id)
         reply_parts.append(ATTACHMENT_TOO_LARGE_MESSAGE)
         yield ATTACHMENT_TOO_LARGE_MESSAGE
-    except BaseException:
+    except BaseException as exc:
         # Includes client cancellation: preserve the visible partial answer.
         session_manager.append_message(session_id, "assistant", "".join(reply_parts), status="interrupted")
+        _remember_claude_session(session_id, brain, succeeded=False,
+                                 cancelled=isinstance(exc, (asyncio.CancelledError, GeneratorExit)))
         await close_session_brain(session_id)
         raise
 
     _record_turn_telemetry(session_id, endpoint, brain)
     session_manager.append_message(session_id, "assistant", "".join(reply_parts))
+    _remember_claude_session(session_id, brain)
 
 
 async def _stream_with_permission_prompts(session_id: str, brain, full_text: str):

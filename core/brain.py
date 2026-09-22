@@ -48,7 +48,7 @@ class Brain:
     def __init__(self, vault_dir: str | None = None, cwd_override: str | None = None,
                  integration_ids: list[str] | None = None, session_id: str | None = None,
                  model: str | None = None, is_admin: bool = False, project_id: str | None = None,
-                 effort: str | None = None):
+                 effort: str | None = None, resume_session_id: str | None = None):
         self.vault_dir = vault_dir or resolve_vault_dir()
         # Optional model override for a "Claude Code CLI" endpoint added in
         # Settings > Add Models (David's ask 2026-08-31 — Claude is no
@@ -102,6 +102,17 @@ class Brain:
         # turn with no session (a scheduled task, say) has no one watching, so
         # the broker denies rather than hanging - see core/permissions.py.
         self.surface = f"chat:{session_id}" if session_id else "none"
+        # The Claude Code CLI session to reopen on connect, when this chat has
+        # one (services/chat_service.py reads it from the session record).
+        # Resuming keeps the real conversation - its turns, tool results and
+        # attachment notes - and a prompt prefix the cache can reuse, where
+        # a fresh connection would need the transcript replayed as one
+        # message. Checked against the installed SDK (0.2.148+): `resume` is
+        # a native ClaudeAgentOptions field, passed as --resume=<id>.
+        self.resume_session_id = resume_session_id
+        # The CLI session id this brain's turns ran in, from each
+        # ResultMessage; chat_service persists it after a successful turn.
+        self.cli_session_id: str | None = None
         self._client: ClaudeSDKClient | None = None
 
     def _options(self) -> ClaudeAgentOptions:
@@ -243,6 +254,7 @@ class Brain:
             allowed_tools=allowed_tools,
             model=self.model,
             effort=self.effort,
+            resume=self.resume_session_id,
             include_partial_messages=True,
             # The "landing zone" (David's ask 2026-09-01, after live-testing
             # found chats couldn't answer real vault/memory questions) —
@@ -342,6 +354,7 @@ class Brain:
                         yield block.text
             if isinstance(message, ResultMessage):
                 self.last_usage = message.usage
+                self.cli_session_id = message.session_id or self.cli_session_id
                 if message.is_error:
                     raise RuntimeError("Claude Code reported an unsuccessful turn")
                 break

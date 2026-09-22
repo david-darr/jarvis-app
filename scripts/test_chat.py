@@ -1221,6 +1221,139 @@ class RepoIntegrityTests(unittest.TestCase):
                           f"Root package.json lost its vendored {dependency} dependency.")
 
 
+class _FakeClaudeClient:
+    """Stands in for ClaudeSDKClient: records what each connection asked to
+    resume and what was sent, and reports a CLI session id like the real one."""
+    instances: list = []
+    refuse_resume = False
+    next_session_id = "cli-session-1"
+
+    def __init__(self, options):
+        self.options = options
+        self.prompts = []
+        _FakeClaudeClient.instances.append(self)
+
+    async def connect(self):
+        if self.options.resume and _FakeClaudeClient.refuse_resume:
+            raise RuntimeError(f"No conversation found with session ID: {self.options.resume}")
+
+    async def query(self, text):
+        self.prompts.append(text)
+
+    async def receive_response(self):
+        yield ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+                            session_id=_FakeClaudeClient.next_session_id,
+                            usage={"input_tokens": 3, "cache_read_input_tokens": 900, "cache_creation_input_tokens": 40})
+
+    async def disconnect(self):
+        pass
+
+
+class ClaudeResumeTests(unittest.TestCase):
+    """A Claude chat that reconnects - after Stop, an error or a restart -
+    must reopen its real CLI session rather than replay the transcript as one
+    message, which the prompt cache cannot reuse. Measured live 2026-09-22:
+    the turn after a Stop went from 12,067 cache-written tokens to 47."""
+
+    def setUp(self):
+        _FakeClaudeClient.instances = []
+        _FakeClaudeClient.refuse_resume = False
+        _FakeClaudeClient.next_session_id = "cli-session-1"
+        chat_service._brains.clear()
+        self.sid = session_manager.create_session("resume")["id"]
+        patches = [patch("core.brain.ClaudeSDKClient", _FakeClaudeClient),
+                   patch.object(chat_service, "_resolve_endpoint", return_value=ENDPOINTS["claude"])]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(chat_service._brains.clear)
+
+    def send(self, text):
+        return asyncio.run(chat_service.send_message(self.sid, text))
+
+    def last_client(self):
+        return _FakeClaudeClient.instances[-1]
+
+    def test_a_reconnect_resumes_the_cli_session_and_replays_nothing(self):
+        self.send("remember amber-falcon")
+        self.assertIsNone(_FakeClaudeClient.instances[0].options.resume)
+        asyncio.run(chat_service.close_session_brain(self.sid))  # what Stop does
+        self.send("what was the word?")
+        self.assertEqual(self.last_client().options.resume, "cli-session-1")
+        self.assertEqual(self.last_client().prompts, ["what was the word?"])
+        stored = session_manager.get_session(self.sid)
+        self.assertEqual(stored["claude_synced_through"], len(stored["messages"]))
+
+    def test_messages_saved_without_the_cli_are_handed_over_on_resume(self):
+        self.send("first question")
+        session_manager.append_message(self.sid, "user", "Course note: exam moved to Friday.")
+        asyncio.run(chat_service.close_session_brain(self.sid))
+        self.send("when is the exam?")
+        prompt = self.last_client().prompts[0]
+        self.assertIn("exam moved to Friday", prompt)
+        self.assertNotIn("first question", prompt, "only what the CLI has not seen is handed over")
+        self.assertTrue(prompt.endswith("when is the exam?"))
+
+    def test_a_refused_resume_falls_back_to_replaying_the_transcript(self):
+        session_manager.append_message(self.sid, "user", "my colour is teal")
+        session_manager.append_message(self.sid, "assistant", "noted")
+        session_manager.set_claude_session(self.sid, "pruned-session", 2)
+        _FakeClaudeClient.refuse_resume = True
+        _FakeClaudeClient.next_session_id = "cli-session-2"
+        self.send("what colour?")
+        self.assertEqual([c.options.resume for c in _FakeClaudeClient.instances], ["pruned-session", None])
+        self.assertIn("my colour is teal", self.last_client().prompts[0])
+        self.assertEqual(session_manager.get_session(self.sid)["claude_session_id"], "cli-session-2")
+
+    def test_a_stopped_turn_keeps_the_session_but_a_failed_resume_forgets_it(self):
+        resumed = Brain(vault_dir=str(tempfile.gettempdir()), session_id=self.sid, resume_session_id="cli-session-1")
+        chat_service._remember_claude_session(self.sid, resumed, succeeded=False, cancelled=True)
+        self.assertEqual(session_manager.get_session(self.sid)["claude_session_id"], "cli-session-1")
+        chat_service._remember_claude_session(self.sid, resumed, succeeded=False)
+        self.assertIsNone(session_manager.get_session(self.sid)["claude_session_id"],
+                          "a resume that never completed a turn must not be retried forever")
+
+    def test_rewriting_history_or_moving_folder_forgets_the_cli_session(self):
+        session_manager.append_message(self.sid, "user", "a")
+        session_manager.append_message(self.sid, "assistant", "b")
+        rewrites = {
+            "compaction": lambda: session_manager.compact_session(self.sid, 1, "summary"),
+            "open mic summary": lambda: session_manager.replace_messages(self.sid, 0, [{"role": "assistant", "content": "s"}]),
+            "workspace": lambda: session_manager.set_workspace(self.sid, tempfile.gettempdir()),
+            "another model": lambda: session_manager.set_model_endpoint(self.sid, "some-other-endpoint"),
+        }
+        for name, rewrite in rewrites.items():
+            with self.subTest(change=name):
+                session_manager.set_claude_session(self.sid, "cli-session-1", 2)
+                rewrite()
+                self.assertIsNone(session_manager.get_session(self.sid)["claude_session_id"])
+
+    def test_each_turn_records_its_prompt_cache_split(self):
+        self.send("hello")
+        state = session_manager.get_session(self.sid)["context_state"]
+        self.assertEqual((state["cache_read_tokens"], state["cache_write_tokens"], state["uncached_input_tokens"]),
+                         (900, 40, 3))
+
+
+class CacheTelemetryTests(unittest.TestCase):
+    """Each provider reports the cache split in its own shape; what is not
+    reported stays None rather than being guessed."""
+
+    def test_each_provider_shape(self):
+        from core import token_usage
+        cases = {
+            "claude": ({"input_tokens": 2, "cache_read_input_tokens": 300, "cache_creation_input_tokens": 50}, (300, 50, 2)),
+            "codex": ({"input_tokens": 1000, "cached_input_tokens": 800}, (800, None, 200)),
+            "openai": ({"prompt_tokens": 500, "prompt_tokens_details": {"cached_tokens": 384}}, (384, None, 116)),
+            "deepseek": ({"prompt_tokens": 90, "prompt_cache_hit_tokens": 64, "prompt_cache_miss_tokens": 26}, (64, None, 26)),
+            "unreported": ({"prompt_tokens": 50}, (None, None, None)),
+        }
+        for name, (usage, expected) in cases.items():
+            with self.subTest(provider=name):
+                got = token_usage.extract_cache_tokens(usage)
+                self.assertEqual((got["cache_read_tokens"], got["cache_write_tokens"], got["uncached_input_tokens"]), expected)
+
+
 class SkillSafetyTests(unittest.TestCase):
     """Skills are instructions a model follows, so the two things that matter
     are that it gets all of one, and that a skill name can only ever mean a

@@ -21,6 +21,14 @@ from typing import Optional
 from core import session_manager_store as store
 
 
+def _clear_claude_session(session: dict) -> None:
+    """Forget the Claude CLI session, so the next connect starts a fresh one
+    primed from the saved transcript. For anything that changes history or
+    working folder in a way the CLI's own copy cannot follow."""
+    session["claude_session_id"] = None
+    session["claude_synced_through"] = 0
+
+
 class SessionManager:
     # No __init__: the store opens lazily on first use and runs the legacy
     # JSON import itself, so the migration doesn't depend on this class
@@ -44,6 +52,13 @@ class SessionManager:
             # <thread_id>` gives real cross-restart conversation continuity,
             # so this is persisted here rather than only held in memory.
             "codex_thread_id": None,
+            # The Claude Code CLI's own session id, and how many of this
+            # chat's saved messages that CLI session has seen. Together they
+            # let a reconnect resume the real conversation (core/brain.py)
+            # instead of replaying the whole transcript as one message, which
+            # the prompt cache cannot reuse. See set_claude_session().
+            "claude_session_id": None,
+            "claude_synced_through": 0,
             # Projects (David's ask 2026-09-12) — None = not in a project.
             # See core/projects.py's project_addendum(): every brain kind
             # appends the assigned project's instructions/documents to its
@@ -143,6 +158,9 @@ class SessionManager:
             # A different endpoint must not resume an old provider's thread.
             # Saved messages are replayed into a fresh Codex thread instead.
             session["codex_thread_id"] = None
+            # Same for Claude: turns answered by another model in between are
+            # not in the CLI's session, so it would resume with a hole in it.
+            _clear_claude_session(session)
         if model_changed:
             # A different model has a different context capacity, so the
             # stored occupancy no longer describes anything real. Cleared
@@ -177,6 +195,19 @@ class SessionManager:
             return
         session["context_state"] = state
         store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
+
+    def set_claude_session(self, session_id: str, claude_session_id: Optional[str],
+                           synced_through: int = 0) -> dict:
+        """Records the Claude Code CLI session a chat's turns run in, and how
+        many of the chat's saved messages that session has seen
+        (``synced_through``). Messages saved after that point without going
+        through the CLI - a seeded course note, a stopped reply - are handed
+        over on the next resume rather than silently missing from it.
+        Internal bookkeeping, not surfaced in the listing."""
+        session = self._require(session_id)
+        session["claude_session_id"] = claude_session_id
+        session["claude_synced_through"] = synced_through if claude_session_id else 0
+        return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def set_codex_thread_id(self, session_id: str, thread_id: Optional[str]) -> dict:
         """Records the Codex CLI thread id a session's first codex_cli turn
@@ -275,6 +306,10 @@ class SessionManager:
             m["archived"] = True
         compactions = session.setdefault("compactions", [])
         compactions.append({"through_index": through_index, "summary": summary, "created_at": time.time()})
+        # The CLI's session still holds the uncompacted history; resuming it
+        # would undo the compaction. The next turn starts fresh from the
+        # summary instead.
+        _clear_claude_session(session)
         session["updated_at"] = time.time()
         # The `archived` flag is written onto the messages themselves, and a
         # message is its own stored row — so the rows do have to be rewritten.
@@ -298,6 +333,9 @@ class SessionManager:
         messages = session.get("messages", [])
         start = max(0, min(start_index, len(messages)))
         session["messages"] = messages[:start] + replacement
+        # The CLI's session still holds the replaced messages, and the saved
+        # indices after the splice no longer line up with it.
+        _clear_claude_session(session)
         session["updated_at"] = time.time()
         # Everything from the splice point on is new, and there may now be
         # fewer messages than before; the store deletes the stale tail.
@@ -319,6 +357,9 @@ class SessionManager:
         calling this), or clear back to None for the default vault scope."""
         session = self._require(session_id)
         session["workspace_dir"] = workspace_dir
+        # The CLI files its sessions by working folder, so one started in the
+        # old folder cannot be resumed from the new one.
+        _clear_claude_session(session)
         return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def set_integrations(self, session_id: str, enabled_integration_ids: Optional[list[str]]) -> dict:
