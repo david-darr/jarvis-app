@@ -28,6 +28,11 @@ MIN_STEP_UNITS = 500
 # behind the lead's own judgement, the budgets, and the no-progress check.
 MAX_CYCLES = 5
 SCHEDULE_POLL_SECONDS = 15
+# How often the background retry checks whether a startup lease conflict has
+# cleared. Well under the lease's own 30s TTL so a stale lease from a killed
+# process gets picked up promptly rather than making a restart wait out most
+# of another full TTL window on top of the one it already lost.
+RUNTIME_RETRY_SECONDS = 5
 
 
 class SwarmService:
@@ -39,6 +44,7 @@ class SwarmService:
         self.lock = asyncio.Lock()
         self.cycles = {}
         self.scheduler = None
+        self._retry_task = None
 
     async def start(self):
         try:
@@ -51,9 +57,45 @@ class SwarmService:
             self.runtime = SwarmRuntime(self.store, self.directory / "systems", poll_interval=1, stop_timeout=12)
             await self.runtime.start()
             self.scheduler = asyncio.create_task(self._schedule_loop())
+        except Conflict as exc:
+            # Another process's lease on this database hasn't expired yet —
+            # the common case is this same app restarting: the previous
+            # process died holding the lease, and its TTL outlives the
+            # process itself. Unlike other startup faults this is
+            # self-healing, so retry in the background instead of leaving
+            # Swarm unavailable for this process's whole remaining life
+            # (verified live 2026-09-21: it previously required a second
+            # manual restart to clear).
+            self.fault = exc
+            logger.warning("Swarm runtime lease held by another process at startup; retrying: %s", exc)
+            self._retry_task = asyncio.create_task(self._retry_start())
         except Exception as exc:
             self.fault = exc
             logger.exception("Swarm unavailable; other app features remain available")
+
+    async def _retry_start(self):
+        """Background retry for the Conflict case above. Reuses the same
+        SwarmRuntime instance — its start() is safe to call again as long as
+        the first attempt never set self.generation (Conflict raises before
+        that assignment), so nothing needs re-constructing. Only a Conflict
+        is worth retrying: it means the lease is still held, which is a fact
+        that can change on its own. Any other exception here means a real
+        problem, not a lease race, so it's reported and given up on exactly
+        like the single-attempt path above."""
+        while True:
+            await asyncio.sleep(RUNTIME_RETRY_SECONDS)
+            try:
+                await self.runtime.start()
+            except Conflict:
+                continue
+            except Exception as exc:
+                self.fault = exc
+                logger.exception("Swarm retry failed for a reason other than a held lease; giving up")
+                return
+            self.fault = None
+            self.scheduler = asyncio.create_task(self._schedule_loop())
+            logger.info("Swarm runtime lease acquired after retry; Swarm is now available")
+            return
 
     def status(self, system_id=None):
         """Availability, and for a named company its own verdict.
@@ -655,6 +697,10 @@ class SwarmService:
 
     async def close(self):
         try:
+            if self._retry_task:
+                self._retry_task.cancel()
+                await asyncio.gather(self._retry_task, return_exceptions=True)
+                self._retry_task = None
             if self.scheduler:
                 self.scheduler.cancel()
                 await asyncio.gather(self.scheduler, return_exceptions=True)
