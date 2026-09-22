@@ -134,15 +134,32 @@ def list_skills() -> list[dict]:
     return skills_service.list_skills()
 
 
-def read_skill(slug: str, max_chars: int = 4000) -> str:
-    """Reads one skill's full body (bounded at max_chars, same reasoning as
-    read_vault_file) — the deliberate second step after list_skills points
-    at one."""
+# A safety stop, not a budget. Hermes's number: skill_manager_tool refuses
+# past 100k, while its linter warns from 24k that a body is getting heavy.
+SKILL_HARD_LIMIT_CHARS = 100_000
+
+
+def read_skill(slug: str) -> str:
+    """Reads one skill's full body — the deliberate second step after
+    list_skills points at one.
+
+    Whole, never truncated. This used to cut at 4,000 characters, which every
+    bundled skill exceeds (humanizer is ~30k), so models followed the first
+    part of a procedure believing it was all of it. Hermes rules out partial
+    reads of instructional content for the same reason: a model reads page
+    one and never asks for page two. Past the hard limit it refuses outright
+    rather than hand over a fragment.
+    """
     skill = skills_service.get_skill(slug)
     if skill is None:
         raise ValueError(f"no such skill: {slug}")
     text = skill["body"]
-    return text if len(text) <= max_chars else text[:max_chars] + "...[truncated]"
+    if len(text) > SKILL_HARD_LIMIT_CHARS:
+        raise ValueError(
+            f"skill '{slug}' is {len(text):,} characters, over the {SKILL_HARD_LIMIT_CHARS:,} "
+            "limit for loading a skill; it needs splitting before a model can use it"
+        )
+    return text
 
 
 # -- Notes / Tasks / Calendar (David's ask 2026-09-01, follow-up: asked

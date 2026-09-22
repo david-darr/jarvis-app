@@ -1221,6 +1221,59 @@ class RepoIntegrityTests(unittest.TestCase):
                           f"Root package.json lost its vendored {dependency} dependency.")
 
 
+class SkillSafetyTests(unittest.TestCase):
+    """Skills are instructions a model follows, so the two things that matter
+    are that it gets all of one, and that a skill name can only ever mean a
+    skill in the skills folder."""
+
+    def setUp(self):
+        from services import skills_service
+        self.skills = skills_service
+        self.tmp = tempfile.TemporaryDirectory(prefix="jarvis-skills-")
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.skills_dir = root / "skills"
+        self.skills_dir.mkdir()
+        self._saved = skills_service.SKILLS_DIR
+        skills_service.SKILLS_DIR = str(self.skills_dir)
+        self.addCleanup(setattr, skills_service, "SKILLS_DIR", self._saved)
+
+    def test_a_model_reads_a_bundled_skill_whole(self):
+        import shutil
+        template = Path(self.skills.SKILL_TEMPLATES_DIR) / "humanizer"
+        shutil.copytree(template, self.skills_dir / "humanizer")
+        body = self.skills.get_skill("humanizer")["body"]
+        self.assertGreater(len(body), 4000, "fixture should exceed the old 4,000-character cut")
+        self.assertEqual(memory_tools.read_skill("humanizer"), body)
+
+    def test_an_oversized_skill_is_refused_rather_than_cut(self):
+        self.skills.create_skill("huge", "", "x" * (memory_tools.SKILL_HARD_LIMIT_CHARS + 1))
+        with self.assertRaisesRegex(ValueError, "limit"):
+            memory_tools.read_skill("huge")
+
+    def test_a_skill_name_cannot_reach_outside_the_skills_folder(self):
+        outside = Path(self.tmp.name) / "outside"
+        outside.mkdir()
+        target = outside / "SKILL.md"
+        target.write_text("---\ndescription: not a skill\n---\n\nsecret\n", encoding="utf-8")
+        for name in ("../outside", "..\\outside", "..", ".hidden", "Outside"):
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    self.skills.get_skill(name)
+                with self.assertRaises(ValueError):
+                    memory_tools.read_skill(name)
+                with self.assertRaises(ValueError):
+                    self.skills.update_skill(name, "overwritten", "overwritten")
+                with self.assertRaises(ValueError):
+                    self.skills.delete_skill(name)
+        self.assertIn("secret", target.read_text(encoding="utf-8"))
+
+    def test_a_folder_the_app_could_not_have_made_is_skipped_not_fatal(self):
+        self.skills.create_skill("real", "a real one", "body")
+        (self.skills_dir / ".scan-cache").mkdir()
+        self.assertEqual([s["slug"] for s in self.skills.list_skills()], ["real"])
+
+
 def _load_build_runtime():
     import importlib.util
     path = Path(__file__).resolve().parent / "build_runtime.py"

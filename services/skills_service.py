@@ -27,17 +27,24 @@ SKILL_TEMPLATES_DIR = os.path.join(BASE_DIR, "skill_templates")
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
 
 _SLUG_RE = re.compile(r"[^a-z0-9-]+")
+# Hermes's skill-name rule. A slug becomes a directory name, so it must never
+# carry a separator or a dot: "..\\..\\x" used to reach a SKILL.md outside the
+# skills folder through the API and the model's read_skill tool.
+_VALID_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
 
 
 def _slugify(name: str) -> str:
     slug = name.strip().lower().replace(" ", "-")
-    slug = _SLUG_RE.sub("", slug)
+    slug = _SLUG_RE.sub("", slug).lstrip("-")
     if not slug:
         raise ValueError("skill name produces an empty slug")
     return slug
 
 
 def _skill_path(slug: str) -> str:
+    """The one place a slug becomes a path, so the one place it is checked."""
+    if not isinstance(slug, str) or not _VALID_SLUG_RE.fullmatch(slug):
+        raise ValueError(f"invalid skill name: {slug!r}")
     return os.path.join(SKILLS_DIR, slug, "SKILL.md")
 
 
@@ -141,6 +148,10 @@ def list_skills() -> list[dict]:
         return []
     skills = []
     for slug in sorted(os.listdir(SKILLS_DIR)):
+        # A folder the app could not have created (dotfiles, hand-made names)
+        # is skipped rather than failing the whole listing.
+        if not _VALID_SLUG_RE.fullmatch(slug):
+            continue
         path = _skill_path(slug)
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:

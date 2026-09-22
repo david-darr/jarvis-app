@@ -47,7 +47,10 @@ async def import_skill(body: ImportSkillRequest, user: str = Depends(require_use
 
 @router.get("/{slug}")
 async def get_skill(slug: str, user: str = Depends(require_user)) -> dict:
-    skill = skills_service.get_skill(slug)
+    try:
+        skill = skills_service.get_skill(slug)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if skill is None:
         raise HTTPException(status_code=404, detail="skill not found")
     return skill
@@ -59,9 +62,14 @@ async def update_skill(slug: str, body: UpdateSkillRequest, user: str = Depends(
         return skills_service.update_skill(slug, body.description, body.body)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="skill not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.delete("/{slug}")
 async def delete_skill(slug: str, user: str = Depends(require_user)) -> dict:
-    skills_service.delete_skill(slug)
+    try:
+        skills_service.delete_skill(slug)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True}
