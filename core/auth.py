@@ -52,6 +52,44 @@ SINGLE_USER = "local"
 # Codex process holds it, whoever is chatting.
 INTERNAL_TOOL_TOKEN = secrets.token_hex(32)
 
+# With accounts off, every local request used to count as the one admin user,
+# so any process on the machine - an agent's shell included, whose sandbox
+# limits file writes but not loopback HTTP - could export the backup or wipe
+# data through the API (reproduced 2026-09-22). When Electron starts the
+# backend it now passes a per-launch secret and gives its own windows a cookie
+# holding it; with accounts off, only requests carrying that cookie are the
+# local user (core/middleware.py). Taken out of the environment at import,
+# before anything starts a child process, so no agent inherits it. A backend
+# started without it (a dev server) stays open as before.
+UI_COOKIE_NAME = "jarvis_ui"
+UI_CODE_TTL_SECONDS = 60
+
+
+def _take_ui_secret(environ=os.environ) -> Optional[str]:
+    return environ.pop("JARVIS_UI_SECRET", None) or None
+
+
+UI_SECRET = _take_ui_secret()
+
+# One-time codes that hand the cookie to the person's own browser (the tray's
+# "Open in browser"): minted only by a request that already holds the cookie,
+# single use, and short-lived.
+_ui_codes: dict[str, float] = {}
+
+
+def mint_ui_code() -> str:
+    now = time.time()
+    for stale in [c for c, expires in _ui_codes.items() if expires < now]:
+        _ui_codes.pop(stale, None)
+    code = secrets.token_urlsafe(24)
+    _ui_codes[code] = now + UI_CODE_TTL_SECONDS
+    return code
+
+
+def redeem_ui_code(code: str) -> bool:
+    expires = _ui_codes.pop(code, None) if code else None
+    return expires is not None and expires >= time.time()
+
 
 def auth_enabled() -> bool:
     """True if EITHER the AUTH_ENABLED env var or the persisted setting says

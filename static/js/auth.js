@@ -17,12 +17,29 @@ import { api, el } from "./api.js";
 // authenticated API.
 export async function run(overlay) {
   const status = await api("/api/auth/status");
+  if (status.local_access_locked) {
+    // Accounts are off and this page is not the JARVIS app window, so the
+    // backend answers it nothing (core/auth.py's UI_SECRET). Say how to get
+    // in rather than render an app whose every request would fail.
+    renderLocalAccessLocked(overlay);
+    return new Promise(() => {});
+  }
   if (!status.auth_enabled || status.username) return;
 
   await new Promise((resolve) => {
     if (status.setup_required) renderSetup(overlay, resolve);
     else renderLogin(overlay, resolve);
   });
+}
+
+function renderLocalAccessLocked(overlay) {
+  overlay.innerHTML = "";
+  overlay.appendChild(card([
+    el("h2", { text: "Open JARVIS from the app" }),
+    el("div", { class: "sub", text:
+      "This JARVIS only answers its own window, so other programs on this computer can't use it as you. "
+      + "To use it in a browser, right-click the JARVIS icon in the system tray and choose Open in browser." }),
+  ]));
 }
 
 function backLink(text, onclick) {

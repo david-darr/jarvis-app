@@ -20,13 +20,14 @@
 // freeze (custom tabs are imported at runtime, so a frozen module graph
 // would break them).
 
-const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, shell, nativeImage, screen } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, shell, nativeImage, screen, session } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { autoUpdater } = require("electron-updater");
 const sideBrowser = require("./browser");
 const { createDesktopLog } = require("./desktop-log");
+const { createUiSecret, uiCookie, browserHandoffUrl } = require("./ui-access");
 
 // desktop.log, beside the backend's logs in the per-user data folder, so the
 // shell's own messages are no longer lost with its console (see
@@ -45,6 +46,9 @@ const BACKEND_URL = process.env.JARVIS_BACKEND_URL || "http://127.0.0.1:8420";
 // workflow used throughout this project's build relies on that, so spawning
 // a second backend in that case would be wrong, not just redundant.
 const SHOULD_SPAWN_BACKEND = !process.env.JARVIS_BACKEND_URL;
+// Only for a backend this process starts: an already-running one (a dev
+// server) was not given it and stays open to local requests. See ui-access.js.
+const UI_SECRET = SHOULD_SPAWN_BACKEND ? createUiSecret() : null;
 
 let backendProcess = null;
 
@@ -190,7 +194,9 @@ function startBackend() {
       // OS-correct per-user location (%APPDATA%\JARVIS on Windows,
       // ~/Library/Application Support/JARVIS on macOS). core/constants.py
       // reads JARVIS_DATA_DIR and falls back to the in-repo data/ for dev.
-      env: { ...process.env, JARVIS_DATA_DIR: path.join(app.getPath("userData"), "data") },
+      // JARVIS_UI_SECRET: see ui-access.js. The backend removes it from its
+      // own environment at startup, so nothing it starts inherits it.
+      env: { ...process.env, JARVIS_DATA_DIR: path.join(app.getPath("userData"), "data"), JARVIS_UI_SECRET: UI_SECRET },
     },
   );
   const proc = backendProcess;
@@ -305,13 +311,25 @@ function buildTray() {
   tray.on("double-click", showWindow);
 }
 
+// The person's own browser has no access cookie, so it gets a one-time link
+// that hands it over (ui-access.js). A dev backend needs none.
+async function openInBrowser() {
+  if (!UI_SECRET) return shell.openExternal(BACKEND_URL);
+  try {
+    await shell.openExternal(await browserHandoffUrl(fetch, BACKEND_URL, UI_SECRET));
+  } catch (err) {
+    console.error(`[ui-access] couldn't open JARVIS in the browser: ${err.message}`);
+    dialog.showErrorBox("Couldn't open JARVIS in the browser", err.message);
+  }
+}
+
 function updateTrayMenu() {
   if (!tray) return;
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "Open JARVIS", click: showWindow },
     {
       label: "Open in browser",
-      click: () => shell.openExternal(BACKEND_URL),
+      click: () => openInBrowser().catch(console.error),
     },
     { type: "separator" },
     { label: "Show usage overlay", type: "checkbox", checked: usageOverlayVisible,
@@ -445,6 +463,9 @@ async function createWindow() {
     return;
   }
   backendReady = true;
+  // Before the first page loads: with accounts off, the backend answers only
+  // requests carrying this (ui-access.js). The usage overlay shares the session.
+  if (UI_SECRET) await session.defaultSession.cookies.set(uiCookie(BACKEND_URL, UI_SECRET));
   win.loadURL(BACKEND_URL);
   if (usageOverlayVisible) setUsageOverlayVisible(true).catch(console.error);
 }

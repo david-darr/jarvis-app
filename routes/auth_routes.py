@@ -6,9 +6,11 @@ default that skips all of this.
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Response, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from core.auth import auth_manager, auth_enabled, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS
+from core import auth as auth_module
+from core.auth import auth_manager, auth_enabled, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS, SINGLE_USER, UI_COOKIE_NAME
 from core.middleware import get_current_user, require_admin, require_user
 from services.email_service import email_service
 
@@ -42,7 +44,35 @@ async def status(request: Request) -> dict:
         # leak on a shared machine), but "does more than one account exist"
         # is safe to expose to anyone so the sidebar can gate the option.
         "other_users_exist": auth_enabled() and len(auth_manager.list_users()) > 1,
+        # Accounts off, and this request is not the app's own window (see
+        # core/auth.py's UI_SECRET): the page says to open JARVIS from the app.
+        "local_access_locked": not auth_enabled() and user is None,
     }
+
+
+@router.post("/ui-code")
+async def ui_code(request: Request) -> dict:
+    """A one-time code that hands the app window's access to the person's
+    own browser (the tray's "Open in browser"). Only a request that already
+    holds that access can mint one."""
+    if auth_enabled() or not auth_module.UI_SECRET:
+        raise HTTPException(status_code=404, detail="not needed: sign in, or the app is already open to local requests")
+    if get_current_user(request) != SINGLE_USER:
+        raise HTTPException(status_code=401, detail="authentication required")
+    return {"code": auth_module.mint_ui_code()}
+
+
+@router.get("/ui-handoff")
+async def ui_handoff(code: str = "") -> Response:
+    """Redeem a code from /ui-code: sets the app's access cookie in this
+    browser and opens the app. Single use, 60 seconds."""
+    if auth_enabled() or not auth_module.UI_SECRET or not auth_module.redeem_ui_code(code):
+        raise HTTPException(status_code=403, detail="this link has expired; use Open in browser from the JARVIS tray again")
+    response = RedirectResponse("/", status_code=303)
+    # A session cookie (never written to disk by the browser), not readable
+    # by page scripts, and never sent on a request another site starts.
+    response.set_cookie(UI_COOKIE_NAME, auth_module.UI_SECRET, httponly=True, samesite="strict", path="/")
+    return response
 
 
 @router.post("/setup")

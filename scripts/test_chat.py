@@ -14,6 +14,7 @@ import io
 import json
 import logging
 import subprocess
+import time
 from datetime import datetime, timedelta
 
 import httpx
@@ -1637,6 +1638,104 @@ def _text(content):
 def _http_400():
     request = httpx.Request("POST", "http://fake/chat/completions")
     return httpx.HTTPStatusError("bad request", request=request, response=httpx.Response(400, request=request))
+
+
+class LocalAccessTests(unittest.TestCase):
+    """With accounts off, every local request used to count as the one admin
+    user, so any program on the machine - an agent's shell included - could
+    export the backup or wipe data (reproduced 2026-09-22). A backend Electron
+    starts now answers only requests carrying its per-launch secret cookie."""
+
+    SECRET = "per-launch-secret-for-tests"
+
+    def setUp(self):
+        from fastapi import FastAPI as _FastAPI
+        from routes import auth_routes, notes_routes, system_routes
+        from core import auth as auth_module, middleware as mw
+        self.auth = auth_module
+        self.token = {"X-JARVIS-Internal-Token": mw.INTERNAL_TOOL_TOKEN}
+        self.ui = {"Cookie": f"jarvis_ui={self.SECRET}"}
+        app_ = _FastAPI()
+        for r in (auth_routes, notes_routes, system_routes, session_routes, chat_routes):
+            app_.include_router(r.router)
+        self.web = TestClient(app_)
+        p = patch.object(auth_module, "UI_SECRET", self.SECRET)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_without_the_cookie_nothing_answers_and_nothing_is_wiped(self):
+        from services.notes_service import notes_service
+        notes_service.create_note("must survive")
+        before = len(notes_service.list_notes())
+        for method, path, body in [("GET", "/api/system/diagnostics", None), ("GET", "/api/system/backup/export", None),
+                                   ("POST", "/api/system/wipe", {"kind": "notes"}), ("GET", "/api/sessions", None),
+                                   ("POST", "/api/chat/stream", {"session_id": "any", "message": "spend money"})]:
+            for label, headers in [("no cookie", {}), ("wrong cookie", {"Cookie": "jarvis_ui=guess"})]:
+                with self.subTest(path=path, case=label):
+                    self.assertEqual(self.web.request(method, path, json=body, headers=headers).status_code, 401)
+        self.assertEqual(len(notes_service.list_notes()), before)
+
+    def test_the_app_window_and_codex_still_work(self):
+        self.assertEqual(self.web.get("/api/system/diagnostics", headers=self.ui).status_code, 200)
+        self.assertEqual(self.web.get("/api/sessions", headers=self.ui).status_code, 200)
+        note = self.web.post("/api/notes", json={"text": "from codex"}, headers=self.token)
+        self.assertEqual(note.status_code, 200, "Codex's CLI writes by its own token, no cookie needed")
+
+    def test_the_page_can_tell_it_is_locked_out(self):
+        self.assertTrue(self.web.get("/api/auth/status").json()["local_access_locked"])
+        self.assertFalse(self.web.get("/api/auth/status", headers=self.ui).json()["local_access_locked"])
+
+    def test_a_browser_gets_in_only_through_a_one_time_code(self):
+        self.assertEqual(self.web.post("/api/auth/ui-code").status_code, 401, "only the app can mint a code")
+        code = self.web.post("/api/auth/ui-code", headers=self.ui).json()["code"]
+        handoff = self.web.get(f"/api/auth/ui-handoff?code={code}", follow_redirects=False)
+        self.assertEqual(handoff.status_code, 303)
+        cookie = handoff.headers["set-cookie"]
+        self.assertIn(f"jarvis_ui={self.SECRET}", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("samesite=strict", cookie.lower())
+        self.assertNotIn("expires", cookie.lower(), "a session cookie, never written to disk")
+        self.assertEqual(self.web.get(f"/api/auth/ui-handoff?code={code}", follow_redirects=False).status_code, 403,
+                         "single use")
+        stale = self.web.post("/api/auth/ui-code", headers=self.ui).json()["code"]
+        with patch("core.auth.time.time", return_value=time.time() + 61):
+            self.assertEqual(self.web.get(f"/api/auth/ui-handoff?code={stale}", follow_redirects=False).status_code, 403)
+        self.assertEqual(self.web.get("/api/auth/ui-handoff?code=made-up", follow_redirects=False).status_code, 403)
+
+    def test_a_backend_started_without_a_secret_stays_open(self):
+        with patch.object(self.auth, "UI_SECRET", None):
+            self.assertEqual(self.web.get("/api/system/diagnostics").status_code, 200)
+            self.assertEqual(self.web.post("/api/auth/ui-code").status_code, 404)
+
+    def test_the_secret_leaves_the_environment_so_no_agent_inherits_it(self):
+        environ = {"JARVIS_UI_SECRET": "abc", "PATH": "x"}
+        self.assertEqual(self.auth._take_ui_secret(environ), "abc")
+        self.assertNotIn("JARVIS_UI_SECRET", environ)
+        self.assertNotIn("JARVIS_UI_SECRET", os.environ)
+
+    def test_the_electron_helper_sets_a_safe_cookie_and_asks_for_a_code(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        module = str(Path(__file__).resolve().parents[1] / "electron" / "ui-access.js").replace("\\", "/")
+        script = (
+            f"const m = require({json.dumps(module)});"
+            "const s = m.createUiSecret();"
+            "const seen = {};"
+            "const fakeFetch = async (url, opts) => { seen.url = url; seen.cookie = opts.headers.Cookie;"
+            "  return { ok: true, json: async () => ({ code: 'c/1' }) }; };"
+            "m.browserHandoffUrl(fakeFetch, 'http://127.0.0.1:8420', s).then((link) => {"
+            "  console.log(JSON.stringify({ secretLength: s.length, cookie: m.uiCookie('http://127.0.0.1:8420', s),"
+            "    seen, link, secret: s })); });"
+        )
+        out = json.loads(subprocess.run([node, "-e", script], check=True, capture_output=True, text=True, timeout=60).stdout)
+        self.assertEqual(out["secretLength"], 64)
+        cookie = out["cookie"]
+        self.assertEqual((cookie["name"], cookie["httpOnly"], cookie["sameSite"]), ("jarvis_ui", True, "strict"))
+        self.assertNotIn("expirationDate", cookie)
+        self.assertEqual(out["seen"]["url"], "http://127.0.0.1:8420/api/auth/ui-code")
+        self.assertEqual(out["seen"]["cookie"], f"jarvis_ui={out['secret']}")
+        self.assertEqual(out["link"], "http://127.0.0.1:8420/api/auth/ui-handoff?code=c%2F1")
 
 
 class InternalTokenScopeTests(unittest.TestCase):

@@ -12,7 +12,8 @@ from typing import Optional
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from core.auth import auth_manager, auth_enabled, SESSION_COOKIE_NAME, SINGLE_USER, INTERNAL_TOOL_TOKEN
+from core import auth as auth_module
+from core.auth import auth_manager, auth_enabled, SESSION_COOKIE_NAME, SINGLE_USER, INTERNAL_TOOL_TOKEN, UI_COOKIE_NAME
 from core.constants import APP_PORT
 
 
@@ -124,6 +125,17 @@ def _internal_tool_may(request: Request) -> bool:
     return any(request.method == method and pattern.match(path) for method, pattern in _INTERNAL_TOOL_ROUTES)
 
 
+def local_access_open(request: Request) -> bool:
+    """With accounts off: is this the app's own window (or a browser it
+    handed the cookie to)? Always true for a backend started without a UI
+    secret, such as a dev server. See core/auth.py's UI_SECRET."""
+    secret = auth_module.UI_SECRET
+    if not secret:
+        return True
+    cookie = request.cookies.get(UI_COOKIE_NAME) or ""
+    return secrets.compare_digest(cookie, secret)
+
+
 def get_current_user(request: Request) -> Optional[str]:
     """Returns the authenticated username, or None if unauthenticated.
     Does not raise — routes that require auth should use require_user()/require_admin()."""
@@ -132,7 +144,7 @@ def get_current_user(request: Request) -> Optional[str]:
         return "internal-tool"
 
     if not auth_enabled():
-        return SINGLE_USER
+        return SINGLE_USER if local_access_open(request) else None
 
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token:
