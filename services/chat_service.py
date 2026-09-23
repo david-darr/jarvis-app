@@ -152,7 +152,11 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
                           model=cli_model or None, is_admin=is_admin, project_id=project_id,
                           effort=effort)
     base_url, model, api_key, num_ctx = model_endpoints.resolve_runtime(endpoint["id"])
-    return ExternalBrain(base_url, model, api_key, history=session_manager.effective_messages(session_id),
+    # exclude_last: the current message is already saved by the time a brain
+    # is built, and run_turn() adds it itself. Loading it here too sent it to
+    # the model twice on every fresh connection (found 2026-09-22), and the
+    # doubled request could never match the one rebuilt after a reconnect.
+    return ExternalBrain(base_url, model, api_key, history=session_manager.effective_messages(session_id, exclude_last=True),
                          session_id=session_id, num_ctx=num_ctx, is_admin=is_admin, project_id=project_id)
 
 
