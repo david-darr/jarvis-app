@@ -1790,6 +1790,36 @@ class WorkBoardTests(unittest.TestCase):
                                                       "run_at": "2099-01-01T00:00:00", "status": "ready"}).status_code, 400)
 
 
+class BoardToolTests(unittest.TestCase):
+    """Agents put work on the board through the task tools they already have
+    (no new tools: each would cost prompt space on every turn), and list_tasks
+    now shows the ids update_task and delete_task need."""
+
+    def setUp(self):
+        from services.task_service import task_service
+        self.tasks = task_service
+        self.before = {t["id"] for t in task_service.list_tasks()}
+        self.addCleanup(lambda: [task_service.delete_task(t["id"]) for t in task_service.list_tasks()
+                                 if t["id"] not in self.before])
+
+    def test_a_local_model_can_put_a_chain_of_cards_on_the_board(self):
+        from core.external_brain import ExternalBrain
+        brain = ExternalBrain("http://fake", "m", None, session_id="s")
+        first = asyncio.run(brain._execute_tool("create_task", {"name": "research", "prompt": "find it",
+                                                                "schedule_kind": "card", "status": "ready"}))
+        first_id = first.split()[2].rstrip(":")
+        asyncio.run(brain._execute_tool("create_task", {"name": "write up", "prompt": "write it", "schedule_kind": "card",
+                                                        "status": "ready", "depends_on": [first_id]}))
+        listing = asyncio.run(brain._execute_tool("list_tasks", {}))
+        self.assertIn(f"- {first_id}: research (card, ready)", listing)
+        self.assertIn(f"write up (card, ready, waiting on {first_id})", listing)
+
+    def test_scheduled_tasks_list_with_their_ids(self):
+        from core import memory_tools
+        task = memory_tools.create_task("daily brief", "p", "daily", run_time="07:00")
+        self.assertEqual(memory_tools.describe_task(task), f"- {task['id']}: daily brief (enabled, daily)")
+
+
 class TaskModelTests(unittest.TestCase):
     """Tasks always ran on Claude through the CLI, whatever models were set up.
     Any task or card can now name the endpoint it runs on."""

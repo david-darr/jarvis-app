@@ -98,7 +98,7 @@ def get_hive_mind_server(exclude_session_id: str | None = None):
     )
     async def _list_tasks(args: dict) -> dict:
         tasks = memory_tools.list_tasks()
-        text = "\n".join(f"- {t['name']} ({'enabled' if t.get('enabled') else 'disabled'})" for t in tasks) or "No tasks configured."
+        text = "\n".join(memory_tools.describe_task(t) for t in tasks) or "No tasks configured."
         return {"content": [{"type": "text", "text": text}]}
 
     @tool(
@@ -167,13 +167,17 @@ def get_hive_mind_server(exclude_session_id: str | None = None):
         "create_task",
         "Create a new scheduled/automated Task. schedule_kind is 'once' (needs run_at, an ISO "
         "datetime), 'interval' (needs interval_seconds), or 'daily' (needs run_time — use this "
-        "whenever the user names a time of day, e.g. 'every morning at 6am').",
+        "whenever the user names a time of day, e.g. 'every morning at 6am'), or 'card' for one-off "
+        "work on the board: JARVIS runs a 'ready' card by itself and puts the result up for the "
+        "user's review; depends_on makes it wait for other cards and receive their results.",
         {
             "type": "object",
             "properties": {
                 "name": {"type": "string"},
                 "prompt": {"type": "string", "description": "What the task should do when it runs"},
-                "schedule_kind": {"type": "string", "enum": ["once", "interval", "daily"]},
+                "schedule_kind": {"type": "string", "enum": ["once", "interval", "daily", "card"]},
+                "status": {"type": "string", "enum": ["backlog", "ready"], "description": "Cards only: 'ready' to run it, 'backlog' (default) to hold it"},
+                "depends_on": {"type": "array", "items": {"type": "string"}, "description": "Cards only: ids of cards it waits for"},
                 "run_at": {"type": "string", "description": "ISO 8601 datetime, required for schedule_kind='once'"},
                 "interval_seconds": {"type": "integer", "description": "Required for schedule_kind='interval'"},
                 "run_time": {"type": "string", "description": "Local time of day as 'HH:MM' (24-hour), required for schedule_kind='daily'"},
@@ -188,7 +192,7 @@ def get_hive_mind_server(exclude_session_id: str | None = None):
                 args["name"], args["prompt"], args["schedule_kind"],
                 run_at=args.get("run_at"), interval_seconds=args.get("interval_seconds"),
                 deliver_to_channel=args.get("deliver_to_channel"),
-                run_time=args.get("run_time"),
+                run_time=args.get("run_time"), depends_on=args.get("depends_on"), status=args.get("status"),
             )
             text = f"Created task {task['id']}: {task['name']}"
         except ValueError as e:
@@ -207,6 +211,7 @@ def get_hive_mind_server(exclude_session_id: str | None = None):
                 "prompt": {"type": "string"},
                 "enabled": {"type": "boolean"},
                 "deliver_to_channel": {"type": "string"},
+                "depends_on": {"type": "array", "items": {"type": "string"}, "description": "Cards only: ids of cards it waits for"},
             },
             "required": ["task_id"],
         },
@@ -216,7 +221,7 @@ def get_hive_mind_server(exclude_session_id: str | None = None):
         try:
             task = memory_tools.update_task(task_id, **{k: v for k, v in args.items() if v is not None})
             text = f"Updated task {task['id']}"
-        except KeyError as e:
+        except (KeyError, ValueError) as e:
             text = str(e)
         return {"content": [{"type": "text", "text": text}]}
 

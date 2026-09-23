@@ -89,7 +89,11 @@ def _fmt_notes(notes: list[dict]) -> str:
 
 
 def _fmt_tasks(tasks: list[dict]) -> str:
-    return "\n".join(f"- [{t['id']}] {t['name']} ({'enabled' if t.get('enabled') else 'disabled'})" for t in tasks) or "No tasks configured."
+    return "\n".join(memory_tools.describe_task(t) for t in tasks) or "No tasks configured."
+
+
+def _ids(value: str | None) -> list[str] | None:
+    return [part.strip() for part in value.split(",") if part.strip()] if value else None
 
 
 def _fmt_events(events: list[dict]) -> str:
@@ -146,7 +150,9 @@ def main() -> None:
     p = sub.add_parser("create_task")
     p.add_argument("--name", required=True)
     p.add_argument("--prompt", required=True)
-    p.add_argument("--schedule_kind", required=True, choices=["once", "interval", "daily"])
+    p.add_argument("--schedule_kind", required=True, choices=["once", "interval", "daily", "card"])
+    p.add_argument("--status", choices=["backlog", "ready"], help="cards only: ready runs it")
+    p.add_argument("--depends_on", help="cards only: comma-separated ids of cards it waits for")
     p.add_argument("--run_at")
     p.add_argument("--interval_seconds", type=int)
     p.add_argument("--run_time")
@@ -157,6 +163,7 @@ def main() -> None:
     p.add_argument("--name"); p.add_argument("--prompt")
     p.add_argument("--enabled", choices=["true", "false"])
     p.add_argument("--deliver_to_channel")
+    p.add_argument("--depends_on", help="cards only: comma-separated ids of cards it waits for")
 
     p = sub.add_parser("delete_task"); p.add_argument("--task_id", required=True)
 
@@ -230,10 +237,12 @@ def main() -> None:
                 "name": args.name, "prompt": args.prompt, "schedule_kind": args.schedule_kind,
                 "run_at": args.run_at, "interval_seconds": args.interval_seconds,
                 "run_time": args.run_time, "deliver_to_channel": args.deliver_to_channel,
+                "status": args.status, "depends_on": _ids(args.depends_on),
             })
             print(f"Created task {task['id']}: {task['name']}")
         elif args.command == "update_task":
-            fields = {"name": args.name, "prompt": args.prompt, "deliver_to_channel": args.deliver_to_channel}
+            fields = {"name": args.name, "prompt": args.prompt, "deliver_to_channel": args.deliver_to_channel,
+                      "depends_on": _ids(args.depends_on)}
             if args.enabled is not None:
                 fields["enabled"] = args.enabled == "true"
             task = _internal_request("PATCH", f"/tasks/{args.task_id}", fields)

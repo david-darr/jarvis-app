@@ -231,17 +231,32 @@ def delete_note(note_id: str) -> None:
 
 def create_task(name: str, prompt: str, schedule_kind: str, run_at: Optional[str] = None,
                  interval_seconds: Optional[int] = None, deliver_to_channel: Optional[str] = None,
-                 run_time: Optional[str] = None) -> dict:
+                 run_time: Optional[str] = None, depends_on: Optional[list] = None,
+                 status: Optional[str] = None) -> dict:
+    """schedule_kind 'card' puts one-off work on the board (see
+    services/task_service.py); status 'ready' lets the board run it."""
     return task_service.create_task(
         name, prompt, schedule_kind, run_at=run_at,
         interval_seconds=interval_seconds, deliver_to_channel=deliver_to_channel,
-        run_time=run_time,
+        run_time=run_time, depends_on=depends_on, status=status,
     )
 
 
 def update_task(task_id: str, **fields) -> dict:
-    """fields: any of name, prompt, enabled, deliver_to_channel."""
+    """fields: any of name, prompt, enabled, deliver_to_channel, depends_on."""
     return task_service.update_task(task_id, **fields)
+
+
+def describe_task(task: dict) -> str:
+    """One line per task for the models' list_tasks. With the id, which
+    update_task and delete_task need and the listing used to leave out."""
+    if task.get("schedule_kind") == "card":
+        state = task.get("status", "backlog")
+        waiting = task_service.waiting_on(task)
+        if waiting and state == "ready":
+            state += f", waiting on {', '.join(waiting)}"
+        return f"- {task['id']}: {task['name']} (card, {state})"
+    return f"- {task['id']}: {task['name']} ({'enabled' if task.get('enabled') else 'disabled'}, {task['schedule_kind']})"
 
 
 def delete_task(task_id: str) -> None:

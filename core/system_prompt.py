@@ -109,8 +109,8 @@ _CODEX_HIVE_MIND_COMMANDS = """  list_notes | list_tasks | list_upcoming_events 
   create_note --text TEXT [--due_date ISO8601] [--project NAME]
   update_note --note_id ID [--text TEXT] [--due_date ISO8601] [--project NAME] [--completed true|false]
   delete_note --note_id ID
-  create_task --name NAME --prompt TEXT --schedule_kind once|interval|daily [--run_at ISO8601] [--interval_seconds N] [--run_time HH:MM] [--deliver_to_channel NAME]
-  update_task --task_id ID [--name NAME] [--prompt TEXT] [--enabled true|false] [--deliver_to_channel NAME]
+  create_task --name NAME --prompt TEXT --schedule_kind once|interval|daily|card [--run_at ISO8601] [--interval_seconds N] [--run_time HH:MM] [--deliver_to_channel NAME] [--status backlog|ready] [--depends_on ID,ID]
+  update_task --task_id ID [--name NAME] [--prompt TEXT] [--enabled true|false] [--deliver_to_channel NAME] [--depends_on ID,ID]
   delete_task --task_id ID
   create_event --title TITLE --start ISO8601 --end ISO8601 [--all_day] [--location LOC] [--description DESC]
   update_event --event_id ID [--title TITLE] [--start ISO8601] [--end ISO8601] [--all_day true|false] [--location LOC] [--description DESC] [--completed true|false]

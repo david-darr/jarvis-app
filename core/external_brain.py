@@ -215,13 +215,15 @@ _MEMORY_TOOLS = [
         "type": "function",
         "function": {
             "name": "create_task",
-            "description": "Create a new scheduled/automated Task. schedule_kind is 'once' (needs run_at), 'interval' (needs interval_seconds), or 'daily' (needs run_time, e.g. every morning at 6am).",
+            "description": "Create a new scheduled/automated Task. schedule_kind is 'once' (needs run_at), 'interval' (needs interval_seconds), or 'daily' (needs run_time, e.g. every morning at 6am), or 'card' for one-off work on the board: JARVIS runs a 'ready' card by itself and puts the result up for the user's review; depends_on makes it wait for other cards and receive their results.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
                     "prompt": {"type": "string"},
-                    "schedule_kind": {"type": "string", "enum": ["once", "interval", "daily"]},
+                    "schedule_kind": {"type": "string", "enum": ["once", "interval", "daily", "card"]},
+                    "status": {"type": "string", "enum": ["backlog", "ready"], "description": "Cards only: 'ready' to run it, 'backlog' (default) to hold it"},
+                    "depends_on": {"type": "array", "items": {"type": "string"}, "description": "Cards only: ids of cards it waits for"},
                     "run_at": {"type": "string", "description": "ISO 8601 datetime, for schedule_kind='once'"},
                     "interval_seconds": {"type": "integer", "description": "For schedule_kind='interval'"},
                     "run_time": {"type": "string", "description": "Local time of day as 'HH:MM' (24-hour), for schedule_kind='daily'. Prefer this over a 24h interval when the user names a time."},
@@ -244,6 +246,7 @@ _MEMORY_TOOLS = [
                     "prompt": {"type": "string"},
                     "enabled": {"type": "boolean"},
                     "deliver_to_channel": {"type": "string"},
+                    "depends_on": {"type": "array", "items": {"type": "string"}, "description": "Cards only: ids of cards it waits for"},
                 },
                 "required": ["task_id"],
             },
@@ -445,7 +448,7 @@ class ExternalBrain:
                 return "\n".join(f"- {n['text']}" + (f" (due {n['due_date']})" if n.get("due_date") else "") for n in notes) or "No open notes."
             if name == "list_tasks":
                 tasks = memory_tools.list_tasks()
-                return "\n".join(f"- {t['name']} ({'enabled' if t.get('enabled') else 'disabled'})" for t in tasks) or "No tasks configured."
+                return "\n".join(memory_tools.describe_task(t) for t in tasks) or "No tasks configured."
             if name == "list_upcoming_events":
                 events = memory_tools.list_upcoming_events()
                 return "\n".join(f"- {e['title']} ({e['start']})" for e in events) or "Nothing upcoming in the next 14 days."
@@ -481,7 +484,7 @@ class ExternalBrain:
                     args["name"], args["prompt"], args["schedule_kind"],
                     run_at=args.get("run_at"), interval_seconds=args.get("interval_seconds"),
                     deliver_to_channel=args.get("deliver_to_channel"),
-                    run_time=args.get("run_time"),
+                    run_time=args.get("run_time"), depends_on=args.get("depends_on"), status=args.get("status"),
                 )
                 return f"Created task {task['id']}: {task['name']}"
             if name == "update_task":
