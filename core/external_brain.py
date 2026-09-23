@@ -364,7 +364,7 @@ _SHELL_TOOL = {
 class ExternalBrain:
     def __init__(self, base_url: str, model: str, api_key: str | None, history: list[dict] | None = None,
                  session_id: str | None = None, num_ctx: int | None = None, is_admin: bool = False,
-                 project_id: str | None = None):
+                 project_id: str | None = None, endpoint_id: str | None = None):
         self.base_url = base_url
         self.model = model
         self.api_key = api_key
@@ -379,7 +379,7 @@ class ExternalBrain:
         # Claude. Only prepended once, on a session with no prior history —
         # an existing conversation already carries its own system message
         # from when it was first created.
-        seeded = [{"role": m["role"], "content": m["content"]} for m in (history or [])]
+        seeded = self._seed(history or [], endpoint_id)
         if not seeded or seeded[0].get("role") != "system":
             # Projects (David's ask 2026-09-12) appended the same way as
             # core/brain.py/core/codex_brain.py — see core/projects.py's
@@ -391,6 +391,32 @@ class ExternalBrain:
         # not every OpenAI-compatible endpoint returns it. Read by
         # services/chat_service.py right after run_turn()/run_turn_stream().
         self.last_usage: dict | None = None
+        # This turn's tool calls and results, in the order sent. Filled while
+        # the turn runs (so a stopped turn still has what ran); saved with the
+        # reply by services/chat_service.py, which is how they survive a
+        # reconnect. See _seed below.
+        self.last_tool_rounds: list[dict] = []
+
+    @staticmethod
+    def _seed(history: list[dict], endpoint_id: str | None) -> list[dict]:
+        """The saved transcript as this endpoint should see it, tool rounds
+        included (prompt-cache audit finding 2, 2026-09-22). Each reply's
+        rounds are saved on that reply and replayed just before it, which
+        rebuilds exactly the request the live connection last sent - so a
+        reconnect loses neither the earlier tool results nor the cached
+        prefix.
+
+        Only the endpoint that produced the rounds gets them back. Providers
+        shape tool calls differently (Ollama sends arguments as an object,
+        the OpenAI spec as a string), so one endpoint's rounds can be
+        rejected by another; the reply text alone still carries over."""
+        seeded = []
+        for m in history:
+            rounds = m.get("tool_rounds") or {}
+            if endpoint_id and rounds.get("endpoint_id") == endpoint_id:
+                seeded.extend(rounds.get("messages") or [])
+            seeded.append({"role": m["role"], "content": m["content"]})
+        return seeded
 
     async def _execute_tool(self, name: str, args: dict) -> str:
         try:
@@ -492,24 +518,30 @@ class ExternalBrain:
 
     async def run_turn(self, user_text: str) -> str:
         self._messages.append({"role": "user", "content": user_text})
+        self.last_tool_rounds = []
         reply = await openai_compatible.run_turn(
             self.base_url, self.model, self.api_key, self._messages,
             tools=self.tools, tool_executor=self._execute_tool,
             on_usage=lambda u: setattr(self, "last_usage", u), num_ctx=self.num_ctx,
+            rounds=self.last_tool_rounds,
         )
+        self._messages.extend(self.last_tool_rounds)
         self._messages.append({"role": "assistant", "content": reply})
         return reply
 
     async def run_turn_stream(self, user_text: str) -> AsyncIterator[str]:
         self._messages.append({"role": "user", "content": user_text})
+        self.last_tool_rounds = []
         parts: list[str] = []
         async for chunk in openai_compatible.run_turn_stream(
             self.base_url, self.model, self.api_key, self._messages,
             tools=self.tools, tool_executor=self._execute_tool,
             on_usage=lambda u: setattr(self, "last_usage", u), num_ctx=self.num_ctx,
+            rounds=self.last_tool_rounds,
         ):
             parts.append(chunk)
             yield chunk
+        self._messages.extend(self.last_tool_rounds)
         self._messages.append({"role": "assistant", "content": "".join(parts)})
 
     async def disconnect(self) -> None:

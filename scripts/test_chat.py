@@ -9,6 +9,9 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch, AsyncMock
 import asyncio
+import copy
+
+import httpx
 
 fixture = tempfile.TemporaryDirectory(prefix="jarvis-chat-test-")
 os.environ["JARVIS_DATA_DIR"] = fixture.name
@@ -1596,6 +1599,136 @@ class DependencyPinningTests(unittest.TestCase):
             "llama-cpp-python @ https://example.invalid/llama_cpp_python-0.3.35-py3-none-win_amd64.whl"
             " ; sys_platform == 'win32' \\\n    --hash=sha256:" + "b" * 64 + "\n",
         )
+
+
+
+class _ScriptedEndpoint:
+    """Stands in for an OpenAI-compatible server at the one boundary every
+    request crosses (openai_compatible._post_chat): records a deep copy of
+    each request body and answers from a script."""
+
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.bodies = []
+
+    async def __call__(self, client, base_url, api_key, body):
+        self.bodies.append(copy.deepcopy(body))
+        reply = self.replies.pop(0)
+        if isinstance(reply, BaseException):
+            raise reply
+        return {"choices": [{"message": reply}]}
+
+
+def _tool_call(call_id="call-1", name="search_vault"):
+    return {"role": "assistant", "content": None,
+            "tool_calls": [{"id": call_id, "type": "function",
+                            "function": {"name": name, "arguments": '{"query": "falcon"}'}}]}
+
+
+def _text(content):
+    return {"role": "assistant", "content": content}
+
+
+def _http_400():
+    request = httpx.Request("POST", "http://fake/chat/completions")
+    return httpx.HTTPStatusError("bad request", request=request, response=httpx.Response(400, request=request))
+
+
+class ToolRoundTests(unittest.TestCase):
+    """An OpenAI-compatible chat must keep each turn's tool calls and results.
+    They used to live only in the request loop's own copy of the history, so
+    the next turn forgot every earlier tool result, and its request stopped
+    matching the previous one right after the last user message - which is
+    where the provider's prompt cache stopped too."""
+
+    OTHER = {"id": "other-local", "kind": "local", "model": "other-model"}
+
+    def setUp(self):
+        chat_service._brains.clear()
+        chat_service._busy.clear()
+        self.sid = session_manager.create_session("tools")["id"]
+        self.endpoint = ENDPOINTS["local"]
+        patches = [
+            patch.object(chat_service, "_resolve_endpoint", side_effect=lambda sid: self.endpoint),
+            patch("core.model_endpoints.resolve_runtime", return_value=("http://fake", "local-model", None, None)),
+            patch("core.external_brain.ExternalBrain._execute_tool", new=AsyncMock(return_value="RESULT-falcon-42")),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(chat_service._brains.clear)
+
+    def script(self, *replies):
+        fake = _ScriptedEndpoint(replies)
+        p = patch("core.providers.openai_compatible._post_chat", new=fake)
+        p.start()
+        self.addCleanup(p.stop)
+        return fake
+
+    def send(self, text):
+        return asyncio.run(chat_service.send_message(self.sid, text))
+
+    @staticmethod
+    def tool_messages(body):
+        return [m for m in body["messages"] if m.get("role") == "tool" or m.get("tool_calls")]
+
+    def test_the_next_turn_extends_the_previous_request_exactly(self):
+        fake = self.script(_tool_call(), _text("found it"), _text("still know it"))
+        self.send("find the falcon note")
+        self.send("what did the search return?")
+        last_of_turn_one, turn_two = fake.bodies[1]["messages"], fake.bodies[2]["messages"]
+        self.assertEqual(turn_two[:len(last_of_turn_one)], last_of_turn_one,
+                         "turn two must resend turn one's final request unchanged, tool round included")
+        self.assertEqual(turn_two[len(last_of_turn_one):],
+                         [{"role": "assistant", "content": "found it"}, {"role": "user", "content": "what did the search return?"}])
+        self.assertIn("RESULT-falcon-42", [m.get("content") for m in turn_two])
+
+    def test_tool_results_survive_a_reconnect(self):
+        fake = self.script(_tool_call(), _text("found it"), _text("still know it"))
+        self.send("find the falcon note")
+        asyncio.run(chat_service.close_session_brain(self.sid))  # a restart, a Stop or an error
+        self.send("what did the search return?")
+        last_of_turn_one, turn_two = fake.bodies[1]["messages"], fake.bodies[2]["messages"]
+        self.assertEqual(turn_two[:len(last_of_turn_one)], last_of_turn_one)
+
+    def test_a_stopped_turn_keeps_the_tool_rounds_that_ran(self):
+        fake = self.script(_tool_call(name="create_note"), asyncio.CancelledError(), _text("the note exists"))
+
+        async def stopped_stream():
+            async for _ in chat_service.stream_message(self.sid, "make a note"):
+                pass
+        with self.assertRaises(asyncio.CancelledError):
+            asyncio.run(stopped_stream())
+        self.send("did the note get made?")
+        self.assertEqual(len(self.tool_messages(fake.bodies[2])), 2,
+                         "the tool that already ran before the Stop must stay in the history")
+
+    def test_tool_rounds_are_only_replayed_to_the_endpoint_that_made_them(self):
+        fake = self.script(_tool_call(), _text("found it"), _text("fresh start"))
+        self.send("find the falcon note")
+        asyncio.run(chat_service.close_session_brain(self.sid))
+        self.endpoint = self.OTHER
+        self.send("and now?")
+        self.assertEqual(self.tool_messages(fake.bodies[2]), [])
+        self.assertIn({"role": "assistant", "content": "found it"}, fake.bodies[2]["messages"])
+
+    def test_the_no_tools_fallback_sends_text_only_history(self):
+        fake = self.script(_tool_call(), _text("found it"), _http_400(), _text("plain answer"))
+        self.send("find the falcon note")
+        self.assertEqual(self.send("again?"), "plain answer")
+        retry = fake.bodies[3]
+        self.assertNotIn("tools", retry)
+        self.assertEqual(self.tool_messages(retry), [])
+
+    def test_the_session_payload_sent_to_the_browser_leaves_tool_rounds_out(self):
+        self.script(_tool_call(), _text("found it"))
+        self.send("find the falcon note")
+        stored = session_manager.get_session(self.sid)["messages"]
+        self.assertTrue(any("tool_rounds" in m for m in stored), "the rounds must be saved with the chat")
+        served = client.get(f"/api/sessions/{self.sid}").json()["messages"]
+        self.assertFalse(any("tool_rounds" in m for m in served))
+        starred = client.post(f"/api/sessions/{self.sid}/star", json={"starred": True}).json()
+        self.assertFalse(any("tool_rounds" in m for m in starred.get("messages", [])))
 
 
 

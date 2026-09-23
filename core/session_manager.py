@@ -106,7 +106,8 @@ class SessionManager:
             raise KeyError(f"no such session: {session_id}")
         return session
 
-    def append_message(self, session_id: str, role: str, content: str, status: str = "complete") -> None:
+    def append_message(self, session_id: str, role: str, content: str, status: str = "complete",
+                       extra: Optional[dict] = None) -> None:
         """Add one turn to a conversation.
 
         Deliberately never loads the transcript to do it: the store hands
@@ -115,6 +116,9 @@ class SessionManager:
         this cost grow with the conversation's length — at 800 messages a
         single append took 66 ms, against 6 ms for the JSON store this
         replaced. It is now flat.
+
+        extra: further fields saved on the message itself, such as an
+        OpenAI-compatible reply's `tool_rounds`. The core fields always win.
         """
         header = store.get_session_header(session_id)
         if header is None:
@@ -122,7 +126,7 @@ class SessionManager:
         session, count = header
 
         now = time.time()
-        message = {"role": role, "content": content, "ts": now, "status": status}
+        message = {**(extra or {}), "role": role, "content": content, "ts": now, "status": status}
         session["updated_at"] = now
 
         # Auto-title from the first user message, same idea as most chat UIs

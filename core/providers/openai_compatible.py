@@ -38,6 +38,16 @@ below detects that exact pattern (content is a JSON object, its "name" is
 one of the tools actually offered this turn — not just anything JSON-
 shaped) and rescues it into a real tool call so it actually executes,
 instead of the user seeing raw JSON as if it were the model's answer.
+
+Tool rounds kept, 2026-09-22 (prompt-cache audit finding 2): a caller can
+pass `rounds`, a list this module appends each tool-calling assistant
+message and each tool result to as they happen - the very same dicts sent
+in the request. The caller keeps them in its history, so the next turn's
+request extends this one exactly (the provider's prompt cache carries over)
+and the model still has its earlier tool results. They used to exist only
+in this module's local copy of the history and were dropped after every
+turn. Appended as they happen, not at the end, so a stopped turn still
+records the tools that actually ran.
 """
 import json
 from typing import Awaitable, AsyncIterator, Callable, Optional
@@ -97,6 +107,29 @@ def _extract_fake_tool_call(content: Optional[str], tools: Optional[list[dict]])
     return {"id": f"rescued-{name}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
 
 
+def _without_tool_rounds(messages: list[dict]) -> list[dict]:
+    """The text-only view of a history, for the no-tools fallback below: an
+    endpoint that rejects the `tools` field may reject tool-role messages
+    too, and a fallback that used to work must not start failing because
+    the history now carries tool rounds."""
+    plain = []
+    for m in messages:
+        if m.get("role") == "tool":
+            continue
+        if m.get("tool_calls"):
+            if m.get("content"):
+                plain.append({"role": m["role"], "content": m["content"]})
+            continue
+        plain.append(m)
+    return plain
+
+
+def _record(working_messages: list[dict], rounds: Optional[list[dict]], message: dict) -> None:
+    working_messages.append(message)
+    if rounds is not None:
+        rounds.append(message)
+
+
 async def _post_chat(client: httpx.AsyncClient, base_url: str, api_key: Optional[str], body: dict) -> dict:
     """The one place num_ctx capping actually gets applied — see module
     docstring. `body` may carry a `num_ctx` key; it's popped here rather
@@ -116,7 +149,8 @@ async def _post_chat(client: httpx.AsyncClient, base_url: str, api_key: Optional
 
 async def run_turn(base_url: str, model: str, api_key: Optional[str], messages: list[dict],
                     tools: Optional[list[dict]] = None, tool_executor: Optional[Callable[[str, dict], Awaitable[str]]] = None,
-                    on_usage: Optional[Callable[[dict], None]] = None, num_ctx: Optional[int] = None) -> str:
+                    on_usage: Optional[Callable[[dict], None]] = None, num_ctx: Optional[int] = None,
+                    rounds: Optional[list[dict]] = None) -> str:
     """Non-streaming chat completion, with an optional bounded tool-calling
     loop (David's ask 2026-08-31 — see module docstring). Without `tools`,
     behaves exactly as before this change.
@@ -127,7 +161,8 @@ async def run_turn(base_url: str, model: str, api_key: Optional[str], messages: 
     every call; a server that never does simply never reports usage, same
     honest-degradation posture as the tools fallback above.
 
-    num_ctx: see module docstring — applied by _post_chat()."""
+    num_ctx: see module docstring — applied by _post_chat().
+    rounds: see module docstring."""
     working_messages = list(messages)
     async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
         for _ in range(MAX_TOOL_ROUNDS if tools else 1):
@@ -142,7 +177,7 @@ async def run_turn(base_url: str, model: str, api_key: Optional[str], messages: 
                 if tools and e.response.status_code in (400, 422):
                     # This endpoint doesn't understand `tools` at all — retry
                     # once, plain, rather than failing the turn outright.
-                    retry_body = {"model": model, "messages": working_messages}
+                    retry_body = {"model": model, "messages": _without_tool_rounds(working_messages)}
                     if num_ctx:
                         retry_body["num_ctx"] = num_ctx
                     data = await _post_chat(client, base_url, api_key, retry_body)
@@ -167,12 +202,12 @@ async def run_turn(base_url: str, model: str, api_key: Optional[str], messages: 
             if not tool_calls or not tool_executor:
                 return message.get("content") or ""
 
-            working_messages.append(message)
+            _record(working_messages, rounds, message)
             for call in tool_calls:
                 fn = call["function"]
                 args = _parse_tool_arguments(fn.get("arguments"))
                 result = await tool_executor(fn["name"], args)
-                working_messages.append({
+                _record(working_messages, rounds, {
                     "role": "tool",
                     "tool_call_id": call["id"],
                     "content": result,
@@ -184,13 +219,14 @@ async def run_turn(base_url: str, model: str, api_key: Optional[str], messages: 
 
 async def run_turn_stream(base_url: str, model: str, api_key: Optional[str], messages: list[dict],
                            tools: Optional[list[dict]] = None, tool_executor: Optional[Callable[[str, dict], Awaitable[str]]] = None,
-                           on_usage: Optional[Callable[[dict], None]] = None, num_ctx: Optional[int] = None) -> AsyncIterator[str]:
+                           on_usage: Optional[Callable[[dict], None]] = None, num_ctx: Optional[int] = None,
+                           rounds: Optional[list[dict]] = None) -> AsyncIterator[str]:
     """Streaming variant. Tool-calling rounds (if any) are resolved
     non-streamed first — a tool call has no incremental text of its own to
     stream — then only the final round streams token-by-token, same
     real-time feel as before for the common no-tool-call case.
 
-    on_usage: see run_turn's docstring.
+    on_usage, rounds: see run_turn's docstring.
     num_ctx: see module docstring. The plain (no-tools) branch below is SSE-
     based and can't go through _post_chat()/chat_capped() — for a detected
     capped-Ollama endpoint it instead falls back to one non-streamed
@@ -238,7 +274,8 @@ async def run_turn_stream(base_url: str, model: str, api_key: Optional[str], mes
             except httpx.HTTPStatusError as e:
                 if e.response.status_code in (400, 422):
                     # Fall back to a plain streamed call with no tools.
-                    async for chunk in run_turn_stream(base_url, model, api_key, working_messages, tools=None, on_usage=on_usage, num_ctx=num_ctx):
+                    async for chunk in run_turn_stream(base_url, model, api_key, _without_tool_rounds(working_messages),
+                                                       tools=None, on_usage=on_usage, num_ctx=num_ctx):
                         yield chunk
                     return
                 raise
@@ -258,12 +295,12 @@ async def run_turn_stream(base_url: str, model: str, api_key: Optional[str], mes
                     yield content
                 return
 
-            working_messages.append(message)
+            _record(working_messages, rounds, message)
             for call in tool_calls:
                 fn = call["function"]
                 args = _parse_tool_arguments(fn.get("arguments"))
                 result = await tool_executor(fn["name"], args)
-                working_messages.append({
+                _record(working_messages, rounds, {
                     "role": "tool",
                     "tool_call_id": call["id"],
                     "content": result,

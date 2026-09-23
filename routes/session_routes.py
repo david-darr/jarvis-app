@@ -63,6 +63,15 @@ class SetOpenMicRequest(BaseModel):
     active: bool
 
 
+def _for_client(session: dict) -> dict:
+    """A session as the browser gets it. An OpenAI-compatible reply's saved
+    `tool_rounds` exist for the model (see core/external_brain.py's _seed),
+    not the chat window, and can be large - a whole file read, say - so they
+    stay on the server."""
+    messages = [{k: v for k, v in m.items() if k != "tool_rounds"} for m in session.get("messages") or []]
+    return {**session, "messages": messages} if "messages" in session else session
+
+
 @router.get("")
 async def list_sessions(user: str = Depends(require_user)) -> list[dict]:
     return session_manager.list_sessions()
@@ -78,7 +87,7 @@ async def get_session(session_id: str, user: str = Depends(require_user)) -> dic
     session = session_manager.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
-    return session
+    return _for_client(session)
 
 
 @router.patch("/{session_id}")
@@ -93,7 +102,7 @@ async def rename_session(session_id: str, body: RenameSessionRequest, user: str 
 @router.post("/{session_id}/star")
 async def star_session(session_id: str, body: StarSessionRequest, user: str = Depends(require_user)) -> dict:
     try:
-        return session_manager.set_starred(session_id, body.starred)
+        return _for_client(session_manager.set_starred(session_id, body.starred))
     except KeyError:
         raise HTTPException(status_code=404, detail="session not found")
 

@@ -157,7 +157,8 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
     # the model twice on every fresh connection (found 2026-09-22), and the
     # doubled request could never match the one rebuilt after a reconnect.
     return ExternalBrain(base_url, model, api_key, history=session_manager.effective_messages(session_id, exclude_last=True),
-                         session_id=session_id, num_ctx=num_ctx, is_admin=is_admin, project_id=project_id)
+                         session_id=session_id, num_ctx=num_ctx, is_admin=is_admin, project_id=project_id,
+                         endpoint_id=endpoint["id"])
 
 
 def _prime_with_history(session_id: str, just_created: bool, endpoint: dict, full_text: str,
@@ -223,6 +224,17 @@ def _remember_claude_session(session_id: str, brain: Optional[AnyBrain], cancell
     if cli_id:
         session = session_manager.get_session(session_id) or {}
         session_manager.set_claude_session(session_id, cli_id, len(session.get("messages", [])))
+
+
+def _tool_rounds(brain: Optional[AnyBrain], endpoint: dict) -> Optional[dict]:
+    """An OpenAI-compatible turn's tool calls and results, as saved on its
+    reply so a reconnect can replay them (see ExternalBrain._seed). Tagged
+    with the endpoint because only that endpoint gets them back. None for
+    the CLI brains, which keep their own tool history."""
+    rounds = getattr(brain, "last_tool_rounds", None) if isinstance(brain, ExternalBrain) else None
+    if not rounds:
+        return None
+    return {"tool_rounds": {"endpoint_id": endpoint["id"], "messages": list(rounds)}}
 
 
 def _apply_attachments(session_id: str, text: str, attachment_ids: list[str] | None) -> str:
@@ -307,7 +319,7 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
         await close_session_brain(session_id)
         raise
     _record_turn_telemetry(session_id, endpoint, brain)
-    session_manager.append_message(session_id, "assistant", reply)
+    session_manager.append_message(session_id, "assistant", reply, extra=_tool_rounds(brain, endpoint))
     _remember_claude_session(session_id, brain)
     return reply
 
@@ -343,14 +355,17 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
         yield ATTACHMENT_TOO_LARGE_MESSAGE
     except BaseException as exc:
         # Includes client cancellation: preserve the visible partial answer.
-        session_manager.append_message(session_id, "assistant", "".join(reply_parts), status="interrupted")
+        # Tools that ran before the Stop really happened; keep them, or the
+        # next turn would not know a note was already created.
+        session_manager.append_message(session_id, "assistant", "".join(reply_parts), status="interrupted",
+                                       extra=_tool_rounds(brain, endpoint))
         _remember_claude_session(session_id, brain, succeeded=False,
                                  cancelled=isinstance(exc, (asyncio.CancelledError, GeneratorExit)))
         await close_session_brain(session_id)
         raise
 
     _record_turn_telemetry(session_id, endpoint, brain)
-    session_manager.append_message(session_id, "assistant", "".join(reply_parts))
+    session_manager.append_message(session_id, "assistant", "".join(reply_parts), extra=_tool_rounds(brain, endpoint))
     _remember_claude_session(session_id, brain)
 
 
