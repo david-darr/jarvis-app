@@ -1345,18 +1345,45 @@ class ClaudeResumeTests(unittest.TestCase):
 
 
 class ShellPermissionTests(unittest.TestCase):
-    """The SDK skips can_use_tool for anything on allowed_tools, so Bash on
-    that list meant an admin's shell ran without asking (verified live
-    2026-09-22). An admin must be asked; a non-admin must be refused."""
+    """Admin shell grants are automatic, visible and revocable; non-admin
+    sessions cannot use the native shell tools."""
 
-    def test_an_admin_is_asked_before_bash_and_a_non_admin_is_refused(self):
+    def setUp(self):
+        from core import permissions
+        self.permissions = permissions
+        self.directory = tempfile.TemporaryDirectory(prefix="jarvis-shell-grants-")
+        self.addCleanup(self.directory.cleanup)
+        patcher = patch.object(permissions, "PERMISSIONS_FILE",
+                               os.path.join(self.directory.name, "permissions.json"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_admin_shell_is_automatic_and_non_admin_shell_is_refused(self):
+        from core import custom_tabs
         vault = tempfile.mkdtemp(prefix="jarvis-shell-")
         admin = Brain(vault_dir=vault, is_admin=True)._options()
-        self.assertNotIn("Bash", admin.allowed_tools)
-        self.assertNotIn("Bash", admin.disallowed_tools)
+        self.assertIn("Bash", admin.allowed_tools)
+        self.assertIn("PowerShell", admin.allowed_tools)
         self.assertIsNotNone(admin.can_use_tool)
+        self.assertIn(custom_tabs.USER_TABS_DIR, admin.add_dirs)
+        self.assertNotIn(os.path.dirname(custom_tabs.USER_TABS_DIR), admin.add_dirs,
+                         "the rest of data/ stays outside Claude's file-tool roots")
+        self.assertNotIn("mcp__ungranted_connector__write", admin.allowed_tools)
         user = Brain(vault_dir=vault, is_admin=False)._options()
         self.assertIn("Bash", user.disallowed_tools)
+        self.assertIn("PowerShell", user.disallowed_tools)
+        self.assertNotIn("Bash", user.allowed_tools)
+        self.assertNotIn("PowerShell", user.allowed_tools)
+
+    def test_revoking_one_shell_grant_stops_preapproval(self):
+        admin = Brain(vault_dir=tempfile.gettempdir(), is_admin=True)
+        self.assertIn("Bash", admin._options().allowed_tools)
+        rule = next(r for r in self.permissions.list_rules()
+                    if r["tool"] == "Bash" and r.get("source") == "built-in")
+        self.assertTrue(self.permissions.revoke(rule["id"]))
+        allowed = admin._options().allowed_tools
+        self.assertNotIn("Bash", allowed)
+        self.assertIn("PowerShell", allowed)
 
 
 class UsageTotalsTests(unittest.TestCase):

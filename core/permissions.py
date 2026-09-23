@@ -11,11 +11,10 @@ Fail closed. An unanswered request denies, and says it timed out rather than
 implying the owner refused. Silence, a closed tab, or a surface with nobody
 watching are all denials.
 
-A grant is a rule, never a tool. "Always allow Bash" must be unrepresentable,
-so every grant carries a scope - a command prefix, a path root, a host. The
-Claude Agent SDK suggests that scope itself for its own tools, which is what
-Claude Code shows as "always allow this command"; for tools this app defines,
-the scope is derived here.
+A person's "always" grant is scoped to a command prefix, path root or host.
+The built-in admin Bash and PowerShell grants are the deliberate exception:
+David restored automatic admin shell commands on 2026-09-22. They remain visible
+and revocable in Settings.
 
 A grant you cannot find is a trap. Rules are listed and revocable in
 Settings, and every decision is written to an audit trail.
@@ -88,11 +87,13 @@ def _save(data: dict) -> None:
     write_json_atomic(PERMISSIONS_FILE, data)
 
 
-def _matches(rule: dict, tool: str, target: str | None) -> bool:
+def _matches(rule: dict, tool: str, target: str | None, is_admin: bool = False) -> bool:
     """A rule with no content covers the whole tool, which is only ever used
-    for the read-only tools this app pre-approves for itself. Everything a
-    person grants carries content, and a trailing :* is a prefix."""
+    for the tools this app pre-approves for itself, including admin shell.
+    A person's prompt-based grant carries content; :* is a prefix."""
     if rule["tool"] != tool:
+        return False
+    if rule.get("admin_only") and not is_admin:
         return False
     content = rule.get("content")
     if not content:
@@ -162,19 +163,20 @@ def ensure_seeded(tools: list[str]) -> None:
 
     These tools were already granted - hardcoded in core/brain.py, invisible
     and unrevocable. Writing them in as rules changes no behaviour and makes
-    them inspectable and revocable for the first time. Shell is deliberately
-    never seeded: being asked before a command runs is the point.
+    them inspectable and revocable. Admin shell tools are seeded when the
+    admin config includes them; non-admin configs never do.
     """
     data = _load()
     known = set(data["seeded"])
-    additions = [tool for tool in tools if tool not in known and tool not in ("Bash", "run_shell")]
+    additions = [tool for tool in tools if tool not in known and tool != "run_shell"]
     if not additions:
         return
     now = time.time()
     for tool in additions:
         data["rules"].append({"id": uuid.uuid4().hex, "tool": tool, "content": None,
                               "behavior": "allow", "scope": "forever", "granted_at": now,
-                              "granted_by": "jarvis", "source": "built-in"})
+                              "granted_by": "jarvis", "source": "built-in",
+                              "admin_only": tool in ("Bash", "PowerShell")})
         data["seeded"].append(tool)
     _save(data)
 
@@ -191,18 +193,19 @@ def grant_standing(tools: list[str], granted_by: str) -> None:
     """Grant tools whole and for good, when someone explicitly adds them
     (Settings > Agent Tools' extra allowed list). Seeding happens once per
     tool, so without this a tool revoked earlier could never be re-allowed
-    by adding it back. Shell is never granted this way."""
+    by adding it back. run_shell is never granted this way."""
     data = _load()
     held = {rule["tool"] for rule in data["rules"]
             if rule.get("behavior") == "allow" and not rule.get("content") and rule.get("scope") == "forever"}
-    additions = [tool for tool in tools if tool not in held and tool not in ("Bash", "run_shell")]
+    additions = [tool for tool in tools if tool not in held and tool != "run_shell"]
     if not additions:
         return
     now = time.time()
     for tool in additions:
         data["rules"].append({"id": uuid.uuid4().hex, "tool": tool, "content": None,
                               "behavior": "allow", "scope": "forever", "granted_at": now,
-                              "granted_by": granted_by, "source": "settings"})
+                              "granted_by": granted_by, "source": "settings",
+                              "admin_only": tool in ("Bash", "PowerShell")})
         if tool not in data["seeded"]:
             data["seeded"].append(tool)
         _record(data, {"decision": "granted", "tool": tool, "by": granted_by})
@@ -224,10 +227,10 @@ def _remember(rule: dict, surface: str) -> None:
     _save(data)
 
 
-def stored_decision(surface: str, tool: str, target: str | None) -> Decision | None:
+def stored_decision(surface: str, tool: str, target: str | None, is_admin: bool = False) -> Decision | None:
     """An answer that needs no one, or None if this has to be asked."""
     for rule in _session_rules.get(surface, []) + _load()["rules"]:
-        if _matches(rule, tool, target):
+        if _matches(rule, tool, target, is_admin):
             return Decision(rule["behavior"], "A saved rule covers this.", rule)
     return None
 
@@ -252,10 +255,10 @@ def drop_session(surface: str) -> None:
 
 async def decide(*, surface: str, tool: str, arguments: dict, title: str = "", description: str = "",
                  target: str | None = None, choices: list[dict] | None = None,
-                 timeout: float = DEFAULT_TIMEOUT_SECONDS) -> Decision:
+                 timeout: float = DEFAULT_TIMEOUT_SECONDS, is_admin: bool = False) -> Decision:
     """Answer from a rule, or ask the person and wait."""
     target = target if target is not None else derive_target(tool, arguments)
-    saved = stored_decision(surface, tool, target)
+    saved = stored_decision(surface, tool, target, is_admin)
     if saved:
         return saved
     queue = _channels.get(surface)

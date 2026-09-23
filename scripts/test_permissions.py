@@ -143,15 +143,25 @@ class BrokerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(entry.get("decision") == "granted" for entry in entries))
         self.assertTrue(any(entry.get("by") == "alice" for entry in entries))
 
-    async def test_seeding_never_grants_the_shell(self):
-        permissions.ensure_seeded(["mcp__hive_mind__list_notes", "Bash", "run_shell"])
+    async def test_admin_shell_defaults_are_visible_revocable_and_not_reseeded(self):
+        permissions.ensure_seeded(["mcp__hive_mind__list_notes", "Bash", "PowerShell", "run_shell"])
         tools = {rule["tool"] for rule in permissions.list_rules()}
         self.assertIn("mcp__hive_mind__list_notes", tools)
-        self.assertNotIn("Bash", tools)
+        self.assertIn("Bash", tools)
+        self.assertIn("PowerShell", tools)
         self.assertNotIn("run_shell", tools)
-        permissions.ensure_seeded(["mcp__hive_mind__list_notes"])
+        self.assertIsNone(permissions.stored_decision("chat:user", "Bash", "git status"),
+                          "the built-in shell grant cannot authorize a non-admin caller")
+        self.assertEqual(permissions.stored_decision("chat:admin", "Bash", "git status",
+                                                     is_admin=True).behavior, "allow")
+        shell = next(rule for rule in permissions.list_rules() if rule["tool"] == "Bash")
+        self.assertTrue(permissions.revoke(shell["id"]))
+        permissions.ensure_seeded(["mcp__hive_mind__list_notes", "Bash", "PowerShell"])
+        self.assertNotIn("Bash", permissions.standing_grants(), "revocation must survive a reconnect")
         self.assertEqual(len([r for r in permissions.list_rules() if r["tool"].startswith("mcp__")]), 1,
                          "seeding twice must not duplicate a grant")
+        permissions.grant_standing(["Bash"], granted_by="alice")
+        self.assertIn("Bash", permissions.standing_grants(), "an admin can explicitly restore it")
 
     async def test_a_request_shows_the_arguments_as_text(self):
         queue = permissions.open_channel("chat:1")

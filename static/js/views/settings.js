@@ -2068,7 +2068,8 @@ async function renderPermissionsPanel(content) {
 
   if (!rules.length) content.append(el("p", { class: "meta", text: "Nothing is granted yet." }));
   for (const rule of rules) {
-    const scope = rule.scope === "session" ? "this chat only" : "everywhere";
+    const scope = rule.admin_only ? "admins only, everywhere"
+      : rule.scope === "session" ? "this chat only" : "everywhere";
     const row = el("div", { class: "settings-row" }, [
       el("div", {}, [
         el("div", { text: rule.content ? `${rule.tool} — ${rule.content}` : rule.tool }),

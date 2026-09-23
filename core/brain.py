@@ -29,7 +29,7 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import StreamEvent
 
-from core import hive_mind_server, image_gen, integrations, permissions, projects, settings as settings_store, system_prompt
+from core import custom_tabs, hive_mind_server, image_gen, integrations, permissions, projects, settings as settings_store, system_prompt
 from core.constants import REPO_CODE_DIRS
 from core.vault import resolve_vault_dir
 
@@ -145,15 +145,9 @@ class Brain:
         # no wildcard/prefix form that auto-approves a whole MCP server, so
         # each tool genuinely has to be listed by its exact full name here,
         # not a shortcut worth looking for again.
-        # Shell execution (David's ask 2026-09-02) — admin-only, modeled on
-        # Odysseus's own agent-tool gate (their src/tool_security.py). No
-        # command blocklist, matching their actual safety model — the admin
-        # check decides whether shell can be asked for at all. Claude already
-        # has a native Bash tool. It used to be pre-approved for admins
-        # because an unapproved call once hung on a prompt nothing could
-        # answer; the permission broker (self._permission) now answers it,
-        # so an admin is asked instead. A non-admin session gets Bash
-        # explicitly denied (not just omitted) so it fails closed at once.
+        # Shell execution is admin-only. David restored the original automatic
+        # admin shell behavior after command-by-command prompts became noisy;
+        # its built-in grants remain visible and revocable in Permissions.
         allowed_tools = [
             "mcp__hive_mind__search_sessions",
             "mcp__hive_mind__list_skills",
@@ -206,21 +200,15 @@ class Brain:
         # Escape hatch for whatever this hardcoded baseline doesn't cover —
         # see core/settings.py's extra_allowed_tools for why this exists.
         allowed_tools.extend(settings_store.get_setting("extra_allowed_tools") or [])
-        # Bash is never pre-approved, admin or not. The SDK treats anything on
-        # allowed_tools as granted and skips can_use_tool entirely, so listing
-        # Bash here for admins meant their shell commands ran without asking,
-        # even after the permission broker shipped (verified live 2026-09-22).
-        # Left off the list, an admin's Bash call reaches self._permission and
-        # the person decides; a non-admin's is refused outright below.
-        if not self.is_admin:
-            disabled = [*disabled, "Bash"]
+        if self.is_admin:
+            allowed_tools.extend(("Bash", "PowerShell"))
+        else:
+            disabled = [*disabled, "Bash", "PowerShell"]
         # App-wide approval (David's ask 2026-09-18). The pre-approved list
         # above is written into the permission store as visible, revocable
         # rules. Anything outside it used to hang on a prompt nothing could
-        # answer; it now reaches the person instead. Bash is deliberately
-        # never seeded: being asked before a command runs is the whole point,
-        # and the admin gate above still decides whether it can be asked for
-        # at all.
+        # answer; it now reaches the person instead. Admin shell grants are
+        # seeded here too, so Settings can show and revoke the auto behavior.
         permissions.ensure_seeded(allowed_tools)
         # Only what still has a standing grant is pre-approved. Revoking a
         # built-in in Settings > Permissions used to change nothing: this list
@@ -229,7 +217,7 @@ class Brain:
         # because this list feeds the fingerprint, an open chat picks the
         # revocation up on its next message.
         grants = permissions.standing_grants()
-        allowed_tools = [tool for tool in allowed_tools if tool in grants]
+        allowed_tools = [tool for tool in allowed_tools if tool in grants and tool not in disabled]
         return disabled, allowed_tools, mcp_servers
 
     @staticmethod
@@ -279,8 +267,9 @@ class Brain:
             # deliberately not in this list — see REPO_CODE_DIRS' comment.
             # generated_files IS included (unlike the rest of data/) so a
             # requested deliverable can be built there directly instead of
-            # in the vault.
-            add_dirs=REPO_CODE_DIRS + [image_gen.GENERATED_FILES_DIR],
+            # in the vault. User-built tab source is the one narrow data/
+            # exception: generated tabs live there and need file-tool access.
+            add_dirs=REPO_CODE_DIRS + [image_gen.GENERATED_FILES_DIR, custom_tabs.USER_TABS_DIR],
             # Found live 2026-09-08: the SDK's own default here is 1MB, and
             # a handful of real photos read back through a file tool (see
             # core/attachments.py) easily produces one JSON message from the
@@ -330,6 +319,7 @@ class Brain:
             surface=self.surface,
             tool=tool_name,
             arguments=arguments if isinstance(arguments, dict) else {},
+            is_admin=self.is_admin,
             target=rule_content or permissions.derive_target(tool_name, arguments),
             title=getattr(context, "title", None) or getattr(context, "display_name", None) or tool_name,
             description=getattr(context, "description", None) or getattr(context, "decision_reason", None) or "",
