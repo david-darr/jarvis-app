@@ -37,11 +37,39 @@ A tab is 2-3 files:
    ```js
    export async function render(container, tabId) { ... }
    ```
-   `container` is the tab's content element — clear it (`container.innerHTML = ""`) and build into it. Return a cleanup function only if you own a persistent resource (an animation loop, a websocket) that needs tearing down on tab switch; otherwise return nothing. Use the shared helpers from `../api.js`: `api(path, options)` (fetch wrapper, throws on non-2xx, parses JSON) and `el(tag, attrs, children)` (DOM builder — `attrs.text` sets textContent, `attrs.onclick` etc. wire listeners). Read `static/js/views/tasks.js` end to end as the concrete worked example of this pattern (fetch on render, rebuild a list, wire buttons that call `api()` then re-fetch).
+   `container` is the tab's content element — clear it (`container.innerHTML = ""`) and build into it. Return a cleanup function only if you own a persistent resource (an animation loop, a websocket) that needs tearing down on tab switch; otherwise return nothing. Import the shared helpers from `/static/js/api.js` (the user view is served from `/custom-views`, so `../api.js` would resolve to `/api.js`): `api(path, options)` (fetch wrapper, throws on non-2xx, parses JSON) and `el(tag, attrs, children)` (DOM builder — `attrs.text` sets textContent, `attrs.onclick` etc. wire listeners). Read `static/js/views/tasks.js` end to end as the concrete worked example of this pattern (fetch on render, rebuild a list, wire buttons that call `api()` then re-fetch).
 
 3. **`tabs/services/<slug>_service.py`** (optional, only if the tab needs its own persisted data) — a singleton class following every existing service's exact shape (see `services/task_service.py` or `services/notes_service.py`): reads its own `data/<slug>.json` once at import time via `core.atomic_io.read_json`, mutates an in-memory dict, writes back via `core.atomic_io.write_json_atomic` on every change, module-level singleton instance at the bottom (`<slug>_service = <Slug>Service()`). Import `DATA_DIR` from `core.constants` for its JSON path rather than hardcoding one, so it follows the data directory wherever it actually is. You're writing the service *code*; the data file it manages is created by that code at runtime when the app calls it.
 
 That's the whole contract. No `app.py` edit (an existing one-time hook mounts every discovered `tab_*.py` automatically, from both the app's own `routes/` and the user tabs directory), no `static/js/app.js` edit (the sidebar fetches `/api/system/custom-tabs` and appends whatever it finds, loading each view from the URL the manifest reports), no `icons.js` edit (the icon travels inline in `TAB_MANIFEST`).
+
+## Handle errors inside the view
+
+`switchTab()` catches a failure while it awaits `render()`, but it cannot catch a fetch or event handler that fails after `render()` returns. Catch those async failures in the view and show a visible error in the tab instead of leaving "Loading..." on screen. `api()` throws on network and non-2xx failures; failed GETs do not show a toast. For a request started without awaiting it:
+
+```js
+import { api, el } from "/static/js/api.js";
+
+export async function render(container) {
+  container.replaceChildren(el("p", { text: "Loading items..." }));
+  api("/api/tab-example/items")
+    .then((items) => {
+      if (container.isConnected) {
+        container.replaceChildren(el("p", { text: `${items.length} items` }));
+      }
+    })
+    .catch((error) => {
+      console.error("Could not load tab items", error);
+      if (container.isConnected) {
+        container.replaceChildren(el("p", {
+          class: "empty-state", text: "Could not load items. Reopen the tab to retry.",
+        }));
+      }
+    });
+}
+```
+
+Handle async button and other event handlers with their own `try`/`catch` or `.catch()` too, and show the failure in the tab.
 
 ## Reference implementation to imitate
 
