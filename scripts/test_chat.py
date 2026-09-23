@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch, AsyncMock
 import asyncio
 import copy
+import json
 
 import httpx
 
@@ -1632,6 +1633,91 @@ def _text(content):
 def _http_400():
     request = httpx.Request("POST", "http://fake/chat/completions")
     return httpx.HTTPStatusError("bad request", request=request, response=httpx.Response(400, request=request))
+
+
+class OpenRouterCacheMarkerTests(unittest.TestCase):
+    """Anthropic models reached through OpenRouter cache only where a request
+    carries explicit cache_control markers, and JARVIS sent none, so every
+    turn re-billed the whole conversation. Prompt-cache audit finding 5; the
+    layout follows Hermes's agent/prompt_caching.py (envelope routes)."""
+
+    OPENROUTER = "https://openrouter.ai/api/v1"
+    CLAUDE = "anthropic/claude-sonnet-5"
+    HISTORY = [
+        {"role": "system", "content": "You are JARVIS."},
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": "two"},
+        {"role": "user", "content": "three"},
+        {"role": "assistant", "content": "four"},
+        {"role": "user", "content": "five"},
+    ]
+    TOOLS = [{"type": "function", "function": {"name": "search_vault", "parameters": {"type": "object", "properties": {}}}}]
+
+    def run_turn(self, replies, base_url=OPENROUTER, model=CLAUDE, messages=None, tools=None):
+        from core.providers import openai_compatible
+        fake = _ScriptedEndpoint(replies)
+        history = copy.deepcopy(messages if messages is not None else self.HISTORY)
+        before = copy.deepcopy(history)
+        with patch.object(openai_compatible, "_post_chat", new=fake):
+            asyncio.run(openai_compatible.run_turn(base_url, model, None, history, tools=tools,
+                                                   tool_executor=AsyncMock(return_value="RESULT") if tools else None))
+        self.assertEqual(history, before, "markers are request-local; the caller's history never carries them")
+        return fake.bodies
+
+    @staticmethod
+    def markers(messages):
+        envelope = [m for m in messages if "cache_control" in m]
+        parts = [p for m in messages if isinstance(m.get("content"), list) for p in m["content"] if "cache_control" in p]
+        return envelope, parts
+
+    def test_a_claude_request_through_openrouter_carries_four_markers_in_content_parts(self):
+        messages = self.run_turn([_text("six")])[0]["messages"]
+        envelope, parts = self.markers(messages)
+        self.assertEqual(envelope, [], "never on the message envelope")
+        self.assertEqual(len(parts), 4, "the API allows at most four")
+        marked = [m["content"][-1]["text"] for m in messages if isinstance(m.get("content"), list)]
+        self.assertEqual(marked, ["You are JARVIS.", "three", "four", "five"],
+                         "the system message plus the last three messages")
+        self.assertEqual(messages[0]["content"], [{"type": "text", "text": "You are JARVIS.", "cache_control": {"type": "ephemeral"}}])
+
+    def test_a_tool_result_is_marked_inside_its_content_never_on_the_envelope(self):
+        bodies = self.run_turn([_tool_call(), _text("done")], tools=self.TOOLS)
+        messages = bodies[1]["messages"]
+        envelope, parts = self.markers(messages)
+        self.assertEqual(envelope, [])
+        self.assertLessEqual(len(parts), 4)
+        tool = next(m for m in messages if m["role"] == "tool")
+        self.assertEqual(tool["content"][-1]["cache_control"], {"type": "ephemeral"})
+        call = next(m for m in messages if m.get("tool_calls"))
+        self.assertIsNone(call["content"], "a message with no text gets no marker")
+
+    def test_other_routes_send_exactly_what_they_did_before(self):
+        for base_url, model in [(self.OPENROUTER, "openai/gpt-5"), ("http://localhost:11434/v1", "claude-lookalike"),
+                                ("https://api.openai.com/v1", "gpt-5")]:
+            with self.subTest(base_url=base_url, model=model):
+                self.assertEqual(self.run_turn([_text("six")], base_url=base_url, model=model)[0]["messages"], self.HISTORY)
+
+    def test_the_no_tools_fallback_is_marked_too(self):
+        bodies = self.run_turn([_tool_call(), _http_400(), _text("plain")], tools=self.TOOLS)
+        envelope, parts = self.markers(bodies[2]["messages"])
+        self.assertEqual((envelope, len(parts)), ([], 4))
+
+    def test_a_streamed_reply_without_tools_is_marked_too(self):
+        from core.providers import openai_compatible
+        sent = {}
+
+        def handler(request):
+            sent.update(json.loads(request.content))
+            return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n')
+
+        real_client = httpx.AsyncClient
+        with patch.object(openai_compatible.httpx, "AsyncClient",
+                          side_effect=lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw)):
+            async def run():
+                return [c async for c in openai_compatible.run_turn_stream(self.OPENROUTER, self.CLAUDE, None, copy.deepcopy(self.HISTORY))]
+            self.assertEqual(asyncio.run(run()), ["hi"])
+        envelope, parts = self.markers(sent["messages"])
+        self.assertEqual((envelope, len(parts)), ([], 4))
 
 
 class ToolRoundTests(unittest.TestCase):

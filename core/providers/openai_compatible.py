@@ -51,6 +51,7 @@ records the tools that actually ran.
 """
 import json
 from typing import Awaitable, AsyncIterator, Callable, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -124,6 +125,60 @@ def _without_tool_rounds(messages: list[dict]) -> list[dict]:
     return plain
 
 
+# Prompt-cache audit finding 5 (2026-09-22), laid out as Hermes's
+# agent/prompt_caching.py does for envelope routes. OpenAI, DeepSeek and local
+# servers reuse a cached prefix on their own; an Anthropic model reached through
+# OpenRouter caches only where the request carries a cache_control marker, and
+# JARVIS sent none, so every turn re-billed the whole conversation.
+_CACHE_MARKER = {"type": "ephemeral"}
+_MAX_CACHE_MARKERS = 4  # the most one Anthropic request accepts
+
+
+def _needs_cache_markers(base_url: str, model: str) -> bool:
+    host = (urlparse(base_url or "").hostname or "").lower()
+    on_openrouter = host == "openrouter.ai" or host.endswith(".openrouter.ai")
+    return on_openrouter and "claude" in (model or "").lower()
+
+
+def _can_carry_marker(message: dict) -> bool:
+    # Only inside a content part: OpenRouter hangs on a marker on a role:tool
+    # envelope and ignores one on an empty assistant turn, so a message with no
+    # text (a tool call) gets none rather than wasting one of the four.
+    content = message.get("content")
+    if isinstance(content, str):
+        return content != ""
+    return isinstance(content, list) and bool(content) and isinstance(content[-1], dict)
+
+
+def _marked(message: dict) -> dict:
+    content = message["content"]
+    if isinstance(content, str):
+        parts = [{"type": "text", "text": content, "cache_control": dict(_CACHE_MARKER)}]
+    else:
+        parts = [*content[:-1], {**content[-1], "cache_control": dict(_CACHE_MARKER)}]
+    return {**message, "content": parts}
+
+
+def _request_messages(base_url: str, model: str, messages: list[dict]) -> list[dict]:
+    """The messages as this request sends them. Unchanged except for an
+    Anthropic model on OpenRouter, which gets a marker on the system message
+    (covering the tool list too, which renders before it) and on each of the
+    last three messages, so every turn reads what the previous one cached.
+    A copy: markers never reach the stored history, which stays
+    byte-comparable from turn to turn."""
+    if not _needs_cache_markers(base_url, model):
+        return messages
+    marked = list(messages)
+    used = 0
+    if marked and marked[0].get("role") == "system" and _can_carry_marker(marked[0]):
+        marked[0] = _marked(marked[0])
+        used = 1
+    carriers = [i for i, m in enumerate(marked) if m.get("role") != "system" and _can_carry_marker(m)]
+    for i in carriers[-(_MAX_CACHE_MARKERS - used):]:
+        marked[i] = _marked(marked[i])
+    return marked
+
+
 def _record(working_messages: list[dict], rounds: Optional[list[dict]], message: dict) -> None:
     working_messages.append(message)
     if rounds is not None:
@@ -166,7 +221,7 @@ async def run_turn(base_url: str, model: str, api_key: Optional[str], messages: 
     working_messages = list(messages)
     async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
         for _ in range(MAX_TOOL_ROUNDS if tools else 1):
-            body = {"model": model, "messages": working_messages}
+            body = {"model": model, "messages": _request_messages(base_url, model, working_messages)}
             if tools:
                 body["tools"] = tools
             if num_ctx:
@@ -177,7 +232,7 @@ async def run_turn(base_url: str, model: str, api_key: Optional[str], messages: 
                 if tools and e.response.status_code in (400, 422):
                     # This endpoint doesn't understand `tools` at all — retry
                     # once, plain, rather than failing the turn outright.
-                    retry_body = {"model": model, "messages": _without_tool_rounds(working_messages)}
+                    retry_body = {"model": model, "messages": _request_messages(base_url, model, _without_tool_rounds(working_messages))}
                     if num_ctx:
                         retry_body["num_ctx"] = num_ctx
                     data = await _post_chat(client, base_url, api_key, retry_body)
@@ -242,7 +297,8 @@ async def run_turn_stream(base_url: str, model: str, api_key: Optional[str], mes
                 yield content
             return
 
-        stream_body = {"model": model, "messages": messages, "stream": True, "stream_options": {"include_usage": True}}
+        stream_body = {"model": model, "messages": _request_messages(base_url, model, messages), "stream": True,
+                       "stream_options": {"include_usage": True}}
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
             async with client.stream(
                 "POST", f"{base_url}/chat/completions", headers=_headers(api_key), json=stream_body,
@@ -266,7 +322,7 @@ async def run_turn_stream(base_url: str, model: str, api_key: Optional[str], mes
     working_messages = list(messages)
     async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
         for round_num in range(MAX_TOOL_ROUNDS):
-            body = {"model": model, "messages": working_messages, "tools": tools}
+            body = {"model": model, "messages": _request_messages(base_url, model, working_messages), "tools": tools}
             if num_ctx:
                 body["num_ctx"] = num_ctx
             try:
