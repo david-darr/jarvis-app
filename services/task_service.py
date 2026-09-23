@@ -18,6 +18,16 @@ means six in the morning where the user is.
 Chained tasks, webhook triggers, and per-task personas (all real Odysseus
 features) are deliberately out of this pass — this is the execution-loop
 foundation those build on top of.
+
+Cards (the work board, Hermes track 2026-09-23, after Hermes's kanban): a
+fourth kind, "card", with no schedule. A card is a one-off piece of work that
+moves Backlog -> Ready -> Running -> Review -> Done (or Blocked). The task
+loop's dispatcher (core/task_scheduler.py) claims one Ready card at a time on
+a lease, runs it, and puts the result in Review for a person to approve or
+send back with a note. A card can wait on other cards (depends_on): it is not
+claimed until they are all Done, and their results are handed to it - which
+is how chained work happens. Any task or card can name the model it runs on
+(endpoint_id); without one it runs on Claude, as tasks always have.
 """
 import time
 import uuid
@@ -32,6 +42,18 @@ TASKS_FILE = os.path.join(DATA_DIR, "tasks.json")
 TASK_RUNS_FILE = os.path.join(DATA_DIR, "task_runs.json")
 
 MAX_RUNS_KEPT = 200
+
+CARD_STATUSES = ("backlog", "ready", "running", "review", "done", "blocked")
+# One run plus two retries, then Blocked.
+CARD_MAX_ATTEMPTS = 3
+# How long a claim holds. A run still going past it is taken as dead (the app
+# closed mid-run, say) and the card goes back to Ready, or Blocked when out of
+# attempts, so it can never sit in Running forever.
+CARD_LEASE_SECONDS = 30 * 60
+CARD_RESULT_INSTRUCTION = (
+    "[This is a card on JARVIS's work board. Your reply is the result the user will review, so reply with the "
+    "finished work itself, not a note about where you put it. Use tools only when the work itself needs them.]"
+)
 
 
 class TaskService:
@@ -61,9 +83,18 @@ class TaskService:
         builtin_action: Optional[str] = None,
         deliver_to_channel: Optional[str] = None,
         run_time: Optional[str] = None,
+        depends_on: Optional[list[str]] = None,
+        status: Optional[str] = None,
+        endpoint_id: Optional[str] = None,
     ) -> dict:
-        if schedule_kind not in ("once", "interval", "daily"):
-            raise ValueError("schedule_kind must be 'once', 'interval' or 'daily'")
+        if schedule_kind not in ("once", "interval", "daily", "card"):
+            raise ValueError("schedule_kind must be 'once', 'interval', 'daily' or 'card'")
+        if schedule_kind != "card" and (depends_on or status):
+            raise ValueError("depends_on and status are for cards (schedule_kind 'card')")
+        if schedule_kind == "card":
+            if status not in (None, "backlog", "ready"):
+                raise ValueError("a new card starts in 'backlog' or 'ready'")
+            self._check_dependencies(None, depends_on or [])
         if schedule_kind == "once" and not run_at:
             raise ValueError("run_at is required for a one-shot task")
         if schedule_kind == "interval" and not interval_seconds:
@@ -75,7 +106,9 @@ class TaskService:
 
         task_id = uuid.uuid4().hex[:12]
         now = time.time()
-        if schedule_kind == "once":
+        if schedule_kind == "card":
+            next_run_at = None  # cards are dispatched, not scheduled
+        elif schedule_kind == "once":
             next_run_at = run_at
         elif schedule_kind == "daily":
             next_run_at = _next_daily(run_time)
@@ -102,7 +135,13 @@ class TaskService:
             # Settings > Channels delivery target (David's ask 2026-08-31) —
             # None means "Tasks tab only," matching existing behavior exactly.
             "deliver_to_channel": deliver_to_channel,
+            # The model endpoint this runs on (core/model_endpoints.py); None
+            # keeps the original behaviour, Claude through the CLI.
+            "endpoint_id": endpoint_id,
         }
+        if schedule_kind == "card":
+            task.update({"status": status or "backlog", "depends_on": list(depends_on or []), "attempts": 0,
+                         "claimed_until": None, "comments": []})
         self._tasks[task_id] = task
         self._save_tasks()
         return task
@@ -111,11 +150,136 @@ class TaskService:
         task = self._tasks.get(task_id)
         if task is None:
             raise KeyError(f"no such task: {task_id}")
-        for key in ("name", "prompt", "enabled", "deliver_to_channel"):
+        if "depends_on" in fields:
+            if task["schedule_kind"] != "card":
+                raise ValueError("depends_on is for cards")
+            self._check_dependencies(task_id, fields["depends_on"] or [])
+        for key in ("name", "prompt", "enabled", "deliver_to_channel", "endpoint_id", "depends_on"):
             if key in fields:
-                task[key] = fields[key]
+                task[key] = list(fields[key] or []) if key == "depends_on" else fields[key]
         self._save_tasks()
         return task
+
+    # -- cards ----------------------------------------------------------------
+
+    def _check_dependencies(self, card_id: Optional[str], depends_on: list[str]) -> None:
+        for dep in depends_on:
+            other = self._tasks.get(dep)
+            if other is None or other["schedule_kind"] != "card":
+                raise ValueError(f"depends_on must name existing cards; {dep!r} is not one")
+            if dep == card_id:
+                raise ValueError("a card cannot depend on itself")
+        if card_id is None:
+            return
+        # Would this make a loop? Walk what the new dependencies wait on.
+        seen, stack = set(), list(depends_on)
+        while stack:
+            current = stack.pop()
+            if current == card_id:
+                raise ValueError("that would make cards wait on each other in a loop")
+            if current not in seen:
+                seen.add(current)
+                stack.extend(self._tasks.get(current, {}).get("depends_on") or [])
+
+    def _comment(self, card: dict, kind: str, text: str, by: str) -> None:
+        card["comments"].append({"at": time.time(), "kind": kind, "text": text, "by": by})
+
+    def waiting_on(self, card: dict) -> list[str]:
+        """Dependencies not yet Done."""
+        return [d for d in card.get("depends_on") or [] if (self._tasks.get(d) or {}).get("status") != "done"]
+
+    def set_card_status(self, card_id: str, status: str, note: Optional[str] = None, by: str = "user") -> dict:
+        """A person (or an agent) moving a card. Running is the dispatcher's
+        alone, so a running card cannot be moved and nothing can be moved to
+        it. Review -> Ready with a note is "request changes": the note goes
+        to the next run. Blocked -> Ready is a retry and restores the attempts."""
+        card = self._tasks.get(card_id)
+        if card is None or card["schedule_kind"] != "card":
+            raise KeyError(f"no such card: {card_id}")
+        if status not in CARD_STATUSES or status == "running":
+            raise ValueError(f"a card can be moved to backlog, ready, review, done or blocked, not {status!r}")
+        if card["status"] == "running":
+            raise ValueError("this card is running; wait for it to finish")
+        if note:
+            self._comment(card, "feedback" if card["status"] == "review" and status == "ready" else "note", note, by)
+        if status == "ready" and card["status"] == "blocked":
+            card["attempts"] = 0
+        card["status"] = status
+        self._save_tasks()
+        return card
+
+    def claim_next_card(self, now: Optional[float] = None, card_id: Optional[str] = None) -> Optional[dict]:
+        """The oldest Ready card whose dependencies are all Done, marked
+        Running with a lease. One at a time keeps spend predictable.
+        card_id claims that card only ("Run now"), from Backlog too."""
+        now = time.time() if now is None else now
+        allowed = ("ready", "backlog") if card_id else ("ready",)
+        ready = [c for c in self._tasks.values()
+                 if c["schedule_kind"] == "card" and c["status"] in allowed and not self.waiting_on(c)
+                 and (card_id is None or c["id"] == card_id)]
+        if not ready:
+            return None
+        card = min(ready, key=lambda c: c["created_at"])
+        card["status"] = "running"
+        card["attempts"] += 1
+        card["claimed_until"] = now + CARD_LEASE_SECONDS
+        self._save_tasks()
+        return card
+
+    def finish_card(self, card_id: str, output: str) -> dict:
+        card = self._tasks[card_id]
+        self._comment(card, "result", output, "jarvis")
+        card["status"] = "review"
+        card["claimed_until"] = None
+        card["last_run_at"] = time.time()
+        self._append_run(card, output, None)
+        self._save_tasks()
+        return card
+
+    def fail_card(self, card_id: str, error: str) -> dict:
+        card = self._tasks[card_id]
+        self._comment(card, "error", error, "jarvis")
+        card["status"] = "blocked" if card["attempts"] >= CARD_MAX_ATTEMPTS else "ready"
+        card["claimed_until"] = None
+        card["last_run_at"] = time.time()
+        self._append_run(card, "", error)
+        self._save_tasks()
+        return card
+
+    def reclaim_stale_cards(self, now: Optional[float] = None) -> list[dict]:
+        """Running cards whose lease ran out: the run is taken as lost."""
+        now = time.time() if now is None else now
+        stale = [c for c in self._tasks.values() if c["schedule_kind"] == "card" and c["status"] == "running"
+                 and (c.get("claimed_until") or 0) < now]
+        return [self.fail_card(c["id"], "The run did not finish (JARVIS may have closed while it ran).") for c in stale]
+
+    def card_prompt(self, card: dict) -> str:
+        """What the model is asked: the card itself, the results of the
+        cards it waited on, and, on a re-run, its last result with the
+        feedback on it."""
+        parts = [card["prompt"]]
+        for dep in card.get("depends_on") or []:
+            result = self._latest(self._tasks.get(dep) or {}, "result")
+            if result:
+                parts.append(f"[Result of the card this one depends on, \"{self._tasks[dep]['name']}\":]\n{result['text']}")
+        feedback = self._latest(card, "feedback")
+        previous = self._latest(card, "result")
+        if feedback and previous and previous["at"] < feedback["at"]:
+            parts.append(f"[Your previous result:]\n{previous['text']}\n\n[Feedback on it, to address now:]\n{feedback['text']}")
+        # Without this, a model with tools filed the work elsewhere (a note)
+        # and returned "the note has been created" as the card's result
+        # (seen live on qwen2.5-coder, 2026-09-23).
+        parts.append(CARD_RESULT_INSTRUCTION)
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _latest(card: dict, kind: str) -> Optional[dict]:
+        return next((c for c in reversed(card.get("comments") or []) if c["kind"] == kind), None)
+
+    def _append_run(self, task: dict, output: str, error: Optional[str]) -> None:
+        self._runs.append({"task_id": task["id"], "task_name": task["name"], "ran_at": time.time(),
+                           "output": output, "error": error, "delivered": None})
+        self._save_runs()
 
     def set_daily_schedule(self, task_id: str, run_time: str) -> dict:
         """Convert an existing task to a daily wall-clock schedule.
@@ -138,6 +302,10 @@ class TaskService:
     def delete_task(self, task_id: str) -> None:
         if task_id in self._tasks:
             del self._tasks[task_id]
+            # A card that waited on this one no longer does.
+            for other in self._tasks.values():
+                if task_id in (other.get("depends_on") or []):
+                    other["depends_on"] = [d for d in other["depends_on"] if d != task_id]
             self._save_tasks()
 
     def due_tasks(self) -> list[dict]:

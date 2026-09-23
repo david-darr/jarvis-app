@@ -1667,6 +1667,147 @@ def _http_400():
     return httpx.HTTPStatusError("bad request", request=request, response=httpx.Response(400, request=request))
 
 
+class WorkBoardTests(unittest.TestCase):
+    """Cards: one-off work the task loop runs by itself (after Hermes's
+    kanban). Backlog -> Ready -> Running -> Review -> Done, or Blocked after
+    three failed attempts; dependencies hold a card until they are Done and
+    hand it their results; any task or card can name its model."""
+
+    def setUp(self):
+        from core import task_scheduler
+        from services.task_service import task_service
+        self.scheduler, self.tasks = task_scheduler, task_service
+        self.created = []
+        self.addCleanup(lambda: [task_service.delete_task(t) for t in self.created])
+        self.prompts, self.outputs = [], []
+        test = self
+
+        class FakeBrain:
+            async def connect(self): pass
+            async def disconnect(self): pass
+            async def run_turn(self, prompt):
+                test.prompts.append(prompt)
+                outcome = test.outputs.pop(0) if test.outputs else "done it"
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+
+        p = patch.object(task_scheduler, "_task_brain", side_effect=lambda task: FakeBrain())
+        p.start()
+        self.addCleanup(p.stop)
+        p2 = patch.object(task_scheduler.events, "emit")
+        p2.start()
+        self.addCleanup(p2.stop)
+
+    def card(self, name, status="ready", depends_on=None, prompt=None):
+        card = self.tasks.create_task(name, prompt or f"do {name}", "card", status=status, depends_on=depends_on)
+        self.created.append(card["id"])
+        return card
+
+    def dispatch(self):
+        return asyncio.run(self.scheduler.dispatch_cards())
+
+    def test_a_card_runs_once_and_waits_for_review(self):
+        card = self.card("write summary")
+        self.outputs = ["the summary"]
+        self.assertEqual(self.dispatch()["id"], card["id"])
+        stored = self.tasks.get_task(card["id"])
+        self.assertEqual((stored["status"], stored["comments"][-1]["kind"], stored["comments"][-1]["text"]),
+                         ("review", "result", "the summary"))
+        self.assertIsNone(self.dispatch(), "nothing else is Ready; a card in Review is not run again")
+        self.tasks.set_card_status(card["id"], "done")
+        self.assertEqual(self.tasks.get_task(card["id"])["status"], "done")
+        self.assertNotIn(card["id"], [t["id"] for t in self.tasks.due_tasks()], "cards are never scheduled")
+
+    def test_request_changes_reruns_with_the_feedback_and_previous_result(self):
+        card = self.card("draft email")
+        self.outputs = ["first draft", "second draft"]
+        self.dispatch()
+        self.tasks.set_card_status(card["id"], "ready", note="make it shorter")
+        self.dispatch()
+        self.assertIn("first draft", self.prompts[1])
+        self.assertIn("make it shorter", self.prompts[1])
+        self.assertEqual(self.tasks.get_task(card["id"])["comments"][-1]["text"], "second draft")
+
+    def test_failures_retry_then_block_and_a_retry_restores_attempts(self):
+        card = self.card("flaky")
+        self.outputs = [RuntimeError("model down")] * 3
+        for expected in ("ready", "ready", "blocked"):
+            self.dispatch()
+            self.assertEqual(self.tasks.get_task(card["id"])["status"], expected)
+        self.assertIsNone(self.dispatch(), "a blocked card is not retried by itself")
+        self.tasks.set_card_status(card["id"], "ready")
+        self.assertEqual(self.tasks.get_task(card["id"])["attempts"], 0)
+
+    def test_a_lost_run_goes_back_to_ready_instead_of_staying_running(self):
+        card = self.card("long job")
+        claimed = self.tasks.claim_next_card()
+        self.assertEqual((claimed["id"], claimed["status"]), (card["id"], "running"))
+        with self.assertRaises(ValueError):
+            self.tasks.set_card_status(card["id"], "done")
+        self.tasks.reclaim_stale_cards(now=time.time() + 31 * 60)
+        stored = self.tasks.get_task(card["id"])
+        self.assertEqual((stored["status"], stored["attempts"], stored["comments"][-1]["kind"]), ("ready", 1, "error"))
+
+    def test_dependencies_hold_a_card_and_hand_it_their_results(self):
+        first = self.card("gather facts")
+        second = self.card("write report", depends_on=[first["id"]])
+        self.outputs = ["FACT-42", "the report"]
+        self.assertEqual(self.dispatch()["id"], first["id"])
+        self.assertIsNone(self.dispatch(), "the report waits while its dependency is in Review")
+        self.tasks.set_card_status(first["id"], "done")
+        self.assertEqual(self.dispatch()["id"], second["id"])
+        self.assertIn("FACT-42", self.prompts[1])
+        self.assertIn("reply with the finished work itself", self.prompts[1],
+                      "the model is told its reply is the result (qwen filed it in a note otherwise)")
+        with self.assertRaises(ValueError):
+            self.tasks.update_task(first["id"], depends_on=[second["id"]])
+        with self.assertRaises(ValueError):
+            self.card("orphan", depends_on=["no-such-card"])
+        self.tasks.delete_task(first["id"])
+        self.assertEqual(self.tasks.get_task(second["id"])["depends_on"], [])
+
+    def test_the_board_routes(self):
+        from fastapi import FastAPI as _FastAPI
+        from routes import task_routes
+        app_ = _FastAPI()
+        app_.include_router(task_routes.router)
+        web = TestClient(app_)
+        a = web.post("/api/tasks", json={"name": "a", "prompt": "p", "schedule_kind": "card"}).json()
+        self.created.append(a["id"])
+        self.assertEqual(a["status"], "backlog")
+        b = web.post("/api/tasks", json={"name": "b", "prompt": "p", "schedule_kind": "card", "status": "ready",
+                                         "depends_on": [a["id"]]}).json()
+        self.created.append(b["id"])
+        self.assertEqual(web.post(f"/api/tasks/{b['id']}/run").status_code, 409, "b still waits on a")
+        self.outputs = ["ran a"]
+        self.assertEqual(web.post(f"/api/tasks/{a['id']}/run").status_code, 200, "run now takes a Backlog card")
+        self.assertEqual(web.post(f"/api/tasks/{a['id']}/status", json={"status": "done"}).json()["status"], "done")
+        self.assertEqual(web.post(f"/api/tasks/{a['id']}/status", json={"status": "running"}).status_code, 400)
+        self.assertEqual(web.post("/api/tasks", json={"name": "c", "prompt": "p", "schedule_kind": "card",
+                                                      "endpoint_id": "no-such-model"}).status_code, 400)
+        self.assertEqual(web.post("/api/tasks", json={"name": "d", "prompt": "p", "schedule_kind": "once",
+                                                      "run_at": "2099-01-01T00:00:00", "status": "ready"}).status_code, 400)
+
+
+class TaskModelTests(unittest.TestCase):
+    """Tasks always ran on Claude through the CLI, whatever models were set up.
+    Any task or card can now name the endpoint it runs on."""
+
+    def test_the_model_a_task_names_is_the_one_it_runs_on(self):
+        from core import task_scheduler
+        from services import chat_service as cs
+        self.assertIsInstance(task_scheduler._task_brain({"endpoint_id": None}), Brain)
+        built = []
+        with patch("core.model_endpoints.get_endpoint", side_effect=lambda eid: ENDPOINTS.get(eid)), \
+             patch.object(cs, "_build_brain", side_effect=lambda endpoint, session_id, is_admin: built.append(
+                 (endpoint["id"], session_id, is_admin)) or "brain"):
+            self.assertEqual(task_scheduler._task_brain({"endpoint_id": "local"}), "brain")
+            self.assertEqual(built, [("local", None, False)], "detached from any chat, never admin")
+            with self.assertRaises(ValueError):
+                task_scheduler._task_brain({"endpoint_id": "deleted-endpoint"})
+
+
 class CompactionRegionTests(unittest.TestCase):
     """The compaction summariser must see exactly the region being folded:
     never the kept tail (it stays verbatim), and on a second compaction the

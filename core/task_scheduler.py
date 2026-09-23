@@ -44,6 +44,22 @@ async def _deliver(task: dict, output: str) -> Optional[bool]:
     return delivered
 
 
+def _task_brain(task: dict):
+    """The brain a task or card runs on: the model endpoint it names, or
+    Claude through the CLI when it names none (every task's behaviour before
+    endpoint_id existed). Detached from any chat, and never admin, same as
+    task runs always were."""
+    endpoint_id = task.get("endpoint_id")
+    if not endpoint_id:
+        return Brain()
+    from core import model_endpoints
+    from services.chat_service import _build_brain
+    endpoint = model_endpoints.get_endpoint(endpoint_id)
+    if endpoint is None:
+        raise ValueError("the model this runs on has been removed; pick another in Tasks")
+    return _build_brain(endpoint, session_id=None, is_admin=False)
+
+
 async def _run_task(task: dict) -> None:
     # Lines logged while the task runs name it (core/logs.py).
     tag = log_files.set_log_tag(f"task:{task['id']}")
@@ -53,14 +69,52 @@ async def _run_task(task: dict) -> None:
         log_files.reset_log_tag(tag)
 
 
+async def _run_card(card: dict) -> None:
+    """Run a claimed card once: its result goes to Review; a failure goes
+    back to Ready for a retry, or to Blocked when out of attempts."""
+    brain = None
+    try:
+        brain = _task_brain(card)
+        await brain.connect()
+        output = await brain.run_turn(task_service.card_prompt(card))
+        task_service.finish_card(card["id"], output)
+        events.emit("card.review", f"{card['name']} is ready for review", task_id=card["id"])
+        logger.info("card '%s' (%s) finished; waiting for review", card["name"], card["id"])
+    except Exception as e:
+        failed = task_service.fail_card(card["id"], str(e) or type(e).__name__)
+        blocked = failed["status"] == "blocked"
+        events.emit("card.blocked" if blocked else "card.retry",
+                    f"{card['name']} {'is blocked' if blocked else 'failed and will retry'}: {e}",
+                    level="error" if blocked else "warning", task_id=card["id"])
+        logger.exception("card '%s' (%s) failed (attempt %s)", card["name"], card["id"], card["attempts"])
+    finally:
+        if brain is not None:
+            await brain.disconnect()
+
+
+async def dispatch_cards() -> Optional[dict]:
+    """One pass of the work board: recover runs that were lost, then run the
+    oldest Ready card whose dependencies are Done. Returns the card run."""
+    for card in task_service.reclaim_stale_cards():
+        logger.warning("card '%s' (%s): its run was lost; now %s", card["name"], card["id"], card["status"])
+    card = task_service.claim_next_card()
+    if card is not None:
+        await _run_task(card)
+    return card
+
+
 async def _run_task_tagged(task: dict) -> None:
+    if task.get("schedule_kind") == "card":
+        await _run_card(task)
+        return
     builtin_id = task.get("builtin_action")
     if builtin_id:
         await _run_builtin_task(task, builtin_id)
         return
 
-    brain = Brain()
+    brain = None
     try:
+        brain = _task_brain(task)
         await brain.connect()
         output = await brain.run_turn(task["prompt"])
         delivered = await _deliver(task, output)
@@ -72,7 +126,8 @@ async def _run_task_tagged(task: dict) -> None:
         events.emit("task.failed", f"{task['name']} failed: {e}", level="error", task_id=task["id"])
         logger.exception("task '%s' (%s) failed", task["name"], task["id"])
     finally:
-        await brain.disconnect()
+        if brain is not None:
+            await brain.disconnect()
 
 
 async def _run_builtin_task(task: dict, builtin_id: str) -> None:
@@ -91,7 +146,7 @@ async def _run_builtin_task(task: dict, builtin_id: str) -> None:
             output = await defn["run"]()
         else:
             prompt = await defn["build_prompt"]()
-            brain = Brain()
+            brain = _task_brain(task)
             try:
                 await brain.connect()
                 output = await brain.run_turn(prompt)
@@ -112,6 +167,9 @@ async def _poll_loop() -> None:
         try:
             for task in task_service.due_tasks():
                 await _run_task(task)
+            # One card per pass (see dispatch_cards): scheduled tasks never
+            # wait behind a whole board of work.
+            await dispatch_cards()
         except Exception:
             logger.exception("task_scheduler poll loop iteration failed")
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
