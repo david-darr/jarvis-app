@@ -26,6 +26,13 @@ const fs = require("fs");
 const path = require("path");
 const { autoUpdater } = require("electron-updater");
 const sideBrowser = require("./browser");
+const { createDesktopLog } = require("./desktop-log");
+
+// desktop.log, beside the backend's logs in the per-user data folder, so the
+// shell's own messages are no longer lost with its console (see
+// desktop-log.js). The same folder the spawned backend is given below.
+const desktopLog = createDesktopLog(path.join(app.getPath("userData"), "data", "logs"));
+desktopLog.attachConsole();
 
 // In a packaged build, main.js runs from inside the app's asar archive, and
 // the backend source is bundled separately as an extraResource (see
@@ -186,9 +193,18 @@ function startBackend() {
       env: { ...process.env, JARVIS_DATA_DIR: path.join(app.getPath("userData"), "data") },
     },
   );
-  backendProcess.stdout.on("data", (d) => process.stdout.write(`[backend] ${d}`));
-  backendProcess.stderr.on("data", (d) => process.stderr.write(`[backend] ${d}`));
-  backendProcess.on("exit", (code) => console.log(`[backend] exited with code ${code}`));
+  const proc = backendProcess;
+  proc.stdout.on("data", (d) => process.stdout.write(`[backend] ${d}`));
+  proc.stderr.on("data", (d) => {
+    process.stderr.write(`[backend] ${d}`);
+    desktopLog.backendOutput(d);
+  });
+  proc.on("exit", (code) => {
+    // stopBackend() clears backendProcess first, so an exit it did not ask for
+    // is the one worth recording with the backend's last words.
+    desktopLog.backendExited(code, backendProcess !== proc);
+    process.stdout.write(`[backend] exited with code ${code}\n`);
+  });
 }
 
 function stopBackend() {

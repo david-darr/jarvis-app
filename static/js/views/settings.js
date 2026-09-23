@@ -110,6 +110,8 @@ const SECTION_GROUPS = [
         keywords: ["accounts", "add user", "roles", "admin", "people"] },
       { id: "system", label: "System", render: renderSystemPanel,
         keywords: ["backup", "export", "import", "diagnostics", "health", "reset", "wipe", "danger"] },
+      { id: "logs", label: "Logs", render: renderLogsPanel,
+        keywords: ["log", "logs", "errors", "debug", "troubleshoot", "crash", "backend", "desktop", "warnings"] },
       { id: "custom-tabs", label: "Custom Tabs", render: renderCustomTabsPanel, devMode: true,
         keywords: ["new tab", "developer mode", "custom tab"] },
     ],
@@ -1844,6 +1846,115 @@ async function renderSystemPanel(content) {
   }
   wipeRow.appendChild(wipeBtns);
   content.appendChild(wipeRow);
+}
+
+// -- Admin: Logs (Hermes track, 2026-09-22) ----------------------------------
+// Reads backend.log, errors.log and desktop.log through /api/system/logs
+// (core/logs.py). Follow polls with the byte cursor the last read returned,
+// and stops by itself once the panel is gone.
+const LOG_FOLLOW_MS = 2000;
+const LOG_MAX_SHOWN = 1000;
+
+async function renderLogsPanel(content) {
+  const [files, chats] = await Promise.all([
+    api("/api/system/logs/files"),
+    api("/api/sessions").catch(() => []),
+  ]);
+  const chatTitles = new Map(chats.map((c) => [c.id, c.title || "Untitled chat"]));
+  content.innerHTML = "";
+  content.append(el("p", { class: "meta", text:
+    "What JARVIS has been doing. Errors keeps only warnings and errors, so they are not pushed out by routine lines; "
+    + "Desktop is the app window itself. Pick a chat to see only what happened during its turns." }));
+
+  const option = (value, text, selected = false) => el("option", { value, text, ...(selected ? { selected: "" } : {}) });
+  const fileSelect = customSelect({ class: "logs-file" }, files.map((f) =>
+    option(f.name, `${f.name[0].toUpperCase()}${f.name.slice(1)} (${f.size ? `${(f.size / 1024).toFixed(0)} KB` : "empty"})`)));
+  const levelSelect = customSelect({ class: "logs-level" }, [
+    option("", "All levels"), option("INFO", "Info and up"), option("WARNING", "Warnings and up"), option("ERROR", "Errors only")]);
+  const componentSelect = customSelect({ class: "logs-component" }, [
+    option("", "Every area"), ...["chat", "swarm", "tasks", "remote", "discord", "skills"].map((c) => option(c, c[0].toUpperCase() + c.slice(1)))]);
+  const sinceSelect = customSelect({ class: "logs-since" }, [
+    option("", "Any time"), option("15m", "Last 15 minutes"), option("1h", "Last hour"), option("24h", "Last day"), option("7d", "Last week")]);
+  const chatSelect = customSelect({ class: "logs-chat" }, [
+    option("", "Any chat or task"), ...chats.slice(0, 50).map((c) => option(c.id, c.title || "Untitled chat"))]);
+  const searchInput = el("input", { class: "logs-search", type: "search", placeholder: "Search text", maxlength: "200" });
+  const followBox = el("input", { type: "checkbox", class: "logs-follow" });
+  const status = el("div", { class: "meta logs-status" });
+  const output = el("div", { class: "logs-output" });
+
+  content.append(
+    el("div", { class: "logs-controls" }, [fileSelect, levelSelect, componentSelect, sinceSelect, chatSelect, searchInput,
+      el("label", { class: "logs-follow-label" }, [followBox, document.createTextNode(" Follow")])]),
+    status, output);
+
+  let cursor = 0;
+  let timer = null;
+  let generation = 0;
+
+  const query = (extra = {}) => {
+    const params = new URLSearchParams({ name: fileSelect.value, ...extra });
+    for (const [key, select] of [["level", levelSelect], ["component", componentSelect], ["since", sinceSelect], ["tag", chatSelect]]) {
+      if (select.value) params.set(key, select.value);
+    }
+    if (searchInput.value.trim()) params.set("text", searchInput.value.trim());
+    return `/api/system/logs?${params}`;
+  };
+
+  const entryEl = (entry) => {
+    const level = entry.level.toLowerCase();
+    const row = el("div", { class: `log-entry log-${level}` });
+    if (entry.tag) {
+      const label = chatTitles.get(entry.tag) || entry.tag;
+      row.append(el("span", { class: "log-tag", text: label, title: entry.tag }));
+    }
+    row.append(document.createTextNode(entry.text));
+    return row;
+  };
+
+  const append = (entries) => {
+    const stick = output.scrollTop + output.clientHeight >= output.scrollHeight - 8;
+    for (const entry of entries) output.append(entryEl(entry));
+    while (output.childElementCount > LOG_MAX_SHOWN) output.firstElementChild.remove();
+    if (stick) output.scrollTop = output.scrollHeight;
+  };
+
+  const stopFollowing = () => { if (timer) { clearInterval(timer); timer = null; } };
+
+  const poll = async (mine) => {
+    if (!document.body.contains(output)) { stopFollowing(); return; }
+    try {
+      const res = await api(query({ cursor: String(cursor) }));
+      if (mine !== generation) return;
+      if (res.rotated) status.textContent = "The log rotated; following the new file.";
+      cursor = res.end;
+      append(res.entries);
+    } catch (problem) { status.textContent = `Following stopped: ${problem.message}`; stopFollowing(); followBox.checked = false; }
+  };
+
+  const load = async () => {
+    const mine = ++generation;
+    stopFollowing();
+    status.textContent = "Loading...";
+    try {
+      const res = await api(query({ limit: "300" }));
+      if (mine !== generation) return;
+      output.innerHTML = "";
+      cursor = res.end;
+      if (!res.exists) status.textContent = "Nothing has been written to this log yet.";
+      else if (!res.entries.length) status.textContent = "No lines match.";
+      else status.textContent = `Showing the last ${res.entries.length} matching entries.`;
+      append(res.entries);
+      output.scrollTop = output.scrollHeight;
+      if (followBox.checked) timer = setInterval(() => poll(mine), LOG_FOLLOW_MS);
+    } catch (problem) { status.textContent = problem.message; }
+  };
+
+  for (const control of [fileSelect, levelSelect, componentSelect, sinceSelect, chatSelect, followBox]) {
+    control.addEventListener("change", load);
+  }
+  let searchDelay = null;
+  searchInput.addEventListener("input", () => { clearTimeout(searchDelay); searchDelay = setTimeout(load, 300); });
+  await load();
 }
 
 // -- Admin: Custom Tabs (Developer Mode, David's ask 2026-09-01) ------------

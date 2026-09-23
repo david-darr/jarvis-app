@@ -10,7 +10,11 @@ import unittest
 from unittest.mock import patch, AsyncMock
 import asyncio
 import copy
+import io
 import json
+import logging
+import subprocess
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -1633,6 +1637,179 @@ def _text(content):
 def _http_400():
     request = httpx.Request("POST", "http://fake/chat/completions")
     return httpx.HTTPStatusError("bad request", request=request, response=httpx.Response(400, request=request))
+
+
+class LogBrowsingTests(unittest.TestCase):
+    """Settings > Admin > Logs (core/logs.py, adapted from Hermes's
+    hermes_cli/logs.py). Before it, the only way to read a log was to find
+    the file; lines named no chat; the desktop shell's own output went to a
+    console nobody sees in the packaged app."""
+
+    def setUp(self):
+        from core import logs
+        self.logs = logs
+        self.dir = tempfile.mkdtemp(prefix="jarvis-logs-test-")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+
+    def write(self, name, lines):
+        with open(os.path.join(self.dir, name), "a", encoding="utf-8") as f:
+            f.write("".join(line + "\n" for line in lines))
+
+    @staticmethod
+    def line(ts, logger_name, level, message, tag=None):
+        return f"{ts},123 - {logger_name} - {level}{f' [{tag}]' if tag else ''} - {message}"
+
+    def test_filters_keep_a_traceback_with_the_line_that_raised_it(self):
+        now = datetime.now()
+        old = (now - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+        recent = (now - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+        self.write("backend.log", [
+            self.line(old, "core.brain", "INFO", "connected", "chat-a"),
+            self.line(recent, "services.chat_service", "ERROR", "turn failed", "chat-a"),
+            "Traceback (most recent call last):",
+            '  File "x.py", line 1, in <module>',
+            "RuntimeError: boom",
+            self.line(recent, "core.swarm.engine", "WARNING", "budget low"),
+            self.line(recent, "core.brain", "INFO", "connected", "chat-b"),
+        ])
+        tail = lambda **kw: [e["text"].split(" - ")[-1].split("\n")[0] for e in self.logs.tail("backend", self.dir, **kw)["entries"]]
+        self.assertEqual(tail(level="warning"), ["turn failed", "budget low"])
+        errors = self.logs.tail("backend", self.dir, level="ERROR")["entries"]
+        self.assertTrue(errors[0]["text"].endswith("RuntimeError: boom"), "the traceback stays with its line")
+        self.assertEqual(tail(tag="chat-a"), ["connected", "turn failed"])
+        self.assertEqual(tail(since="1h"), ["turn failed", "budget low", "connected"])
+        self.assertEqual(tail(component="swarm"), ["budget low"])
+        self.assertEqual(tail(text="BOOM"), ["turn failed"], "text search covers the traceback, case-insensitively")
+        self.assertEqual(tail(limit=1), ["connected"])
+        for bad in [{"level": "LOUD"}, {"since": "soon"}, {"component": "nope"}]:
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                self.logs.tail("backend", self.dir, **bad)
+        with self.assertRaises(ValueError):
+            self.logs.tail("../secrets", self.dir)
+
+    def test_the_tail_of_a_large_file_is_read_from_the_end_in_whole_lines(self):
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.write("backend.log", [self.line(ts, "core.brain", "INFO", f"line {i:06d} " + "x" * 80) for i in range(15000)])
+        self.assertGreater(os.path.getsize(os.path.join(self.dir, "backend.log")), 1_048_576)
+        entries = self.logs.tail("backend", self.dir, limit=3)["entries"]
+        self.assertEqual([e["text"].split(" - ")[-1][:11] for e in entries], ["line 014997", "line 014998", "line 014999"])
+
+    def test_following_returns_only_new_whole_lines_and_survives_rotation(self):
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.write("backend.log", [self.line(ts, "core.brain", "INFO", "before")])
+        cursor = self.logs.tail("backend", self.dir)["end"]
+        self.write("backend.log", [self.line(ts, "core.brain", "INFO", "after")])
+        with open(os.path.join(self.dir, "backend.log"), "a", encoding="utf-8") as f:
+            f.write(self.line(ts, "core.brain", "INFO", "half-writ"))  # no newline yet
+        res = self.logs.follow("backend", self.dir, cursor)
+        self.assertEqual([e["text"].split(" - ")[-1] for e in res["entries"]], ["after"])
+        self.assertFalse(res["rotated"])
+        res2 = self.logs.follow("backend", self.dir, res["end"])
+        self.assertEqual(res2["entries"], [], "a line still being written waits for the next poll")
+        os.replace(os.path.join(self.dir, "backend.log"), os.path.join(self.dir, "backend.log.1"))
+        self.write("backend.log", [self.line(ts, "core.brain", "INFO", "fresh")])
+        res3 = self.logs.follow("backend", self.dir, res2["end"])
+        self.assertTrue(res3["rotated"])
+        self.assertEqual([e["text"].split(" - ")[-1] for e in res3["entries"]], ["fresh"])
+
+    def test_lines_logged_during_a_turn_name_the_chat_and_later_ones_do_not(self):
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(logging.Formatter(self.logs.LOG_FORMAT))
+        logging.getLogger().addHandler(handler)
+        self.addCleanup(logging.getLogger().removeHandler, handler)
+        sid = session_manager.create_session("logged")["id"]
+        chat_service._brains.clear()
+        self.addCleanup(chat_service._brains.clear)
+
+        async def replying(client, base_url, api_key, body):
+            logging.getLogger("core.providers.fake").warning("inside the turn")
+            return {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+
+        with patch.object(chat_service, "_resolve_endpoint", return_value=ENDPOINTS["local"]), \
+             patch("core.model_endpoints.resolve_runtime", return_value=("http://fake", "local-model", None, None)), \
+             patch("core.providers.openai_compatible._post_chat", new=replying):
+            asyncio.run(chat_service.send_message(sid, "hello"))
+
+            async def streamed():
+                return [c async for c in chat_service.stream_message(sid, "again")]
+            asyncio.run(streamed())
+        logging.getLogger("core.providers.fake").warning("after the turn")
+        lines = stream.getvalue().splitlines()
+        inside = [l for l in lines if "inside the turn" in l]
+        self.assertEqual(len(inside), 2)
+        self.assertTrue(all(f"WARNING [{sid}] - " in l for l in inside), inside)
+        self.assertTrue(any("WARNING - after the turn" in l for l in lines), "the tag does not outlive the turn")
+
+    def test_errors_log_keeps_warnings_and_errors_only(self):
+        root = logging.getLogger()
+        before = list(root.handlers)
+        self.logs.setup(self.dir)
+        self.logs.setup(self.dir)  # idempotent
+        added = [h for h in root.handlers if h not in before]
+        self.addCleanup(lambda: [root.removeHandler(h) or h.close() for h in added])
+        self.assertEqual(sorted(os.path.basename(h.baseFilename) for h in added), ["backend.log", "errors.log"])
+        log = logging.getLogger("core.brain")
+        log.info("routine")
+        log.warning("worth a look")
+        for h in added:
+            h.flush()
+        errors_text = open(os.path.join(self.dir, "errors.log"), encoding="utf-8").read()
+        backend_text = open(os.path.join(self.dir, "backend.log"), encoding="utf-8").read()
+        self.assertNotIn("routine", errors_text)
+        self.assertIn("worth a look", errors_text)
+        self.assertIn("routine", backend_text)
+
+    def test_the_desktop_shell_writes_a_log_the_viewer_can_read(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        module = str(Path(__file__).resolve().parents[1] / "electron" / "desktop-log.js").replace("\\", "/")
+        script = (
+            f"const {{ createDesktopLog }} = require({json.dumps(module)});"
+            f"const log = createDesktopLog({json.dumps(self.dir)});"
+            "const fake = { log(){}, info(){}, warn(){}, error(){} }; log.attachConsole(fake);"
+            "fake.log('[updater] up to date'); fake.warn('slow start');"
+            "log.backendOutput('Traceback (most recent call last):\\nImportError: no module named x\\n');"
+            "log.backendExited(1, false); log.backendExited(0, true);"
+        )
+        subprocess.run([node, "-e", script], check=True, timeout=60)
+        entries = self.logs.tail("desktop", self.dir)["entries"]
+        self.assertEqual([(e["logger"], e["level"]) for e in entries],
+                         [("desktop", "INFO"), ("desktop", "WARNING"), ("desktop", "ERROR"), ("desktop", "INFO")])
+        self.assertIn("ImportError: no module named x", entries[2]["text"], "a backend that died early leaves its last words")
+        big = "x".join([""] * 2000)
+        rotate = (f"const {{ createDesktopLog }} = require({json.dumps(module)});"
+                  f"const log = createDesktopLog({json.dumps(self.dir)});"
+                  f"for (let i = 0; i < 700; i++) log.write('INFO', 'filler ' + i + ' {big}');")
+        subprocess.run([node, "-e", rotate], check=True, timeout=60)
+        self.assertTrue(os.path.exists(os.path.join(self.dir, "desktop.log.1")))
+        self.assertLess(os.path.getsize(os.path.join(self.dir, "desktop.log")), 1_100_000)
+
+    def test_the_log_routes_are_admin_only_and_read_the_data_folder(self):
+        from fastapi import FastAPI as _FastAPI
+        from routes import system_routes
+        from core import middleware as mw
+        from core.constants import DATA_DIR
+        app_ = _FastAPI()
+        app_.include_router(system_routes.router)
+        web = TestClient(app_)
+        log_dir = os.path.join(DATA_DIR, "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        self.addCleanup(shutil.rmtree, log_dir, True)
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(os.path.join(log_dir, "errors.log"), "w", encoding="utf-8") as f:
+            f.write(self.line(ts, "core.brain", "ERROR", "shown to an admin") + "\n")
+        with patch("core.middleware.auth_enabled", return_value=True):
+            self.assertEqual(web.get("/api/system/logs?name=errors").status_code, 401)
+            self.assertEqual(web.get("/api/system/logs?name=errors",
+                                     headers={"X-JARVIS-Internal-Token": mw.INTERNAL_TOOL_TOKEN}).status_code, 403)
+        res = web.get("/api/system/logs?name=errors")
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertIn("shown to an admin", res.json()["entries"][0]["text"])
+        self.assertEqual(web.get("/api/system/logs?name=errors&level=LOUD").status_code, 400)
+        names = [f["name"] for f in web.get("/api/system/logs/files").json()]
+        self.assertEqual(names, ["backend", "errors", "desktop"])
 
 
 class LocalCallbackTests(unittest.TestCase):

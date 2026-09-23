@@ -1476,3 +1476,18 @@ button.dashboard-row:hover { background: rgba(255,255,255,.035); }
 .speech-model-actions .meta { font-variant-numeric: tabular-nums; min-width: 38px; text-align: right; }
 .speech-devices select { min-width: 220px; max-width: 320px; }
 .speech-devices .meta { margin: 6px 0 0; }
+
+/* Settings > Admin > Logs (static/js/views/settings.js renderLogsPanel). */
+.logs-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0 6px; }
+.logs-controls .custom-select { flex: 1 1 150px; min-width: 0; }
+.logs-controls .logs-search { flex: 2 1 180px; min-width: 0; }
+.logs-follow-label { display: flex; align-items: center; gap: 4px; color: var(--text-dim); white-space: nowrap; }
+.logs-status { margin: 4px 0 8px; }
+.logs-output { height: 420px; max-height: 60vh; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: rgba(0, 0, 0, 0.22); font: 11.5px/1.5 'Cascadia Code', Consolas, monospace; color: var(--text-dim); }
+.log-entry { white-space: pre-wrap; overflow-wrap: anywhere; padding: 1px 0; }
+.log-debug { color: var(--text-faint); }
+.log-warning { color: #d9b67d; }
+.log-error, .log-critical { color: var(--danger); }
+.log-tag { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 6px; background: var(--accent-dim);
+  color: var(--accent); max-width: 220px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; white-space: nowrap; }

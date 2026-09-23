@@ -62,6 +62,14 @@ function fixture(url) {
   if (route === "/api/settings") return { onboarding_complete: true, developer_mode_enabled: false };
   if (route === "/api/system/custom-tabs") return [{ id: "school", label: "School" }];
   if (route === "/api/system/status") return { scheduler_running: true, vault_ok: true, enabled_task_count: empty ? 0 : 1, model_endpoint_count: empty ? 0 : 3, discord_connected_bots: [], next_task: empty ? null : { name: "Daily briefing", next_run_at: future(6) } };
+  if (route === "/api/system/logs/files") return [
+    { name: "backend", file: "backend.log", size: 204800, modified: now - 30 },
+    { name: "errors", file: "errors.log", size: 2048, modified: now - 300 },
+    { name: "desktop", file: "desktop.log", size: 0, modified: null }];
+  if (route === "/api/system/logs") return url.searchParams.has("cursor") ? { entries: [], end: 900, rotated: false } : { exists: true, end: 900, entries: [
+    { ts: "2026-09-22 21:40:00", logger: "core.brain", level: "INFO", tag: "s1", text: "2026-09-22 21:40:00,120 - core.brain - INFO [s1] - connected to the model" },
+    { ts: "2026-09-22 21:41:00", logger: "services.chat_service", level: "ERROR", tag: "s1", text: "2026-09-22 21:41:00,220 - services.chat_service - ERROR [s1] - turn failed\nTraceback (most recent call last):\nRuntimeError: the model stopped responding" },
+    { ts: "2026-09-22 21:42:00", logger: "core.swarm.engine", level: "WARNING", tag: null, text: "2026-09-22 21:42:00,000 - core.swarm.engine - WARNING - budget is running low" }] };
   if (route === "/api/system/events") return list([{ message: "Daily briefing completed", level: "info", ts: now - 800 }, { message: "Memory sync finished", level: "info", ts: now - 2000 }]);
   if (route === "/api/sessions") return list(sessions);
   // Must precede the generic /api/sessions/ match below, which would
@@ -322,6 +330,16 @@ app.whenReady().then(async () => {
       assert.equal(await js("import('/static/js/voiceInput.js').then(m=>m.getInputDevice())"), '');
       assert.deepEqual(await overflow(), [], label + " speech overflow");
       await capture(label + "-speech");
+      // -- Logs (Hermes track, 2026-09-22): entries render by level, a
+      // traceback stays with its line, and a chat is named, not shown as an id.
+      await js("document.querySelector('[data-section=logs]').click()");
+      await waitFor("document.querySelectorAll('.log-entry').length===3");
+      assert.ok(await js("document.querySelector('.log-entry.log-error').textContent.includes('RuntimeError: the model stopped responding')"), "Traceback stays with its entry");
+      assert.equal(await js("document.querySelector('.log-entry.log-error .log-tag').textContent"), "A clearer direction for the workspace", "A chat is shown by its title");
+      assert.ok(await js("!!document.querySelector('.log-entry.log-warning') && !document.querySelector('.log-entry.log-warning .log-tag')"), "An untagged line has no chat label");
+      assert.ok(await js("document.querySelector('.logs-file').textContent.includes('Backend (200 KB)')"), "Files show their size");
+      assert.deepEqual(await overflow(), [], label + " logs overflow");
+      await capture(label + "-logs");
       await js("document.querySelector('[data-section=vault]').click()");
       await waitFor("!!document.querySelector('#settings-content .card')");
       // Search matches what someone would actually type, not just the

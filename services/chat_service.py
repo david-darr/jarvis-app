@@ -19,7 +19,7 @@ from fastapi import HTTPException
 
 from claude_agent_sdk import CLIJSONDecodeError
 
-from core import attachments, model_catalog, model_endpoints, permissions, token_usage
+from core import attachments, logs as log_files, model_catalog, model_endpoints, permissions, token_usage
 from core.brain import Brain
 from core.codex_brain import CodexBrain
 from core.external_brain import ExternalBrain
@@ -313,8 +313,14 @@ def _prepare_sent_text(session_id: str, index: int, text: str, attachment_ids: l
 
 
 async def send_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> str:
-    async with session_operation(session_id):
-        return await _send_message(session_id, text, attachment_ids, is_admin)
+    # Every line logged during the turn names this chat (core/logs.py), so the
+    # Logs view can pull out one conversation's trail.
+    tag = log_files.set_log_tag(session_id)
+    try:
+        async with session_operation(session_id):
+            return await _send_message(session_id, text, attachment_ids, is_admin)
+    finally:
+        log_files.reset_log_tag(tag)
 
 
 async def _send_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> str:
@@ -343,9 +349,13 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
 
 
 async def stream_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> AsyncIterator[str]:
-    async with session_operation(session_id):
-        async for chunk in _stream_message(session_id, text, attachment_ids, is_admin):
-            yield chunk
+    tag = log_files.set_log_tag(session_id)  # see send_message
+    try:
+        async with session_operation(session_id):
+            async for chunk in _stream_message(session_id, text, attachment_ids, is_admin):
+                yield chunk
+    finally:
+        log_files.reset_log_tag(tag)
 
 
 async def _stream_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> AsyncIterator[str]:

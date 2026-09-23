@@ -10,7 +10,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from core import events
+from core import events, logs as log_files
 from core.brain import Brain
 from core.builtin_tasks import BUILTIN_TASKS
 from core.channels import registry as channel_registry
@@ -45,6 +45,15 @@ async def _deliver(task: dict, output: str) -> Optional[bool]:
 
 
 async def _run_task(task: dict) -> None:
+    # Lines logged while the task runs name it (core/logs.py).
+    tag = log_files.set_log_tag(f"task:{task['id']}")
+    try:
+        await _run_task_tagged(task)
+    finally:
+        log_files.reset_log_tag(tag)
+
+
+async def _run_task_tagged(task: dict) -> None:
     builtin_id = task.get("builtin_action")
     if builtin_id:
         await _run_builtin_task(task, builtin_id)

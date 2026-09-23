@@ -8,8 +8,9 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from core import custom_tabs, events, model_endpoints, settings as settings_store, system_admin, task_scheduler
+from core import custom_tabs, events, logs as log_files, model_endpoints, settings as settings_store, system_admin, task_scheduler
 from core.channels import discord_channel
+from core.constants import DATA_DIR
 from core.middleware import require_admin, require_user
 from core.vault import resolve_vault_dir
 from services.task_service import task_service
@@ -46,6 +47,43 @@ async def recent_events(limit: int = Query(50, ge=1, le=300), user: str = Depend
 @router.get("/diagnostics")
 async def diagnostics(user: str = Depends(require_admin)) -> dict:
     return system_admin.diagnostics()
+
+
+def _log_dir() -> str:
+    return os.path.join(DATA_DIR, "logs")
+
+
+def _person_admin(user: str = Depends(require_admin)) -> str:
+    """An admin who is a person. The internal tool token counts as admin
+    elsewhere, but every Codex process holds it, whoever started the chat,
+    so it must not read logs that describe every user's activity."""
+    if user == "internal-tool":
+        raise HTTPException(status_code=403, detail="not available to the app's own tools")
+    return user
+
+
+@router.get("/logs/files")
+async def log_file_list(user: str = Depends(_person_admin)) -> list[dict]:
+    """The logs Settings > Admin > Logs can show (core/logs.py)."""
+    return log_files.list_files(_log_dir())
+
+
+@router.get("/logs")
+async def read_log(name: str = Query("backend"), limit: int = Query(200, ge=1, le=2000),
+                   cursor: int | None = Query(None, ge=0), level: str | None = None,
+                   tag: str | None = None, since: str | None = None, component: str | None = None,
+                   text: str | None = Query(None, max_length=200), user: str = Depends(_person_admin)) -> dict:
+    """A filtered tail of one log, or, with `cursor`, what was written after
+    it - how the Logs view follows a file. Admin-only: logs describe every
+    user's activity."""
+    try:
+        if cursor is None:
+            return log_files.tail(name, _log_dir(), limit=limit, level=level, tag=tag, since=since,
+                                  component=component, text=text)
+        return log_files.follow(name, _log_dir(), cursor, level=level, tag=tag, since=since,
+                                component=component, text=text)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/custom-tabs")
