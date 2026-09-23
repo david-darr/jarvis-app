@@ -37,7 +37,16 @@ const events = [
   { id: "e2", title: "Time to think", start: future(26), end: future(27), source: "event" },
   { id: "e3", title: "Weekly review", start: future(60), end: future(61), source: "event" },
 ];
-const tasks = [{ id: "t1", name: "Daily briefing", enabled: true, schedule_kind: "daily", run_time: "07:00", next_run_at: future(6), last_run_at: null }];
+const tasks = [
+  { id: "t1", name: "Daily briefing", enabled: true, schedule_kind: "daily", run_time: "07:00", next_run_at: future(6), last_run_at: null },
+  // Work board cards (taskBoard.js): one in Review, one waiting on it, one Blocked.
+  { id: "c1", name: "Gather sources", schedule_kind: "card", status: "review", depends_on: [], attempts: 1, endpoint_id: "m3",
+    created_at: now - 900, comments: [{ at: now - 600, kind: "result", text: "Three sources found: the design brief, the research notes and last week's review.", by: "jarvis" }] },
+  { id: "c2", name: "Write the summary", schedule_kind: "card", status: "ready", depends_on: ["c1"], attempts: 0, endpoint_id: null,
+    created_at: now - 800, comments: [] },
+  { id: "c3", name: "Tidy the vault", schedule_kind: "card", status: "blocked", depends_on: [], attempts: 3, endpoint_id: null,
+    created_at: now - 700, comments: [{ at: now - 60, kind: "error", text: "The model stopped responding.", by: "jarvis" }] },
+];
 const docs = ["Design principles", "Project research", "Ideas for next week"].map((title, i) => ({ id: "d" + (i + 1), title, updated_at: now - i * 3600 }));
 function graph() {
   const nodes = [{ id: "", name: "Vault", type: "folder", folder: "" }], edges = [];
@@ -250,6 +259,16 @@ app.whenReady().then(async () => {
           // Provider logos where known (core/model_marks.py); the generic icon where not.
           const marks = await js("[...document.querySelectorAll('.dashboard-row > .model-mark')].map(n => n.getAttribute('aria-label'))");
           assert.deepEqual(marks, ["Claude", "Codex"], label + " home model logos");
+        }
+        if (tab === "tasks" && !empty) {
+          // The work board (Hermes track 2026-09-23): cards sit in their
+          // columns with the actions that column allows, and stay out of the
+          // scheduled list.
+          await waitFor("document.querySelectorAll('.board-card').length === 3");
+          assert.ok(await js("[...document.querySelectorAll('.board-card-review button')].some(b => b.textContent === 'Approve')"), label + " review card offers Approve");
+          assert.ok(await js("document.querySelector('.board-card-blocked .board-card-text').textContent.includes('model stopped')"), label + " blocked card shows its error");
+          assert.ok(await js("document.querySelector('.board-card-ready').textContent.includes('waits for Gather sources')"), label + " a waiting card names what it waits for");
+          assert.ok(await js("!document.getElementById('tasks-list').textContent.includes('Gather sources')"), label + " cards stay out of the scheduled list");
         }
         assert.deepEqual(await overflow(), [], label + " overflow in " + tab);
         await capture(label + "-" + tab);

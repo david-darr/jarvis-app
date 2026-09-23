@@ -1,5 +1,6 @@
 import { api, el, customSelect, toast, confirmDialog, iconButton, emptyState } from "../api.js";
 import { ICONS } from "../icons.js";
+import { renderBoard } from "./taskBoard.js";
 
 // Built-in tasks gallery (David's ask 2026-08-31, matching Odysseus's
 // premade-action preset picker — src/builtin_actions.py's tidy_sessions/
@@ -39,6 +40,11 @@ export async function render(container) {
     el("option", { value: "", text: "Tasks tab only" }),
     ...channels.map((c) => el("option", { value: c.id, text: `${c.label}${c.configured ? "" : " (not configured)"}` })),
   ]);
+  const models = await api("/api/models").catch(() => []);
+  const formModelSelect = customSelect({ style: "font-size:12.5px;" }, [
+    el("option", { value: "", text: "Claude (default)" }),
+    ...models.map((m) => el("option", { value: m.id, text: m.name })),
+  ]);
   const addBtn = el("button", { class: "btn", text: "Schedule" });
 
   // Labeled fields instead of seven bare placeholder-only inputs crammed
@@ -65,19 +71,23 @@ export async function render(container) {
       runAtField,
       dailyField,
       intervalField,
+      el("div", { class: "field" }, [el("label", { text: "Model" }), formModelSelect]),
       el("div", { class: "field" }, [el("label", { text: "Deliver to" }), channelSelect]),
       addBtn,
     ])
   );
 
   const list = el("div", { id: "tasks-list", style: "margin-top:14px;" });
-  container.append(el("div", { class: "view-constrained" }, [header, form, list, builtinCard]));
+  const boardCard = el("div", { class: "glass card task-board-card" });
+  container.append(el("div", { class: "view-constrained" }, [header, boardCard, form, list, builtinCard]));
+  await renderBoard(boardCard);
 
   addBtn.addEventListener("click", async () => {
     const name = nameInput.value.trim();
     const prompt = promptInput.value.trim();
     if (!name || !prompt) return;
-    const body = { name, prompt, schedule_kind: kindSelect.value, deliver_to_channel: channelSelect.value || null };
+    const body = { name, prompt, schedule_kind: kindSelect.value, deliver_to_channel: channelSelect.value || null,
+                   endpoint_id: formModelSelect.value || null };
     if (kindSelect.value === "once") {
       if (!runAtInput.value) return;
       body.run_at = new Date(runAtInput.value).toISOString();
@@ -158,7 +168,9 @@ async function refreshBuiltins(card) {
 }
 
 async function refresh(list) {
-  const [tasks, channels] = await Promise.all([api("/api/tasks"), api("/api/channels")]);
+  const [allTasks, channels, models] = await Promise.all([api("/api/tasks"), api("/api/channels"), api("/api/models").catch(() => [])]);
+  // Cards live on the work board above, not in the scheduled list.
+  const tasks = allTasks.filter((t) => t.schedule_kind !== "card");
   list.innerHTML = "";
   if (tasks.length === 0) {
     list.appendChild(emptyState({
@@ -209,6 +221,16 @@ async function refresh(list) {
     deliverySelect.addEventListener("change", async () => {
       await api(`/api/tasks/${task.id}`, { method: "PATCH", body: JSON.stringify({ deliver_to_channel: deliverySelect.value }) });
     });
+    // The model it runs on (Hermes track 2026-09-23): tasks always ran on
+    // Claude before, whatever models were added.
+    const modelSelect = customSelect({ style: "font-size:11.5px;" }, [
+      el("option", { value: "", text: "Claude (default)" }),
+      ...models.map((m) => el("option", { value: m.id, text: m.name })),
+    ]);
+    modelSelect.value = task.endpoint_id || "";
+    modelSelect.addEventListener("change", async () => {
+      await api(`/api/tasks/${task.id}`, { method: "PATCH", body: JSON.stringify({ endpoint_id: modelSelect.value }) });
+    });
 
     // Real bug found live (David: "i didn't get any response") — Run now
     // actually executes and GET /api/tasks/{id}/runs records real output,
@@ -222,7 +244,7 @@ async function refresh(list) {
           el("div", { class: "title", text: task.name + (task.builtin_action ? " · built-in" : "") + (task.enabled ? "" : "  (disabled)") }),
           el("div", { class: "meta", text: schedText }),
         ]),
-        el("div", { class: "card-row", style: "gap:6px;" }, [deliverySelect, runBtn, el("div", { class: "row-actions" }, [delBtn])]),
+        el("div", { class: "card-row", style: "gap:6px;" }, [modelSelect, deliverySelect, runBtn, el("div", { class: "row-actions" }, [delBtn])]),
       ]),
       runsHost,
     ]);

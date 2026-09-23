@@ -1502,3 +1502,26 @@ button.dashboard-row:hover { background: rgba(255,255,255,.035); }
 .log-error, .log-critical { color: var(--danger); }
 .log-tag { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 6px; background: var(--accent-dim);
   color: var(--accent); max-width: 220px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; white-space: nowrap; }
+
+/* Tasks > Work board (static/js/views/taskBoard.js). Scrolls sideways on a
+   narrow screen rather than squeezing six columns into it. */
+.task-board-card { margin-bottom: 14px; }
+.task-board { display: grid; grid-template-columns: repeat(6, minmax(150px, 1fr)); gap: 10px; margin-top: 12px;
+  overflow-x: auto; padding-bottom: 4px; }
+.board-column { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 8px; border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border); }
+.board-column-title { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-faint); }
+.board-card { display: flex; flex-direction: column; gap: 6px; padding: 9px 10px; border-radius: 8px;
+  border: 1px solid var(--border-strong); background: rgba(0, 0, 0, 0.18); min-width: 0; }
+.board-card-name { font-size: 12.5px; color: var(--text); overflow-wrap: anywhere; }
+.board-card-running { border-color: var(--accent); }
+.board-card-review { border-color: #d9b67d; }
+.board-card-blocked { border-color: var(--danger); }
+.board-card-done { opacity: .7; }
+.board-card-output summary { font-size: 11px; color: var(--text-dim); cursor: pointer; }
+.board-card-text { margin-top: 4px; max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 11.5px; color: var(--text-dim); }
+.board-card-text.is-error { color: var(--danger); }
+.board-card-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.board-card-actions .btn { padding: 3px 9px; font-size: 11px; }
+.board-feedback { flex: 1 1 100%; min-width: 0; font-size: 11.5px; }
