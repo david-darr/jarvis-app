@@ -46,3 +46,6 @@ electron/runtime/
 
 # Stray output from backgrounded launches during development
 nohup.out
+
+# evals: real transcripts and run output never committed (evals/README.md)
+evals/**/results/

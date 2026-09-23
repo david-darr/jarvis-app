@@ -1667,6 +1667,113 @@ def _http_400():
     return httpx.HTTPStatusError("bad request", request=request, response=httpx.Response(400, request=request))
 
 
+class CompactionRegionTests(unittest.TestCase):
+    """The compaction summariser must see exactly the region being folded:
+    never the kept tail (it stays verbatim), and on a second compaction the
+    earlier region only through the previous summary. Modelled on Hermes's
+    evals/compaction/test_region_scoping.py; free, no model calls."""
+
+    def setUp(self):
+        self.prompts = []
+        test = self
+
+        class RecordingBrain:
+            async def connect(self): pass
+            async def disconnect(self): pass
+            async def run_turn(self, prompt):
+                test.prompts.append(prompt)
+                return f"SUMMARY-{len(test.prompts)}"
+
+        self.sid = session_manager.create_session("region")["id"]
+        chat_service._busy.clear()
+        patches = [patch.object(chat_service, "_resolve_endpoint", return_value=ENDPOINTS["local"]),
+                   patch.object(chat_service, "_build_brain", side_effect=lambda *a, **k: RecordingBrain())]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def add(self, count, marker_at=None, marker=None):
+        start = len(session_manager.get_session(self.sid)["messages"])
+        for i in range(count):
+            text = marker if marker_at == start + i else f"filler {start + i}"
+            session_manager.append_message(self.sid, "user" if (start + i) % 2 == 0 else "assistant", text)
+
+    def test_only_the_folded_region_reaches_the_summariser(self):
+        keep = chat_service.COMPACTION_TAIL_KEEP
+        self.add(1, 0, "HEAD-SENTINEL")
+        self.add(9, 5, "MIDDLE-SENTINEL")
+        self.add(keep, 10 + keep - 2, "TAIL-SENTINEL")
+        asyncio.run(chat_service.compact_session(self.sid))
+        first = self.prompts[0]
+        self.assertIn("HEAD-SENTINEL", first)
+        self.assertIn("MIDDLE-SENTINEL", first)
+        self.assertNotIn("TAIL-SENTINEL", first, "the kept tail stays verbatim, not summarised")
+
+        self.add(10, None)
+        asyncio.run(chat_service.compact_session(self.sid))
+        second = self.prompts[1]
+        self.assertIn("SUMMARY-1", second, "the earlier region arrives through its summary")
+        self.assertNotIn("HEAD-SENTINEL", second, "not re-read raw")
+        self.assertIn("TAIL-SENTINEL", second, "the old tail is folded this time")
+
+
+class EvalHarnessTests(unittest.TestCase):
+    """The offline parts of evals/: the synthetic transcript plants its facts
+    where compaction folds, and the navigability metrics count what they say."""
+
+    @staticmethod
+    def load(rel):
+        import importlib.util
+        path = Path(__file__).resolve().parents[1] / rel
+        spec = importlib.util.spec_from_file_location(path.stem + "_under_test", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_synthetic_facts_sit_in_the_region_compaction_folds(self):
+        run = self.load("evals/compaction/run.py")
+        messages, facts = run.synthetic(40)
+        self.assertEqual(len(messages), 80)
+        self.assertGreaterEqual(len(facts), 6)
+        folded = run.transcript_text(messages[:len(messages) - chat_service.COMPACTION_TAIL_KEEP])
+        for fact in facts:
+            self.assertIn(fact["a"], folded, fact)
+        self.assertEqual(run.synthetic(40), run.synthetic(40), "deterministic for a fixed seed")
+
+    def test_navigability_metrics_count_complexity_ladders_cycles_and_thresholds(self):
+        metrics = self.load("evals/codebase_navigability/static_metrics.py")
+        root = tempfile.mkdtemp(prefix="jarvis-nav-test-")
+        self.addCleanup(shutil.rmtree, root, True)
+        os.makedirs(os.path.join(root, "pkg"))
+        files = {
+            "pkg/__init__.py": "",
+            "pkg/a.py": ("from pkg import b\n\n"
+                         "def branchy(x, y):\n"
+                         "    \"\"\"Doc.\"\"\"\n"
+                         "    # a comment\n"
+                         "    if x and y:\n"
+                         "        return [i for i in x if i]\n"
+                         "    elif x:\n        return 1\n    elif y:\n        return 2\n    elif x == y:\n        return 3\n"
+                         "    for i in range(3):\n        while i:\n            i -= 1\n"
+                         "    return 0\n"),
+            "pkg/b.py": "from pkg import a\n\n\ndef long():\n" + "    x = 1\n" * 320,
+        }
+        for rel, text in files.items():
+            with open(os.path.join(root, rel), "w", encoding="utf-8") as f:
+                f.write(text)
+        result = metrics.measure(root)
+        branchy = next(f for f in result["most_complex"] if f["name"] == "branchy")
+        # 1 + if + and + comprehension(for + if) + elif x3 + for + while = 10
+        self.assertEqual(branchy["cc"], 10)
+        self.assertEqual(result["ladders"]["max"], 4)
+        self.assertEqual(result["imports"]["cycle_members"], [["pkg.a", "pkg.b"]])
+        kinds = {(f["kind"], f.get("name")) for f in result["flagged"]}
+        self.assertIn(("function_lines", "long"), kinds)
+        self.assertIn(("if_elif_ladder", None), kinds)
+        self.assertEqual(result["source"]["docstring"], 1)
+        self.assertEqual(result["source"]["comment"], 1)
+
+
 class LocalAccessTests(unittest.TestCase):
     """With accounts off, every local request used to count as the one admin
     user, so any program on the machine - an agent's shell included - could
