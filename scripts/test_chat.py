@@ -1731,6 +1731,37 @@ class ToolRoundTests(unittest.TestCase):
         self.assertFalse(any("tool_rounds" in m for m in starred.get("messages", [])))
 
 
+class OllamaNativeShapeTests(unittest.TestCase):
+    """Ollama's native /api/chat, which every capped local endpoint uses,
+    returns 400 for tool-call arguments sent as a JSON string - the OpenAI
+    spec's shape, and what the fake-tool-call rescue builds. Verified
+    against Ollama directly 2026-09-22: a string got 400, an object 200.
+    So a local model that writes its tool calls as text failed on the round
+    after its first tool call."""
+
+    def test_string_arguments_reach_ollama_as_an_object_and_history_is_untouched(self):
+        from core import ollama_client
+        sent = {}
+
+        class FakeClient:
+            def __init__(self, *a, **k): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *exc): return False
+            async def post(self, url, json):
+                sent.update(json)
+                return httpx.Response(200, json={"message": {"role": "assistant", "content": "done"}},
+                                      request=httpx.Request("POST", url))
+
+        history = [{"role": "user", "content": "hi"},
+                   {"role": "assistant", "content": None, "tool_calls": [
+                       {"id": "rescued-x", "type": "function", "function": {"name": "x", "arguments": '{"q": "falcon"}'}}]},
+                   {"role": "tool", "tool_call_id": "rescued-x", "content": "ok"}]
+        before = copy.deepcopy(history)
+        with patch.object(ollama_client.httpx, "AsyncClient", FakeClient):
+            asyncio.run(ollama_client.chat_capped("m", history, 2048, base_url="http://localhost:11434"))
+        self.assertEqual(sent["messages"][1]["tool_calls"][0]["function"]["arguments"], {"q": "falcon"})
+        self.assertEqual(history, before, "the caller's history keeps the OpenAI shape")
+
 
 if __name__ == '__main__':
     try:

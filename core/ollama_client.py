@@ -61,6 +61,32 @@ def is_ollama_url(base_url: str) -> bool:
     return ":11434" in base_url
 
 
+def _native_messages(messages: list[dict]) -> list[dict]:
+    """Messages as Ollama's native /api/chat accepts them. It returns 400 for
+    tool-call arguments sent as a JSON string (the OpenAI spec's shape, and
+    what core/providers/openai_compatible.py's fake-tool-call rescue builds),
+    and accepts the same arguments as an object - verified directly
+    2026-09-22. Converted on a copy, so the caller's history keeps the one
+    OpenAI shape; the conversion is deterministic, so a resent history still
+    renders the same prompt and keeps its cached prefix."""
+    native = []
+    for m in messages:
+        calls = m.get("tool_calls")
+        if calls and any(isinstance((c.get("function") or {}).get("arguments"), str) for c in calls):
+            converted = []
+            for c in calls:
+                fn = dict(c.get("function") or {})
+                if isinstance(fn.get("arguments"), str):
+                    try:
+                        fn["arguments"] = json.loads(fn["arguments"] or "{}")
+                    except json.JSONDecodeError:
+                        fn["arguments"] = {}
+                converted.append({**c, "function": fn})
+            m = {**m, "tool_calls": converted}
+        native.append(m)
+    return native
+
+
 async def chat_capped(model: str, messages: list[dict], num_ctx: int, tools: list[dict] | None = None,
                        base_url: str = DEFAULT_BASE_URL) -> dict:
     """Real bug found live, 2026-09-01: Ollama 0.33.1's OpenAI-*compatible*
@@ -79,7 +105,7 @@ async def chat_capped(model: str, messages: list[dict], num_ctx: int, tools: lis
     Non-streaming only: this path exists specifically for the "cap memory"
     case, where correctness matters more than token-by-token streaming."""
     ollama_base = base_url.removesuffix("/v1").rstrip("/") or DEFAULT_BASE_URL
-    body = {"model": model, "messages": messages, "stream": False, "options": {"num_ctx": num_ctx}}
+    body = {"model": model, "messages": _native_messages(messages), "stream": False, "options": {"num_ctx": num_ctx}}
     if tools:
         body["tools"] = tools
     async with httpx.AsyncClient(timeout=None) as client:
