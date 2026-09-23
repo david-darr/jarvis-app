@@ -19,7 +19,9 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 # in-repo default is the dev path, and is git-ignored.
 DATA_DIR = os.getenv("JARVIS_DATA_DIR") or os.path.join(BASE_DIR, "data")
 
-APP_BIND = os.getenv("APP_BIND", "127.0.0.1")
+# The packaged app's port. Only a fallback: a helper process is told the
+# port the local listener actually serves on (core/middleware.py's
+# local_api_base), since no launcher sets this.
 APP_PORT = int(os.getenv("APP_PORT", "8420"))
 
 # Full read/write dev access for every connected AI model (David's ask

@@ -15,6 +15,7 @@ import time
 
 from core import discord_bots_store, model_endpoints, session_manager_store as session_store, settings as settings_store
 from core.atomic_io import write_json_atomic
+from core.auth import auth_enabled
 from core.constants import DATA_DIR
 from core.vault import resolve_vault_dir
 from services.notes_service import NOTES_FILE, notes_service
@@ -48,7 +49,10 @@ def diagnostics() -> dict:
         "skills_count": len(list_skills()),
         "model_endpoints_count": len(model_endpoints.list_endpoints()),
         "data_dir_bytes": data_size,
-        "auth_enabled": os.getenv("AUTH_ENABLED", "false").lower() in {"1", "true", "yes"},
+        # The check the app actually enforces (the variable OR the saved
+        # setting); reading the variable alone reported false for every
+        # desktop user who turned accounts on.
+        "auth_enabled": auth_enabled(),
         "discord_configured": bool(discord_bots_store.list_bots()),
     }
 

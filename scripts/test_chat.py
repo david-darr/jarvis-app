@@ -1635,6 +1635,95 @@ def _http_400():
     return httpx.HTTPStatusError("bad request", request=request, response=httpx.Response(400, request=request))
 
 
+class LocalCallbackTests(unittest.TestCase):
+    """Codex's write tools (mcp_servers/hive_mind_cli.py) called back to
+    127.0.0.1:{APP_PORT}, a default of 8420 nothing ever set, with a token
+    that is random per process. So on any backend not on 8420 (the dev one
+    is 8421) they reached whatever was on 8420 and failed with 401 -
+    reproduced 2026-09-22. The address is now handed to each Codex process,
+    from the port the local listener actually serves on."""
+
+    def setUp(self):
+        from core import middleware
+        self.middleware = middleware
+        saved = getattr(middleware, "_loopback_port", None)
+        self.addCleanup(lambda: setattr(middleware, "_loopback_port", saved))
+        middleware._loopback_port = None
+
+    @staticmethod
+    def load_cli():
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "hive_mind_cli_under_test", Path(__file__).resolve().parents[1] / "mcp_servers" / "hive_mind_cli.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_the_local_listener_port_is_recorded_and_remote_ones_are_not(self):
+        self.middleware.remember_loopback_port({"type": "http", "scheme": "https", "server": ("100.64.0.7", 8422)})
+        self.assertEqual(self.middleware.local_api_base(), "http://127.0.0.1:8420/api", "APP_PORT stays the fallback")
+        self.middleware.remember_loopback_port({"type": "http", "scheme": "http", "server": ("127.0.0.1", 8431)})
+        self.assertEqual(self.middleware.local_api_base(), "http://127.0.0.1:8431/api")
+
+    def test_a_request_to_the_app_records_its_port(self):
+        with patch.object(self.middleware, "remember_loopback_port", wraps=self.middleware.remember_loopback_port) as seen:
+            client.get(f"/api/sessions")
+        self.assertTrue(seen.called, "every request passes the scope to the recorder")
+
+    def test_the_cli_posts_to_the_address_it_was_given(self):
+        cli = self.load_cli()
+        calls = []
+        response = httpx.Response(200, json={"id": "n1"}, request=httpx.Request("POST", "http://x"))
+        with patch.dict(os.environ, {"JARVIS_API_BASE": "http://127.0.0.1:8431/api", "JARVIS_INTERNAL_TOKEN": "t"}), \
+             patch.object(cli.httpx, "request", side_effect=lambda method, url, **kw: calls.append(url) or response):
+            cli._internal_request("POST", "/notes", {"text": "x"})
+        self.assertEqual(calls, ["http://127.0.0.1:8431/api/notes"])
+
+    def test_the_cli_refuses_to_guess_an_address(self):
+        cli = self.load_cli()
+        env = {k: v for k, v in os.environ.items() if k != "JARVIS_API_BASE"}
+        with patch.dict(os.environ, env, clear=True), patch.object(cli.httpx, "request") as request:
+            with self.assertRaises(RuntimeError):
+                cli._internal_request("POST", "/notes", {"text": "x"})
+        request.assert_not_called()
+
+    def test_each_codex_process_is_told_where_to_call_back(self):
+        self.middleware.remember_loopback_port({"type": "http", "scheme": "http", "server": ("127.0.0.1", 8431)})
+        seen = {}
+
+        class FakeProc:
+            pid = 0
+            returncode = 0
+            def __init__(self):
+                self.stdin = type("In", (), {"write": lambda _, data: None, "write_eof": lambda _: None})()
+                self.stdout = asyncio.StreamReader()
+                self.stdout.feed_data(b'{"type":"turn.failed","error":{"message":"stop here"}}\n')
+                self.stdout.feed_eof()
+                self.stderr = asyncio.StreamReader()
+                self.stderr.feed_eof()
+            async def wait(self): return 0
+
+        async def fake_exec(*args, **kwargs):
+            seen.update(kwargs["env"])
+            return FakeProc()
+
+        async def run():
+            with (patch("core.codex_brain.asyncio.create_subprocess_exec", new=fake_exec),
+                  patch.object(CodexBrain, "_codex_path", return_value="codex"),
+                  patch("core.codex_brain._kill_process_tree", new=AsyncMock())):
+                with self.assertRaises(RuntimeError):
+                    _ = [c async for c in CodexBrain().run_turn_stream("hi")]
+        asyncio.run(run())
+        self.assertEqual(seen.get("JARVIS_API_BASE"), "http://127.0.0.1:8431/api")
+
+    def test_diagnostics_reports_auth_as_the_app_enforces_it(self):
+        from core import settings as settings_store, system_admin
+        self.addCleanup(lambda: settings_store.update_settings(auth_enabled=False))
+        settings_store.update_settings(auth_enabled=True)
+        with patch.dict(os.environ, {"AUTH_ENABLED": "false"}):
+            self.assertTrue(system_admin.diagnostics()["auth_enabled"])
+
+
 class OpenRouterCacheMarkerTests(unittest.TestCase):
     """Anthropic models reached through OpenRouter cache only where a request
     carries explicit cache_control markers, and JARVIS sent none, so every

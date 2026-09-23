@@ -106,8 +106,7 @@ npm run dist
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `AUTH_ENABLED` | `false` | Turn on real accounts + login |
-| `APP_BIND` | `127.0.0.1` | Bind address |
-| `APP_PORT` | `8420` | Port |
+| `APP_PORT` | `8420` | Fallback address for helper processes (Codex's write tools) before the backend has seen a local request. The server's own port comes from its launch command (`--port`). |
 | `JARVIS_DATA_DIR` | in-repo `data/` | Where all runtime state is stored. The desktop app sets this to the per-user app-data location automatically. |
 | `JARVIS_BACKEND_URL` | — | Point the Electron shell at an already-running backend instead of spawning one |
 

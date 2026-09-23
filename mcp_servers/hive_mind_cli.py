@@ -52,6 +52,11 @@ built for exactly this ("app's own tool calls, no browser session") but
 unused until now — passed in via the JARVIS_INTERNAL_TOKEN env var (see
 core/codex_brain.py) as the X-JARVIS-Internal-Token header every
 core/middleware.py route already recognizes; no new auth code needed.
+Where that backend is comes from JARVIS_API_BASE, set the same way. It
+used to be 127.0.0.1:{APP_PORT}, a default of 8420 nothing set, so from a
+backend on any other port the writes reached whatever was on 8420 and
+failed with 401 (reproduced 2026-09-22). With no address, a write refuses
+rather than guess.
 """
 import argparse
 import os
@@ -63,15 +68,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import httpx  # noqa: E402
 
 from core import memory_tools  # noqa: E402
-from core.constants import APP_PORT  # noqa: E402
-
-_API_BASE = f"http://127.0.0.1:{APP_PORT}/api"
 
 
 def _internal_request(method: str, path: str, json_body: dict | None = None) -> dict:
+    api_base = os.environ.get("JARVIS_API_BASE")
+    if not api_base:
+        raise RuntimeError("JARVIS_API_BASE is not set, so there is no JARVIS backend to send this to. "
+                           "Write commands only work when JARVIS itself starts Codex.")
     token = os.environ.get("JARVIS_INTERNAL_TOKEN", "")
     resp = httpx.request(
-        method, f"{_API_BASE}{path}", json=json_body,
+        method, f"{api_base}{path}", json=json_body,
         headers={"X-JARVIS-Internal-Token": token}, timeout=15.0,
     )
     resp.raise_for_status()
@@ -253,7 +259,7 @@ def main() -> None:
         elif args.command == "delete_event":
             _internal_request("DELETE", f"/calendar/events/{args.event_id}")
             print(f"Deleted event {args.event_id}")
-    except (KeyError, ValueError) as e:
+    except (KeyError, ValueError, RuntimeError) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     except httpx.HTTPStatusError as e:

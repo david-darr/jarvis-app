@@ -11,13 +11,39 @@ from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from core.auth import auth_manager, auth_enabled, SESSION_COOKIE_NAME, SINGLE_USER, INTERNAL_TOOL_TOKEN
+from core.constants import APP_PORT
 
 
 _NO_CACHE_SUFFIXES = (".js", ".mjs", ".css", ".html")
 
+# The port this process's local listener actually serves on, from the first
+# request that arrives over plain http on 127.0.0.1 (the desktop window and a
+# dev browser always do). Codex's write tools call back to it (see
+# local_api_base). It used to come from APP_PORT alone, a default of 8420 that
+# no launcher sets, so on any other port - the dev backend runs on 8421 - the
+# calls reached whatever was on 8420 and failed with 401 (reproduced
+# 2026-09-22). The remote listener, TLS on a tailnet address, is ignored: the
+# callback always goes to the local one.
+_loopback_port: Optional[int] = None
+
+
+def remember_loopback_port(scope: dict) -> None:
+    global _loopback_port
+    server = scope.get("server")
+    if scope.get("type") == "http" and scope.get("scheme") == "http" and server and server[0] in ("127.0.0.1", "::1"):
+        _loopback_port = server[1]
+
+
+def local_api_base() -> str:
+    """Where a helper process started by this backend reaches its API. APP_PORT
+    stays the fallback for a backend no local request has reached yet (the
+    packaged app serves on 8420, which is that default)."""
+    return f"http://127.0.0.1:{_loopback_port or APP_PORT}/api"
+
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        remember_loopback_port(request.scope)
         response = await call_next(request)
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"

@@ -49,6 +49,7 @@ import sys
 from core.auth import INTERNAL_TOOL_TOKEN
 from core import image_gen
 from core.constants import BASE_DIR, REPO_CODE_DIRS
+from core.middleware import local_api_base
 from core.session_manager import sent_text, session_manager
 from core.vault import resolve_vault_dir
 from core import projects, system_prompt
@@ -217,9 +218,14 @@ class CodexBrain:
         # (create/update/delete note/task/event) authenticate to this same
         # backend's own /api/* routes as "internal-tool" — see
         # mcp_servers/hive_mind_cli.py's docstring for why writes go over
-        # HTTP rather than direct file access. Full os.environ is preserved;
-        # only these two vars are added.
-        env = {**os.environ, "JARVIS_CODEX_SESSION_ID": self.session_id or "", "JARVIS_INTERNAL_TOKEN": INTERNAL_TOOL_TOKEN}
+        # HTTP rather than direct file access. JARVIS_API_BASE says where that
+        # backend is: the port its local listener actually serves on, handed
+        # over per process like the session id and token, because a global
+        # default sent the calls to whatever was on 8420 (see
+        # core/middleware.py's local_api_base). Full os.environ is preserved;
+        # only these three vars are added.
+        env = {**os.environ, "JARVIS_CODEX_SESSION_ID": self.session_id or "",
+               "JARVIS_INTERNAL_TOKEN": INTERNAL_TOOL_TOKEN, "JARVIS_API_BASE": local_api_base()}
 
         proc = await asyncio.create_subprocess_exec(
             *args,
