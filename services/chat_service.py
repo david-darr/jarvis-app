@@ -23,7 +23,7 @@ from core import attachments, model_catalog, model_endpoints, permissions, token
 from core.brain import Brain
 from core.codex_brain import CodexBrain
 from core.external_brain import ExternalBrain
-from core.session_manager import session_manager
+from core.session_manager import sent_text, session_manager
 from core.vault import resolve_vault_dir
 
 logger = logging.getLogger(__name__)
@@ -196,7 +196,7 @@ def _prime_with_history(session_id: str, just_created: bool, endpoint: dict, ful
         unseen = [m for m in unseen if m.get("content")]
         if not unseen:
             return full_text
-        transcript = "\n\n".join(f'{m["role"]}: {m["content"]}' for m in unseen)
+        transcript = "\n\n".join(f'{m["role"]}: {sent_text(m)}' for m in unseen)
         return (
             "[Messages added to this chat since your last turn, for context:]\n\n"
             f"{transcript}\n\n[End of added messages. Current message:]\n{full_text}"
@@ -204,7 +204,7 @@ def _prime_with_history(session_id: str, just_created: bool, endpoint: dict, ful
     prior = session_manager.effective_messages(session_id, exclude_last=True)
     if not prior:
         return full_text
-    transcript = "\n\n".join(f'{m["role"]}: {m["content"]}' for m in prior)
+    transcript = "\n\n".join(f'{m["role"]}: {sent_text(m)}' for m in prior)
     return (
         "[This chat has history from before this connection — context from "
         f"earlier in this same conversation, for your reference:]\n\n{transcript}"
@@ -301,22 +301,32 @@ def _apply_open_mic_discipline(session_id: str, full_text: str) -> str:
     return full_text + OPEN_MIC_DISCIPLINE
 
 
+def _prepare_sent_text(session_id: str, index: int, text: str, attachment_ids: list[str] | None) -> str:
+    """The user message as the model receives it - the attachment note and
+    Open Mic instruction added - recorded beside the saved message so every
+    later replay sends the same text (see SessionManager.record_sent_text).
+    Deliberately before _prime_with_history: that wrapper is a one-off for
+    a fresh connection, not part of the message."""
+    sent = _apply_open_mic_discipline(session_id, _apply_attachments(session_id, text, attachment_ids))
+    session_manager.record_sent_text(session_id, index, text, sent)
+    return sent
+
+
 async def send_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> str:
     async with session_operation(session_id):
         return await _send_message(session_id, text, attachment_ids, is_admin)
 
 
 async def _send_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> str:
-    session_manager.append_message(session_id, "user", text)
+    index = session_manager.append_message(session_id, "user", text)
     endpoint = _resolve_endpoint(session_id)
     if endpoint is None:
         session_manager.append_message(session_id, "assistant", NO_MODEL_MESSAGE)
         return NO_MODEL_MESSAGE
 
-    full_text = _apply_attachments(session_id, text, attachment_ids)
+    full_text = _prepare_sent_text(session_id, index, text, attachment_ids)
     brain, just_created = await _get_brain(session_id, endpoint, is_admin)
     full_text = _prime_with_history(session_id, just_created, endpoint, full_text, brain)
-    full_text = _apply_open_mic_discipline(session_id, full_text)
     try:
         reply = await brain.run_turn(full_text)
     except CLIJSONDecodeError:
@@ -339,7 +349,7 @@ async def stream_message(session_id: str, text: str, attachment_ids: list[str] |
 
 
 async def _stream_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> AsyncIterator[str]:
-    session_manager.append_message(session_id, "user", text)
+    index = session_manager.append_message(session_id, "user", text)
     endpoint = _resolve_endpoint(session_id)
     if endpoint is None:
         session_manager.append_message(session_id, "assistant", NO_MODEL_MESSAGE)
@@ -349,10 +359,9 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
     reply_parts: list[str] = []
     brain = None
     try:
-        full_text = _apply_attachments(session_id, text, attachment_ids)
+        full_text = _prepare_sent_text(session_id, index, text, attachment_ids)
         brain, just_created = await _get_brain(session_id, endpoint, is_admin)
         full_text = _prime_with_history(session_id, just_created, endpoint, full_text, brain)
-        full_text = _apply_open_mic_discipline(session_id, full_text)
         async for item in _stream_with_permission_prompts(session_id, brain, full_text):
             if isinstance(item, str):
                 reply_parts.append(item)

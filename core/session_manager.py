@@ -21,6 +21,15 @@ from typing import Optional
 from core import session_manager_store as store
 
 
+def sent_text(message: dict) -> str:
+    """What a model was actually sent for this message, for any replay of the
+    conversation to a model. Usually just its content; for a user message
+    that went out with an attachment note or the Open Mic instruction, the
+    exact text sent (see SessionManager.record_sent_text). Summaries and
+    compaction read `content` instead: they want what was said."""
+    return message.get("sent") or message.get("content") or ""
+
+
 def _clear_claude_session(session: dict) -> None:
     """Forget the Claude CLI session, so the next connect starts a fresh one
     primed from the saved transcript. For anything that changes history or
@@ -107,7 +116,7 @@ class SessionManager:
         return session
 
     def append_message(self, session_id: str, role: str, content: str, status: str = "complete",
-                       extra: Optional[dict] = None) -> None:
+                       extra: Optional[dict] = None) -> int:
         """Add one turn to a conversation.
 
         Deliberately never loads the transcript to do it: the store hands
@@ -119,6 +128,8 @@ class SessionManager:
 
         extra: further fields saved on the message itself, such as an
         OpenAI-compatible reply's `tool_rounds`. The core fields always win.
+
+        Returns the message's index, for record_sent_text().
         """
         header = store.get_session_header(session_id)
         if header is None:
@@ -136,6 +147,22 @@ class SessionManager:
             session["title"] = content[:60]
 
         store.append_message(session_id, count, message, session)
+        return count
+
+    def record_sent_text(self, session_id: str, index: int, typed: str, sent: str) -> None:
+        """Keep the exact text a user message went out as, when it differs
+        from what was typed (an attachment note, the Open Mic instruction).
+
+        The chat stores and shows what the person typed, and used to keep
+        nothing else, so every replay (a local/API reconnect, Claude's
+        fallback replay, a fresh Codex thread) lost the attachment paths, and
+        a rebuilt local/API history stopped matching the cached one at the
+        first such turn. Prompt-cache audit finding 4, 2026-09-22. Written
+        after the message is saved, as a one-row update, so a failure while
+        preparing the turn still leaves the message saved and appending stays
+        flat however long the chat is."""
+        if sent != typed:
+            store.update_message_fields(session_id, index, {"sent": sent})
 
     def set_model_endpoint(self, session_id: str, model_endpoint_id: Optional[str], model_override: Optional[str] = None,
                            model_effort: Optional[str] = None) -> dict:

@@ -49,7 +49,7 @@ import sys
 from core.auth import INTERNAL_TOOL_TOKEN
 from core import image_gen
 from core.constants import BASE_DIR, REPO_CODE_DIRS
-from core.session_manager import session_manager
+from core.session_manager import sent_text, session_manager
 from core.vault import resolve_vault_dir
 from core import projects, system_prompt
 
@@ -203,7 +203,7 @@ class CodexBrain:
             prompt_text = system_prompt.for_codex(sys.executable, HIVE_MIND_CLI_PATH, self.is_admin) + projects.project_addendum(self.project_id)
             prior = session_manager.effective_messages(self.session_id, exclude_last=True)
             if prior:
-                transcript = "\n\n".join(f'{m["role"]}: {m["content"]}' for m in prior)
+                transcript = "\n\n".join(f'{m["role"]}: {sent_text(m)}' for m in prior)
                 prompt_text += f"\n\n[Earlier conversation, for context:]\n{transcript}\n[End of earlier conversation]"
             prompt = f"[System instructions:]\n{prompt_text}\n\n[User message:]\n{user_text}"
         else:

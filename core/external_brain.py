@@ -27,6 +27,7 @@ from typing import AsyncIterator
 
 from core import memory_tools, projects, system_prompt
 from core.providers import openai_compatible
+from core.session_manager import sent_text
 
 _MEMORY_TOOLS = [
     {
@@ -415,7 +416,10 @@ class ExternalBrain:
             rounds = m.get("tool_rounds") or {}
             if endpoint_id and rounds.get("endpoint_id") == endpoint_id:
                 seeded.extend(rounds.get("messages") or [])
-            seeded.append({"role": m["role"], "content": m["content"]})
+            # What this endpoint was actually sent, attachment note and Open
+            # Mic instruction included, so the rebuilt history still matches
+            # the cached one (prompt-cache audit finding 4).
+            seeded.append({"role": m["role"], "content": sent_text(m)})
         return seeded
 
     async def _execute_tool(self, name: str, args: dict) -> str:

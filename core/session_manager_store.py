@@ -400,6 +400,25 @@ def append_message(session_id: str, index: int, message: dict, doc: dict) -> Non
             )
 
 
+def update_message_fields(session_id: str, index: int, fields: dict) -> None:
+    """Merge extra fields into one stored message: one row read, one row
+    written, whatever the length of the chat. For fields beside the message
+    rather than the message itself (see SessionManager.record_sent_text), so
+    role and content - and with them the search index - cannot change here."""
+    if {"role", "content"} & set(fields):
+        raise ValueError("role and content are not changed through update_message_fields")
+    with _LOCK:
+        conn = _connect()
+        with conn:
+            row = conn.execute("SELECT doc FROM messages WHERE session_id = ? AND idx = ?",
+                               (session_id, index)).fetchone()
+            if row is None:
+                raise KeyError(f"no message {index} in session {session_id}")
+            message = {**json.loads(row["doc"]), **fields}
+            conn.execute("UPDATE messages SET doc = ? WHERE session_id = ? AND idx = ?",
+                         (json.dumps(message, ensure_ascii=False), session_id, index))
+
+
 def session_exists(session_id: str) -> bool:
     with _LOCK:
         conn = _connect()

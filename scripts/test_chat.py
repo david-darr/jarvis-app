@@ -1877,6 +1877,101 @@ class BuiltinRevocationTests(unittest.TestCase):
         self.assertIn(extra, _FakeClaudeClient.instances[-1].options.allowed_tools)
 
 
+class SentTextTests(unittest.TestCase):
+    """The attachment note and the Open Mic instruction are added to what is
+    sent, never to what is stored, so the chat shows what the person typed.
+    But nothing kept what was sent: a rebuilt local/API history stopped
+    matching the cached one at the first such turn (every turn of an Open
+    Mic session), and every replay lost the attachment paths. Prompt-cache
+    audit finding 4."""
+
+    NOTE_PATH = "report-7f3a.pdf"
+
+    def setUp(self):
+        chat_service._brains.clear()
+        chat_service._busy.clear()
+        _FakeClaudeClient.instances = []
+        _FakeClaudeClient.refuse_resume = False
+        self.sid = session_manager.create_session("sent")["id"]
+        self.endpoint = ENDPOINTS["local"]
+        patches = [
+            patch.object(chat_service, "_resolve_endpoint", side_effect=lambda sid: self.endpoint),
+            patch("core.model_endpoints.resolve_runtime", return_value=("http://fake", "local-model", None, None)),
+            patch.object(chat_service.attachments, "resolve_for_turn", return_value=([self.NOTE_PATH], [])),
+            patch("core.brain.ClaudeSDKClient", _FakeClaudeClient),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(chat_service._brains.clear)
+        self.fake = _ScriptedEndpoint([_text("one"), _text("two"), _text("three")])
+        p = patch("core.providers.openai_compatible._post_chat", new=self.fake)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def send(self, text, attachment_ids=None):
+        return asyncio.run(chat_service.send_message(self.sid, text, attachment_ids))
+
+    def reconnect(self):
+        asyncio.run(chat_service.close_session_brain(self.sid))
+
+    def test_an_open_mic_history_rebuilt_after_a_reconnect_matches_what_was_sent(self):
+        session_manager.set_open_mic(self.sid, True)
+        self.send("how is the weather")
+        self.reconnect()
+        self.send("and tomorrow")
+        first, second = self.fake.bodies[0]["messages"], self.fake.bodies[1]["messages"]
+        self.assertEqual(second[:len(first)], first)
+        self.assertEqual(session_manager.get_session(self.sid)["messages"][0]["content"], "how is the weather",
+                         "the chat still stores what the person said")
+
+    def test_an_attachment_path_survives_a_local_reconnect(self):
+        self.send("read this", ["att-1"])
+        self.reconnect()
+        self.send("summarise it")
+        first, second = self.fake.bodies[0]["messages"], self.fake.bodies[1]["messages"]
+        self.assertEqual(second[:len(first)], first)
+        self.assertIn(self.NOTE_PATH, second[1]["content"])
+        self.assertEqual(session_manager.get_session(self.sid)["messages"][0]["content"], "read this")
+
+    def test_claude_replay_keeps_the_attachment_path(self):
+        self.send("read this", ["att-1"])
+        self.reconnect()  # what switching the chat's model does
+        self.endpoint = ENDPOINTS["claude"]
+        self.send("what was the file called?")
+        self.assertIn(self.NOTE_PATH, _FakeClaudeClient.instances[-1].prompts[0])
+
+    def test_a_fresh_codex_thread_keeps_the_attachment_path(self):
+        self.send("read this", ["att-1"])
+        session_manager.append_message(self.sid, "user", "what was the file called?")
+        written = []
+
+        class FakeProc:
+            pid = 0
+            returncode = 0
+            def __init__(self):
+                self.stdin = type("In", (), {"write": lambda _, data: written.append(data), "write_eof": lambda _: None})()
+                self.stdout = asyncio.StreamReader()
+                self.stdout.feed_data(b'{"type":"turn.failed","error":{"message":"stop here"}}\n')
+                self.stdout.feed_eof()
+                self.stderr = asyncio.StreamReader()
+                self.stderr.feed_eof()
+            async def wait(self): return 0
+
+        async def fake_exec(*args, **kwargs):
+            return FakeProc()
+
+        async def run():
+            brain = CodexBrain(session_id=self.sid)
+            with (patch("core.codex_brain.asyncio.create_subprocess_exec", new=fake_exec),
+                  patch.object(CodexBrain, "_codex_path", return_value="codex"),
+                  patch("core.codex_brain._kill_process_tree", new=AsyncMock())):
+                with self.assertRaises(RuntimeError):
+                    _ = [c async for c in brain.run_turn_stream("what was the file called?")]
+        asyncio.run(run())
+        self.assertIn(self.NOTE_PATH, b"".join(written).decode("utf-8"))
+
+
 if __name__ == '__main__':
     try:
         unittest.main()
