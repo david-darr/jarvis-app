@@ -980,7 +980,7 @@ function renderMcpServerForm(host, content) {
   host.append(
     el("div", { class: "glass bracket card" }, [
       el("div", { class: "title", style: "font-size:12.5px;", text: "Add MCP Tool Server" }),
-      el("div", { class: "meta", style: "margin:4px 0 8px;", text: "Registered servers widen the agent's real tool access on its next new/reconnected chat." }),
+      el("div", { class: "meta", style: "margin:4px 0 8px;", text: "Registered servers widen the agent's real tool access. Open chats pick up a change on their next message." }),
       el("div", { class: "card-row", style: "flex-wrap:wrap;gap:8px;" }, [nameInput, typeSelect, cmdInput, urlInput, keyInput, saveBtn]),
       err,
     ]),
@@ -1656,7 +1656,7 @@ async function renderAgentToolsPanel(content) {
   content.innerHTML = "";
   content.append(
     el("div", { class: "title", text: "Agent Tools" }),
-    el("div", { class: "meta", style: "margin-top:6px;", text: "Globally disable tools for every new chat session. Takes effect on the next new/reconnected session." }),
+    el("div", { class: "meta", style: "margin-top:6px;", text: "Globally disable tools for every chat. Open chats pick up a change on their next message." }),
   );
   const list = el("div", { style: "margin-top:12px;display:flex;flex-wrap:wrap;gap:14px;" });
   const checks = {};
@@ -1693,7 +1693,7 @@ async function renderAgentToolsPanel(content) {
   extraSaveBtn.addEventListener("click", async () => {
     const extra_allowed_tools = extraTextarea.value.split("\n").map((s) => s.trim()).filter(Boolean);
     await api("/api/settings/extra-allowed-tools", { method: "POST", body: JSON.stringify({ extra_allowed_tools }) });
-    toast("Saved — takes effect on the next new or reconnected session", "success");
+    toast("Saved — open chats pick it up on their next message", "success");
   });
   content.append(extraTextarea, extraSaveBtn);
 }

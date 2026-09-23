@@ -212,10 +212,9 @@ async def list_agent_tools(user: str = Depends(require_admin)) -> dict:
 
 @router.post("/agent-tools")
 async def set_disabled_tools(body: SetDisabledToolsRequest, user: str = Depends(require_admin)) -> dict:
-    """Globally disables the listed tools for every new Brain connection
-    (see core/brain.py's disallowed_tools wiring) — takes effect on the next
-    new/reconnected session, same "not live for already-open sessions"
-    caveat as vault-dir above."""
+    """Globally disables the listed tools for every Claude chat (see
+    core/brain.py's disallowed_tools wiring). An open chat picks the change
+    up on its next message - see Brain.tool_config_changed()."""
     unknown = set(body.disabled_tools) - set(AGENT_TOOLS)
     if unknown:
         from fastapi import HTTPException

@@ -99,7 +99,15 @@ async def _get_brain(session_id: str, endpoint: dict, is_admin: bool = False) ->
     _prime_with_history)."""
     brain = _brains.get(session_id)
     if brain is not None:
-        return brain, False
+        if not (isinstance(brain, Brain) and brain.tool_config_changed()):
+            return brain, False
+        # Settings changed this chat's tools since it connected (a disabled
+        # tool, an MCP server). Apply it now, at a turn boundary, rather than
+        # at whatever reconnect happens next; the rebuilt brain resumes the
+        # same CLI session, so the conversation is kept. See
+        # Brain.tool_config_changed().
+        logger.info("tool settings changed; reconnecting chat %s before its turn", session_id)
+        await close_session_brain(session_id)
 
     brain = _build_brain(endpoint, session_id=session_id, is_admin=is_admin)
     try:

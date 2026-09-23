@@ -1763,6 +1763,56 @@ class OllamaNativeShapeTests(unittest.TestCase):
         self.assertEqual(history, before, "the caller's history keeps the OpenAI shape")
 
 
+class ToolSettingsTests(unittest.TestCase):
+    """Global tool settings (disabled tools, extra allowed tools, MCP servers)
+    were read only when a Claude chat connected, so a change reached an open
+    chat at its next Stop, error or restart - never, in a chat that just kept
+    going. Prompt-cache audit finding 3: a change now lands on each open
+    chat's next message, resuming the same CLI session."""
+
+    def setUp(self):
+        from core import settings as settings_store
+        self.settings = settings_store
+        _FakeClaudeClient.instances = []
+        _FakeClaudeClient.refuse_resume = False
+        _FakeClaudeClient.next_session_id = "cli-session-1"
+        chat_service._brains.clear()
+        self.sid = session_manager.create_session("settings")["id"]
+        patches = [patch("core.brain.ClaudeSDKClient", _FakeClaudeClient),
+                   patch.object(chat_service, "_resolve_endpoint", return_value=ENDPOINTS["claude"])]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(chat_service._brains.clear)
+        self.addCleanup(lambda: settings_store.update_settings(disabled_tools=[], extra_allowed_tools=[]))
+
+    def send(self, text):
+        return asyncio.run(chat_service.send_message(self.sid, text))
+
+    def test_a_disabled_tool_reaches_an_open_chat_on_its_next_turn(self):
+        self.send("hello")
+        self.assertNotIn("WebFetch", _FakeClaudeClient.instances[-1].options.disallowed_tools)
+        self.settings.update_settings(disabled_tools=["WebFetch"])
+        self.send("fetch something")
+        self.assertEqual(len(_FakeClaudeClient.instances), 2, "the open chat must reconnect before the turn")
+        latest = _FakeClaudeClient.instances[-1]
+        self.assertIn("WebFetch", latest.options.disallowed_tools)
+        self.assertEqual(latest.options.resume, "cli-session-1", "the conversation is resumed, not restarted")
+        self.assertEqual(latest.prompts, ["fetch something"])
+
+    def test_an_extra_allowed_tool_reaches_an_open_chat_on_its_next_turn(self):
+        self.send("hello")
+        self.settings.update_settings(extra_allowed_tools=["mcp__claude_ai_Canva__resize-design"])
+        self.send("resize it")
+        self.assertIn("mcp__claude_ai_Canva__resize-design", _FakeClaudeClient.instances[-1].options.allowed_tools)
+
+    def test_unchanged_settings_keep_the_connection(self):
+        self.send("hello")
+        self.send("again")
+        self.send("and again")
+        self.assertEqual(len(_FakeClaudeClient.instances), 1)
+
+
 if __name__ == '__main__':
     try:
         unittest.main()

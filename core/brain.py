@@ -14,6 +14,8 @@ vault notes by default. No separate memory-store API needed for the core
 mechanism, same as how the real JARVIS (voice-line/brain.py) works today.
 """
 import asyncio
+import hashlib
+import json
 import os
 
 from claude_agent_sdk import (
@@ -113,24 +115,25 @@ class Brain:
         # The CLI session id this brain's turns ran in, from each
         # ResultMessage; chat_service persists it after a successful turn.
         self.cli_session_id: str | None = None
+        # Digest of the settings-derived tools this connection was built with;
+        # see tool_config_changed().
+        self.tool_fingerprint: str | None = None
         self._client: ClaudeSDKClient | None = None
 
-    def _options(self) -> ClaudeAgentOptions:
+    def _tool_config(self) -> tuple[list[str], list[str], dict]:
+        """The parts of a connection that come from global settings rather
+        than from this chat: (disallowed tools, pre-approved tools, registered
+        MCP servers). Read fresh each time, so tool_config_changed() can tell
+        whether an open chat is running on settings that have since changed."""
         # Settings > Admin > Agent Tools (David's ask 2026-08-31, matching
         # Odysseus's builtin-tool-toggle panel) — globally disabled tool
-        # names, read fresh per connect() rather than cached at import time
-        # so a Settings change takes effect on the next new session.
+        # names.
         disabled = settings_store.get_setting("disabled_tools") or []
         # Settings > Integrations > MCP Tool Server (David's ask 2026-08-31,
         # matching Odysseus's Integrations panel) — registered MCP servers
-        # widen the agent's real tool access, read fresh per connect() same
-        # as disabled_tools above, filtered to this session's chosen subset.
+        # widen the agent's real tool access, filtered to this session's
+        # chosen subset.
         mcp_servers = integrations.list_mcp_servers_runtime(self.integration_ids)
-        # Shared memory + cross-session awareness (David's ask 2026-08-31):
-        # Claude already has native file-tool access to the vault (its own
-        # cwd below) — the only real gap is cross-session search, added
-        # in-process (no subprocess/network hop) here.
-        mcp_servers = {**mcp_servers, "hive_mind": hive_mind_server.get_hive_mind_server(self.session_id)}
         # Real gap found live: acceptEdits only auto-approves file-edit-type
         # prompts — a custom in-process MCP tool like search_sessions still
         # hit a permission prompt Claude has no way to answer headlessly, so
@@ -211,6 +214,37 @@ class Brain:
         # the person decides; a non-admin's is refused outright below.
         if not self.is_admin:
             disabled = [*disabled, "Bash"]
+        return disabled, allowed_tools, mcp_servers
+
+    @staticmethod
+    def _fingerprint(disabled: list[str], allowed_tools: list[str], mcp_servers: dict) -> str:
+        # A digest, never the config itself: MCP entries carry decrypted keys.
+        blob = json.dumps([disabled, allowed_tools, mcp_servers], sort_keys=True, default=str)
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+    def tool_config_changed(self) -> bool:
+        """Whether global settings have changed this connection's tools since
+        it connected (prompt-cache audit finding 3, 2026-09-22).
+
+        These settings used to land in an open chat only at its next
+        reconnect - a Stop, an error, a restart - so a tool disabled in
+        Settings stayed usable in every open chat until then, and the change
+        then broke the cached prompt at an arbitrary moment. services/
+        chat_service.py asks this before each turn and reconnects (resuming
+        the same CLI session) when it is true, so a change lands on each
+        chat's next message instead. Not deferred to new chats, as Hermes
+        does by default: JARVIS chats live for weeks, and these settings are
+        mostly safety switches."""
+        return self._client is not None and self._fingerprint(*self._tool_config()) != self.tool_fingerprint
+
+    def _options(self) -> ClaudeAgentOptions:
+        disabled, allowed_tools, mcp_servers = self._tool_config()
+        self.tool_fingerprint = self._fingerprint(disabled, allowed_tools, mcp_servers)
+        # Shared memory + cross-session awareness (David's ask 2026-08-31):
+        # Claude already has native file-tool access to the vault (its own
+        # cwd below) — the only real gap is cross-session search, added
+        # in-process (no subprocess/network hop) here.
+        mcp_servers = {**mcp_servers, "hive_mind": hive_mind_server.get_hive_mind_server(self.session_id)}
 
         # A generated file needs somewhere to be built that isn't the vault
         # (David's ask 2026-09-12, after a live test found Claude writing a
@@ -220,7 +254,7 @@ class Brain:
         os.makedirs(image_gen.GENERATED_FILES_DIR, exist_ok=True)
 
         # App-wide approval (David's ask 2026-09-18). The pre-approved list
-        # above keeps working exactly as before - it is now written into the
+        # from _tool_config() keeps working exactly as before - it is now written into the
         # permission store as visible, revocable rules rather than staying
         # invisible in code. Anything outside it used to hang on a prompt
         # nothing could answer; it now reaches the person instead. Bash is
