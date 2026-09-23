@@ -1639,6 +1639,72 @@ def _http_400():
     return httpx.HTTPStatusError("bad request", request=request, response=httpx.Response(400, request=request))
 
 
+class InternalTokenScopeTests(unittest.TestCase):
+    """The token every Codex process holds (so hive_mind_cli.py can write
+    notes, tasks and events) resolved to "internal-tool", which counted as
+    a full admin: with accounts on, any Codex chat - a non-admin's, or one
+    steered by injected text - could export the backup or wipe data.
+    Reproduced 2026-09-22. It now works only on the routes the CLI calls,
+    none of which needs admin, and is ignored everywhere else."""
+
+    def setUp(self):
+        from fastapi import FastAPI as _FastAPI
+        from routes import calendar_routes, chat_routes as _chat_routes, notes_routes, system_routes, task_routes
+        from core import middleware as mw
+        self.token = {"X-JARVIS-Internal-Token": mw.INTERNAL_TOOL_TOKEN}
+        app_ = _FastAPI()
+        for r in (notes_routes, task_routes, calendar_routes, _chat_routes, session_routes, system_routes):
+            app_.include_router(r.router)
+        self.web = TestClient(app_)
+        p = patch("core.middleware.auth_enabled", return_value=True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_the_token_is_refused_on_admin_routes_and_nothing_is_wiped(self):
+        from services.notes_service import notes_service
+        notes_service.create_note("must survive")
+        before = len(notes_service.list_notes())
+        for method, path, body in [("GET", "/api/system/diagnostics", None), ("GET", "/api/system/backup/export", None),
+                                   ("GET", "/api/system/wipe-kinds", None), ("GET", "/api/system/logs", None),
+                                   ("POST", "/api/system/wipe", {"kind": "notes"})]:
+            with self.subTest(path=path):
+                res = self.web.request(method, path, json=body, headers=self.token)
+                self.assertEqual(res.status_code, 401, res.text)
+        self.assertEqual(len(notes_service.list_notes()), before)
+
+    def test_the_token_still_does_what_the_cli_needs(self):
+        note = self.web.post("/api/notes", json={"text": "from codex"}, headers=self.token)
+        self.assertEqual(note.status_code, 200, note.text)
+        note_id = note.json()["id"]
+        self.assertEqual(self.web.patch(f"/api/notes/{note_id}", json={"completed": True}, headers=self.token).status_code, 200)
+        self.assertEqual(self.web.delete(f"/api/notes/{note_id}", headers=self.token).status_code, 200)
+        task = self.web.post("/api/tasks", json={"name": "t", "prompt": "p", "schedule_kind": "once",
+                                                 "run_at": "2099-01-01T00:00:00"}, headers=self.token)
+        self.assertEqual(task.status_code, 200, task.text)
+        task_id = task.json()["id"]
+        self.assertEqual(self.web.patch(f"/api/tasks/{task_id}", json={"enabled": False}, headers=self.token).status_code, 200)
+        self.assertEqual(self.web.delete(f"/api/tasks/{task_id}", headers=self.token).status_code, 200)
+        event = self.web.post("/api/calendar/events", json={"title": "e", "start": "2099-01-01T10:00:00",
+                                                            "end": "2099-01-01T11:00:00"}, headers=self.token)
+        self.assertEqual(event.status_code, 200, event.text)
+        event_id = event.json()["id"]
+        self.assertEqual(self.web.patch(f"/api/calendar/events/{event_id}", json={"title": "e2"}, headers=self.token).status_code, 200)
+        self.assertEqual(self.web.delete(f"/api/calendar/events/{event_id}", headers=self.token).status_code, 200)
+        artifact = self.web.post("/api/chat/artifacts", json={"session_id": "none", "path": "x.md"}, headers=self.token)
+        self.assertNotIn(artifact.status_code, (401, 403), "authorised; any refusal is about the file, not the caller")
+
+    def test_the_token_is_ignored_on_other_user_routes(self):
+        for method, path, body in [("GET", "/api/sessions", None), ("GET", "/api/notes", None),
+                                   ("POST", "/api/tasks/any/run", None), ("GET", "/api/calendar/events/archived", None),
+                                   ("POST", "/api/chat/stream", {"session_id": "any", "message": "spend money"})]:
+            with self.subTest(path=path):
+                self.assertEqual(self.web.request(method, path, json=body, headers=self.token).status_code, 401)
+
+    def test_internal_tool_is_not_an_admin(self):
+        from core.auth import auth_manager
+        self.assertFalse(auth_manager.is_admin("internal-tool"))
+
+
 class LogBrowsingTests(unittest.TestCase):
     """Settings > Admin > Logs (core/logs.py, adapted from Hermes's
     hermes_cli/logs.py). Before it, the only way to read a log was to find
@@ -1803,7 +1869,7 @@ class LogBrowsingTests(unittest.TestCase):
         with patch("core.middleware.auth_enabled", return_value=True):
             self.assertEqual(web.get("/api/system/logs?name=errors").status_code, 401)
             self.assertEqual(web.get("/api/system/logs?name=errors",
-                                     headers={"X-JARVIS-Internal-Token": mw.INTERNAL_TOOL_TOKEN}).status_code, 403)
+                                     headers={"X-JARVIS-Internal-Token": mw.INTERNAL_TOOL_TOKEN}).status_code, 401)
         res = web.get("/api/system/logs?name=errors")
         self.assertEqual(res.status_code, 200, res.text)
         self.assertIn("shown to an admin", res.json()["entries"][0]["text"])

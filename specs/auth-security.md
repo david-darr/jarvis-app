@@ -21,7 +21,9 @@ Matches Odysseus's own default posture, per the explicit "match what Odysseus us
 
 ## Internal-Tool Loopback
 
-`INTERNAL_TOOL_TOKEN` is generated once per process via `secrets.token_hex(32)`, never persisted, never sent to any client. It exists so JARVIS's own agent/tool-call machinery can reach admin-gated routes without needing a real browser session — a request carrying `X-JARVIS-Internal-Token` matching this value resolves to the reserved `"internal-tool"` user, which `is_admin()` always treats as admin. Direct copy of Odysseus's own loopback mechanism.
+`INTERNAL_TOOL_TOKEN` is generated once per process via `secrets.token_hex(32)`, never persisted, never sent to any client. Its one consumer is Codex's `mcp_servers/hive_mind_cli.py`, which uses it to write notes, tasks and calendar events and to publish a generated file without a browser session (`core/codex_brain.py` puts it in every Codex process's environment). A request carrying `X-JARVIS-Internal-Token` matching this value resolves to the reserved `"internal-tool"` user **only on those routes** (`_INTERNAL_TOOL_ROUTES` in `core/middleware.py`); anywhere else the header is ignored and the request is judged on its own credentials. `"internal-tool"` is an ordinary user, not an admin. It used to be a full admin accepted everywhere (Odysseus's loopback), which let any Codex chat, including a non-admin's or one steered by injected text, export the backup or wipe data once accounts were on; fixed 2026-09-22.
+
+With accounts off (`AUTH_ENABLED=false`, the desktop default) every local request is the single admin user, so a local process, an agent's shell included, reaches the admin API without any token. Closing that is a separate change.
 
 `"internal-tool"` and `"api"` are reserved usernames — `create_user()` refuses to register either, so a real account can never collide with this mechanism.
 

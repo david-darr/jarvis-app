@@ -5,6 +5,8 @@ access. When AUTH_ENABLED=false (the local-desktop default), every request
 resolves to the single local user with admin rights — no login screen, no
 friction, matching the "single trusted user on their own machine" case.
 """
+import re
+import secrets
 from typing import Optional
 
 from fastapi import Request, HTTPException
@@ -96,11 +98,37 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# What the internal tool token may do: exactly the writes Codex's
+# mcp_servers/hive_mind_cli.py makes, none of which needs admin. It used to be
+# accepted everywhere as a full admin, and every Codex process holds it, so
+# with accounts on any Codex chat - a non-admin's, or one steered by injected
+# text - could export the backup or wipe data (reproduced 2026-09-22).
+# Anywhere else the header is ignored and the request is judged on its own
+# credentials.
+_INTERNAL_TOOL_ROUTES = (
+    ("POST", re.compile(r"^/api/notes$")),
+    ("PATCH", re.compile(r"^/api/notes/[^/]+$")),
+    ("DELETE", re.compile(r"^/api/notes/[^/]+$")),
+    ("POST", re.compile(r"^/api/tasks$")),
+    ("PATCH", re.compile(r"^/api/tasks/[^/]+$")),
+    ("DELETE", re.compile(r"^/api/tasks/[^/]+$")),
+    ("POST", re.compile(r"^/api/calendar/events$")),
+    ("PATCH", re.compile(r"^/api/calendar/events/[^/]+$")),
+    ("DELETE", re.compile(r"^/api/calendar/events/[^/]+$")),
+    ("POST", re.compile(r"^/api/chat/artifacts$")),
+)
+
+
+def _internal_tool_may(request: Request) -> bool:
+    path = request.url.path
+    return any(request.method == method and pattern.match(path) for method, pattern in _INTERNAL_TOOL_ROUTES)
+
+
 def get_current_user(request: Request) -> Optional[str]:
     """Returns the authenticated username, or None if unauthenticated.
     Does not raise — routes that require auth should use require_user()/require_admin()."""
     internal_token = request.headers.get("X-JARVIS-Internal-Token")
-    if internal_token and internal_token == INTERNAL_TOOL_TOKEN:
+    if internal_token and secrets.compare_digest(internal_token, INTERNAL_TOOL_TOKEN) and _internal_tool_may(request):
         return "internal-tool"
 
     if not auth_enabled():

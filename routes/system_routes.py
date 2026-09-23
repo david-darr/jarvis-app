@@ -53,17 +53,8 @@ def _log_dir() -> str:
     return os.path.join(DATA_DIR, "logs")
 
 
-def _person_admin(user: str = Depends(require_admin)) -> str:
-    """An admin who is a person. The internal tool token counts as admin
-    elsewhere, but every Codex process holds it, whoever started the chat,
-    so it must not read logs that describe every user's activity."""
-    if user == "internal-tool":
-        raise HTTPException(status_code=403, detail="not available to the app's own tools")
-    return user
-
-
 @router.get("/logs/files")
-async def log_file_list(user: str = Depends(_person_admin)) -> list[dict]:
+async def log_file_list(user: str = Depends(require_admin)) -> list[dict]:
     """The logs Settings > Admin > Logs can show (core/logs.py)."""
     return log_files.list_files(_log_dir())
 
@@ -72,7 +63,7 @@ async def log_file_list(user: str = Depends(_person_admin)) -> list[dict]:
 async def read_log(name: str = Query("backend"), limit: int = Query(200, ge=1, le=2000),
                    cursor: int | None = Query(None, ge=0), level: str | None = None,
                    tag: str | None = None, since: str | None = None, component: str | None = None,
-                   text: str | None = Query(None, max_length=200), user: str = Depends(_person_admin)) -> dict:
+                   text: str | None = Query(None, max_length=200), user: str = Depends(require_admin)) -> dict:
     """A filtered tail of one log, or, with `cursor`, what was written after
     it - how the Logs view follows a file. Admin-only: logs describe every
     user's activity."""

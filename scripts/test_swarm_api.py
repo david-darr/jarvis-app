@@ -82,8 +82,10 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_authentication_and_internal_tool_not_human(self):
         self.assertEqual((await self.call("GET", "/systems", user=None)).status_code, 401)
+        # The internal token is ignored outside the note/task/event routes
+        # Codex's CLI writes to, so here it is no credential at all.
         response = await self.client.get("/api/swarm/systems", headers={"X-JARVIS-Internal-Token": middleware.INTERNAL_TOOL_TOKEN})
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 401)
         with patch("core.middleware.auth_enabled", return_value=False):
             self.assertEqual((await self.call("GET", "/systems", user=None)).status_code, 200)
 

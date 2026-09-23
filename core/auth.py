@@ -45,9 +45,11 @@ RESERVED_USERNAMES = {"internal-tool", "api"}
 
 SINGLE_USER = "local"
 
-# Generated once per process, never persisted. The app's own tool-call
-# machinery presents this via a header to satisfy require_admin() without a
-# browser session, mirroring Odysseus's internal-tool loopback exactly.
+# Generated once per process, never persisted. Codex's hive_mind_cli.py
+# presents this via a header to write notes, tasks and events without a
+# browser session (Odysseus's internal-tool loopback). It is an ordinary user,
+# not an admin, and core/middleware.py accepts it only on those routes: every
+# Codex process holds it, whoever is chatting.
 INTERNAL_TOOL_TOKEN = secrets.token_hex(32)
 
 
@@ -108,7 +110,7 @@ class AuthManager:
         return bcrypt.checkpw(password.encode("utf-8"), user["password_hash"].encode("utf-8"))
 
     def is_admin(self, username: str) -> bool:
-        if username in ("internal-tool", SINGLE_USER):
+        if username == SINGLE_USER:
             return True
         user = self._users["users"].get(username)
         return bool(user and user.get("is_admin"))
