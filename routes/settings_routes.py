@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from core import discord_bots_store, settings as settings_store
+from core import discord_bots_store, permissions, settings as settings_store
 from core.channels import discord_channel
 from core.middleware import require_admin
 from core.session_manager import session_manager
@@ -238,5 +238,10 @@ async def set_extra_allowed_tools(body: SetExtraAllowedToolsRequest, user: str =
     jarvis-app doesn't know about ahead of time (Canva's own surface,
     which isn't enumerated anywhere in this codebase)."""
     cleaned = [t.strip() for t in body.extra_allowed_tools if t.strip()]
+    previous = set(settings_store.get_setting("extra_allowed_tools") or [])
+    # Adding a tool here is an explicit grant, including one revoked earlier
+    # in Settings > Permissions; a tool already listed keeps whatever the
+    # permission store says, so a revocation is not undone by re-saving.
+    permissions.grant_standing([t for t in cleaned if t not in previous], granted_by=user)
     settings_store.update_settings(extra_allowed_tools=cleaned)
     return {"ok": True}

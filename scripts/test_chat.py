@@ -1813,6 +1813,70 @@ class ToolSettingsTests(unittest.TestCase):
         self.assertEqual(len(_FakeClaudeClient.instances), 1)
 
 
+class BuiltinRevocationTests(unittest.TestCase):
+    """Revoking a built-in grant in Settings > Permissions changed nothing:
+    core/brain.py passed its whole hardcoded list as allowed_tools, and the
+    SDK never consults can_use_tool for a tool on that list. A revoked tool
+    must drop off it, reaching the permission prompt instead."""
+
+    TOOL = "mcp__hive_mind__create_note"
+
+    def setUp(self):
+        from core import permissions, settings as settings_store
+        self.permissions = permissions
+        saved = copy.deepcopy(permissions._load())
+        self.addCleanup(lambda: permissions._save(saved))
+        self.addCleanup(lambda: settings_store.update_settings(extra_allowed_tools=[]))
+        _FakeClaudeClient.instances = []
+        _FakeClaudeClient.refuse_resume = False
+        _FakeClaudeClient.next_session_id = "cli-session-1"
+        chat_service._brains.clear()
+        self.sid = session_manager.create_session("revoke")["id"]
+        patches = [patch("core.brain.ClaudeSDKClient", _FakeClaudeClient),
+                   patch.object(chat_service, "_resolve_endpoint", return_value=ENDPOINTS["claude"])]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(chat_service._brains.clear)
+
+    def send(self, text):
+        return asyncio.run(chat_service.send_message(self.sid, text))
+
+    def revoke(self, tool):
+        rule = next(r for r in self.permissions.list_rules() if r["tool"] == tool and not r.get("content"))
+        self.assertTrue(self.permissions.revoke(rule["id"]))
+
+    def test_a_revoked_builtin_is_no_longer_pre_approved_in_an_open_chat(self):
+        self.send("hello")
+        self.assertIn(self.TOOL, _FakeClaudeClient.instances[-1].options.allowed_tools)
+        self.revoke(self.TOOL)
+        self.send("make a note")
+        allowed = _FakeClaudeClient.instances[-1].options.allowed_tools
+        self.assertEqual(len(_FakeClaudeClient.instances), 2, "the revocation reaches the open chat on its next turn")
+        self.assertNotIn(self.TOOL, allowed)
+        self.assertIn("mcp__hive_mind__list_notes", allowed, "only the revoked tool goes")
+
+    def test_adding_a_revoked_tool_back_to_the_extra_list_grants_it_again(self):
+        from routes import settings_routes
+        extra = "mcp__claude_ai_Canva__resize-design"
+        asyncio.run(settings_routes.set_extra_allowed_tools(
+            settings_routes.SetExtraAllowedToolsRequest(extra_allowed_tools=[extra]), user="admin"))
+        self.send("hello")
+        self.assertIn(extra, _FakeClaudeClient.instances[-1].options.allowed_tools)
+        self.revoke(extra)
+        asyncio.run(settings_routes.set_extra_allowed_tools(
+            settings_routes.SetExtraAllowedToolsRequest(extra_allowed_tools=[extra]), user="admin"))
+        self.send("still revoked?")
+        self.assertNotIn(extra, _FakeClaudeClient.instances[-1].options.allowed_tools,
+                         "re-saving an unchanged list must not undo a revocation")
+        asyncio.run(settings_routes.set_extra_allowed_tools(
+            settings_routes.SetExtraAllowedToolsRequest(extra_allowed_tools=[]), user="admin"))
+        asyncio.run(settings_routes.set_extra_allowed_tools(
+            settings_routes.SetExtraAllowedToolsRequest(extra_allowed_tools=[extra]), user="admin"))
+        self.send("added back")
+        self.assertIn(extra, _FakeClaudeClient.instances[-1].options.allowed_tools)
+
+
 if __name__ == '__main__':
     try:
         unittest.main()

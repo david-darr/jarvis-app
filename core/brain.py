@@ -214,6 +214,22 @@ class Brain:
         # the person decides; a non-admin's is refused outright below.
         if not self.is_admin:
             disabled = [*disabled, "Bash"]
+        # App-wide approval (David's ask 2026-09-18). The pre-approved list
+        # above is written into the permission store as visible, revocable
+        # rules. Anything outside it used to hang on a prompt nothing could
+        # answer; it now reaches the person instead. Bash is deliberately
+        # never seeded: being asked before a command runs is the whole point,
+        # and the admin gate above still decides whether it can be asked for
+        # at all.
+        permissions.ensure_seeded(allowed_tools)
+        # Only what still has a standing grant is pre-approved. Revoking a
+        # built-in in Settings > Permissions used to change nothing: this list
+        # was passed whole, and the SDK never consults can_use_tool for a tool
+        # on it (found 2026-09-22). A revoked tool is now asked about, and
+        # because this list feeds the fingerprint, an open chat picks the
+        # revocation up on its next message.
+        grants = permissions.standing_grants()
+        allowed_tools = [tool for tool in allowed_tools if tool in grants]
         return disabled, allowed_tools, mcp_servers
 
     @staticmethod
@@ -252,16 +268,6 @@ class Brain:
         # system_prompt.py's _GENERATED_FILES_ADDENDUM) — must exist before
         # the SDK will grant access to it.
         os.makedirs(image_gen.GENERATED_FILES_DIR, exist_ok=True)
-
-        # App-wide approval (David's ask 2026-09-18). The pre-approved list
-        # from _tool_config() keeps working exactly as before - it is now written into the
-        # permission store as visible, revocable rules rather than staying
-        # invisible in code. Anything outside it used to hang on a prompt
-        # nothing could answer; it now reaches the person instead. Bash is
-        # deliberately never seeded: being asked before a command runs is the
-        # whole point, and the admin gate above still decides whether it can
-        # be asked for at all.
-        permissions.ensure_seeded(allowed_tools)
 
         return ClaudeAgentOptions(
             can_use_tool=self._permission,

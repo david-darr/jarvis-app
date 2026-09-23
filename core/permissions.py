@@ -179,6 +179,36 @@ def ensure_seeded(tools: list[str]) -> None:
     _save(data)
 
 
+def standing_grants() -> set[str]:
+    """Tools a saved rule allows whole and for good - what core/brain.py may
+    still pre-approve. A seeded built-in grant that has been revoked is no
+    longer here, so the tool goes back to being asked about."""
+    return {rule["tool"] for rule in _load()["rules"]
+            if rule.get("behavior") == "allow" and not rule.get("content") and rule.get("scope") == "forever"}
+
+
+def grant_standing(tools: list[str], granted_by: str) -> None:
+    """Grant tools whole and for good, when someone explicitly adds them
+    (Settings > Agent Tools' extra allowed list). Seeding happens once per
+    tool, so without this a tool revoked earlier could never be re-allowed
+    by adding it back. Shell is never granted this way."""
+    data = _load()
+    held = {rule["tool"] for rule in data["rules"]
+            if rule.get("behavior") == "allow" and not rule.get("content") and rule.get("scope") == "forever"}
+    additions = [tool for tool in tools if tool not in held and tool not in ("Bash", "run_shell")]
+    if not additions:
+        return
+    now = time.time()
+    for tool in additions:
+        data["rules"].append({"id": uuid.uuid4().hex, "tool": tool, "content": None,
+                              "behavior": "allow", "scope": "forever", "granted_at": now,
+                              "granted_by": granted_by, "source": "settings"})
+        if tool not in data["seeded"]:
+            data["seeded"].append(tool)
+        _record(data, {"decision": "granted", "tool": tool, "by": granted_by})
+    _save(data)
+
+
 def _record(data: dict, entry: dict) -> None:
     data["audit"].append({"at": time.time(), **entry})
 
