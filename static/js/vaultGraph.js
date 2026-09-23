@@ -1,4 +1,5 @@
 import { api, el, toast } from "./api.js";
+import { renderMessageBody } from "./chatContent.js";
 
 // Brain tab's Vault view (David's ask 2026-09-01) — force-directed graph of
 // the vault's folders/notes, ported from the original JARVIS kiosk
@@ -347,8 +348,39 @@ export function createVaultGraph(container) {
     api(`/api/vault/note?path=${encodeURIComponent(node.id)}`)
       .then((data) => {
         if (selectedId !== node.id) return;
-        panelBody.textContent = data.content;
         panelRawContent = data.content;
+        const readingText = data.content.replace(/^---\s*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)\s*(?:\r?\n|$)/, "");
+        const readingView = el("div", { class: "vault-note-content artifact-document" });
+        renderMessageBody(readingView, readingText, null);
+        // Obsidian wikilinks are plain text to the Markdown parser. Give them
+        // readable labels and navigate within this vault when the target exists.
+        const walker = document.createTreeWalker(readingView, NodeFilter.SHOW_TEXT);
+        const textNodes = [];
+        while (walker.nextNode()) {
+          const textNode = walker.currentNode;
+          if (!textNode.parentElement?.closest("pre, code") && /\[\[.+?\]\]/.test(textNode.textContent)) textNodes.push(textNode);
+        }
+        for (const textNode of textNodes) {
+          const fragment = document.createDocumentFragment();
+          const source = textNode.textContent;
+          const pattern = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+          let last = 0, match;
+          while ((match = pattern.exec(source))) {
+            fragment.append(document.createTextNode(source.slice(last, match.index)));
+            const target = match[1].split("#")[0].replace(/\.md$/i, "");
+            const label = match[2] || target.split("/").pop();
+            const linked = graph.nodes.find((candidate) => candidate.type === "note" &&
+              (candidate.id.replace(/\.md$/i, "").toLowerCase() === target.toLowerCase() ||
+                candidate.name.toLowerCase() === target.toLowerCase()));
+            fragment.append(linked
+              ? el("button", { type: "button", class: "vault-note-link", text: label, onclick: () => selectNode(linked) })
+              : document.createTextNode(label));
+            last = pattern.lastIndex;
+          }
+          fragment.append(document.createTextNode(source.slice(last)));
+          textNode.replaceWith(fragment);
+        }
+        panelBody.replaceChildren(readingView);
         editBtn.style.display = "";
       })
       .catch(() => {

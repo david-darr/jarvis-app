@@ -116,7 +116,7 @@ function fixture(url) {
         lint: [] } },
   ]);
   if (route === "/api/vault/graph") return graph();
-  if (route === "/api/vault/note") return { content: "# Projects index\n\nA connected place for ideas and ongoing work." };
+  if (route === "/api/vault/note") return { content: "---\nstatus: active\n---\n# Projects index\n\nA **connected place** for ideas and ongoing work. See [[Projects/note-1|the next note]]." };
   if (route === "/api/email/triage") return { generated_at: now, scanned: 12, items: empty ? [] : [{ subject: "Project check-in this afternoon", from: "team@example.test", reason: "An upcoming meeting needs your review." }] };
   if (route === "/api/email/accounts") return [];
   if (route === "/api/channels") return [];
@@ -262,8 +262,18 @@ app.whenReady().then(async () => {
       assert.equal(await js("document.querySelectorAll('.vault-search-result').length"), 1);
       await js("document.querySelector('.vault-search-result').click()");
       await waitFor("document.querySelector('.vault-panel-body').textContent.includes('connected place')");
+      assert.equal(await js("document.querySelector('.vault-note-content h1')?.textContent"), "Projects index", "Vault Markdown has a rendered heading");
+      assert.equal(await js("document.querySelector('.vault-note-content strong')?.textContent"), "connected place", "Vault Markdown has rendered emphasis");
+      assert.ok(await js("!document.querySelector('.vault-note-content').textContent.includes('status: active')"), "Vault reading view hides frontmatter");
+      assert.equal(await js("document.querySelector('.vault-note-link')?.textContent"), "the next note", "Wikilink has a readable label");
+      await js("document.querySelector('.vault-panel-actions button').click()");
+      assert.ok(await js("document.querySelector('#vault-note-editor').value.includes('status: active')"), "Edit preserves original frontmatter");
+      await js("document.querySelector('.vault-panel-actions button:nth-child(3)').click()");
+      await waitFor("!!document.querySelector('.vault-note-content h1')");
       await capture(label + "-vault-note");
       assert.deepEqual(await overflow(), [], label + " vault note overflow");
+      await js("document.querySelector('.vault-note-link').click()");
+      assert.equal(await js("document.querySelector('.vault-panel-header span').textContent"), "Projects note 1", "Wikilink opens its vault note");
       await navigate("home");
       await js("document.querySelector('.sidebar-settings-btn').click()");
       await waitFor("!!document.querySelector('#settings-content .card')");

@@ -875,6 +875,17 @@ input[type="checkbox"]:checked::after {
   font-size: 12px; line-height: 1.6; color: var(--text-dim);
   white-space: pre-wrap; word-break: break-word;
 }
+.vault-note-content {
+  white-space: normal; word-break: normal;
+  max-width: 68ch; margin: 0 auto; padding: 8px 10px 24px;
+  font-size: 13px; line-height: 1.75;
+}
+.vault-note-link {
+  border: 0; padding: 0; background: none; color: var(--accent);
+  font: inherit; text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
+}
+.vault-note-link:hover { color: var(--text); }
+.vault-note-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .vault-child-row { cursor: pointer; padding: 4px 0; }
 .vault-child-row:hover { color: var(--text); }
 #vault-note-editor {
