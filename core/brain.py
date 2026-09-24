@@ -174,6 +174,9 @@ class Brain:
             "mcp__hive_mind__update_event",
             "mcp__hive_mind__delete_event",
             "mcp__hive_mind__save_generated_image",
+            # Sandboxed runs (core/sandbox.py): nothing on this computer for a
+            # prompt to protect, so pre-approved like the read tools.
+            "mcp__hive_mind__run_code",
             "mcp__hive_mind__save_generated_file",
             # Canva image/design generation (David's ask 2026-09-10, "have
             # their claude code use Canva"). Pre-approves only the
@@ -248,7 +251,7 @@ class Brain:
         # Claude already has native file-tool access to the vault (its own
         # cwd below) — the only real gap is cross-session search, added
         # in-process (no subprocess/network hop) here.
-        mcp_servers = {**mcp_servers, "hive_mind": hive_mind_server.get_hive_mind_server(self.session_id)}
+        mcp_servers = {**mcp_servers, "hive_mind": hive_mind_server.get_hive_mind_server(self.session_id, self.is_admin)}
 
         # A generated file needs somewhere to be built that isn't the vault
         # (David's ask 2026-09-12, after a live test found Claude writing a

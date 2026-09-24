@@ -448,3 +448,59 @@ async def _write_repo_file(args, ctx):
 async def _run_shell(args, ctx):
     result = await memory_tools.run_shell(args.get("command", ""), cwd=args.get("cwd"))
     return f"exit_code={result['exit_code']}\nstdout:\n{result['stdout']}\nstderr:\n{result['stderr']}"
+
+
+# Sandboxed code runs (Hermes track, phase 7 step 2, 2026-09-23). Every model
+# gets it, with no permission prompt (David's call): a run happens in
+# core/sandbox.py's container, with no network, no host files beyond a copy,
+# no secrets, and nothing written back to a real folder - so there is nothing
+# on this computer for a prompt to protect. Codex is not offered it; it
+# already runs commands in its own sandbox.
+@register(
+    "run_code",
+    "Run a shell command in an isolated Linux sandbox (Debian, Python 3.12, no internet). "
+    "Its working directory /work starts with the files you pass (path -> text) and, in an admin chat "
+    "with copy_repo=true, a copy of the JARVIS code. Returns the output and a diff of what the command "
+    "changed; nothing is written back to any real folder. Use it to run code, tests or scripts safely.",
+    _object({
+        "command": _str("A shell command run with sh in /work, not Python source. To run Python, put the "
+                        "code in files (e.g. {\"main.py\": \"...\"}) and use the command \"python main.py\""),
+        "files": {"type": "object", "additionalProperties": {"type": "string"},
+                  "description": "Optional files to create first: relative path -> text content"},
+        "copy_repo": {"type": "boolean", "description": "Admin chats only: start with a copy of the JARVIS code"},
+        "timeout_seconds": {"type": "integer", "description": "Optional, default 120, at most 900"},
+    }, ("command",)),
+)
+async def _run_code(args, ctx):
+    import json
+    from core import sandbox
+    from core.constants import BASE_DIR
+    command = (args.get("command") or "").strip()
+    if not command:
+        return "Not run: no command given."
+    files = args.get("files") or {}
+    if isinstance(files, str):  # some local models send objects as JSON text
+        try:
+            files = json.loads(files)
+        except ValueError:
+            return "Not run: files must be an object of path -> text."
+    if not isinstance(files, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in files.items()):
+        return "Not run: files must be an object of path -> text."
+    copy_repo = args.get("copy_repo") in (True, "true", "True")
+    if copy_repo and not ctx.is_admin:
+        return "Not run: only an admin chat can copy the JARVIS code into the sandbox."
+    try:
+        timeout = int(args.get("timeout_seconds") or sandbox.DEFAULT_TIMEOUT_SECONDS)
+    except (TypeError, ValueError):
+        timeout = sandbox.DEFAULT_TIMEOUT_SECONDS
+    try:
+        result = await sandbox.run(command, files=files, source_dir=BASE_DIR if copy_repo else None, timeout=timeout)
+    except sandbox.SandboxUnavailable as e:
+        return f"Not run: the sandbox is unavailable ({e}). Nothing was run on this computer."
+    except ValueError as e:
+        return f"Not run: {e}"
+    changes = "\n".join(f"  {c['status']}: {c['path']}" for c in result.changes) or "  none"
+    return (f"exit_code={result.exit_code}{' (timed out)' if result.timed_out else ''}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}\n"
+            f"files changed in /work (not written anywhere real):\n{changes}\n"
+            + (f"diff:\n{result.diff}" if result.diff else ""))

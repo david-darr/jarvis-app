@@ -22,8 +22,9 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
+os.environ["JARVIS_DATA_DIR"] = tempfile.mkdtemp(prefix="jarvis-sbx-test-data-")  # never the real data
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from core import sandbox  # noqa: E402
+from core import sandbox, tool_registry  # noqa: E402
 
 DOCKER_UP = asyncio.run(sandbox.available())[0]
 
@@ -190,6 +191,54 @@ class RefusalTests(unittest.TestCase):
         self.assertEqual(pairs["--memory"], pairs["--memory-swap"])
         self.assertIn("--read-only", args)
         self.assertIn("@sha256:", sandbox.IMAGE, "the image is pinned by digest")
+
+
+def call(args, is_admin=False):
+    return asyncio.run(tool_registry.call("run_code", args, tool_registry.ToolContext("sbx-chat", is_admin),
+                                          tool_registry.OPENAI))
+
+
+class RunCodeToolTests(unittest.TestCase):
+    """Step 2: the run_code tool every model gets (not Codex, which has its own sandbox)."""
+
+    def test_every_model_is_offered_it_and_claude_runs_it_without_a_prompt(self):
+        from core.brain import Brain
+        from core.external_brain import ExternalBrain
+        self.assertIn("run_code", [t["function"]["name"] for t in ExternalBrain("http://x", "m", None).tools],
+                      "a non-admin local model has it")
+        self.assertIn("run_code", [s.name for s in tool_registry.specs(tool_registry.CLAUDE)])
+        _, allowed, _ = Brain(vault_dir=tempfile.gettempdir())._tool_config()
+        self.assertIn("mcp__hive_mind__run_code", allowed, "pre-approved, as a visible revocable grant")
+
+    @unittest.skipUnless(DOCKER_UP, "Docker is not running")
+    def test_a_run_reports_output_and_changes_and_writes_nothing_real(self):
+        text = call({"command": "python hi.py > out.txt; cat out.txt", "files": '{"hi.py": "print(6 * 7)"}'})
+        self.assertIn("exit_code=0", text)
+        self.assertIn("42", text)
+        self.assertIn("added: out.txt", text)
+        self.assertIn("+42", text)
+
+    @unittest.skipUnless(DOCKER_UP, "Docker is not running")
+    def test_only_an_admin_gets_the_jarvis_code_and_never_its_data_or_env(self):
+        self.assertIn("only an admin chat", call({"command": "ls", "copy_repo": True}))
+        text = call({"command": "test -f core/sandbox.py && echo HAVE-CODE; ls -a; test -e data || echo NO-DATA; "
+                                "test -e .env || echo NO-ENV", "copy_repo": True, "timeout_seconds": 300}, is_admin=True)
+        self.assertIn("HAVE-CODE", text)
+        self.assertIn("NO-DATA", text)
+        self.assertIn("NO-ENV", text)
+
+    def test_without_docker_it_says_so_and_runs_nothing(self):
+        async def down(*args, **kw):
+            return 1, "", "error during connect"
+        with patch("core.sandbox._docker", side_effect=down):
+            text = call({"command": "echo hi"})
+        self.assertIn("Not run: the sandbox is unavailable", text)
+        self.assertIn("Nothing was run on this computer", text)
+
+    def test_bad_input_is_refused_before_anything_runs(self):
+        self.assertIn("no command", call({"command": " "}))
+        self.assertIn("path -> text", call({"command": "ls", "files": "not json"}))
+        self.assertIn("path -> text", call({"command": "ls", "files": {"a": 1}}))
 
 
 def _host_http_server():

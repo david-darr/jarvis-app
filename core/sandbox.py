@@ -115,22 +115,53 @@ def _safe_relative(path: str) -> PurePosixPath:
     return rel
 
 
-def _copy_in(source_dir: str, workspace: Path) -> None:
-    total = 0
-    root = Path(source_dir)
+def _git_listing(root: Path) -> Optional[list[str]]:
+    """For a git folder, the files git knows about: tracked plus new ones it
+    does not ignore. That leaves out build output, data and ignored secrets
+    by the repo's own rules (the JARVIS repo is 17 MB this way, over 400 MB
+    walked). None when the folder is not a repo."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                             capture_output=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    return [p for p in out.stdout.decode("utf-8", "replace").split("\0") if p]
+
+
+def _walk_listing(root: Path) -> list[str]:
+    paths = []
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         here = Path(dirpath)
         dirnames[:] = [d for d in dirnames if d not in SKIPPED_DIRS and not (here / d).is_symlink()]
-        for name in filenames:
-            src = here / name
-            if src.is_symlink() or not src.is_file():
-                continue  # a link could point anywhere on the host
-            total += src.stat().st_size
-            if total > MAX_INPUT_BYTES:
-                raise ValueError("the input folder is larger than the sandbox accepts (200 MB)")
-            dest = workspace / src.relative_to(root)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, dest)
+        paths.extend((here / name).relative_to(root).as_posix() for name in filenames)
+    return paths
+
+
+def _copy_in(source_dir: str, workspace: Path) -> None:
+    total = 0
+    root = Path(source_dir).resolve()
+    listing = _git_listing(root)
+    for rel in (listing if listing is not None else _walk_listing(root)):
+        parts = PurePosixPath(rel).parts
+        if any(part in SKIPPED_DIRS for part in parts[:-1]):
+            continue
+        src = root / rel
+        # A link could point anywhere on the host, and so could a folder
+        # link on the way to a file: the resolved path must stay inside.
+        if src.is_symlink() or not src.is_file() or root not in src.resolve().parents:
+            continue
+        name = parts[-1]
+        if name == ".env" or name.startswith(".env."):
+            continue  # local secrets stay out even of a sealed copy
+        total += src.stat().st_size
+        if total > MAX_INPUT_BYTES:
+            raise ValueError("the input folder is larger than the sandbox accepts (200 MB)")
+        dest = workspace / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dest)
 
 
 def _snapshot(workspace: Path) -> dict[str, str]:
