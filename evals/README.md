@@ -21,14 +21,19 @@ python evals/compaction/run.py --transcript my-chat-copy.json --questions 12 --b
 and cached in `--out/questions.json` so reruns compare like with like. Results are `scorecard.json`,
 `answers.json` and the summary itself. Real transcripts and results are git-ignored.
 
-The answerer is closed-book: JARVIS's `search_sessions` excludes the current chat, so the archived messages are
-unreachable to the model after compaction (Hermes's summary carries a search pointer instead, worth 30+ points
-on needle questions there). The region check that needs no model runs with the normal tests
-(`CompactionRegionTests` in `scripts/test_chat.py`).
+Three arms: `compacted` answers from the summary alone; `compacted+search` answers from the summary and, only
+when that answer is "unknown", picks keywords and searches the chat's compacted messages once
+(`search_sessions` with `this_chat`, the way back in the summary now points the model to, as Hermes's does);
+`uncompacted` is the ceiling. `--facts N` plants more facts than a summary can keep. An answer containing the
+gold answer verbatim is scored correct without asking the judge, which once marked "Dmitri" wrong against gold
+"Dmitri". The region check that needs no model runs with the normal tests (`CompactionRegionTests`).
 
-First run, 2026-09-23, qwen2.5-coder:32b, 40 synthetic turns, 8 facts: compacted 87.5% recall in 777 context
-tokens, uncompacted 100% in 1,139. The one fact lost was a personal aside (a sister's name); every project
-decision survived.
+Runs on qwen2.5-coder:32b, 2026-09-23. 40 turns, 8 facts: compacted 87.5% (777 context tokens) vs 100%
+uncompacted (1,139); the lost fact was a personal aside. Later runs with 8 and with 40 facts in 120 turns: the
+summary kept 39-40 of 40, so the search arm rarely had to search. The one miss exposed that the archive search
+required every keyword ("job queue chosen" found nothing against "the job queue"); it now falls back to any
+keyword, ranked. A recovery through search is not yet shown live: qwen's summaries keep nearly every planted
+fact, so a harder transcript (a real long chat) is the next test.
 
 ## `codebase_navigability/static_metrics.py` - what the code costs an agent to navigate
 

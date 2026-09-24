@@ -71,6 +71,27 @@ def search_sessions(query: str, exclude_session_id: Optional[str] = None, max_re
                                  max_results=max_results)
 
 
+def search_this_chat_archive(session_id: Optional[str], query: str, max_results: int = 5) -> list[dict]:
+    """The earlier part of this chat that a compaction summarised: its exact
+    messages, for when the summary lacks a detail. Only that folded part is
+    searched - everything after it is already in the model's context. Empty
+    for a chat that was never compacted. (Hermes's compaction leaves the
+    model the same way back in; its eval puts it at 30+ points on questions
+    about specific facts.)"""
+    if not session_id:
+        return []
+    header = store.get_session_header(session_id)
+    compactions = (header[0].get("compactions") if header else None) or []
+    if not compactions:
+        return []
+    return store.search_archive(session_id, query, compactions[-1]["through_index"], max_results=max_results)
+
+
+def format_archive_hits(hits: list[dict]) -> str:
+    return "\n\n".join(f"[earlier in this chat, message {h['index'] + 1}] ({h['role']}): {h['snippet']}" for h in hits) \
+        or "Nothing in this chat's compacted part matches. It was either never said, or said in other words."
+
+
 def search_vault(query: str, vault_dir: Optional[str] = None, max_results: int = 5) -> list[dict]:
     """Keyword search across vault notes — the "shared memory" half, for
     models that don't otherwise have any vault file access (external

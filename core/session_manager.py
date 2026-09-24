@@ -311,6 +311,11 @@ class SessionManager:
                 "content": (
                     "[Earlier parts of this conversation were compacted to save context space. "
                     "Summary of what happened before this point:]\n\n" + latest["summary"]
+                    # The way back in (Hermes's recovery pointer): the exact
+                    # messages stay searchable, on demand, rather than resent.
+                    + "\n\n[The exact earlier messages are still stored. Only if you need a specific detail "
+                    "this summary does not give, search them with search_sessions and this_chat set "
+                    "(--this_chat for the command-line tool).]"
                 ),
             }
             result = [summary_note] + messages[latest["through_index"]:]

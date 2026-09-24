@@ -507,7 +507,7 @@ def set_channel_session(channel_key: str, session_id: str) -> None:
 
 # ------------------------------------------------------------------ search
 
-def _fts_query(query: str) -> str:
+def _fts_query(query: str, joiner: str = " AND ") -> str:
     """Turn a user phrase into an FTS5 MATCH expression.
 
     Every bare word becomes a quoted term ANDed with the rest, so "swarm
@@ -518,7 +518,43 @@ def _fts_query(query: str) -> str:
     sqlite3.OperationalError on an ordinary question mid-turn.
     """
     terms = [t for t in "".join(c if c.isalnum() or c in "_'" else " " for c in query).split() if t]
-    return " AND ".join('"' + t.replace('"', '""') + '"' for t in terms)
+    return joiner.join('"' + t.replace('"', '""') + '"' for t in terms)
+
+
+def search_archive(session_id: str, query: str, before_index: int, max_results: int = 5) -> list[dict]:
+    """Ranked search within one chat's messages before `before_index` - the
+    part a compaction folded into its summary. Several hits from the one chat
+    are the point here, unlike search_messages' one per chat.
+
+    Every word must match first; if nothing does, any word may, ranked by how
+    many and how rare. A model's keywords often include one the message never
+    used ("job queue chosen" against "we are using NATS for the job queue"),
+    and over a single chat's archive the looser search is still small."""
+    if before_index <= 0:
+        return []
+    rows = []
+    for joiner in (" AND ", " OR "):
+        match = _fts_query(query, joiner)
+        if not match:
+            return []
+        with _LOCK:
+            conn = _connect()
+            try:
+                rows = conn.execute(
+                    """SELECT f.idx, f.role, snippet(messages_fts, 0, '', '', '...', 32) AS snippet,
+                              bm25(messages_fts) AS rank
+                       FROM messages_fts f
+                       WHERE messages_fts MATCH ? AND f.session_id = ? AND f.idx < ?
+                       ORDER BY rank
+                       LIMIT ?""",
+                    (match, session_id, before_index, max_results),
+                ).fetchall()
+            except sqlite3.OperationalError as e:
+                logger.error("search_archive: FTS query failed for %r (%s)", query, e)
+                return []
+        if rows:
+            break
+    return [{"index": r["idx"], "role": r["role"], "snippet": r["snippet"]} for r in rows]
 
 
 def search_messages(query: str, exclude_session_id: Optional[str] = None,

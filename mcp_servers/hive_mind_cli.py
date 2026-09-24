@@ -130,6 +130,7 @@ def main() -> None:
     sub.add_parser("list_skills")
 
     p = sub.add_parser("search_sessions"); p.add_argument("--query", required=True)
+    p.add_argument("--this_chat", action="store_true", help="search this chat's compacted earlier messages instead")
     p = sub.add_parser("read_skill"); p.add_argument("--slug", required=True)
     p = sub.add_parser("read_spec"); p.add_argument("--filename", required=True)
     p = sub.add_parser("read_document"); p.add_argument("--doc_id", required=True)
@@ -203,6 +204,9 @@ def main() -> None:
             print(_fmt_task_runs(memory_tools.list_task_runs()))
         elif args.command == "list_skills":
             print(_fmt_skills(memory_tools.list_skills()))
+        elif args.command == "search_sessions" and args.this_chat:
+            this_chat = os.environ.get("JARVIS_CODEX_SESSION_ID") or None
+            print(memory_tools.format_archive_hits(memory_tools.search_this_chat_archive(this_chat, args.query)))
         elif args.command == "search_sessions":
             exclude = os.environ.get("JARVIS_CODEX_SESSION_ID") or None
             results = memory_tools.search_sessions(args.query, exclude_session_id=exclude)

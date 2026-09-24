@@ -1838,6 +1838,97 @@ class TaskModelTests(unittest.TestCase):
                 task_scheduler._task_brain({"endpoint_id": "deleted-endpoint"})
 
 
+class ToolRegistryTests(unittest.TestCase):
+    """The hive-mind tools are declared once (core/tool_registry.py) and both
+    brains are built from them, so a shared tool answers the same whichever
+    model asks, and each surface gets exactly its own tools."""
+
+    def claude_tools(self, session_id="s1"):
+        import core.hive_mind_server as hms
+        captured = {}
+        with patch.object(hms, "create_sdk_mcp_server", side_effect=lambda name, tools: captured.setdefault("tools", tools)):
+            hms.get_hive_mind_server(session_id)
+        return {t.name: t for t in captured["tools"]}
+
+    def test_a_shared_tool_answers_the_same_for_claude_and_other_models(self):
+        from core.external_brain import ExternalBrain
+        from core import memory_tools
+        note = memory_tools.create_note("registry parity check")
+        self.addCleanup(memory_tools.delete_note, note["id"])
+        claude = self.claude_tools()
+        other = ExternalBrain("http://fake", "m", None, session_id="s1")
+        for name, args in [("list_notes", {}), ("list_tasks", {}), ("read_skill", {"slug": "../nope"})]:
+            with self.subTest(tool=name):
+                via_claude = asyncio.run(claude[name].handler(dict(args)))["content"][0]["text"]
+                self.assertEqual(via_claude, asyncio.run(other._execute_tool(name, dict(args))))
+        self.assertIn("registry parity check", asyncio.run(other._execute_tool("list_notes", {})))
+
+    def test_each_surface_gets_its_own_tools_and_the_shell_only_for_an_admin(self):
+        from core import tool_registry as reg
+        from core.external_brain import ExternalBrain
+        claude = set(self.claude_tools())
+        plain = {t["function"]["name"] for t in ExternalBrain("http://x", "m", None).tools}
+        admin = {t["function"]["name"] for t in ExternalBrain("http://x", "m", None, is_admin=True).tools}
+        self.assertTrue({"search_vault", "read_repo_file", "run_shell"}.isdisjoint(claude), "Claude has its own file tools")
+        self.assertTrue({"save_generated_image", "save_generated_file"}.isdisjoint(plain))
+        self.assertEqual(admin - plain, {"run_shell"})
+        self.assertIn("Unknown tool", asyncio.run(reg.call("run_shell", {"command": "echo hi"}, reg.ToolContext(), reg.OPENAI)))
+        self.assertIn("Unknown tool", asyncio.run(reg.call("save_generated_file", {}, reg.ToolContext(), reg.OPENAI)))
+        self.assertIn("Unknown tool", asyncio.run(reg.call("no_such_tool", {}, reg.ToolContext(), reg.CLAUDE)))
+
+    def test_a_failing_tool_answers_with_its_error_instead_of_ending_the_turn(self):
+        from core import tool_registry as reg
+        text = asyncio.run(reg.call("update_task", {"task_id": "missing-task", "name": "x"}, reg.ToolContext(), reg.CLAUDE))
+        self.assertTrue(text.startswith("Tool error:"), text)
+
+
+class CompactedArchiveSearchTests(unittest.TestCase):
+    """After "Compact this chat" the model could no longer reach the exact
+    earlier messages: its search excludes the current chat. It can now, on
+    demand, through search_sessions with this_chat - only the part the
+    summary replaced, and only this chat's. The summary says so."""
+
+    def setUp(self):
+        self.sid = session_manager.create_session("archive")["id"]
+        for i in range(20):
+            text = "the project codename is zephyr-lantern" if i == 2 else f"filler message {i}"
+            if i == 17:
+                text = "zephyr-lantern mentioned again in the kept tail"
+            session_manager.append_message(self.sid, "user" if i % 2 == 0 else "assistant", text)
+        other = session_manager.create_session("other chat")["id"]
+        session_manager.append_message(other, "user", "a different zephyr-lantern in another chat")
+
+    def test_only_the_compacted_part_of_this_chat_is_searched(self):
+        from core import memory_tools
+        self.assertEqual(memory_tools.search_this_chat_archive(self.sid, "zephyr lantern"), [],
+                         "a chat never compacted has nothing archived")
+        session_manager.compact_session(self.sid, 14, "The user is planning a project.")
+        hits = memory_tools.search_this_chat_archive(self.sid, "zephyr lantern")
+        self.assertEqual([h["index"] for h in hits], [2], "not the kept tail, not another chat")
+        self.assertIn("message 3", memory_tools.format_archive_hits(hits))
+        loose = memory_tools.search_this_chat_archive(self.sid, "codename chosen")
+        self.assertEqual([h["index"] for h in loose], [2],
+                         "a keyword the message never used falls back to any-word matching (live eval miss)")
+
+    def test_the_summary_tells_the_model_the_way_back_in(self):
+        session_manager.compact_session(self.sid, 14, "The user is planning a project.")
+        note = session_manager.effective_messages(self.sid)[0]["content"]
+        self.assertIn("this_chat", note)
+        self.assertIn("Only if you need a specific detail", note)
+
+    def test_every_model_path_can_search_it(self):
+        session_manager.compact_session(self.sid, 14, "The user is planning a project.")
+        from core.external_brain import ExternalBrain
+        brain = ExternalBrain("http://fake", "m", None, session_id=self.sid)
+        text = asyncio.run(brain._execute_tool("search_sessions", {"query": "zephyr lantern", "this_chat": True}))
+        self.assertIn("project codename is zephyr-lantern", text)
+        cli = Path(__file__).resolve().parents[1] / "mcp_servers" / "hive_mind_cli.py"
+        env = {**os.environ, "JARVIS_DATA_DIR": fixture.name, "JARVIS_CODEX_SESSION_ID": self.sid}
+        out = subprocess.run([sys.executable, str(cli), "search_sessions", "--query", "zephyr lantern", "--this_chat"],
+                             capture_output=True, text=True, env=env, timeout=60)
+        self.assertIn("project codename is zephyr-lantern", out.stdout, out.stderr)
+
+
 class CompactionRegionTests(unittest.TestCase):
     """The compaction summariser must see exactly the region being folded:
     never the kept tail (it stays verbatim), and on a second compaction the

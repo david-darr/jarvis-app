@@ -101,7 +101,7 @@ def for_external(is_admin: bool = False) -> str:
 # literal command to run rather than exposing a native tool-calling API,
 # since that's the only mechanism actually available to it.
 _CODEX_HIVE_MIND_COMMANDS = """  list_notes | list_tasks | list_upcoming_events | list_specs | list_documents | list_contacts | list_task_runs | list_skills
-  search_sessions --query TEXT
+  search_sessions --query TEXT [--this_chat]   (--this_chat: search the compacted earlier part of this chat, only when its summary lacks a detail you need)
   read_skill --slug SLUG
   read_spec --filename NAME
   read_document --doc_id ID

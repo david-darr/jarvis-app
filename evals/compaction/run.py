@@ -47,6 +47,11 @@ ANSWER_PROMPT = (
     "Using only the conversation context below, answer the question in a few words. If the context does not "
     "contain the answer, reply exactly: unknown\n\n[Context]\n{context}\n\n[Question]\n{question}"
 )
+TERMS_PROMPT = (
+    "You need to look something up in the earlier, compacted part of a conversation with a keyword search. "
+    "Give 1 to 3 distinctive keywords likely to appear in the message that answers the question below. "
+    "Reply with the keywords only, separated by spaces.\n\nQuestion: {question}"
+)
 JUDGE_PROMPT = (
     "Grade an answer against the gold answer. Reply with a single digit: 2 if it matches the gold answer's "
     "meaning, 1 if partly right, 0 if wrong or unknown.\n\nQuestion: {question}\nGold answer: {gold}\n"
@@ -73,14 +78,18 @@ FILLER = [
 ]
 
 
-def synthetic(turns: int, seed: int = 7) -> tuple[list[dict], list[dict]]:
+def synthetic(turns: int, seed: int = 7, facts_wanted: int = 0) -> tuple[list[dict], list[dict]]:
     """A chat of `turns` exchanges with facts planted early, and their gold
     questions. Facts land only in the first two thirds, the region a
-    compaction folds away."""
+    compaction folds away. facts_wanted above the 8 varied templates adds
+    look-alike reference codes, too many for a summary to keep - the case a
+    search of the archive exists for."""
     rng = random.Random(seed)
     facts, messages = [], []
-    fact_turns = set(rng.sample(range(max(1, turns * 2 // 3)), min(len(FACT_TEMPLATES), max(1, turns * 2 // 3))))
-    templates = iter(rng.sample(FACT_TEMPLATES, len(FACT_TEMPLATES)))
+    pool = list(FACT_TEMPLATES) + [(f"The door code for room {k} is {{n}}.", f"What is the door code for room {k}?", "{n}")
+                                   for k in range(101, 101 + max(0, facts_wanted - len(FACT_TEMPLATES)))]
+    fact_turns = set(rng.sample(range(max(1, turns * 2 // 3)), min(len(pool), max(1, turns * 2 // 3))))
+    templates = iter(rng.sample(pool, len(pool)))
     for i in range(turns):
         if i in fact_turns:
             statement, question, answer = next(templates)
@@ -106,6 +115,7 @@ async def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="JARVIS compaction recall eval")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--synthetic", type=int, metavar="TURNS")
+    parser.add_argument("--facts", type=int, default=0, help="synthetic: plant this many facts (default: the 8 varied ones)")
     source.add_argument("--transcript")
     parser.add_argument("--questions", type=int, default=10, help="questions to generate (real transcripts)")
     parser.add_argument("--base-url", required=True)
@@ -130,7 +140,7 @@ async def main(argv=None) -> int:
     try:
         os.makedirs(args.out, exist_ok=True)
         if args.synthetic:
-            messages, questions = synthetic(args.synthetic)
+            messages, questions = synthetic(args.synthetic, facts_wanted=args.facts)
         else:
             with open(args.transcript, encoding="utf-8") as f:
                 messages = [m for m in json.load(f)["messages"] if m.get("role") in ("user", "assistant")]
@@ -162,21 +172,38 @@ async def main(argv=None) -> int:
             json.dump(questions, f, indent=2)
 
         after = session_manager.effective_messages(sid)
-        arms = {"compacted": transcript_text(after), "uncompacted": transcript_text(messages)}
+        arms = {"compacted": transcript_text(after), "compacted+search": transcript_text(after),
+                "uncompacted": transcript_text(messages)}
         scorecard = {"model": args.model, "messages": len(messages), "folded_messages": len(folded),
                      "questions": len(questions), "compaction_seconds": compaction_seconds,
                      "summary_tokens": approx_tokens(result["summary"]), "arms": {}}
         details = []
+        from core import memory_tools
         for arm, context in arms.items():
-            points = 0
+            points, searches = 0, 0
             for q in questions:
                 answer = await ask(ANSWER_PROMPT.format(context=context, question=q["q"]))
-                verdict = await ask(JUDGE_PROMPT.format(question=q["q"], gold=q["a"], answer=answer))
-                digit = next((c for c in verdict if c in "012"), "0")
+                if arm == "compacted+search" and "unknown" in answer.lower():
+                    # The model's way back in, used only when the summary
+                    # lacks the answer: one search of this chat's archive.
+                    searches += 1
+                    terms = await ask(TERMS_PROMPT.format(question=q["q"]))
+                    hits = memory_tools.search_this_chat_archive(sid, terms)
+                    found = memory_tools.format_archive_hits(hits)
+                    answer = await ask(ANSWER_PROMPT.format(context=f"{context}\n\n[Search results:]\n{found}", question=q["q"]))
+                if q["a"].lower() in answer.lower():
+                    # The gold answer verbatim is correct; the judge model
+                    # once scored "Dmitri" against gold "Dmitri" as wrong.
+                    digit = "2"
+                else:
+                    verdict = await ask(JUDGE_PROMPT.format(question=q["q"], gold=q["a"], answer=answer))
+                    digit = next((c for c in verdict if c in "012"), "0")
                 points += int(digit)
                 details.append({"arm": arm, "q": q["q"], "gold": q["a"], "answer": answer, "score": int(digit)})
             scorecard["arms"][arm] = {"recall_pct": round(100 * points / (2 * len(questions)), 1) if questions else None,
                                       "context_tokens": approx_tokens(context)}
+            if arm == "compacted+search":
+                scorecard["arms"][arm]["searches"] = searches
 
         with open(os.path.join(args.out, "scorecard.json"), "w", encoding="utf-8") as f:
             json.dump(scorecard, f, indent=2)
