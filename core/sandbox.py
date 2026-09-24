@@ -10,9 +10,11 @@ What a run gets:
 - A copy of its input in /work, the only writable place besides a small
   /tmp. The root filesystem is read-only; no other host path is mounted.
   Symlinks in a copied folder are skipped, so none can point back out.
-- No network at all (`--network none`). Opting a run into network access
-  needs an egress filter first: on Docker Desktop a networked container can
-  reach services on the host's loopback, JARVIS's own API among them.
+- No network (`--network none`) unless the caller opts in with
+  network=True. Then the run gets no route of its own either: it reaches the
+  public internet only through core/sandbox_egress.py's filter, because on
+  Docker Desktop an ordinarily networked container can reach services on the
+  host's loopback, JARVIS's own API among them.
 - No host environment, secrets or Docker socket. It runs as `nobody` with
   every Linux capability dropped and no way to regain privileges.
 - Limits on processes, memory (no swap) and CPU, and a deadline enforced
@@ -64,11 +66,12 @@ class SandboxResult:
     diff: str = ""
 
 
-def hardening_args(memory: str, cpus: str, pids: int) -> list[str]:
+def hardening_args(memory: str, cpus: str, pids: int, network: bool = False) -> list[str]:
     """The docker run flags that make the container a sandbox. Kept apart so
     a test can check every one of them is there."""
+    from core import sandbox_egress
     return [
-        "--network", "none",
+        *(sandbox_egress.run_args() if network else ["--network", "none"]),
         "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
         "--read-only",
@@ -221,12 +224,18 @@ def _cap(text: str) -> str:
 
 async def run(command: str, *, files: Optional[dict[str, str]] = None, source_dir: Optional[str] = None,
               timeout: int = DEFAULT_TIMEOUT_SECONDS, memory: str = "512m", cpus: str = "1",
-              pids: int = 128) -> SandboxResult:
+              pids: int = 128, network: bool = False) -> SandboxResult:
     """Run `command` with sh in a fresh container whose /work holds a copy of
     `source_dir` and/or `files` ({relative path: text})."""
     ok, why = await available()
     if not ok:
         raise SandboxUnavailable(why)
+    if network:
+        from core import sandbox_egress
+        try:
+            await sandbox_egress.ensure(IMAGE)
+        except RuntimeError as e:
+            raise SandboxUnavailable(f"no filtered network: {e}")
     timeout = max(1, min(int(timeout), MAX_TIMEOUT_SECONDS))
     workspace = Path(tempfile.mkdtemp(prefix="jarvis-sbx-"))
     name = f"jarvis-sbx-{uuid.uuid4().hex[:12]}"
@@ -243,7 +252,7 @@ async def run(command: str, *, files: Optional[dict[str, str]] = None, source_di
                      if (workspace / p).stat().st_size <= 512 * 1024}
 
         args = ["run", "--rm", "--name", name, "--label", LABEL, "--hostname", "sandbox",
-                *hardening_args(memory, cpus, pids),
+                *hardening_args(memory, cpus, pids, network),
                 "-v", f"{workspace}:/work", "-w", "/work", IMAGE,
                 "timeout", "-s", "KILL", f"{timeout}s", "sh", "-c", command]
         proc = await asyncio.create_subprocess_exec(

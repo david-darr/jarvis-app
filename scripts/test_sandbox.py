@@ -86,8 +86,9 @@ class EscapeTests(unittest.TestCase):
         self.assertIn("interfaces ['lo']", r.stdout)
 
     def test_control_a_networked_container_would_reach_jarvis(self):
-        """Without --network none the same probe gets through. This is why the
-        sandbox has no network mode yet, and why the test above means something."""
+        """Without --network none the same probe gets through. This is why a
+        networked run goes through core/sandbox_egress.py's filter instead, and
+        why the test above means something."""
         server, port = _host_http_server()
         self.addCleanup(server.shutdown)
         out = subprocess.run(["docker", "run", "--rm", sandbox.IMAGE, "python", "-c",
@@ -191,6 +192,111 @@ class RefusalTests(unittest.TestCase):
         self.assertEqual(pairs["--memory"], pairs["--memory-swap"])
         self.assertIn("--read-only", args)
         self.assertIn("@sha256:", sandbox.IMAGE, "the image is pinned by digest")
+
+
+def _fetch_script(targets):
+    """A probe run inside a networked sandbox: fetch each URL through the
+    proxy the run is given, print what happened."""
+    return ("import urllib.request, urllib.error\n"
+            f"for url in {targets!r}:\n"
+            "    try:\n"
+            "        r = urllib.request.urlopen(url, timeout=20)\n"
+            "        print('OK', r.status, url)\n"
+            "    except urllib.error.HTTPError as e:\n"
+            "        print('HTTP', e.code, url, e.read()[:200].decode(errors='replace').strip())\n"
+            "    except Exception as e:\n"
+            "        print('ERR', type(e).__name__, url, str(e)[:120])\n")
+
+
+@unittest.skipUnless(DOCKER_UP, "Docker is not running")
+class EgressTests(unittest.TestCase):
+    """A networked run (network=True) reaches the public internet only through
+    core/sandbox_egress.py's filter, and nothing on this computer or its
+    network. Needs internet access for the public-site checks."""
+
+    def fetch(self, targets):
+        r = run("python probe.py", files={"probe.py": _fetch_script(targets)}, network=True, timeout=120)
+        self.assertEqual(r.exit_code, 0, r.stderr)
+        return {line.split()[2 if line.startswith(("OK", "HTTP", "ERR")) else 0]: line
+                for line in r.stdout.splitlines() if line.startswith(("OK", "HTTP", "ERR"))}
+
+    def test_public_sites_load_over_https_and_http(self):
+        out = self.fetch(["https://example.com/", "http://example.com/"])
+        self.assertTrue(out["https://example.com/"].startswith("OK 200"), out)
+        self.assertTrue(out["http://example.com/"].startswith("OK 200"), out)
+
+    def test_every_private_or_local_destination_is_refused_on_allowed_ports(self):
+        targets = ["http://host.docker.internal/", "https://host.docker.internal/",  # this computer
+                   "http://127.0.0.1/", "http://localhost/", "http://[::1]/",          # the filter's own loopback
+                   "http://192.168.65.254/", "http://172.17.0.1/", "http://10.0.0.1/", "http://192.168.1.1/",
+                   "http://169.254.169.254/latest/meta-data/",                         # cloud metadata
+                   "http://100.100.100.100/",                                          # Tailscale
+                   "http://127.0.0.1.nip.io/"]                                         # a public name for a private address
+        out = self.fetch(targets)
+        for url in targets:
+            if url.startswith("https"):  # a refused tunnel shows only its status; the reason is in the log
+                self.assertIn("Tunnel connection failed: 403", out[url])
+            elif "nip.io" in url and "cannot resolve" in out[url]:
+                pass  # many home routers drop public answers that point at private addresses; refused either way
+            else:
+                self.assertTrue(out[url].startswith("HTTP 403") and "private or local" in out[url], out[url])
+        from core import sandbox_egress
+        log = subprocess.run(["docker", "logs", sandbox_egress.PROXY_NAME], capture_output=True, text=True).stdout
+        self.assertIn("BLOCKED host.docker.internal is a private or local address", log)
+        self.assertNotIn("ALLOWED CONNECT host.docker.internal", log)
+
+    def test_other_ports_are_refused_even_for_this_computer(self):
+        server, port = _host_http_server()
+        self.addCleanup(server.shutdown)
+        out = self.fetch([f"http://host.docker.internal:{port}/", "http://example.com:8080/"])
+        for line in out.values():
+            self.assertIn("is not 80 or 443", line)
+
+    def test_a_redirect_to_a_private_address_is_refused(self):
+        out = self.fetch(["https://httpbin.org/redirect-to?url=http://127.0.0.1/"])
+        line = next(iter(out.values()))
+        if line.startswith("ERR") or "503" in line or "502" in line:
+            self.skipTest(f"httpbin.org unreachable: {line}")
+        self.assertTrue(line.startswith("HTTP 403") and "private or local" in line, line)
+
+    def test_no_way_out_but_the_filter(self):
+        r = run("getent hosts example.com || echo NO-DNS; "
+                "env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy python -c \""
+                "import socket\n"
+                "for h in ('1.1.1.1', '93.184.215.14'):\n"
+                "    try: socket.create_connection((h, 443), timeout=3); print('REACHED', h)\n"
+                "    except OSError as e: print('blocked', h, e)\"",
+                network=True, timeout=60)
+        self.assertIn("NO-DNS", r.stdout)
+        self.assertNotIn("REACHED", r.stdout)
+
+    def test_control_only_the_address_rule_stops_the_filter_reaching_this_computer(self):
+        """The filter's own container can open a connection to this computer;
+        what stops a sandboxed run getting there through it is the address rule."""
+        server, port = _host_http_server()
+        self.addCleanup(server.shutdown)
+        from core import sandbox_egress
+        run("true", network=True)  # the filter is up
+        out = subprocess.run(["docker", "exec", sandbox_egress.PROXY_NAME, "python", "-c",
+                              f"import socket; socket.create_connection(('host.docker.internal', {port}), timeout=5); print('REACHED')"],
+                             capture_output=True, text=True, timeout=60)
+        self.assertIn("REACHED", out.stdout, out.stderr[-300:])
+
+    def test_the_filter_itself_is_hardened(self):
+        from core import sandbox_egress
+        run("true", network=True)
+        info = subprocess.run(["docker", "inspect", sandbox_egress.PROXY_NAME, "--format",
+                               "{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.Config.User}} {{.HostConfig.SecurityOpt}}"],
+                              capture_output=True, text=True).stdout.strip()
+        self.assertEqual(info, "true [ALL] 65534:65534 [no-new-privileges]")
+        internal = subprocess.run(["docker", "network", "inspect", sandbox_egress.NETWORK, "--format", "{{.Internal}}"],
+                                  capture_output=True, text=True).stdout.strip()
+        self.assertEqual(internal, "true")
+
+    def test_a_run_without_network_is_still_sealed(self):
+        r = run("python -c \"import os; print(sorted(os.listdir('/sys/class/net')))\"; env | grep -i proxy || echo NO-PROXY")
+        self.assertIn("['lo']", r.stdout)
+        self.assertIn("NO-PROXY", r.stdout)
 
 
 def call(args, is_admin=False):
