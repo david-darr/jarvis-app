@@ -1838,6 +1838,57 @@ class TaskModelTests(unittest.TestCase):
                 task_scheduler._task_brain({"endpoint_id": "deleted-endpoint"})
 
 
+class VaultMemoryTests(unittest.TestCase):
+    """The vault behind the memory interface (core/memory). Its old scan was a
+    substring match ("cache prompt" missed what "prompt cache" found), in
+    folder order, capped at 500 files, and read notes cut at 4,000 characters
+    - 111 of David's 175 notes were longer."""
+
+    def setUp(self):
+        from core import memory_tools
+        self.tools = memory_tools
+        self.vault = tempfile.mkdtemp(prefix="jarvis-vault-test-")
+        self.addCleanup(shutil.rmtree, self.vault, True)
+        self.write("Projects/Prompt Cache Notes.md", "# Prompt cache\nHow the prompt cache works in JARVIS.")
+        self.write("Daily/2026-09-01.md", "Mentioned the cache once, and a prompt elsewhere, among other things. " * 3)
+        self.write("Long note.md", "start " + ("x" * 9000) + " TAIL-MARKER")
+
+    def write(self, rel, text, mtime=None):
+        path = os.path.join(self.vault, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        if mtime:
+            os.utime(path, (mtime, mtime))
+
+    def paths(self, query):
+        return [h["path"] for h in self.tools.search_vault(query, vault_dir=self.vault, max_results=5)]
+
+    def test_word_order_does_not_matter_and_the_note_named_for_it_ranks_first(self):
+        self.assertEqual(self.paths("prompt cache")[0], "Projects/Prompt Cache Notes.md")
+        self.assertEqual(self.paths("cache prompt")[0], "Projects/Prompt Cache Notes.md")
+        self.assertEqual(self.paths("cache works jarvis")[0], "Projects/Prompt Cache Notes.md")
+        loose = self.paths("cache nonexistentword")
+        self.assertEqual(loose[0], "Projects/Prompt Cache Notes.md", "no note has every word, so any word matches, best first")
+        self.assertIn("Daily/2026-09-01.md", loose)
+
+    def test_a_long_note_is_read_in_full(self):
+        self.assertTrue(self.tools.read_vault_file("Long note.md", vault_dir=self.vault).endswith("TAIL-MARKER"))
+        cut = self.tools.read_vault_file("Long note.md", vault_dir=self.vault, max_chars=1000)
+        self.assertIn("showing the first 1,000", cut, "a caller's tighter budget says it cut, not a silent trail-off")
+
+    def test_edits_and_deletions_reach_the_index(self):
+        self.assertEqual(self.paths("zebra"), [])
+        self.write("Daily/2026-09-01.md", "Now about a zebra.", mtime=time.time() + 5)
+        self.assertEqual(self.paths("zebra"), ["Daily/2026-09-01.md"])
+        os.remove(os.path.join(self.vault, "Daily/2026-09-01.md"))
+        self.assertEqual(self.paths("zebra"), [])
+
+    def test_a_read_never_leaves_the_vault(self):
+        with self.assertRaises(ValueError):
+            self.tools.read_vault_file("../outside.md", vault_dir=self.vault)
+
+
 class ToolRegistryTests(unittest.TestCase):
     """The hive-mind tools are declared once (core/tool_registry.py) and both
     brains are built from them, so a shared tool answers the same whichever

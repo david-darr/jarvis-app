@@ -22,7 +22,7 @@ from typing import Optional
 
 from core.constants import BASE_DIR, REPO_CODE_DIRS
 from core import session_manager_store as store
-from core.vault import resolve_vault_dir
+from core.memory import vault_memory
 from services import skills_service, documents_service
 from services.notes_service import notes_service
 from services.task_service import task_service
@@ -31,17 +31,6 @@ from core.contacts_store import list_contacts as _list_contacts
 
 SPECS_DIR = os.path.join(BASE_DIR, "specs")
 MAX_LIST_ITEMS = 20  # same token-efficiency posture as everything else here
-
-SNIPPET_RADIUS = 200  # characters of context kept on each side of a match
-MAX_FILES_SCANNED = 500
-
-
-def _snippet(text: str, idx: int, query_len: int) -> str:
-    start = max(0, idx - SNIPPET_RADIUS)
-    end = min(len(text), idx + query_len + SNIPPET_RADIUS)
-    prefix = "..." if start > 0 else ""
-    suffix = "..." if end < len(text) else ""
-    return f"{prefix}{text[start:end]}{suffix}"
 
 
 def search_sessions(query: str, exclude_session_id: Optional[str] = None, max_results: int = 5) -> list[dict]:
@@ -93,53 +82,19 @@ def format_archive_hits(hits: list[dict]) -> str:
 
 
 def search_vault(query: str, vault_dir: Optional[str] = None, max_results: int = 5) -> list[dict]:
-    """Keyword search across vault notes — the "shared memory" half, for
-    models that don't otherwise have any vault file access (external
-    endpoints; Claude already has this natively via its own file tools, so
-    it isn't wired to call this one). Returns short snippets, not full
-    file contents — read_vault_file (below) is the deliberate second step
-    for when a model actually wants a specific file in full."""
-    vault_dir = vault_dir or resolve_vault_dir()
-    query_lower = query.lower()
-    results = []
-    scanned = 0
-    for root, _, files in os.walk(vault_dir):
-        for filename in files:
-            if not filename.endswith(".md"):
-                continue
-            scanned += 1
-            if scanned > MAX_FILES_SCANNED:
-                return results
-            path = os.path.join(root, filename)
-            try:
-                with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                    text = f.read()
-            except OSError:
-                continue
-            idx = text.lower().find(query_lower)
-            if idx == -1:
-                continue
-            results.append({
-                "path": os.path.relpath(path, vault_dir),
-                "snippet": _snippet(text, idx, len(query)),
-            })
-            if len(results) >= max_results:
-                return results
-    return results
+    """Ranked search across vault notes, through the memory interface
+    (core/memory: the vault backend's full-text index). For models with no
+    vault file access of their own - local/API models and Swarm; Claude and
+    Codex use their own file tools. Short snippets, not whole notes:
+    read_vault_file is the deliberate second step."""
+    hits = vault_memory(vault_dir).search(query, limit=max_results)
+    return [{"path": h["ref"], "snippet": h["snippet"]} for h in hits]
 
 
-def read_vault_file(relative_path: str, vault_dir: Optional[str] = None, max_chars: int = 4000) -> str:
-    """Reads one specific vault file in full (bounded at max_chars so a huge
-    note can't blow the context budget) — the deliberate second step after
-    search_vault points at a file, for models with no native Read tool."""
-    vault_dir = vault_dir or resolve_vault_dir()
-    full_path = os.path.realpath(os.path.join(vault_dir, relative_path))
-    vault_real = os.path.realpath(vault_dir)
-    if os.path.commonpath([full_path, vault_real]) != vault_real:
-        raise ValueError("path escapes the vault")
-    with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
-        text = f.read()
-    return text if len(text) <= max_chars else text[:max_chars] + "...[truncated]"
+def read_vault_file(relative_path: str, vault_dir: Optional[str] = None, max_chars: Optional[int] = None) -> str:
+    """One vault note in full (up to the backend's generous cap, or max_chars
+    when a caller budgets tighter, as Swarm does), never outside the vault."""
+    return vault_memory(vault_dir).read(relative_path, max_chars=max_chars)
 
 
 def list_skills() -> list[dict]:
