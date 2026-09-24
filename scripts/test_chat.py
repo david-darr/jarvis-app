@@ -1906,6 +1906,159 @@ class McpClientTests(unittest.TestCase):
         self.assertTrue(next(s for s in integrations.mcp_catalog() if s["id"] == "deepwiki")["added"])
 
 
+class McpOAuthTests(unittest.TestCase):
+    """Signing in to an OAuth MCP server (core/mcp_oauth.py) against a real
+    OAuth-protected MCP server built on the mcp package's own authorization
+    server (scripts/mcp_oauth_fixture.py), whose consent step says yes
+    automatically, standing in for the person clicking Allow."""
+
+    FIXTURE = str(Path(__file__).resolve().parent / "mcp_oauth_fixture.py")
+    REDIRECT = "http://127.0.0.1:1/api/integrations/oauth/callback"
+
+    @classmethod
+    def setUpClass(cls):
+        import socket
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        cls.url = f"http://127.0.0.1:{port}/mcp"
+        cls.server = subprocess.Popen([sys.executable, cls.FIXTURE, str(port)],
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            try:
+                httpx.get(f"http://127.0.0.1:{port}/.well-known/oauth-authorization-server", timeout=1)
+                return
+            except httpx.HTTPError:
+                time.sleep(0.2)
+        cls.server.kill()
+        raise RuntimeError("OAuth fixture did not start")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.kill()
+        cls.server.wait()
+
+    def setUp(self):
+        from core import integrations
+        self.item = integrations.create_mcp_server("Fixture", "http", url=self.url, auth="oauth")
+        self.addCleanup(integrations.delete_integration, self.item["id"])
+
+    async def _sign_in(self, redirect=REDIRECT):
+        """Start, follow the provider's consent redirect, land the callback.
+        Returns (ok, message, the authorization URL)."""
+        from core import mcp_oauth
+        started = await mcp_oauth.start_sign_in(self.item["id"], redirect)
+        async with httpx.AsyncClient() as http:
+            consent = await http.get(started["url"])
+        back = httpx.URL(consent.headers["location"])
+        self.assertTrue(str(back).startswith(redirect), "the provider sends the browser back to JARVIS")
+        ok, message = await mcp_oauth.finish_sign_in(back.params.get("state"), back.params.get("code"),
+                                                     back.params.get("iss"), None)
+        return ok, message, started["url"]
+
+    def runtime(self):
+        from core import integrations
+        return integrations.list_mcp_servers_runtime([self.item["id"]])
+
+    def test_signing_in_makes_the_server_usable_and_no_token_leaves_the_backend(self):
+        from core import integrations, mcp_client, mcp_oauth
+        self.assertEqual(self.runtime(), {}, "not signed in: not offered to any model")
+        ok, message, _ = asyncio.run(self._sign_in())
+        self.assertTrue(ok, message)
+        self.assertTrue(mcp_oauth.status(self.item["id"])["signed_in"])
+        config = self.runtime()["Fixture"]
+        self.assertTrue(config["headers"]["Authorization"].startswith("Bearer "))
+        tools = asyncio.run(mcp_client.list_tools(config))
+        self.assertEqual([t["name"] for t in tools], ["whoami"])
+        token = config["headers"]["Authorization"].split()[1]
+        listed = json.dumps(integrations.list_integrations())
+        self.assertNotIn(token, listed)
+        self.assertIn('"signed_in": true', listed)
+        self.assertNotIn(token, open(integrations.INTEGRATIONS_FILE, encoding="utf-8").read(), "stored encrypted")
+
+    def test_a_token_near_expiry_is_refreshed_and_a_dead_one_asks_for_sign_in_again(self):
+        from core import integrations, mcp_client, mcp_oauth
+        from core.secret_storage import decrypt, encrypt
+        asyncio.run(self._sign_in())
+        before = self.runtime()["Fixture"]["headers"]["Authorization"]
+        asyncio.run(mcp_oauth.refresh_due([self.item["id"]]))
+        self.assertEqual(self.runtime()["Fixture"]["headers"]["Authorization"], before, "not due: left alone")
+
+        def expire():
+            data = integrations._load()
+            data[self.item["id"]]["oauth"]["expires_at"] = time.time() + 10
+            write_json_atomic(integrations.INTEGRATIONS_FILE, data)
+        expire()
+        asyncio.run(mcp_oauth.refresh_due([self.item["id"]]))
+        after = self.runtime()["Fixture"]
+        self.assertNotEqual(after["headers"]["Authorization"], before)
+        self.assertEqual([t["name"] for t in asyncio.run(mcp_client.list_tools(after))], ["whoami"])
+
+        # The server rotated the refresh token; replaying the old one is refused.
+        data = integrations._load()
+        oauth = data[self.item["id"]]["oauth"]
+        tokens = json.loads(decrypt(oauth["tokens"]))
+        tokens["refresh_token"] = "revoked"
+        oauth["tokens"] = encrypt(json.dumps(tokens))
+        write_json_atomic(integrations.INTEGRATIONS_FILE, data)
+        expire()
+        asyncio.run(mcp_oauth.refresh_due([self.item["id"]]))
+        status = mcp_oauth.status(self.item["id"])
+        self.assertFalse(status["signed_in"])
+        self.assertIn("sign in again", status["error"])
+        self.assertEqual(self.runtime(), {})
+
+    def test_an_open_claude_chat_reconnects_after_its_token_is_refreshed(self):
+        from core import integrations, mcp_oauth
+        asyncio.run(self._sign_in())
+        brain = Brain(vault_dir=tempfile.gettempdir(), integration_ids=[self.item["id"]])
+        brain.tool_fingerprint = brain._fingerprint(*brain._tool_config())
+        brain._client = object()
+        self.assertFalse(brain.tool_config_changed())
+        data = integrations._load()
+        data[self.item["id"]]["oauth"]["expires_at"] = time.time() + 10
+        write_json_atomic(integrations.INTEGRATIONS_FILE, data)
+        asyncio.run(mcp_oauth.refresh_due())
+        self.assertTrue(brain.tool_config_changed(), "the new header makes the chat reconnect at its next turn")
+
+    def test_callbacks_nobody_started_or_the_provider_refused_do_nothing(self):
+        from core import mcp_oauth
+        from routes import integrations_routes
+        app_ = FastAPI()
+        app_.include_router(integrations_routes.router)
+        page = TestClient(app_).get("/api/integrations/oauth/callback", params={"state": "made-up", "code": "x"})
+        self.assertEqual(page.status_code, 400, "answered without any login, and turned away")
+        self.assertIn("not one JARVIS is waiting for", page.text)
+
+        async def refused():
+            started = await mcp_oauth.start_sign_in(self.item["id"], self.REDIRECT)
+            state = httpx.URL(started["url"]).params["state"]
+            return await mcp_oauth.finish_sign_in(state, None, None, "access_denied")
+        ok, message = asyncio.run(refused())
+        self.assertFalse(ok)
+        self.assertIn("access_denied", message)
+        status = mcp_oauth.status(self.item["id"])
+        self.assertFalse(status["signed_in"])
+        self.assertIn("access_denied", status["error"])
+
+    def test_a_new_callback_address_registers_again_and_sign_out_forgets_everything(self):
+        from core import integrations, mcp_oauth
+        _, _, first = asyncio.run(self._sign_in())
+        # Tokens that still work mean there is nothing to sign in to again;
+        # drop them, as a dead token would be, keeping the registration.
+        data = integrations._load()
+        data[self.item["id"]]["oauth"].pop("tokens")
+        write_json_atomic(integrations.INTEGRATIONS_FILE, data)
+        ok, message, second = asyncio.run(self._sign_in("http://127.0.0.1:2/api/integrations/oauth/callback"))
+        self.assertTrue(ok, message)
+        self.assertNotEqual(httpx.URL(first).params["client_id"], httpx.URL(second).params["client_id"])
+        self.assertEqual(httpx.URL(second).params["redirect_uri"], "http://127.0.0.1:2/api/integrations/oauth/callback")
+        mcp_oauth.sign_out(self.item["id"])
+        self.assertFalse(mcp_oauth.status(self.item["id"])["signed_in"])
+        self.assertEqual(self.runtime(), {})
+
+
 class VaultMemoryTests(unittest.TestCase):
     """The vault behind the memory interface (core/memory). Its old scan was a
     substring match ("cache prompt" missed what "prompt cache" found), in

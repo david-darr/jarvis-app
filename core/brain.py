@@ -29,7 +29,7 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import StreamEvent
 
-from core import custom_tabs, hive_mind_server, image_gen, integrations, permissions, projects, settings as settings_store, system_prompt
+from core import custom_tabs, hive_mind_server, image_gen, integrations, mcp_oauth, permissions, projects, settings as settings_store, system_prompt
 from core.constants import REPO_CODE_DIRS
 from core.vault import resolve_vault_dir
 
@@ -331,6 +331,9 @@ class Brain:
         return PermissionResultDeny(message=decision.reason, interrupt=False)
 
     async def connect(self) -> None:
+        # Signed-in MCP servers need a live token in the header the CLI is
+        # started with (core/mcp_oauth.py).
+        await mcp_oauth.refresh_due(self.integration_ids)
         self._client = ClaudeSDKClient(options=self._options())
         await self._client.connect()
 

@@ -649,7 +649,7 @@ const CONNECTOR_ICONS = {
 
 function connectorIsConnected(item) {
   if (item.kind === "api_service") return item.has_api_key || !!item.base_url;
-  if (item.kind === "mcp_server") return true; // exists = registered = usable
+  if (item.kind === "mcp_server") return item.auth === "oauth" ? item.signed_in : true; // sign-in servers count once signed in
   return item.last_synced_count != null; // dav/ical: connected once it's synced at least once
 }
 
@@ -791,6 +791,20 @@ async function renderIntegrationsPanel(content) {
         toast("Integration removed", "success");
       });
       const actions = [delBtn];
+      if (item.kind === "mcp_server" && item.auth === "oauth") {
+        const host = el("span", { class: "card-row", style: "gap:6px;" });
+        const signIn = el("button", { class: "btn", text: item.signed_in ? "Sign in again" : "Sign in" });
+        signIn.addEventListener("click", () => signInToMcp(item.id, item.name, content, host));
+        host.append(signIn);
+        if (item.signed_in) {
+          host.append(el("button", { class: "btn", text: "Sign out", onclick: async () => {
+            await api(`/api/integrations/${item.id}/oauth`, { method: "DELETE" });
+            toast(`Signed out of ${item.name}`, "success");
+            await renderIntegrationsPanel(content);
+          } }));
+        }
+        actions.unshift(host);
+      }
       if (item.kind === "caldav_calendar" || item.kind === "carddav_contacts" || item.kind === "ical_feed") {
         const syncBtn = el("button", { class: "btn", text: "Sync now" });
         syncBtn.addEventListener("click", async () => {
@@ -809,8 +823,8 @@ async function renderIntegrationsPanel(content) {
         el("td", { class: "meta", text: INTEGRATION_KIND_LABELS[item.kind] }),
         el("td", {}, [
           connected
-            ? el("span", { class: "connectors-status-ok", text: "✓ Connected" })
-            : el("span", { class: "connectors-status-off", text: "Not connected" }),
+            ? el("span", { class: "connectors-status-ok", text: item.auth === "oauth" ? "✓ Signed in" : "✓ Connected" })
+            : el("span", { class: "connectors-status-off", text: item.auth === "oauth" ? "Needs sign-in" : "Not connected" }),
         ]),
         el("td", {}, [el("div", { class: "card-row", style: "gap:6px;justify-content:flex-end;" }, actions)]),
       ]);
@@ -839,10 +853,41 @@ async function renderIntegrationsPanel(content) {
   content.appendChild(await mcpCatalogSection(content));
 }
 
+// OAuth sign-in to an MCP server (core/mcp_oauth.py). The provider's page
+// opens in a browser (the side browser in the desktop app, which can pop it
+// out to the real one); the provider sends that browser back to this
+// backend, and this polls until the sign-in lands, fails, or times out. The
+// link stays in the row in case no window appeared.
+async function signInToMcp(itemId, name, content, host) {
+  let started;
+  try {
+    started = await api(`/api/integrations/${itemId}/oauth/start`, { method: "POST" });
+  } catch (problem) { toast(problem.message.replace(/^\d+: /, ""), "error"); return; }
+  if (started.signed_in) {
+    toast(`Already signed in to ${name}`, "success");
+    await renderIntegrationsPanel(content);
+    return;
+  }
+  window.open(started.url, "_blank", "noopener");
+  host.innerHTML = "";
+  host.append(el("span", { class: "meta", text: "Waiting for sign-in…" }),
+    el("a", { class: "meta mcp-signin-link", href: started.url, target: "_blank", rel: "noopener", text: "Open the sign-in page" }));
+  const deadline = Date.now() + 5 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (!host.isConnected) return; // the panel was left or redrawn
+    let state;
+    try { state = await api(`/api/integrations/${itemId}/oauth`); } catch { continue; }
+    if (state.signed_in) { toast(`Signed in to ${name}`, "success"); break; }
+    if (!state.pending) { toast(state.error ? `Sign-in failed: ${state.error}` : "Sign-in did not finish", "error"); break; }
+  }
+  await renderIntegrationsPanel(content);
+}
+
 // The MCP catalog (Hermes track 2026-09-23): known servers from
 // core/mcp_catalog.json, adapted from Hermes Agent's. The ones that need no
-// sign-in add in one step as ordinary MCP Tool Servers; OAuth sign-in comes
-// later, so those say so rather than offer a button that cannot work.
+// sign-in add in one step as ordinary MCP Tool Servers; the rest are added
+// as sign-in servers and go straight to signing in.
 async function mcpCatalogSection(content) {
   const catalog = await api("/api/integrations/catalog");
   const section = el("details", { class: "disclosure-panel mcp-catalog", style: "margin-top:18px;" });
@@ -867,7 +912,18 @@ async function mcpCatalogSection(content) {
             await renderIntegrationsPanel(content);
           } catch (problem) { toast(problem.message, "error"); event.currentTarget.disabled = false; }
         } });
-      } else action = el("span", { class: "meta", text: "Needs sign-in (coming)" });
+      } else {
+        action = el("span", { class: "card-row", style: "gap:6px;" });
+        action.append(el("button", { class: "btn", text: "Add and sign in", onclick: async (event) => {
+          event.currentTarget.disabled = true;
+          let item;
+          try {
+            item = await api("/api/integrations/mcp-server", { method: "POST",
+              body: JSON.stringify({ name: server.name, mcp_type: "http", url: server.url, auth: "oauth" }) });
+          } catch (problem) { toast(problem.message, "error"); event.currentTarget.disabled = false; return; }
+          await signInToMcp(item.id, server.name, content, action);
+        } }));
+      }
       list.append(el("div", { class: "mcp-catalog-row", "data-server": server.id }, [
         el("div", {}, [
           el("div", { class: "mcp-catalog-name", text: server.name }),
@@ -884,7 +940,7 @@ async function mcpCatalogSection(content) {
     el("summary", { text: `Browse the MCP catalog (${catalog.length} servers)` }),
     el("div", { class: "meta", style: "margin:6px 0 8px;", text:
       "Tools from these servers are available to every model: Claude directly, local and API models through JARVIS, "
-      + "which asks you before each call. Servers that need a sign-in can't be added yet." }),
+      + "which asks you before each call. Signing in happens in a browser on this computer." }),
     search, list,
   );
   draw();

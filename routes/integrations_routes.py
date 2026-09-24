@@ -2,13 +2,15 @@
 "Add Integration" panel). Admin-gated: API-service keys and MCP server
 config both widen what the agent can reach.
 """
+import html
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from core import contacts_store, dav_client, integrations, sync_engine
-from core.middleware import require_admin
+from core import contacts_store, dav_client, integrations, mcp_oauth, sync_engine
+from core.middleware import local_api_base, require_admin
 from services.calendar_service import calendar_service
 
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
@@ -27,6 +29,7 @@ class CreateMcpServerRequest(BaseModel):
     args: Optional[list[str]] = None
     url: Optional[str] = None
     api_key: Optional[str] = None
+    auth: Optional[str] = None  # "oauth": used once signed in
 
 
 @router.get("")
@@ -48,9 +51,52 @@ async def mcp_catalog(user: str = Depends(require_admin)) -> list[dict]:
 @router.post("/mcp-server")
 async def create_mcp_server(body: CreateMcpServerRequest, user: str = Depends(require_admin)) -> dict:
     try:
-        return integrations.create_mcp_server(body.name, body.mcp_type, body.command, body.args, body.url, body.api_key)
+        return integrations.create_mcp_server(body.name, body.mcp_type, body.command, body.args, body.url,
+                                              body.api_key, body.auth)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# OAuth sign-in for MCP servers (core/mcp_oauth.py). Starting, checking and
+# signing out are admin actions; the callback is not, because the browser the
+# provider sends back carries no app cookie. It is admitted by the `state` of
+# a sign-in an admin started, and anything else is turned away.
+@router.post("/{item_id}/oauth/start")
+async def oauth_start(item_id: str, user: str = Depends(require_admin)) -> dict:
+    try:
+        return await mcp_oauth.start_sign_in(item_id, local_api_base() + mcp_oauth.CALLBACK_PATH)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{item_id}/oauth")
+async def oauth_status(item_id: str, user: str = Depends(require_admin)) -> dict:
+    try:
+        return mcp_oauth.status(item_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+
+
+@router.delete("/{item_id}/oauth")
+async def oauth_sign_out(item_id: str, user: str = Depends(require_admin)) -> dict:
+    try:
+        mcp_oauth.sign_out(item_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    return {"ok": True}
+
+
+@router.get("/oauth/callback", response_class=HTMLResponse)
+async def oauth_callback(state: str = "", code: Optional[str] = None, iss: Optional[str] = None,
+                         error: Optional[str] = None) -> HTMLResponse:
+    ok, message = await mcp_oauth.finish_sign_in(state, code, iss, error)
+    title = "Signed in" if ok else "Sign-in did not finish"
+    page = (f"<!doctype html><meta charset=utf-8><title>JARVIS - {title}</title>"
+            f"<body style=\"font-family:system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem\">"
+            f"<h1 style=\"font-size:1.3rem\">{title}</h1><p>{html.escape(message)}</p></body>")
+    return HTMLResponse(page, status_code=200 if ok else 400)
 
 
 class CreateDavRequest(BaseModel):

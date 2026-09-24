@@ -19,7 +19,7 @@ from fastapi import HTTPException
 
 from claude_agent_sdk import CLIJSONDecodeError
 
-from core import attachments, logs as log_files, model_catalog, model_endpoints, permissions, token_usage
+from core import attachments, logs as log_files, mcp_oauth, model_catalog, model_endpoints, permissions, token_usage
 from core.brain import Brain
 from core.codex_brain import CodexBrain
 from core.external_brain import ExternalBrain
@@ -99,6 +99,11 @@ async def _get_brain(session_id: str, endpoint: dict, is_admin: bool = False) ->
     _prime_with_history)."""
     brain = _brains.get(session_id)
     if brain is not None:
+        # A signed-in MCP server's token renewed here changes the header the
+        # open Claude connection was built with, so the check below
+        # reconnects it (resuming the session) before the old token lapses.
+        if isinstance(brain, Brain):
+            await mcp_oauth.refresh_due(brain.integration_ids)
         if not (isinstance(brain, Brain) and brain.tool_config_changed()):
             return brain, False
         # Settings changed this chat's tools since it connected (a disabled

@@ -25,7 +25,7 @@ hive mind") — same reasoning, same shared engine (core/memory_tools.py).
 """
 from typing import AsyncIterator
 
-from core import integrations, mcp_client, permissions, projects, system_prompt, tool_registry
+from core import integrations, mcp_client, mcp_oauth, permissions, projects, system_prompt, tool_registry
 from core.providers import openai_compatible
 from core.session_manager import sent_text
 
@@ -117,8 +117,12 @@ class ExternalBrain:
         )
         if decision.behavior != "allow":
             return f"Not run: {decision.reason}"
+        # A signed-in server's token can expire during a long chat; the
+        # config is re-read so each call carries the current one.
+        await mcp_oauth.refresh_due(self.integration_ids)
+        config = integrations.list_mcp_servers_runtime(self.integration_ids).get(spec["server"], spec["config"])
         try:
-            return await mcp_client.call_tool(spec["config"], spec["name"], args)
+            return await mcp_client.call_tool(config, spec["name"], args)
         except Exception as e:
             return f"Tool error: {e}"
 
@@ -128,6 +132,7 @@ class ExternalBrain:
         connection, so the tool list - part of the cached prompt - is stable."""
         if not self.session_id:
             return
+        await mcp_oauth.refresh_due(self.integration_ids)
         servers = integrations.list_mcp_servers_runtime(self.integration_ids)
         if not servers:
             return

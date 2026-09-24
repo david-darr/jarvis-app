@@ -138,7 +138,10 @@ function fixture(url) {
   if (route === "/api/tab-school/settings") return { canvas_base_url: "", ics_url: "", canvas_api_token_configured: false };
   if (route === "/api/tab-school/courses") return list([{ name: "Software Design", upcoming_count: 2, overdue_count: 0, assignment_count: 8 }]);
   if (route === "/api/tab-school/assignments") return url.searchParams.has("overdue") ? [] : list([{ id: "a1", course: "Software Design", title: "Review the project brief", due: future(40), completed: false, attachment_links: [] }]);
-  if (route === "/api/integrations") return [];
+  if (route === "/api/integrations") return [
+    { id: "i-notion", kind: "mcp_server", name: "Notion", mcp_type: "http", url: "https://mcp.notion.com/mcp", has_api_key: false, auth: "oauth", signed_in: true },
+    { id: "i-sentry", kind: "mcp_server", name: "Sentry", mcp_type: "http", url: "https://mcp.sentry.dev/mcp", has_api_key: false, auth: "oauth", signed_in: false }];
+  if (route === "/api/integrations/contacts") return [];
   if (route === "/api/integrations/catalog") return [
     { id: "deepwiki", name: "DeepWiki", description: "Ask questions about public GitHub repositories.", auth: "none", url: "https://mcp.deepwiki.com/mcp", docs: "https://docs.devin.ai", added: false },
     { id: "linear", name: "Linear", description: "Issues and projects from your Linear workspace.", auth: "oauth", url: "https://mcp.linear.app/mcp", docs: "https://linear.app/docs", added: false },
@@ -378,7 +381,10 @@ app.whenReady().then(async () => {
       await waitFor("!!document.querySelector('.mcp-catalog')");
       await js("document.querySelector('.mcp-catalog').open = true");
       assert.ok(await js("[...document.querySelectorAll('[data-server=deepwiki] button')].some(b => b.textContent === 'Add')"), label + " a no-sign-in server offers Add");
-      assert.ok(await js("document.querySelector('[data-server=linear]').textContent.includes('Needs sign-in')"), label + " an OAuth server says it needs sign-in");
+      assert.ok(await js("[...document.querySelectorAll('[data-server=linear] button')].some(b => b.textContent === 'Add and sign in')"), label + " an OAuth server offers Add and sign in");
+      const rowText = (name) => js(`[...document.querySelectorAll('.connectors-table tr')].find(r => r.textContent.includes('${name}'))?.textContent || ''`);
+      assert.ok((await rowText("Notion")).includes("Signed in") && (await rowText("Notion")).includes("Sign out"), label + " a signed-in server shows it and offers Sign out");
+      assert.ok((await rowText("Sentry")).includes("Needs sign-in") && !(await rowText("Sentry")).includes("Sign out"), label + " a signed-out server offers Sign in only");
       assert.ok(await js("document.querySelector('[data-server=context7]').textContent.includes('Added')"), label + " an added server is marked");
       await js("{ const s = document.querySelector('.mcp-catalog-search'); s.value = 'linear'; s.dispatchEvent(new Event('input')); }");
       assert.equal(await js("document.querySelectorAll('.mcp-catalog-row').length"), 1, label + " catalog search filters");

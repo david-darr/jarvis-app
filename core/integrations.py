@@ -54,6 +54,8 @@ def _masked(item: dict) -> dict:
         else:
             out["url"] = item.get("url", "")
         out["has_api_key"] = bool(item.get("api_key_encrypted"))
+        out["auth"] = item.get("auth") or ("key" if item.get("api_key_encrypted") else "none")
+        out["signed_in"] = bool((item.get("oauth") or {}).get("tokens"))
     elif item["kind"] in ("caldav_calendar", "carddav_contacts", "ical_feed"):
         out["url"] = item.get("url", "")
         out["username"] = item.get("username", "")
@@ -71,8 +73,9 @@ CATALOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_cat
 def mcp_catalog() -> list[dict]:
     """Known MCP servers (core/mcp_catalog.json, adapted from Hermes Agent's
     catalog), each marked with whether it is already added here. Those that
-    need no sign-in can be added in one step; OAuth ones wait for sign-in
-    support. Adding one is an ordinary MCP Tool Server integration."""
+    need no sign-in can be added in one step; OAuth ones are added and then
+    signed in to (core/mcp_oauth.py). Either way it is an ordinary MCP Tool
+    Server integration."""
     import json
     with open(CATALOG_FILE, encoding="utf-8") as f:
         servers = json.load(f)["servers"]
@@ -104,10 +107,23 @@ def list_mcp_servers_runtime(only_ids: Optional[list[str]] = None) -> dict[str, 
                 cfg["env"] = {"MCP_API_KEY": api_key}
         else:
             cfg = {"type": "http", "url": item["url"]}
+            if item.get("auth") == "oauth":
+                # Signed in through core/mcp_oauth.py, which keeps the token
+                # fresh. Not signed in: left out, rather than handed to a
+                # model as a server that can only answer 401.
+                api_key = _oauth_access_token(item)
+                if not api_key:
+                    continue
             if api_key:
                 cfg["headers"] = {"Authorization": f"Bearer {api_key}"}
         servers[item["name"]] = cfg
     return servers
+
+
+def _oauth_access_token(item: dict) -> Optional[str]:
+    import json
+    raw = (item.get("oauth") or {}).get("tokens")
+    return json.loads(decrypt(raw)).get("access_token") if raw else None
 
 
 def create_api_service(name: str, base_url: str, api_key: Optional[str] = None) -> dict:
@@ -124,13 +140,17 @@ def create_api_service(name: str, base_url: str, api_key: Optional[str] = None) 
 
 def create_mcp_server(name: str, mcp_type: str, command: Optional[str] = None,
                        args: Optional[list[str]] = None, url: Optional[str] = None,
-                       api_key: Optional[str] = None) -> dict:
+                       api_key: Optional[str] = None, auth: Optional[str] = None) -> dict:
+    """`auth="oauth"` marks a server that is used only once signed in
+    (core/mcp_oauth.py); the catalog's sign-in servers are added that way."""
     if mcp_type not in MCP_TYPES:
         raise ValueError("mcp_type must be 'stdio' or 'http'")
     if mcp_type == "stdio" and not command:
         raise ValueError("command is required for a stdio MCP server")
     if mcp_type == "http" and not url:
         raise ValueError("url is required for an http MCP server")
+    if auth not in (None, "oauth") or (auth == "oauth" and mcp_type != "http"):
+        raise ValueError("auth may only be 'oauth', and only for an http MCP server")
     data = _load()
     item_id = uuid.uuid4().hex[:12]
     data[item_id] = {
@@ -138,6 +158,8 @@ def create_mcp_server(name: str, mcp_type: str, command: Optional[str] = None,
         "command": command, "args": args or [], "url": url,
         "api_key_encrypted": encrypt(api_key) if api_key else None,
     }
+    if auth:
+        data[item_id]["auth"] = auth
     write_json_atomic(INTEGRATIONS_FILE, data)
     return _masked(data[item_id])
 
