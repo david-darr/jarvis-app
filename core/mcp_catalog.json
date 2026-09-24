@@ -1,0 +1,591 @@
+{
+ "_about": "MCP servers offered in Settings > Integrations > Browse the catalog. Adapted from Hermes Agent's optional-mcps/*/manifest.yaml at commit 3dca25b6f65ae8e6bccc99ed1396cefdf9977b9c (https://github.com/NousResearch/hermes-agent), keeping each server's name, description, endpoint, auth type and documentation link. Regenerate from a newer Hermes checkout rather than editing by hand.",
+ "_license": "MIT License\n\nCopyright (c) 2025 Nous Research\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.",
+ "servers": [
+  {
+   "id": "airtable",
+   "name": "Airtable",
+   "description": "Bases, tables, and records from your Airtable workspace.",
+   "transport": "http",
+   "url": "https://mcp.airtable.com/mcp",
+   "auth": "oauth",
+   "docs": "https://support.airtable.com/articles/9897799762-using-the-airtable-mcp-server"
+  },
+  {
+   "id": "algolia",
+   "name": "Algolia",
+   "description": "Algolia search: indices, analytics, and settings (read-only).",
+   "transport": "http",
+   "url": "https://mcp.algolia.com/mcp",
+   "auth": "oauth",
+   "docs": "https://www.algolia.com/doc/guides/model-context-protocol/productivity-mcp"
+  },
+  {
+   "id": "alltrails",
+   "name": "AllTrails",
+   "description": "AllTrails: find hikes and trails with reviews and ratings.",
+   "transport": "http",
+   "url": "https://www.alltrails.com/mcp",
+   "auth": "none",
+   "docs": "https://www.alltrails.com/mcp"
+  },
+  {
+   "id": "amplitude",
+   "name": "Amplitude",
+   "description": "Amplitude analytics: charts, dashboards, experiments, flags.",
+   "transport": "http",
+   "url": "https://mcp.amplitude.com/mcp",
+   "auth": "oauth",
+   "docs": "https://amplitude.com/docs/amplitude-ai/amplitude-mcp"
+  },
+  {
+   "id": "asana",
+   "name": "Asana",
+   "description": "Tasks, projects, and goals from your Asana workspace.",
+   "transport": "http",
+   "url": "https://mcp.asana.com/v2/mcp",
+   "auth": "oauth",
+   "docs": "https://developers.asana.com/docs/integrating-with-asanas-mcp-server"
+  },
+  {
+   "id": "atlassian",
+   "name": "Atlassian",
+   "description": "Jira issues and Confluence pages via Atlassian's hosted remote MCP.",
+   "transport": "http",
+   "url": "https://mcp.atlassian.com/v1/mcp/authv2",
+   "auth": "oauth",
+   "docs": "https://support.atlassian.com/rovo/docs/getting-started-with-the-atlassian-remote-mcp-server/"
+  },
+  {
+   "id": "attio",
+   "name": "Attio",
+   "description": "CRM records, lists, and notes in Attio.",
+   "transport": "http",
+   "url": "https://mcp.attio.com/mcp",
+   "auth": "oauth",
+   "docs": "https://attio.com/help/apps/other-apps/using-the-attio-mcp-server"
+  },
+  {
+   "id": "aws-knowledge",
+   "name": "AWS Knowledge",
+   "description": "Authoritative AWS docs, API references, and best practices.",
+   "transport": "http",
+   "url": "https://knowledge-mcp.global.api.aws",
+   "auth": "none",
+   "docs": "https://awslabs.github.io/mcp/servers/aws-knowledge-mcp-server/"
+  },
+  {
+   "id": "betterstack",
+   "name": "Better Stack",
+   "description": "Better Stack: logs, uptime monitors, incidents, and status pages.",
+   "transport": "http",
+   "url": "https://mcp.betterstack.com",
+   "auth": "oauth",
+   "docs": "https://betterstack.com/docs/getting-started/integrations/mcp/"
+  },
+  {
+   "id": "buildkite",
+   "name": "Buildkite",
+   "description": "CI/CD pipelines, builds, and test results from Buildkite.",
+   "transport": "http",
+   "url": "https://mcp.buildkite.com/mcp",
+   "auth": "oauth",
+   "docs": "https://buildkite.com/docs/apis/mcp-server"
+  },
+  {
+   "id": "calendly",
+   "name": "Calendly",
+   "description": "Scheduling links, events, and invitees from Calendly.",
+   "transport": "http",
+   "url": "https://mcp.calendly.com",
+   "auth": "oauth",
+   "docs": "https://developer.calendly.com/calendly-mcp-server"
+  },
+  {
+   "id": "canva",
+   "name": "Canva",
+   "description": "Create, search, and manage Canva designs.",
+   "transport": "http",
+   "url": "https://mcp.canva.com/mcp",
+   "auth": "oauth",
+   "docs": "https://www.canva.dev/docs/mcp/"
+  },
+  {
+   "id": "circleci",
+   "name": "CircleCI",
+   "description": "CircleCI: diagnose build failures, read logs, rerun workflows.",
+   "transport": "http",
+   "url": "https://mcp.circleci.com/v1/mcp",
+   "auth": "oauth",
+   "docs": "https://circleci.com/docs/guides/toolkit/circleci-mcp-overview/"
+  },
+  {
+   "id": "clickup",
+   "name": "ClickUp",
+   "description": "Tasks, docs, and workspaces in ClickUp.",
+   "transport": "http",
+   "url": "https://mcp.clickup.com/mcp",
+   "auth": "oauth",
+   "docs": "https://developer.clickup.com/docs/connect-an-ai-assistant-to-clickups-mcp-server"
+  },
+  {
+   "id": "close",
+   "name": "Close",
+   "description": "Sales CRM: leads, opportunities, calls, and emails.",
+   "transport": "http",
+   "url": "https://mcp.close.com/mcp",
+   "auth": "oauth",
+   "docs": "https://help.close.com/docs/mcp-server"
+  },
+  {
+   "id": "cloudflare",
+   "name": "Cloudflare",
+   "description": "Full Cloudflare API access via the official remote MCP.",
+   "transport": "http",
+   "url": "https://mcp.cloudflare.com/mcp?codemode=false",
+   "auth": "oauth",
+   "docs": "https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/"
+  },
+  {
+   "id": "cloudinary",
+   "name": "Cloudinary",
+   "description": "Upload, search, and transform media assets in Cloudinary.",
+   "transport": "http",
+   "url": "https://asset-management.mcp.cloudinary.com/mcp",
+   "auth": "oauth",
+   "docs": "https://cloudinary.com/documentation/cloudinary_llm_mcp"
+  },
+  {
+   "id": "comfy-cloud",
+   "name": "Comfy Cloud",
+   "description": "Generate images, video, audio, and 3D on Comfy Cloud.",
+   "transport": "http",
+   "url": "https://cloud.comfy.org/mcp",
+   "auth": "oauth",
+   "docs": "https://docs.comfy.org/agent-tools/cloud"
+  },
+  {
+   "id": "context7",
+   "name": "Context7",
+   "description": "Up-to-date, version-specific library docs and code examples.",
+   "transport": "http",
+   "url": "https://mcp.context7.com/mcp",
+   "auth": "none",
+   "docs": "https://context7.com/docs/resources/all-clients"
+  },
+  {
+   "id": "craft",
+   "name": "Craft",
+   "description": "Craft: structured docs, tasks, and personal knowledge base.",
+   "transport": "http",
+   "url": "https://mcp.craft.do/my/mcp",
+   "auth": "oauth",
+   "docs": "https://support.craft.do/hc/en-us/articles/29455875123101"
+  },
+  {
+   "id": "datadog",
+   "name": "Datadog",
+   "description": "Logs, monitors, dashboards, and incidents from Datadog.",
+   "transport": "http",
+   "url": "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp",
+   "auth": "oauth",
+   "docs": "https://docs.datadoghq.com/bits_ai/mcp_server/"
+  },
+  {
+   "id": "deepwiki",
+   "name": "DeepWiki",
+   "description": "Ask questions about any public GitHub repo (Devin's DeepWiki).",
+   "transport": "http",
+   "url": "https://mcp.deepwiki.com/mcp",
+   "auth": "none",
+   "docs": "https://docs.devin.ai/work-with-devin/deepwiki-mcp"
+  },
+  {
+   "id": "dropbox",
+   "name": "Dropbox",
+   "description": "Search, read, and manage files in Dropbox.",
+   "transport": "http",
+   "url": "https://mcp.dropbox.com/mcp",
+   "auth": "oauth",
+   "docs": "https://help.dropbox.com/integrations/connect-dropbox-mcp-server"
+  },
+  {
+   "id": "figma",
+   "name": "Figma",
+   "description": "Official Figma remote MCP — design context, Code Connect, and write-to-canvas via https://mcp.figma.com/mcp (OAuth).",
+   "transport": "http",
+   "url": "https://mcp.figma.com/mcp",
+   "auth": "oauth",
+   "docs": "https://developers.figma.com/docs/figma-mcp-server/remote-server-installation/"
+  },
+  {
+   "id": "fireflies",
+   "name": "Fireflies",
+   "description": "Meeting transcripts, summaries, and action items.",
+   "transport": "http",
+   "url": "https://api.fireflies.ai/mcp",
+   "auth": "oauth",
+   "docs": "https://docs.fireflies.ai/getting-started/mcp-configuration"
+  },
+  {
+   "id": "gamma",
+   "name": "Gamma",
+   "description": "Gamma: generate and edit AI presentations, docs, and sites.",
+   "transport": "http",
+   "url": "https://mcp.gamma.app/mcp",
+   "auth": "oauth",
+   "docs": "https://developers.gamma.app/docs/gamma-mcp-server"
+  },
+  {
+   "id": "gitlab",
+   "name": "GitLab",
+   "description": "GitLab: issues, merge requests, pipelines, and repo context.",
+   "transport": "http",
+   "url": "https://gitlab.com/api/v4/mcp",
+   "auth": "oauth",
+   "docs": "https://docs.gitlab.com/user/model_context_protocol/mcp_server/"
+  },
+  {
+   "id": "globalping",
+   "name": "Globalping",
+   "description": "Ping, traceroute, DNS, and HTTP tests from global probes.",
+   "transport": "http",
+   "url": "https://mcp.globalping.dev/mcp",
+   "auth": "oauth",
+   "docs": "https://github.com/jsdelivr/globalping-mcp-server"
+  },
+  {
+   "id": "grafana",
+   "name": "Grafana",
+   "description": "Query metrics, logs, dashboards, alerts, and incidents from Grafana Cloud.",
+   "transport": "http",
+   "url": "https://mcp.grafana.com/mcp",
+   "auth": "oauth",
+   "docs": "https://grafana.com/docs/grafana-cloud/ai-tools/mcp-servers/cloud-mcp/"
+  },
+  {
+   "id": "hugging_face",
+   "name": "Hugging Face",
+   "description": "Models, datasets, Spaces, and papers from the Hugging Face Hub.",
+   "transport": "http",
+   "url": "https://huggingface.co/mcp",
+   "auth": "oauth",
+   "docs": "https://huggingface.co/docs/hub/agents-mcp"
+  },
+  {
+   "id": "indeed",
+   "name": "Indeed",
+   "description": "Search jobs and listings on Indeed.",
+   "transport": "http",
+   "url": "https://mcp.indeed.com/claude/mcp",
+   "auth": "oauth",
+   "docs": "https://docs.indeed.com/indeed-mcp"
+  },
+  {
+   "id": "intercom",
+   "name": "Intercom",
+   "description": "Conversations, tickets, and customer data from Intercom.",
+   "transport": "http",
+   "url": "https://mcp.intercom.com/mcp",
+   "auth": "oauth",
+   "docs": "https://developers.intercom.com/docs/guides/mcp"
+  },
+  {
+   "id": "kiwi",
+   "name": "Kiwi",
+   "description": "Kiwi.com flight search: itineraries with direct booking links.",
+   "transport": "http",
+   "url": "https://mcp.kiwi.com",
+   "auth": "none",
+   "docs": "https://www.kiwi.com/stories/kiwi-mcp-connector/"
+  },
+  {
+   "id": "klaviyo",
+   "name": "Klaviyo",
+   "description": "Klaviyo marketing: campaigns, flows, segments, and reporting.",
+   "transport": "http",
+   "url": "https://mcp.klaviyo.com/mcp?core-tools-only=true&disable-tools-with-user-generated-content=true",
+   "auth": "oauth",
+   "docs": "https://developers.klaviyo.com/en/docs/klaviyo_mcp_server"
+  },
+  {
+   "id": "linear",
+   "name": "Linear",
+   "description": "Find, create, and update Linear issues, projects, and comments.",
+   "transport": "http",
+   "url": "https://mcp.linear.app/mcp",
+   "auth": "oauth",
+   "docs": "https://linear.app/docs/mcp"
+  },
+  {
+   "id": "microsoft-learn",
+   "name": "Microsoft Learn",
+   "description": "Official Microsoft, Azure, and .NET docs and code samples.",
+   "transport": "http",
+   "url": "https://learn.microsoft.com/api/mcp",
+   "auth": "none",
+   "docs": "https://learn.microsoft.com/en-us/training/support/mcp-get-started"
+  },
+  {
+   "id": "miro",
+   "name": "Miro",
+   "description": "Read and edit Miro boards, diagrams, and frames.",
+   "transport": "http",
+   "url": "https://mcp.miro.com/",
+   "auth": "oauth",
+   "docs": "https://developers.miro.com/docs/connecting-to-miro-mcp"
+  },
+  {
+   "id": "mixpanel",
+   "name": "Mixpanel",
+   "description": "Mixpanel analytics: events, funnels, retention, dashboards.",
+   "transport": "http",
+   "url": "https://mcp.mixpanel.com/mcp",
+   "auth": "oauth",
+   "docs": "https://docs.mixpanel.com/docs/mcp"
+  },
+  {
+   "id": "monday",
+   "name": "Monday",
+   "description": "Boards, items, docs, and workflows in monday.com.",
+   "transport": "http",
+   "url": "https://mcp.monday.com/mcp",
+   "auth": "oauth",
+   "docs": "https://developer.monday.com/apps/docs/mondaycom-mcp-integration"
+  },
+  {
+   "id": "motherduck",
+   "name": "MotherDuck",
+   "description": "MotherDuck: query DuckDB cloud warehouses with SQL.",
+   "transport": "http",
+   "url": "https://api.motherduck.com/mcp",
+   "auth": "oauth",
+   "docs": "https://motherduck.com/docs/key-tasks/ai-and-motherduck/mcp-setup/"
+  },
+  {
+   "id": "n8n-official",
+   "name": "N8N Official",
+   "description": "Connect to your n8n instance's official MCP server with browser OAuth.",
+   "transport": "http",
+   "url": "${N8N_MCP_SERVER_URL}",
+   "auth": "oauth",
+   "docs": "https://docs.n8n.io/connect/connect-to-n8n-mcp-server/"
+  },
+  {
+   "id": "neon",
+   "name": "Neon",
+   "description": "Neon serverless Postgres: projects, branches, and SQL.",
+   "transport": "http",
+   "url": "https://mcp.neon.tech/mcp",
+   "auth": "oauth",
+   "docs": "https://neon.com/docs/ai/neon-mcp-server"
+  },
+  {
+   "id": "netlify",
+   "name": "Netlify",
+   "description": "Sites, deploys, and env vars via Netlify's hosted MCP.",
+   "transport": "http",
+   "url": "https://netlify-mcp.netlify.app/mcp",
+   "auth": "oauth",
+   "docs": "https://docs.netlify.com/build/build-with-ai/agent-setup-guides/agent-setup-overview/"
+  },
+  {
+   "id": "notion",
+   "name": "Notion",
+   "description": "Pages and databases from your Notion workspace.",
+   "transport": "http",
+   "url": "https://mcp.notion.com/mcp",
+   "auth": "oauth",
+   "docs": "https://developers.notion.com/docs/mcp"
+  },
+  {
+   "id": "paypal",
+   "name": "PayPal",
+   "description": "Payments, invoices, and subscriptions via PayPal's hosted MCP.",
+   "transport": "http",
+   "url": "https://mcp.paypal.com/sse",
+   "auth": "oauth",
+   "docs": "https://developer.paypal.com/tools/mcp-server/"
+  },
+  {
+   "id": "plaid",
+   "name": "Plaid",
+   "description": "Plaid dashboard: integrations, Items, and usage debugging.",
+   "transport": "http",
+   "url": "https://api.dashboard.plaid.com/mcp/",
+   "auth": "oauth",
+   "docs": "https://plaid.com/docs/resources/mcp/"
+  },
+  {
+   "id": "postman",
+   "name": "Postman",
+   "description": "Postman workspaces, collections, environments, and APIs.",
+   "transport": "http",
+   "url": "https://mcp.postman.com/minimal",
+   "auth": "oauth",
+   "docs": "https://learning.postman.com/docs/reference/postman-api/postman-mcp-server/postman-mcp-remote-server/"
+  },
+  {
+   "id": "prisma-postgres",
+   "name": "Prisma Postgres",
+   "description": "Create and manage Prisma Postgres databases.",
+   "transport": "http",
+   "url": "https://mcp.prisma.io/mcp",
+   "auth": "oauth",
+   "docs": "https://www.prisma.io/docs/postgres/integrations/mcp-server"
+  },
+  {
+   "id": "railway",
+   "name": "Railway",
+   "description": "Railway: projects, services, deployments, and environments.",
+   "transport": "http",
+   "url": "https://mcp.railway.com",
+   "auth": "oauth",
+   "docs": "https://docs.railway.com/guides/mcp-server"
+  },
+  {
+   "id": "robinhood",
+   "name": "Robinhood",
+   "description": "Robinhood agentic trading: portfolio, balances, and orders.",
+   "transport": "http",
+   "url": "https://agent.robinhood.com/mcp/trading",
+   "auth": "oauth",
+   "docs": "https://robinhood.com/us/en/support/articles/agentic-trading-overview/"
+  },
+  {
+   "id": "semgrep",
+   "name": "Semgrep",
+   "description": "Scan code for security vulnerabilities with Semgrep.",
+   "transport": "http",
+   "url": "https://mcp.semgrep.ai/mcp",
+   "auth": "oauth",
+   "docs": "https://semgrep.dev/docs/mcp"
+  },
+  {
+   "id": "sentry",
+   "name": "Sentry",
+   "description": "Issues, stack traces, and error context from Sentry.",
+   "transport": "http",
+   "url": "https://mcp.sentry.dev/mcp",
+   "auth": "oauth",
+   "docs": "https://docs.sentry.io/product/sentry-mcp/"
+  },
+  {
+   "id": "square",
+   "name": "Square",
+   "description": "Catalog, orders, and payments via Square's hosted MCP.",
+   "transport": "http",
+   "url": "https://mcp.squareup.com/sse",
+   "auth": "oauth",
+   "docs": "https://developer.squareup.com/docs/mcp"
+  },
+  {
+   "id": "strava",
+   "name": "Strava",
+   "description": "Strava: activities, fitness trends, training load (read-only).",
+   "transport": "http",
+   "url": "https://mcp.strava.com/mcp",
+   "auth": "oauth",
+   "docs": "https://support.strava.com/en-us/articles/15401531-strava-mcp-connector"
+  },
+  {
+   "id": "stripe",
+   "name": "Stripe",
+   "description": "Payments, customers, and invoices via Stripe's hosted MCP.",
+   "transport": "http",
+   "url": "https://mcp.stripe.com",
+   "auth": "oauth",
+   "docs": "https://docs.stripe.com/mcp"
+  },
+  {
+   "id": "supabase",
+   "name": "Supabase",
+   "description": "Database, auth, and storage from your Supabase projects.",
+   "transport": "http",
+   "url": "https://mcp.supabase.com/mcp",
+   "auth": "oauth",
+   "docs": "https://supabase.com/docs/guides/ai-tools/mcp"
+  },
+  {
+   "id": "todoist",
+   "name": "Todoist",
+   "description": "Manage Todoist tasks and projects.",
+   "transport": "http",
+   "url": "https://ai.todoist.net/mcp",
+   "auth": "oauth",
+   "docs": "https://www.todoist.com/help/articles/todoist-mcp-server"
+  },
+  {
+   "id": "trivago",
+   "name": "Trivago",
+   "description": "trivago hotel search: compare prices by city and dates.",
+   "transport": "http",
+   "url": "https://mcp.trivago.com/mcp",
+   "auth": "none",
+   "docs": "https://mcp.trivago.com/mcp"
+  },
+  {
+   "id": "twelve-data",
+   "name": "Twelve Data",
+   "description": "Stocks, forex, and crypto market data from Twelve Data.",
+   "transport": "http",
+   "url": "https://mcp.twelvedata.com/mcp",
+   "auth": "oauth",
+   "docs": "https://twelvedata.com/docs"
+  },
+  {
+   "id": "twilio-docs",
+   "name": "Twilio Docs",
+   "description": "Twilio developer docs search (public beta, read-only).",
+   "transport": "http",
+   "url": "https://mcp.twilio.com/docs",
+   "auth": "none",
+   "docs": "https://www.twilio.com/docs/ai/mcp"
+  },
+  {
+   "id": "unreal-engine",
+   "name": "Unreal Engine",
+   "description": "Drive the Unreal Engine 5.8 editor over its local MCP server.",
+   "transport": "http",
+   "url": "http://127.0.0.1:8000/mcp",
+   "auth": "none",
+   "docs": "https://dev.epicgames.com/documentation/unreal-engine/unreal-mcp-in-unreal-editor"
+  },
+  {
+   "id": "vercel",
+   "name": "Vercel",
+   "description": "Deployments, logs, and projects via Vercel's hosted MCP.",
+   "transport": "http",
+   "url": "https://mcp.vercel.com",
+   "auth": "oauth",
+   "docs": "https://vercel.com/docs/mcp"
+  },
+  {
+   "id": "webflow",
+   "name": "Webflow",
+   "description": "Sites, CMS collections, and pages via Webflow's hosted MCP.",
+   "transport": "http",
+   "url": "https://mcp.webflow.com/mcp",
+   "auth": "oauth",
+   "docs": "https://developers.webflow.com/mcp/reference/getting-started"
+  },
+  {
+   "id": "wolfram",
+   "name": "Wolfram",
+   "description": "Wolfram|Alpha computation, math, and curated knowledge.",
+   "transport": "http",
+   "url": "https://agenttools.wolfram.com/mcp",
+   "auth": "none",
+   "docs": "https://www.wolfram.com/agent-tools/"
+  },
+  {
+   "id": "wordpress-com",
+   "name": "Wordpress Com",
+   "description": "WordPress.com: posts, pages, drafts, stats, and comments.",
+   "transport": "http",
+   "url": "https://public-api.wordpress.com/wpcom/v2/mcp/v1",
+   "auth": "oauth",
+   "docs": "https://developer.wordpress.com/docs/mcp/"
+  }
+ ]
+}

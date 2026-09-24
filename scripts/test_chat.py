@@ -1838,6 +1838,74 @@ class TaskModelTests(unittest.TestCase):
                 task_scheduler._task_brain({"endpoint_id": "deleted-endpoint"})
 
 
+class McpClientTests(unittest.TestCase):
+    """Local and API models get the MCP servers Claude does, through JARVIS's
+    own client (core/mcp_client.py), against a real stdio server - and every
+    call from them is asked about first."""
+
+    FIXTURE = str(Path(__file__).resolve().parent / "mcp_echo_fixture.py")
+
+    def setUp(self):
+        self.log = os.path.join(tempfile.mkdtemp(prefix="jarvis-mcp-test-"), "calls.txt")
+        self.addCleanup(shutil.rmtree, os.path.dirname(self.log), True)
+        self.servers = {"echo": {"type": "stdio", "command": sys.executable, "args": [self.FIXTURE],
+                                 "env": {"MCP_ECHO_LOG": self.log}}}
+
+    def brain(self, session_id="mcp-chat"):
+        from core.external_brain import ExternalBrain
+        brain = ExternalBrain("http://fake", "m", None, session_id=session_id)
+        with patch("core.integrations.list_mcp_servers_runtime", return_value=self.servers):
+            asyncio.run(brain.connect())
+        return brain
+
+    def calls(self):
+        return open(self.log, encoding="utf-8").read().split() if os.path.exists(self.log) else []
+
+    def test_a_local_model_gets_the_servers_tools_and_calls_them_once_allowed(self):
+        from core import permissions
+        brain = self.brain()
+        self.assertIn("mcp__echo__echo", [t["function"]["name"] for t in brain.tools])
+        allowed = AsyncMock(return_value=permissions.Decision("allow"))
+        with patch.object(permissions, "decide", new=allowed):
+            self.assertEqual(asyncio.run(brain._execute_tool("mcp__echo__echo", {"text": "hi"})), "ECHO:hi")
+        self.assertEqual(allowed.call_args.kwargs["surface"], "chat:mcp-chat", "asked in the chat that called it")
+        self.assertEqual(self.calls(), ["hi"])
+
+    def test_a_call_nobody_can_approve_never_reaches_the_server(self):
+        brain = self.brain()
+        text = asyncio.run(brain._execute_tool("mcp__echo__echo", {"text": "sneaky"}))
+        self.assertTrue(text.startswith("Not run:"), text)
+        self.assertEqual(self.calls(), [])
+
+    def test_an_unreachable_server_is_skipped_and_a_detached_brain_gets_none(self):
+        self.servers["broken"] = {"type": "stdio", "command": "no-such-command-anywhere", "args": []}
+        names = [t["function"]["name"] for t in self.brain().tools]
+        self.assertIn("mcp__echo__echo", names)
+        self.assertFalse(any(n.startswith("mcp__broken") for n in names))
+        self.assertFalse(any(t["function"]["name"].startswith("mcp__") for t in self.brain(session_id=None).tools))
+
+    def test_function_names_are_safe_and_unique(self):
+        from core import mcp_client
+        taken = set()
+        first = mcp_client.function_name("my server", "do.thing", taken)
+        self.assertEqual(first, "mcp__my_server__do_thing")
+        taken.add(first)
+        self.assertEqual(mcp_client.function_name("my server", "do.thing", taken), "mcp__my_server__do_thing_2")
+        self.assertLessEqual(len(mcp_client.function_name("s" * 80, "t" * 80, set())), 64)
+
+    def test_the_catalog_lists_hermes_servers_and_marks_those_added(self):
+        from core import integrations
+        catalog = integrations.mcp_catalog()
+        self.assertEqual(len(catalog), 65)
+        self.assertEqual(sum(1 for s in catalog if s["auth"] == "none"), 10)
+        self.assertTrue(all(s["url"] and s["name"] and s["description"] for s in catalog))
+        deepwiki = next(s for s in catalog if s["id"] == "deepwiki")
+        self.assertFalse(deepwiki["added"])
+        item = integrations.create_mcp_server("DeepWiki", "http", url=deepwiki["url"])
+        self.addCleanup(integrations.delete_integration, item["id"])
+        self.assertTrue(next(s for s in integrations.mcp_catalog() if s["id"] == "deepwiki")["added"])
+
+
 class VaultMemoryTests(unittest.TestCase):
     """The vault behind the memory interface (core/memory). Its old scan was a
     substring match ("cache prompt" missed what "prompt cache" found), in

@@ -65,6 +65,21 @@ def list_integrations() -> list[dict]:
     return [_masked(i) for i in _load().values()]
 
 
+CATALOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_catalog.json")
+
+
+def mcp_catalog() -> list[dict]:
+    """Known MCP servers (core/mcp_catalog.json, adapted from Hermes Agent's
+    catalog), each marked with whether it is already added here. Those that
+    need no sign-in can be added in one step; OAuth ones wait for sign-in
+    support. Adding one is an ordinary MCP Tool Server integration."""
+    import json
+    with open(CATALOG_FILE, encoding="utf-8") as f:
+        servers = json.load(f)["servers"]
+    added = {(i.get("url") or "").rstrip("/") for i in _load().values() if i.get("kind") == "mcp_server"}
+    return [{**s, "added": (s.get("url") or "").rstrip("/") in added} for s in servers]
+
+
 def list_mcp_servers_runtime(only_ids: Optional[list[str]] = None) -> dict[str, dict]:
     """Live mcp_servers dict for ClaudeAgentOptions, keys are integration
     names, secrets decrypted — runtime use only, never returned from an API.

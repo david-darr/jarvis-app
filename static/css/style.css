@@ -1001,8 +1001,8 @@ input[type="checkbox"]:checked::after {
    "UI somewhat similar to Claude's") — search + All/Connected/Not connected
    filter tabs above a real table (icon/name · type · status), not just a
    stacked card list. */
-.connectors-toolbar { display: flex; align-items: center; gap: 10px; margin: 14px 0 10px; }
-.connectors-search { flex: 1; }
+.connectors-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 14px 0 10px; }
+.connectors-search { flex: 1 1 180px; min-width: 0; }
 /* Generic segmented-tab toggle (originally Integrations' filter tabs,
    generalized 2026-09-01 when Brain's Skills/Vault toggle needed the exact
    same look — reuse, don't duplicate, per specs/frontend-style.md). */
@@ -1525,3 +1525,14 @@ button.dashboard-row:hover { background: rgba(255,255,255,.035); }
 .board-card-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .board-card-actions .btn { padding: 3px 9px; font-size: 11px; }
 .board-feedback { flex: 1 1 100%; min-width: 0; font-size: 11.5px; }
+
+/* Settings > Integrations > MCP catalog (settings.js mcpCatalogSection). */
+.mcp-catalog-search { width: 100%; max-width: 100%; box-sizing: border-box; margin-bottom: 8px; }
+.mcp-catalog { min-width: 0; max-width: 100%; }
+.mcp-catalog-row .meta { overflow-wrap: anywhere; }
+.mcp-catalog-list { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; }
+.mcp-catalog-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px; }
+.mcp-catalog-row > div { min-width: 0; }
+.mcp-catalog-row > :last-child { flex-shrink: 0; }
+.mcp-catalog-name { font-size: 12.5px; color: var(--text); }

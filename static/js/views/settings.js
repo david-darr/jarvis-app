@@ -836,6 +836,59 @@ async function renderIntegrationsPanel(content) {
   }
 
   content.appendChild(formHost);
+  content.appendChild(await mcpCatalogSection(content));
+}
+
+// The MCP catalog (Hermes track 2026-09-23): known servers from
+// core/mcp_catalog.json, adapted from Hermes Agent's. The ones that need no
+// sign-in add in one step as ordinary MCP Tool Servers; OAuth sign-in comes
+// later, so those say so rather than offer a button that cannot work.
+async function mcpCatalogSection(content) {
+  const catalog = await api("/api/integrations/catalog");
+  const section = el("details", { class: "disclosure-panel mcp-catalog", style: "margin-top:18px;" });
+  const search = el("input", { type: "search", class: "mcp-catalog-search", placeholder: "Search servers" });
+  const list = el("div", { class: "mcp-catalog-list" });
+  const draw = () => {
+    const q = search.value.trim().toLowerCase();
+    list.innerHTML = "";
+    const shown = catalog
+      .filter((s) => !q || `${s.name} ${s.description}`.toLowerCase().includes(q))
+      .sort((a, b) => (a.auth === "none" ? 0 : 1) - (b.auth === "none" ? 0 : 1) || a.name.localeCompare(b.name));
+    for (const server of shown) {
+      let action;
+      if (server.added) action = el("span", { class: "meta connectors-status-ok", text: "Added" });
+      else if (server.auth === "none") {
+        action = el("button", { class: "btn", text: "Add", onclick: async (event) => {
+          event.currentTarget.disabled = true;
+          try {
+            await api("/api/integrations/mcp-server", { method: "POST",
+              body: JSON.stringify({ name: server.name, mcp_type: "http", url: server.url }) });
+            toast(`${server.name} added`, "success");
+            await renderIntegrationsPanel(content);
+          } catch (problem) { toast(problem.message, "error"); event.currentTarget.disabled = false; }
+        } });
+      } else action = el("span", { class: "meta", text: "Needs sign-in (coming)" });
+      list.append(el("div", { class: "mcp-catalog-row", "data-server": server.id }, [
+        el("div", {}, [
+          el("div", { class: "mcp-catalog-name", text: server.name }),
+          el("div", { class: "meta", text: server.description }),
+          server.docs ? el("a", { class: "meta", href: server.docs, target: "_blank", rel: "noopener", text: "Documentation" }) : null,
+        ]),
+        action,
+      ]));
+    }
+    if (!shown.length) list.append(el("div", { class: "meta", text: "No server matches." }));
+  };
+  search.addEventListener("input", draw);
+  section.append(
+    el("summary", { text: `Browse the MCP catalog (${catalog.length} servers)` }),
+    el("div", { class: "meta", style: "margin:6px 0 8px;", text:
+      "Tools from these servers are available to every model: Claude directly, local and API models through JARVIS, "
+      + "which asks you before each call. Servers that need a sign-in can't be added yet." }),
+    search, list,
+  );
+  draw();
+  return section;
 }
 
 function renderDavForm(host, content, kind) {

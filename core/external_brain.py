@@ -25,14 +25,15 @@ hive mind") — same reasoning, same shared engine (core/memory_tools.py).
 """
 from typing import AsyncIterator
 
-from core import projects, system_prompt, tool_registry
+from core import integrations, mcp_client, permissions, projects, system_prompt, tool_registry
 from core.providers import openai_compatible
 from core.session_manager import sent_text
 
 class ExternalBrain:
     def __init__(self, base_url: str, model: str, api_key: str | None, history: list[dict] | None = None,
                  session_id: str | None = None, num_ctx: int | None = None, is_admin: bool = False,
-                 project_id: str | None = None, endpoint_id: str | None = None):
+                 project_id: str | None = None, endpoint_id: str | None = None,
+                 integration_ids: list[str] | None = None):
         self.base_url = base_url
         self.model = model
         self.api_key = api_key
@@ -42,6 +43,10 @@ class ExternalBrain:
         # for an admin, absent from a non-admin session's list entirely.
         self.is_admin = is_admin
         self.tools = tool_registry.openai_tools(is_admin)
+        # MCP servers enabled for this chat (None: every registered one, as
+        # for Claude), their tools found at connect() - see core/mcp_client.py.
+        self.integration_ids = integration_ids
+        self._mcp_tools: dict[str, dict] = {}
         # The "landing zone" (David's ask 2026-09-01, after live-testing
         # found chats couldn't answer real vault/memory questions) — a
         # real system message, not just tool descriptions, so a model
@@ -93,11 +98,45 @@ class ExternalBrain:
         return seeded
 
     async def _execute_tool(self, name: str, args: dict) -> str:
+        if name in self._mcp_tools:
+            return await self._call_mcp(name, args)
         return await tool_registry.call(name, args, tool_registry.ToolContext(self.session_id, self.is_admin),
                                         tool_registry.OPENAI)
 
+    async def _call_mcp(self, name: str, args: dict) -> str:
+        """A third-party tool: asked about first, like Claude's MCP calls,
+        through the chat's own permission prompt. With nobody to ask (no chat
+        window open, a scheduled run) the broker refuses and says where to
+        grant it."""
+        spec = self._mcp_tools[name]
+        decision = await permissions.decide(
+            surface=f"chat:{self.session_id}" if self.session_id else "none",
+            tool=name, arguments=args if isinstance(args, dict) else {},
+            title=f"{spec['server']}: {spec['name']}", description=spec["description"][:300],
+            is_admin=self.is_admin,
+        )
+        if decision.behavior != "allow":
+            return f"Not run: {decision.reason}"
+        try:
+            return await mcp_client.call_tool(spec["config"], spec["name"], args)
+        except Exception as e:
+            return f"Tool error: {e}"
+
     async def connect(self) -> None:
-        pass  # stateless HTTP calls — nothing to open ahead of time
+        """Find the tools of the MCP servers this chat may use. Only for a
+        real chat: a detached summariser gets none. The list is fixed for the
+        connection, so the tool list - part of the cached prompt - is stable."""
+        if not self.session_id:
+            return
+        servers = integrations.list_mcp_servers_runtime(self.integration_ids)
+        if not servers:
+            return
+        self._mcp_tools = await mcp_client.discover(servers)
+        self.tools = self.tools + [
+            {"type": "function", "function": {"name": name, "parameters": spec["schema"],
+                                              "description": f"[{spec['server']} MCP server] {spec['description']}".strip()}}
+            for name, spec in self._mcp_tools.items()
+        ]
 
     async def run_turn(self, user_text: str) -> str:
         self._messages.append({"role": "user", "content": user_text})

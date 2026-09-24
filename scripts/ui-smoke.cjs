@@ -139,6 +139,10 @@ function fixture(url) {
   if (route === "/api/tab-school/courses") return list([{ name: "Software Design", upcoming_count: 2, overdue_count: 0, assignment_count: 8 }]);
   if (route === "/api/tab-school/assignments") return url.searchParams.has("overdue") ? [] : list([{ id: "a1", course: "Software Design", title: "Review the project brief", due: future(40), completed: false, attachment_links: [] }]);
   if (route === "/api/integrations") return [];
+  if (route === "/api/integrations/catalog") return [
+    { id: "deepwiki", name: "DeepWiki", description: "Ask questions about public GitHub repositories.", auth: "none", url: "https://mcp.deepwiki.com/mcp", docs: "https://docs.devin.ai", added: false },
+    { id: "linear", name: "Linear", description: "Issues and projects from your Linear workspace.", auth: "oauth", url: "https://mcp.linear.app/mcp", docs: "https://linear.app/docs", added: false },
+    { id: "context7", name: "Context7", description: "Up-to-date library documentation.", auth: "none", url: "https://mcp.context7.com/mcp", docs: null, added: true }];
   throw new Error("No fixture for " + route);
 }
 const server = http.createServer(async (req, res) => {
@@ -369,6 +373,17 @@ app.whenReady().then(async () => {
       assert.ok(await js("document.querySelector('.logs-file').textContent.includes('Backend (200 KB)')"), "Files show their size");
       assert.deepEqual(await overflow(), [], label + " logs overflow");
       await capture(label + "-logs");
+      // -- MCP catalog (Hermes track 2026-09-23): one-step add only where no sign-in is needed.
+      await js("document.querySelector('[data-section=integrations]').click()");
+      await waitFor("!!document.querySelector('.mcp-catalog')");
+      await js("document.querySelector('.mcp-catalog').open = true");
+      assert.ok(await js("[...document.querySelectorAll('[data-server=deepwiki] button')].some(b => b.textContent === 'Add')"), label + " a no-sign-in server offers Add");
+      assert.ok(await js("document.querySelector('[data-server=linear]').textContent.includes('Needs sign-in')"), label + " an OAuth server says it needs sign-in");
+      assert.ok(await js("document.querySelector('[data-server=context7]').textContent.includes('Added')"), label + " an added server is marked");
+      await js("{ const s = document.querySelector('.mcp-catalog-search'); s.value = 'linear'; s.dispatchEvent(new Event('input')); }");
+      assert.equal(await js("document.querySelectorAll('.mcp-catalog-row').length"), 1, label + " catalog search filters");
+      assert.deepEqual(await overflow(), [], label + " integrations overflow");
+      await capture(label + "-mcp-catalog");
       await js("document.querySelector('[data-section=vault]').click()");
       await waitFor("!!document.querySelector('#settings-content .card')");
       // Search matches what someone would actually type, not just the

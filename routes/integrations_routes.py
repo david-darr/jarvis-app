@@ -39,6 +39,12 @@ async def create_api_service(body: CreateApiServiceRequest, user: str = Depends(
     return integrations.create_api_service(body.name, body.base_url, body.api_key)
 
 
+@router.get("/catalog")
+async def mcp_catalog(user: str = Depends(require_admin)) -> list[dict]:
+    """Known MCP servers to add (core/mcp_catalog.json)."""
+    return integrations.mcp_catalog()
+
+
 @router.post("/mcp-server")
 async def create_mcp_server(body: CreateMcpServerRequest, user: str = Depends(require_admin)) -> dict:
     try:

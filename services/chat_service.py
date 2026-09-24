@@ -166,7 +166,7 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
     # doubled request could never match the one rebuilt after a reconnect.
     return ExternalBrain(base_url, model, api_key, history=session_manager.effective_messages(session_id, exclude_last=True),
                          session_id=session_id, num_ctx=num_ctx, is_admin=is_admin, project_id=project_id,
-                         endpoint_id=endpoint["id"])
+                         endpoint_id=endpoint["id"], integration_ids=integration_ids)
 
 
 def _prime_with_history(session_id: str, just_created: bool, endpoint: dict, full_text: str,
