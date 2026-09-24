@@ -299,6 +299,84 @@ class EgressTests(unittest.TestCase):
         self.assertIn("NO-PROXY", r.stdout)
 
 
+@unittest.skipUnless(DOCKER_UP, "Docker is not running")
+class BrowseTests(unittest.TestCase):
+    """Step 3: the read-only browser (core/sandbox_browser.py) and the
+    prompted internet option of run_code. Needs internet access."""
+
+    def browse(self, url):
+        from core import sandbox_browser
+        return asyncio.run(sandbox_browser.browse(url))
+
+    def test_a_public_page_comes_back_as_title_text_and_links(self):
+        page = self.browse("https://example.com/")
+        self.assertIsNone(page["error"])
+        self.assertEqual(page["title"], "Example Domain")
+        self.assertIn("documentation examples", page["text"])
+        self.assertTrue(page["links"] and page["links"][0]["url"].startswith("https://"), page["links"])
+
+    def test_this_computer_and_the_browsers_own_loopback_are_refused(self):
+        for url in ("http://host.docker.internal/", "http://127.0.0.1/", "http://localhost:80/", "http://169.254.169.254/"):
+            page = self.browse(url)
+            # The filter's own refusal, not just an empty page: without
+            # --proxy-bypass-list=<-loopback> Chromium reaches its own
+            # loopback directly and merely finds nothing there.
+            self.assertTrue((page["error"] or "").startswith("refused:"), f"{url}: {page}")
+            self.assertEqual(page["text"], "")
+        self.assertIsNotNone(self.browse("https://host.docker.internal/")["error"])
+
+    def test_only_web_addresses_are_accepted_and_nothing_is_left_running(self):
+        from core import sandbox_browser
+        for bad in ("file:///etc/passwd", "chrome://settings", "javascript:alert(1)", "example.com"):
+            with self.assertRaises(ValueError, msg=bad):
+                self.browse(bad)
+        self.browse("https://example.com/")
+        left = subprocess.run(["docker", "ps", "-aq", "--filter", f"label={sandbox.LABEL}"],
+                              capture_output=True, text=True).stdout.strip()
+        self.assertEqual(left, "", "each browser is thrown away with its container")
+        self.assertIn("@sha256:", sandbox_browser.BROWSER_IMAGE)
+
+    def test_a_long_page_is_cut_cleanly(self):
+        page = self.browse("https://en.wikipedia.org/wiki/Docker_(software)")
+        self.assertIsNone(page["error"])
+        self.assertTrue(page["text"].endswith("page text cut here"))
+        self.assertLessEqual(len(page["links"]), 60)
+
+    def test_browse_is_offered_to_every_model_but_codex_and_claude_needs_no_prompt(self):
+        from core.brain import Brain
+        from core.external_brain import ExternalBrain
+        self.assertIn("browse", [t["function"]["name"] for t in ExternalBrain("http://x", "m", None).tools])
+        _, allowed, _ = Brain(vault_dir=tempfile.gettempdir())._tool_config()
+        self.assertIn("mcp__hive_mind__browse", allowed)
+        text = asyncio.run(tool_registry.call("browse", {"url": "https://example.com/"},
+                                              tool_registry.ToolContext("sbx-chat"), tool_registry.OPENAI))
+        self.assertTrue(text.startswith("Title: Example Domain"), text[:200])
+
+    def test_run_code_with_internet_asks_first_and_nobody_to_ask_means_no(self):
+        from core import permissions
+        spawned = []
+        real_run = sandbox.run
+
+        async def watched(*a, **kw):
+            spawned.append(kw.get("network"))
+            return await real_run(*a, **kw)
+        fetch = {"command": "python get.py", "internet": True,
+                 "files": {"get.py": "import urllib.request as u; print(u.urlopen('https://example.com/', timeout=20).status)"}}
+        with patch("core.sandbox.run", side_effect=watched):
+            refused = call(fetch)  # no chat window: the broker cannot ask
+            self.assertTrue(refused.startswith("Not run:"), refused)
+            self.assertEqual(spawned, [], "a refused run never starts")
+            with patch.object(permissions, "decide", return_value=permissions.Decision("allow")) as asked:
+                allowed = call(fetch)
+            self.assertIn("200", allowed)
+            self.assertEqual(asked.call_args.kwargs["tool"], "run_code_internet")
+            self.assertEqual(spawned, [True])
+            with patch.object(permissions, "decide") as not_asked:
+                offline = call({"command": "echo offline"})
+            not_asked.assert_not_called()
+        self.assertIn("offline", offline)
+
+
 def call(args, is_admin=False):
     return asyncio.run(tool_registry.call("run_code", args, tool_registry.ToolContext("sbx-chat", is_admin),
                                           tool_registry.OPENAI))

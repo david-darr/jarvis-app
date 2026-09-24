@@ -458,7 +458,8 @@ async def _run_shell(args, ctx):
 # already runs commands in its own sandbox.
 @register(
     "run_code",
-    "Run a shell command in an isolated Linux sandbox (Debian, Python 3.12, no internet). "
+    "Run a shell command in an isolated Linux sandbox (Debian, Python 3.12; no internet unless internet=true, "
+    "which asks the person first). "
     "Its working directory /work starts with the files you pass (path -> text) and, in an admin chat "
     "with copy_repo=true, a copy of the JARVIS code. Returns the output and a diff of what the command "
     "changed; nothing is written back to any real folder. Use it to run code, tests or scripts safely.",
@@ -469,6 +470,8 @@ async def _run_shell(args, ctx):
                   "description": "Optional files to create first: relative path -> text content"},
         "copy_repo": {"type": "boolean", "description": "Admin chats only: start with a copy of the JARVIS code"},
         "timeout_seconds": {"type": "integer", "description": "Optional, default 120, at most 900"},
+        "internet": {"type": "boolean", "description": "Optional: reach public websites (e.g. to install a package). "
+                                                       "The person is asked first each time."},
     }, ("command",)),
 )
 async def _run_code(args, ctx):
@@ -493,8 +496,20 @@ async def _run_code(args, ctx):
         timeout = int(args.get("timeout_seconds") or sandbox.DEFAULT_TIMEOUT_SECONDS)
     except (TypeError, ValueError):
         timeout = sandbox.DEFAULT_TIMEOUT_SECONDS
+    internet = args.get("internet") in (True, "true", "True")
+    if internet:
+        # Code with the internet can upload what it reads, even through the
+        # filter, so this one asks (David's call, 2026-09-24).
+        from core import permissions
+        decision = await permissions.decide(
+            surface=f"chat:{ctx.session_id}" if ctx.session_id else "none", tool="run_code_internet",
+            arguments={"command": command}, title="Run code with internet access",
+            description=f"In the sandbox, reaching public websites only: {command[:300]}", is_admin=ctx.is_admin)
+        if decision.behavior != "allow":
+            return f"Not run: {decision.reason or 'internet access was not allowed'}"
     try:
-        result = await sandbox.run(command, files=files, source_dir=BASE_DIR if copy_repo else None, timeout=timeout)
+        result = await sandbox.run(command, files=files, source_dir=BASE_DIR if copy_repo else None,
+                                   timeout=timeout, network=internet)
     except sandbox.SandboxUnavailable as e:
         return f"Not run: the sandbox is unavailable ({e}). Nothing was run on this computer."
     except ValueError as e:
@@ -504,3 +519,28 @@ async def _run_code(args, ctx):
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}\n"
             f"files changed in /work (not written anywhere real):\n{changes}\n"
             + (f"diff:\n{result.diff}" if result.diff else ""))
+
+
+# The read-only browser (Hermes phase 7 step 3, 2026-09-24): a fresh headless
+# Chromium in the sandbox, public websites only, nothing kept between calls
+# (core/sandbox_browser.py). No permission prompt (David's call): it reads
+# public pages, much like a search.
+@register(
+    "browse",
+    "Open one public web page in a sandboxed browser and read it: returns the page title, its readable text "
+    "(first 12,000 characters) and its links. Public websites only; no logins or cookies. Use it to read a page "
+    "you have the address of, e.g. documentation or an article.",
+    _object({"url": _str("The full http:// or https:// address")}, ("url",)),
+)
+async def _browse(args, ctx):
+    from core import sandbox, sandbox_browser
+    try:
+        page = await sandbox_browser.browse(args.get("url") or "")
+    except ValueError as e:
+        return f"Not opened: {e}"
+    except sandbox.SandboxUnavailable as e:
+        return f"Not opened: the sandbox is unavailable ({e})."
+    if page["error"]:
+        return f"Could not read {page['url']}: {page['error']}"
+    links = "\n".join(f"- {l['text'] or '(no text)'}: {l['url']}" for l in page["links"]) or "(none)"
+    return f"Title: {page['title']}\nURL: {page['url']}\n\n{page['text']}\n\nLinks:\n{links}"

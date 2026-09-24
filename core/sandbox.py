@@ -224,9 +224,12 @@ def _cap(text: str) -> str:
 
 async def run(command: str, *, files: Optional[dict[str, str]] = None, source_dir: Optional[str] = None,
               timeout: int = DEFAULT_TIMEOUT_SECONDS, memory: str = "512m", cpus: str = "1",
-              pids: int = 128, network: bool = False) -> SandboxResult:
+              pids: int = 128, network: bool = False, image: str = IMAGE) -> SandboxResult:
     """Run `command` with sh in a fresh container whose /work holds a copy of
-    `source_dir` and/or `files` ({relative path: text})."""
+    `source_dir` and/or `files` ({relative path: text}). `image` must be
+    pinned by digest; core/sandbox_browser.py passes its own."""
+    if "@sha256:" not in image:
+        raise ValueError("a sandbox image must be pinned by digest")
     ok, why = await available()
     if not ok:
         raise SandboxUnavailable(why)
@@ -253,7 +256,7 @@ async def run(command: str, *, files: Optional[dict[str, str]] = None, source_di
 
         args = ["run", "--rm", "--name", name, "--label", LABEL, "--hostname", "sandbox",
                 *hardening_args(memory, cpus, pids, network),
-                "-v", f"{workspace}:/work", "-w", "/work", IMAGE,
+                "-e", "HOME=/tmp", "-v", f"{workspace}:/work", "-w", "/work", image,
                 "timeout", "-s", "KILL", f"{timeout}s", "sh", "-c", command]
         proc = await asyncio.create_subprocess_exec(
             "docker", *args, stdin=asyncio.subprocess.DEVNULL,

@@ -177,6 +177,8 @@ class Brain:
             # Sandboxed runs (core/sandbox.py): nothing on this computer for a
             # prompt to protect, so pre-approved like the read tools.
             "mcp__hive_mind__run_code",
+            # The read-only sandboxed browser, public pages only (David's call).
+            "mcp__hive_mind__browse",
             "mcp__hive_mind__save_generated_file",
             # Canva image/design generation (David's ask 2026-09-10, "have
             # their claude code use Canva"). Pre-approves only the
