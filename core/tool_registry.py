@@ -478,7 +478,8 @@ async def _run_shell(args, ctx):
                         "code in files (e.g. {\"main.py\": \"...\"}) and use the command \"python main.py\""),
         "files": {"type": "object", "additionalProperties": {"type": "string"},
                   "description": "Optional files to create first: relative path -> text content"},
-        "copy_repo": {"type": "boolean", "description": "Admin chats only: start with a copy of the JARVIS code"},
+        "copy_repo": {"type": "boolean", "description": "Admin chats only, and only when JARVIS runs from a "
+                                                        "development checkout: start with a copy of the JARVIS code"},
         "timeout_seconds": {"type": "integer", "description": "Optional, default 120, at most 900"},
         "internet": {"type": "boolean", "description": "Optional: reach public websites (e.g. to install a package). "
                                                        "The person is asked first each time."},
@@ -487,6 +488,7 @@ async def _run_shell(args, ctx):
 async def _run_code(args, ctx):
     import json
     from core import sandbox
+    from core.sandbox_changes import available as sandbox_changes_available
     from core.constants import BASE_DIR
     command = (args.get("command") or "").strip()
     if not command:
@@ -502,12 +504,20 @@ async def _run_code(args, ctx):
     copy_repo = args.get("copy_repo") in (True, "true", "True")
     if copy_repo and not ctx.is_admin:
         return "Not run: only an admin chat can copy the JARVIS code into the sandbox."
+    if copy_repo and not sandbox_changes_available():
+        return ("Not run: copy_repo only works when JARVIS runs from a development checkout of its code. "
+                "This is an installed app, whose folder holds the bundled runtime and is replaced on update.")
     try:
         timeout = int(args.get("timeout_seconds") or sandbox.DEFAULT_TIMEOUT_SECONDS)
     except (TypeError, ValueError):
         timeout = sandbox.DEFAULT_TIMEOUT_SECONDS
     internet = args.get("internet") in (True, "true", "True")
     if internet:
+        # Checked before asking: approving a run that then cannot happen
+        # would be a prompt for nothing.
+        ready, why = await sandbox.available()
+        if not ready:
+            return f"Not run: the sandbox is unavailable ({why}). Nothing was run on this computer."
         # Code with the internet can upload what it reads, even through the
         # filter, so this one asks (David's call, 2026-09-24).
         from core import permissions

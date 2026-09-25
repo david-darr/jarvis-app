@@ -385,6 +385,7 @@ class ChangeSetTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="jarvis-changes-"))
         self.addCleanup(shutil.rmtree, self.root, True)
+        (self.root / ".git").mkdir()  # a development checkout; see test_an_installed_app_folder_is_refused
         (self.root / "a.py").write_text("print('old')\n", newline="")
         (self.root / "b.txt").write_text("keep\n", newline="")
         (self.root / "c.txt").write_text("bye\n", newline="")
@@ -464,7 +465,21 @@ class ChangeSetTests(unittest.TestCase):
             with self.assertRaises(sandbox_changes.Conflict, msg=path):
                 self.apply(self.forged(path))
         self.assertFalse((self.root.parent / "escaped.txt").exists())
-        self.assertFalse((self.root / ".git").exists())
+        self.assertEqual(list((self.root / ".git").iterdir()), [], "nothing written into .git")
+
+    def test_an_installed_app_folder_is_refused(self):
+        """Found 2026-09-25: an install folder holds the bundled runtime (a
+        copy is far over the input limit) and is replaced on update."""
+        from core import sandbox_changes
+        shutil.rmtree(self.root / ".git")
+        with self.assertRaises(sandbox_changes.Conflict) as caught:
+            self.apply(self.forged("x.txt"))
+        self.assertIn("development checkout", str(caught.exception))
+        self.assertFalse((self.root / "x.txt").exists())
+        with patch("core.sandbox_changes.available", return_value=False), patch("core.sandbox.run") as never:
+            text = call({"command": "ls", "copy_repo": True}, is_admin=True)
+        self.assertIn("development checkout", text)
+        never.assert_not_called()
 
     def test_a_change_set_for_another_folder_is_refused(self):
         from core import sandbox_changes
@@ -571,6 +586,16 @@ class RunCodeToolTests(unittest.TestCase):
             text = call({"command": "echo hi"})
         self.assertIn("Not run: the sandbox is unavailable", text)
         self.assertIn("Nothing was run on this computer", text)
+
+    def test_internet_without_docker_says_so_without_asking_first(self):
+        from core import permissions
+
+        async def down(*args, **kw):
+            return 1, "", "error during connect"
+        with patch("core.sandbox._docker", side_effect=down), patch.object(permissions, "decide") as asked:
+            text = call({"command": "echo hi", "internet": True})
+        self.assertIn("sandbox is unavailable", text)
+        asked.assert_not_called()
 
     def test_bad_input_is_refused_before_anything_runs(self):
         self.assertIn("no command", call({"command": " "}))
