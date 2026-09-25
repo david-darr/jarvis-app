@@ -7,6 +7,7 @@ import { createRecorder, transcribeBlob, getSpeechStatus, isRecordingSupported }
 import { createOpenMic } from "../openMic.js";
 import { createChatActivity } from '../chatActivity.js';
 import { showPermissionPrompt, dismissPermissionPrompt } from '../permissionPrompt.js';
+import { mountSideChat, openSideChat, closeSideChat, mainOpened, sideChatSessionId, canSplit, SESSION_MIME } from '../sideChat.js';
 
 // Composer rebuilt to match Odysseus's actual chat-input-bar structure
 // (David's ask 2026-08-31, cross-checked against the real repo at
@@ -391,6 +392,11 @@ export async function render(container, tabId, options = {}) {
   syncBeam();
 
   container.append(sessionsPanel, sessionsBackdrop, main);
+  // A second chat beside this one (static/js/sideChat.js).
+  mountSideChat(container, {
+    mainSessionId: () => activeSessionId,
+    openInMain: (id) => openSession(id, sessionsList, messages),
+  });
   // Selecting a session or starting a new one closes the mobile drawer —
   // no-op above the breakpoint since the classes it touches are inert there.
   sessionsList.addEventListener("click", () => closeSessionsDrawer(true));
@@ -1461,6 +1467,9 @@ async function refreshSessions(sessionsList, messages) {
       class: "session-item" + (session.id === activeSessionId ? " active" : ""),
       "data-session-id": session.id,
       "data-title": session.title,
+      // Drag onto the right half of the chat to open it side by side.
+      draggable: "true",
+      ondragstart: (e) => { e.dataTransfer.setData(SESSION_MIME, session.id); e.dataTransfer.effectAllowed = "copy"; },
       onclick: () => openSession(session.id, sessionsList, messages),
       oncontextmenu: (e) => {
         e.preventDefault();
@@ -1558,6 +1567,7 @@ function showSessionMenu(x, y, session, item, sessionsList, messages) {
       });
       if (!ok) return;
       await api(`/api/sessions/${session.id}`, { method: "DELETE" });
+      if (sideChatSessionId() === session.id) closeSideChat();
       if (activeSessionId === session.id) {
         activeSessionId = null;
         messages.innerHTML = "";
@@ -1567,7 +1577,12 @@ function showSessionMenu(x, y, session, item, sessionsList, messages) {
     },
   });
 
-  menu.append(renameItem, starItem, moveItem, deleteItem);
+  const sideItem = canSplit() && session.id !== activeSessionId ? el("div", {
+    class: "context-menu-item",
+    text: "Open side by side",
+    onclick: () => { closeSessionMenu(); openSideChat(session.id); },
+  }) : null;
+  menu.append(renameItem, starItem, moveItem, ...(sideItem ? [sideItem] : []), deleteItem);
   document.body.appendChild(menu);
   openMenu = menu;
   // Deferred so the click that opened the menu doesn't immediately close it.
@@ -1631,6 +1646,7 @@ async function openSession(sessionId, sessionsList, messages) {
   activeUnsubscribers.forEach(unsub => unsub());
   activeUnsubscribers.length = 0;
   activeSessionId = sessionId;
+  mainOpened(sessionId);
   stagedAttachments = [];
   const attachStrip = document.getElementById("attach-strip");
   if (attachStrip) attachStrip.innerHTML = "";

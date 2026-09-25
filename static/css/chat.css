@@ -263,38 +263,75 @@
    Settings > Appearance > Chat style, or /terminal. Presentation only, and
    scoped to the main chat (#chat-messages, #chat-input): School's course
    panel reuses the .msg classes and keeps its own look. */
-:root[data-chat-style='terminal'] #chat-messages {
+:root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) {
   --term-font: 'Cascadia Code', 'Cascadia Mono', Consolas, 'Courier New', monospace;
   font-family: var(--term-font); gap: 14px;
 }
-:root[data-chat-style='terminal'] #chat-messages > .msg { font-size: 13.5px; line-height: 1.6; align-items: flex-start; }
-:root[data-chat-style='terminal'] #chat-messages > .msg.user .msg-body {
+:root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) > .msg { font-size: 13.5px; line-height: 1.6; align-items: flex-start; }
+:root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) > .msg.user .msg-body {
   max-width: 100%; padding: 0; border: 0; border-radius: 0; background: none; color: var(--text);
 }
-:root[data-chat-style='terminal'] #chat-messages > .msg.user .msg-body::before { content: 'you \276F  '; color: var(--accent); font-weight: 600; }
-:root[data-chat-style='terminal'] #chat-messages > .msg.assistant::before {
+:root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) > .msg.user .msg-body::before { content: 'you \276F  '; color: var(--accent); font-weight: 600; }
+:root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) > .msg.assistant::before {
   content: 'jarvis \276F'; color: var(--text-faint); font-weight: 600; margin-bottom: 2px;
 }
-:root[data-chat-style='terminal'] #chat-messages > .msg.assistant .msg-body { padding-left: 2ch; border-left: 1px solid var(--border); }
-:root[data-chat-style='terminal'] #chat-messages > .msg.user .msg-actions { justify-content: flex-start; }
-:root[data-chat-style='terminal'] #chat-messages .msg-body :is(h1, h2, h3, h4) { font-size: 1em; font-weight: 700; margin: .8em 0 .3em; }
-:root[data-chat-style='terminal'] #chat-messages .msg-body :is(h1, h2)::before { content: '# '; color: var(--text-faint); }
-:root[data-chat-style='terminal'] #chat-messages .msg-cursor {
+:root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) > .msg.assistant .msg-body { padding-left: 2ch; border-left: 1px solid var(--border); }
+:root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) > .msg.user .msg-actions { justify-content: flex-start; }
+:root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) .msg-body :is(h1, h2, h3, h4) { font-size: 1em; font-weight: 700; margin: .8em 0 .3em; }
+:root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) .msg-body :is(h1, h2)::before { content: '# '; color: var(--text-faint); }
+:root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) .msg-cursor {
   width: .62em; height: 1.15em; margin-left: 1px; border-radius: 0; opacity: .85;
 }
-:root[data-chat-style='terminal'] #chat-messages .msg-thinking-text { font-family: var(--term-font); font-size: 12.5px; }
-:root[data-chat-style='terminal'] #chat-messages .msg-thinking-dot { border-radius: 0; width: 7px; height: 12px; }
-:root[data-chat-style='terminal'] #chat-messages .chat-activity { font-family: var(--term-font); font-size: 11.5px; padding: 0 0 0 2ch; margin: 0 0 6px; }
-:root[data-chat-style='terminal'] #chat-messages .chat-activity summary::before { content: '['; color: var(--text-faint); }
-:root[data-chat-style='terminal'] #chat-messages .chat-activity summary::after { content: ']'; color: var(--text-faint); }
+:root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) .msg-thinking-text { font-family: var(--term-font); font-size: 12.5px; }
+:root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) .msg-thinking-dot { border-radius: 0; width: 7px; height: 12px; }
+:root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) .chat-activity { font-family: var(--term-font); font-size: 11.5px; padding: 0 0 0 2ch; margin: 0 0 6px; }
+:root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) .chat-activity summary::before { content: '['; color: var(--text-faint); }
+:root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) .chat-activity summary::after { content: ']'; color: var(--text-faint); }
 :root[data-chat-style='terminal'] .chat-input-bar { border-radius: 8px; }
 :root[data-chat-style='terminal'] .chat-input-top::before {
   content: '\276F'; align-self: flex-start; padding: 4px 0 0 6px; color: var(--accent); font-weight: 700;
   font-family: 'Cascadia Code', Consolas, monospace; font-size: 14px; line-height: 1.6;
 }
-:root[data-chat-style='terminal'] #chat-input {
+:root[data-chat-style='terminal'] :is(#chat-input, .side-chat-input) {
   font-family: 'Cascadia Code', 'Cascadia Mono', Consolas, 'Courier New', monospace; font-size: 13.5px; caret-shape: block;
 }
 @media (prefers-reduced-motion: reduce) {
-  :root[data-chat-style='terminal'] #chat-messages .msg-cursor { animation: none; }
+  :root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) .msg-cursor { animation: none; }
 }
+
+/* Side-by-side chats (static/js/sideChat.js, 2026-09-25). The pane sits after
+   #chat-main in the .chat-layout row; its width is a share of the row the
+   divider sets and localStorage keeps. Desktop widths only. */
+.side-chat { display: none; }
+.chat-layout.has-side-chat .side-chat {
+  display: flex; flex: 0 0 var(--side-chat-width, 44%); min-width: 0; min-height: 0; position: relative;
+  border-left: 1px solid var(--border);
+}
+.side-chat-divider {
+  position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 2; touch-action: none;
+}
+.side-chat-divider:hover, .side-chat-divider:focus-visible { background: linear-gradient(90deg, transparent 3px, var(--accent) 3px 5px, transparent 5px); outline: none; }
+.side-chat-inner { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.side-chat-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; min-height: 54px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.side-chat-title { font-size: 12.5px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.side-chat-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.side-chat-actions .btn { font-size: 11.5px; padding: 4px 9px; }
+.side-chat-close { font-size: 18px; line-height: 1; }
+.side-messages { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 18px 16px; display: flex; flex-direction: column; gap: 18px; }
+.side-messages > .msg { width: 100%; font-size: 14px; }
+.side-chat-composer { display: flex; align-items: flex-end; gap: 8px; margin: 0 12px 12px; padding: 10px; border-radius: 14px; flex-shrink: 0; }
+.side-chat-input { flex: 1; min-width: 0; resize: none; background: transparent; border: none; box-shadow: none; font-size: 14px;
+  line-height: 1.5; max-height: 160px; padding: 4px 6px; }
+.side-chat-input:focus { outline: none; box-shadow: none; }
+.side-chat-send { flex-shrink: 0; font-size: 12px; padding: 6px 12px; }
+.side-chat-send[data-mode='stop'] { color: var(--danger); }
+.side-chat-drop-hint {
+  position: absolute; top: 12px; right: 12px; bottom: 12px; width: calc(50% - 18px); z-index: 5; pointer-events: none;
+  display: grid; place-items: center; border: 2px dashed var(--accent); border-radius: 16px;
+  background: rgba(var(--accent-rgb, 179, 167, 245), .08); color: var(--accent); font-size: 13px;
+  opacity: 0; transition: opacity .12s;
+}
+.side-chat-drop-hint.active { opacity: 1; }
+@media (max-width: 999px) { .chat-layout.has-side-chat .side-chat { display: none; } }
+@media (prefers-reduced-motion: reduce) { .side-chat-drop-hint { transition: none; } }
