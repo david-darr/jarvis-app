@@ -51,6 +51,10 @@ class AppendMessageRequest(BaseModel):
     content: str
 
 
+class RewindRequest(BaseModel):
+    keep: int  # how many of the chat's messages stay; the rest are deleted
+
+
 class SetIntegrationsRequest(BaseModel):
     enabled_integration_ids: list[str] | None = None
 
@@ -243,6 +247,21 @@ async def set_session_integrations(session_id: str, body: SetIntegrationsRequest
         raise HTTPException(status_code=404, detail="session not found")
     await chat_service.close_session_brain(session_id)
     return {"ok": True}
+
+
+@router.post("/{session_id}/rewind")
+@idle_session
+async def rewind_session(session_id: str, body: RewindRequest, user: str = Depends(require_user)) -> dict:
+    """Edit and regenerate (2026-09-25): cut the chat back to its first
+    `keep` messages. Refused while a reply is running (idle_session). The
+    live connection is closed so the next turn starts from the trimmed
+    transcript; see SessionManager.rewind for what that costs."""
+    try:
+        session = session_manager.rewind(session_id, body.keep)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await chat_service.close_session_brain(session_id)
+    return _for_client(session)
 
 
 @router.post("/{session_id}/messages")

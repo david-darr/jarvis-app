@@ -88,9 +88,15 @@ const server = http.createServer(async (req, res) => {
       }
       return json(Object.values(chats));
     }
-    const match = url.pathname.match(/^\/api\/sessions\/([^/]+)(\/model|\/context|\/open-mic)?$/);
+    const match = url.pathname.match(/^\/api\/sessions\/([^/]+)(\/model|\/context|\/open-mic|\/rewind)?$/);
     if (match) {
       const chat = chats[match[1]];
+      if (match[2] === '/rewind') {
+        // Mirrors core/session_manager.py's rewind: keep the first N messages.
+        if (!(data.keep >= 0 && data.keep < chat.messages.length)) { res.writeHead(400); return json({ detail: 'out of range' }); }
+        chat.messages = chat.messages.slice(0, data.keep);
+        return json(chat);
+      }
       if (match[2] === '/model') {
         Object.assign(chat, { model_effort: data.effort ?? null, ...data });
         // Mirrors core/session_manager.py: a model change invalidates the
@@ -727,6 +733,39 @@ app.whenReady().then(async () => {
     while (!pending) await delay(20);
     pending.res.end('data: {"done":true}\n\n'); pending = null;
     await waitFor("document.querySelector('#chat-send').dataset.mode!=='stop'");
+
+    // -- edit and regenerate (2026-09-25): both cut the chat back on the
+    // server, then Regenerate re-sends and Edit returns the text to the box.
+    chats.rw = { id: 'rw', title: 'Rewind', model_endpoint_id: 'claude', messages: [
+      { role: 'user', content: 'Question one', ts: 1 }, { role: 'assistant', content: 'Answer one', ts: 2 },
+      { role: 'user', content: 'Question two', ts: 3 }, { role: 'assistant', content: 'Answer two', ts: 4 }] };
+    await open('rw');
+    await waitFor("document.querySelectorAll('#chat-messages > .msg').length === 4");
+    assert.equal(await js("document.querySelectorAll('.msg-regenerate').length"), 1, 'Regenerate only on the last reply');
+    assert.equal(await js("document.querySelectorAll('.msg-edit').length"), 2, 'Edit on each of my messages');
+    assert.ok(await js("[...document.querySelectorAll('#chat-messages > .msg')].at(-1).querySelector('.msg-regenerate') !== null"));
+    const sentBeforeRegen = streams().length;
+    await js("document.querySelector('.msg-regenerate').click()");
+    for (let i = 0; i < 100 && streams().length === sentBeforeRegen; i++) await delay(40);
+    assert.deepEqual(requests.filter(r => r.path === '/api/sessions/rw/rewind').at(-1).data, { keep: 2 }, 'the old reply and its question are cut');
+    assert.equal(streams().at(-1).data.message, 'Question two', 'the same question goes again');
+    while (!pending) await delay(20);
+    chats.rw.messages.push({ role: 'assistant', content: 'A better answer two', ts: 5 });
+    pending.res.end('data: {"done":true}\n\n'); pending = null;
+    await waitFor("document.querySelector('#chat-send').dataset.mode!=='stop'");
+    await waitFor("[...document.querySelectorAll('#chat-messages > .msg')].at(-1)?.querySelector('.msg-regenerate') !== null");
+    // Editing the first question would drop three later messages: it asks first.
+    await js("document.querySelectorAll('.msg-edit')[0].click()");
+    await waitFor("!!document.querySelector('.modal-backdrop:not(.hidden) .btn, .confirm-dialog button')");
+    await capture('chat-edit-confirm');
+    await js("[...document.querySelectorAll('.modal-backdrop:not(.hidden) button, .confirm-dialog button')].find(b => /Edit message/.test(b.textContent)).click()");
+    await waitFor("document.querySelector('#chat-input').value === 'Question one'");
+    assert.deepEqual(requests.filter(r => r.path === '/api/sessions/rw/rewind').at(-1).data, { keep: 0 });
+    assert.equal(await js("document.querySelectorAll('#chat-messages > .msg').length"), 0, 'everything from the edited message on is gone');
+    await js("document.querySelector('#chat-input').value = ''");
+    // The now-empty chat moves its composer to the centre; let that finish so
+    // the reduced-motion check below measures only what it starts itself.
+    await waitFor("document.querySelector('.chat-composer-dock').getAnimations().every(a => a.playState !== 'running')");
 
     await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
     await waitFor("matchMedia('(prefers-reduced-motion: reduce)').matches");

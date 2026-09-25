@@ -377,6 +377,32 @@ class SessionManager:
         # fewer messages than before; the store deletes the stale tail.
         return store.save_session(session, rebuild_messages_from=start)
 
+    def rewind(self, session_id: str, keep: int) -> dict:
+        """Cuts a chat back to its first `keep` messages, for edit and
+        regenerate (David's ask 2026-09-25, after Hermes). The removed
+        messages are deleted, not archived: an edit replaces them.
+
+        Every copy of the conversation outside the saved transcript is
+        forgotten - the Claude CLI session, the Codex thread - so the next
+        turn replays the trimmed transcript as text (a full cache miss, and
+        earlier tool calls survive only as the replies' text; David accepted
+        that). The caller also closes the live brain. A compacted stretch
+        cannot be cut into: its messages are what the summary stands for."""
+        session = self._require(session_id)
+        messages = session.get("messages", [])
+        compactions = session.get("compactions") or []
+        floor = compactions[-1]["through_index"] if compactions else 0
+        if not floor <= keep < len(messages):
+            raise ValueError(f"can only rewind to between message {floor} and {len(messages) - 1}")
+        session["messages"] = messages[:keep]
+        _clear_claude_session(session)
+        session["codex_thread_id"] = None
+        session["context_state"] = None
+        if session.get("open_mic_started_at", 0) > keep:
+            session.pop("open_mic_started_at", None)
+        session["updated_at"] = time.time()
+        return store.save_session(session, rebuild_messages_from=keep)
+
     def set_project(self, session_id: str, project_id: Optional[str]) -> dict:
         """Assigns a session to a project (core/projects.py), or clears it
         back to None. Caller (routes/session_routes.py) is responsible for

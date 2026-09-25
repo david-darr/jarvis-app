@@ -357,3 +357,7 @@
 .chat-find-count { font-size: 11.5px; color: var(--text-faint); min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; }
 ::highlight(chat-find) { background-color: rgba(var(--accent-rgb), .28); color: inherit; }
 ::highlight(chat-find-current) { background-color: rgba(var(--accent-rgb), .75); color: #111; }
+
+/* Edit and regenerate (2026-09-25): text buttons in the hover action row. */
+.msg-actions .msg-edit, .msg-actions .msg-regenerate { font-size: 11.5px; padding: 3px 7px; }
+.msg-actions .msg-edit:hover, .msg-actions .msg-regenerate:hover { color: var(--text); background: rgba(255, 255, 255, .05); }

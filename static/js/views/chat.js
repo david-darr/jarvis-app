@@ -78,6 +78,68 @@ function messageCard(role, text, ts, status = 'complete') {
   return card;
 }
 
+// Edit and regenerate (David's ask 2026-09-25, after Hermes). Both cut the
+// chat back on the server (POST /api/sessions/{id}/rewind) and send again:
+// Regenerate re-sends the last question, Edit puts a question back in the box
+// with everything after it removed. The model then gets the trimmed chat
+// replayed as text, which costs one full cache miss and, for Claude and
+// Codex, keeps earlier tool calls only as what the replies said about them.
+// Only messages after the latest compaction can be cut back to.
+function addRewindActions(messages, session) {
+  const history = session.messages || [];
+  const floor = (session.compactions || []).at(-1)?.through_index || 0;
+  const cards = [...messages.querySelectorAll(':scope > .msg')];
+  if (cards.length !== history.length) return; // not a plain rendering of this history
+  const lastAssistant = history.map((m) => m.role).lastIndexOf('assistant');
+  history.forEach((msg, index) => {
+    const row = cards[index].querySelector('.msg-actions');
+    if (!row || index < floor) return;
+    if (msg.role === 'user' && msg.content) {
+      row.prepend(el('button', { type: 'button', class: 'msg-action-btn msg-edit', title: 'Edit and resend', text: 'Edit',
+        onclick: () => rewindTo(session, index, msg, { edit: true }) }));
+    }
+    if (index === lastAssistant && index > floor && history[index - 1]?.role === 'user') {
+      row.prepend(el('button', { type: 'button', class: 'msg-action-btn msg-regenerate', title: 'Regenerate this reply', text: 'Regenerate',
+        onclick: () => rewindTo(session, index - 1, history[index - 1], { edit: false }) }));
+    }
+  });
+}
+
+// After a live reply the cards on screen were built as it streamed; put the
+// buttons on them from the saved history once it is saved.
+async function refreshRewindActions(sessionId, messages) {
+  let session;
+  try { session = await api(`/api/sessions/${sessionId}`); } catch { return; }
+  if (sessionId !== activeSessionId || !messages.isConnected) return;
+  messages.querySelectorAll('.msg-edit, .msg-regenerate').forEach((button) => button.remove());
+  addRewindActions(messages, session);
+}
+
+async function rewindTo(session, keep, userMessage, { edit }) {
+  if (!composerRefs || session.id !== activeSessionId) return;
+  if (chatStream.getInFlight(session.id)?.status === 'processing') { toast('Wait for the reply to finish first', 'error'); return; }
+  const removed = (session.messages || []).length - keep;
+  const hadAttachments = !!userMessage.sent && userMessage.sent !== userMessage.content && /attach/i.test(userMessage.sent);
+  const notes = [];
+  if (edit && removed > 2) notes.push(`The ${removed - 1} messages after it will be deleted.`);
+  if (hadAttachments) notes.push("Its attachments aren't sent again; attach them anew if the reply needs them.");
+  if (notes.length) {
+    const ok = await confirmDialog({ title: edit ? 'Edit this message?' : 'Regenerate this reply?', message: notes.join(' '),
+      confirmLabel: edit ? 'Edit message' : 'Regenerate' });
+    if (!ok) return;
+  }
+  try {
+    await api(`/api/sessions/${session.id}/rewind`, { method: 'POST', body: JSON.stringify({ keep }) });
+  } catch (problem) { toast(problem.message.replace(/^\d+: /, ''), 'error'); return; }
+  const { messages, input, sendBtn, attachStrip } = composerRefs;
+  const sessionsList = document.getElementById('sessions-list');
+  await openSession(session.id, sessionsList, messages);
+  input.value = userMessage.content;
+  input.dispatchEvent(new Event('input'));
+  if (edit) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); return; }
+  await sendMessage(messages, input, sendBtn, attachStrip);
+}
+
 let activeSessionId = null;
 let activeProjectFilter = null; // David's ask 2026-09-12 — null = "All Chats"
 let stagedAttachments = []; // [{id, filename}]
@@ -222,6 +284,7 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
         refreshContextMeter(sessionId);
         // A finished reply sends the next queued message; a stopped or
         // failed one pauses the queue until Resume.
+        refreshRewindActions(sessionId, messages);
         if (entry.status === "done") setTimeout(() => sendNextQueued(sessionId), 0);
         else if (queuedBySession.get(sessionId)?.length) { pausedQueues.add(sessionId); renderQueue(); }
       }
@@ -1729,6 +1792,7 @@ async function openSession(sessionId, sessionsList, messages) {
   for (const msg of session.messages) {
     messages.appendChild(messageCard(msg.role, msg.content, msg.ts, msg.status));
   }
+  addRewindActions(messages, session);
   // Reattach to a turn still generating (David's ask 2026-09-12) — its
   // reply isn't in session.messages yet (the backend only persists it once
   // the full turn completes), so it renders as one extra live card on top

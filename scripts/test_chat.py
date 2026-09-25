@@ -1928,6 +1928,64 @@ class McpClientTests(unittest.TestCase):
         self.assertTrue(next(s for s in integrations.mcp_catalog() if s["id"] == "deepwiki")["added"])
 
 
+class RewindTests(unittest.TestCase):
+    """Edit and regenerate (2026-09-25): a chat cut back to its first N
+    messages, every outside copy of the conversation forgotten, and the next
+    turn replaying only what was kept."""
+
+    def setUp(self):
+        self.sid = session_manager.create_session("Rewind me")["id"]
+        self.addCleanup(session_manager.delete_session, self.sid)
+        for role, text in [("user", "first question"), ("assistant", "first answer"),
+                           ("user", "second question zebracorn"), ("assistant", "second answer zebracorn")]:
+            session_manager.append_message(self.sid, role, text)
+        session_manager.set_claude_session(self.sid, "cli-123", synced_through=4)
+        session_manager.set_codex_thread_id(self.sid, "thread-9")
+
+    def test_rewind_trims_and_forgets_every_outside_copy(self):
+        self.assertTrue([h for h in session_store.search_messages("zebracorn") if h.get("session_id") == self.sid])
+        session_manager.rewind(self.sid, 2)
+        session = session_manager.get_session(self.sid)
+        self.assertEqual([m["content"] for m in session["messages"]], ["first question", "first answer"])
+        self.assertIsNone(session["claude_session_id"])
+        self.assertIsNone(session["codex_thread_id"])
+        hits = session_store.search_messages("zebracorn")
+        self.assertFalse([h for h in hits if h.get("session_id") == self.sid], "a removed message is not searchable")
+
+    def test_the_next_turn_replays_only_what_was_kept(self):
+        session_manager.rewind(self.sid, 2)
+        session_manager.append_message(self.sid, "user", "a new question")
+        primed = chat_service._prime_with_history(self.sid, True, {"kind": "claude_cli"}, "a new question",
+                                                  Brain(vault_dir=tempfile.gettempdir(), session_id=self.sid))
+        self.assertIn("first answer", primed)
+        self.assertNotIn("zebracorn", primed)
+        history = session_manager.effective_messages(self.sid, exclude_last=True)
+        self.assertEqual([m["content"] for m in history], ["first question", "first answer"], "what local models are seeded with")
+
+    def test_it_refuses_to_cut_into_a_compacted_stretch_or_past_the_end(self):
+        session_manager.compact_session(self.sid, 2, "the first exchange")
+        for keep in (1, 4, 99, -1):
+            with self.assertRaises(ValueError, msg=keep):
+                session_manager.rewind(self.sid, keep)
+        self.assertEqual(len(session_manager.get_session(self.sid)["messages"]), 4, "nothing changed")
+        session_manager.rewind(self.sid, 2)
+        self.assertEqual(len(session_manager.get_session(self.sid)["messages"]), 2)
+
+    def test_the_route_closes_the_connection_and_refuses_while_a_reply_runs(self):
+        with patch.object(chat_service, "close_session_brain", AsyncMock()) as closed:
+            response = client.post(f"/api/sessions/{self.sid}/rewind", json={"keep": 3})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()["messages"]), 3)
+        closed.assert_awaited_once_with(self.sid)
+        chat_service._busy.add(self.sid)
+        try:
+            self.assertEqual(client.post(f"/api/sessions/{self.sid}/rewind", json={"keep": 1}).status_code, 409)
+        finally:
+            chat_service._busy.discard(self.sid)
+        self.assertEqual(len(session_manager.get_session(self.sid)["messages"]), 3)
+        self.assertEqual(client.post(f"/api/sessions/{self.sid}/rewind", json={"keep": 7}).status_code, 400)
+
+
 class McpOAuthTests(unittest.TestCase):
     """Signing in to an OAuth MCP server (core/mcp_oauth.py) against a real
     OAuth-protected MCP server built on the mcp package's own authorization
