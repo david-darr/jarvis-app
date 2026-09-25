@@ -142,6 +142,13 @@ function fixture(url) {
     { id: "i-notion", kind: "mcp_server", name: "Notion", mcp_type: "http", url: "https://mcp.notion.com/mcp", has_api_key: false, auth: "oauth", signed_in: true },
     { id: "i-sentry", kind: "mcp_server", name: "Sentry", mcp_type: "http", url: "https://mcp.sentry.dev/mcp", has_api_key: false, auth: "oauth", signed_in: false }];
   if (route === "/api/integrations/contacts") return [];
+  if (route === "/api/sandbox/changes") return [
+    { id: "c0ffee000001", session_id: null, created: 1790200000, applicable: true,
+      changes: [{ path: "core/a_rather_long_module_name_for_wrapping.py", status: "modified" }, { path: "notes/new.txt", status: "added" }] },
+    { id: "c0ffee000002", session_id: null, created: 1790100000, applicable: false,
+      changes: [{ path: "big.bin", status: "added" }] }];
+  if (route === "/api/sandbox/changes/c0ffee000001") return { id: "c0ffee000001", applicable: true, changes: [],
+    diff: "--- a/core/a.py\n+++ b/core/a.py\n@@ -1 +1 @@\n-print('<b>old</b>')\n+print('new')\n" };
   if (route === "/api/integrations/catalog") return [
     { id: "deepwiki", name: "DeepWiki", description: "Ask questions about public GitHub repositories.", auth: "none", url: "https://mcp.deepwiki.com/mcp", docs: "https://docs.devin.ai", added: false },
     { id: "linear", name: "Linear", description: "Issues and projects from your Linear workspace.", auth: "oauth", url: "https://mcp.linear.app/mcp", docs: "https://linear.app/docs", added: false },
@@ -390,6 +397,19 @@ app.whenReady().then(async () => {
       assert.equal(await js("document.querySelectorAll('.mcp-catalog-row').length"), 1, label + " catalog search filters");
       assert.deepEqual(await overflow(), [], label + " integrations overflow");
       await capture(label + "-mcp-catalog");
+      // -- Sandbox changes (Hermes phase 7): review before anything reaches the code.
+      await js("document.querySelector('[data-section=\"sandbox-changes\"]').click()");
+      await waitFor("document.querySelectorAll('.sandbox-change').length === 2");
+      await js("document.querySelector('[data-change=c0ffee000001] .sandbox-change-actions button').click()");
+      await waitFor("!!document.querySelector('[data-change=c0ffee000001] .sandbox-diff-line.add')");
+      assert.ok(await js("document.querySelector('[data-change=c0ffee000001] .sandbox-diff-line.del').textContent.includes('<b>old</b>')"),
+        label + " a diff is shown as text, never as HTML");
+      assert.equal(await js("document.querySelector('[data-change=c0ffee000001] .sandbox-diff b')"), null, label + " no markup from a diff");
+      const applyDisabled = (id) => js(`[...document.querySelectorAll('[data-change=${id}] button')].find(b => b.textContent === 'Apply').disabled`);
+      assert.equal(await applyDisabled("c0ffee000001"), false, label + " an applicable change set can be applied");
+      assert.equal(await applyDisabled("c0ffee000002"), true, label + " an oversized one is read only");
+      assert.deepEqual(await overflow(), [], label + " sandbox changes overflow");
+      await capture(label + "-sandbox-changes");
       await js("document.querySelector('[data-section=vault]').click()");
       await waitFor("!!document.querySelector('#settings-content .card')");
       // Search matches what someone would actually type, not just the

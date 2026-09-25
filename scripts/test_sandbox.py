@@ -377,6 +377,159 @@ class BrowseTests(unittest.TestCase):
         self.assertIn("offline", offline)
 
 
+class ChangeSetTests(unittest.TestCase):
+    """Sandbox edits to a folder wait as change sets until an admin applies
+    them (core/sandbox_changes.py). Applies happen in a throwaway folder,
+    never the real JARVIS one."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="jarvis-changes-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        (self.root / "a.py").write_text("print('old')\n", newline="")
+        (self.root / "b.txt").write_text("keep\n", newline="")
+        (self.root / "c.txt").write_text("bye\n", newline="")
+
+    def recorded(self):
+        from core import sandbox_changes
+        result = run("printf \"print('new')\\n\" > a.py && mkdir -p new && echo made > new/n.txt && rm c.txt "
+                     "&& python a.py", source_dir=str(self.root))
+        self.assertEqual(result.exit_code, 0, result.stderr)
+        change_id = sandbox_changes.record(result, "chat-1", root=str(self.root))
+        self.assertIsNotNone(change_id)
+        return change_id
+
+    def apply(self, change_id):
+        from core import sandbox_changes
+        return sandbox_changes.apply(change_id, allowed_root=str(self.root))
+
+    @unittest.skipUnless(DOCKER_UP, "Docker is not running")
+    def test_a_run_becomes_a_change_set_and_applying_writes_exactly_it(self):
+        from core import sandbox_changes
+        change_id = self.recorded()
+        summary = next(c for c in sandbox_changes.list_pending() if c["id"] == change_id)
+        self.assertEqual(sorted((c["status"], c["path"]) for c in summary["changes"]),
+                         [("added", "new/n.txt"), ("deleted", "c.txt"), ("modified", "a.py")],
+                         "no __pycache__ clutter from running the code")
+        self.assertIn("+print('new')", sandbox_changes.get(change_id)["diff"])
+        self.assertEqual((self.root / "a.py").read_text(), "print('old')\n", "nothing applied until asked")
+        self.apply(change_id)
+        self.assertEqual((self.root / "a.py").read_bytes(), b"print('new')\n")
+        self.assertEqual((self.root / "new" / "n.txt").read_bytes(), b"made\n")
+        self.assertFalse((self.root / "c.txt").exists())
+        self.assertEqual((self.root / "b.txt").read_text(), "keep\n")
+        self.assertNotIn(change_id, [c["id"] for c in sandbox_changes.list_pending()], "an applied set is gone")
+        self.assertEqual([p.name for p in self.root.rglob("*.tmp")], [], "no staging files left")
+
+    @unittest.skipUnless(DOCKER_UP, "Docker is not running")
+    def test_a_file_edited_since_the_run_blocks_the_whole_apply(self):
+        from core import sandbox_changes
+        change_id = self.recorded()
+        (self.root / "a.py").write_text("print('edited by hand')\n", newline="")
+        with self.assertRaises(sandbox_changes.Conflict) as caught:
+            self.apply(change_id)
+        self.assertIn("a.py", str(caught.exception))
+        self.assertEqual((self.root / "a.py").read_text(), "print('edited by hand')\n")
+        self.assertTrue((self.root / "c.txt").exists(), "nothing deleted")
+        self.assertFalse((self.root / "new").exists(), "nothing added")
+        self.assertIn(change_id, [c["id"] for c in sandbox_changes.list_pending()], "kept, so it can be discarded")
+
+    @unittest.skipUnless(DOCKER_UP, "Docker is not running")
+    def test_a_file_that_appeared_since_the_run_blocks_it_too(self):
+        from core import sandbox_changes
+        change_id = self.recorded()
+        (self.root / "new").mkdir()
+        (self.root / "new" / "n.txt").write_text("someone else's\n")
+        with self.assertRaises(sandbox_changes.Conflict):
+            self.apply(change_id)
+        self.assertEqual((self.root / "a.py").read_text(), "print('old')\n")
+
+    def forged(self, path, status="added", root=None):
+        """A change set written straight to disk, as if tampered with."""
+        import base64
+        import json as _json
+        from core import sandbox_changes
+        os.makedirs(sandbox_changes.CHANGES_DIR, exist_ok=True)
+        change_id = uuid.uuid4().hex[:12]
+        with open(os.path.join(sandbox_changes.CHANGES_DIR, f"{change_id}.json"), "w", encoding="utf-8") as f:
+            _json.dump({"id": change_id, "root": str((root or self.root).resolve()), "session_id": None,
+                        "created": time.time(), "changes": [{"path": path, "status": status}], "diff": "",
+                        "base_hashes": {}, "applicable": True,
+                        "contents": {path: base64.b64encode(b"owned").decode()}}, f)
+        return change_id
+
+    def test_paths_outside_the_folder_or_into_protected_places_are_refused(self):
+        from core import sandbox_changes
+        for path in ("../escaped.txt", ".git/hooks/pre-commit", "data/users.json", ".env", "sub/.env.local",
+                     "C:/Windows/x.txt", "/etc/x"):
+            with self.assertRaises(sandbox_changes.Conflict, msg=path):
+                self.apply(self.forged(path))
+        self.assertFalse((self.root.parent / "escaped.txt").exists())
+        self.assertFalse((self.root / ".git").exists())
+
+    def test_a_change_set_for_another_folder_is_refused(self):
+        from core import sandbox_changes
+        elsewhere = Path(tempfile.mkdtemp(prefix="jarvis-elsewhere-"))
+        self.addCleanup(shutil.rmtree, elsewhere, True)
+        with self.assertRaises(sandbox_changes.Conflict):
+            self.apply(self.forged("x.txt", root=elsewhere))
+        self.assertFalse((elsewhere / "x.txt").exists())
+
+    def test_unapplied_change_sets_expire(self):
+        from core import sandbox_changes
+        change_id = self.forged("x.txt")
+        sandbox_changes.expire(now=time.time() + (sandbox_changes.EXPIRY_DAYS + 1) * 86400)
+        with self.assertRaises(KeyError):
+            sandbox_changes.get(change_id)
+
+    @unittest.skipUnless(DOCKER_UP, "Docker is not running")
+    def test_an_oversized_change_set_can_be_read_but_not_applied(self):
+        from core import sandbox_changes
+        with patch.object(sandbox, "MAX_CHANGE_BYTES", 4):
+            change_id = self.recorded()
+        self.assertFalse(sandbox_changes.get(change_id)["applicable"])
+        with self.assertRaises(sandbox_changes.Conflict):
+            self.apply(change_id)
+        self.assertEqual((self.root / "a.py").read_text(), "print('old')\n")
+
+    @unittest.skipUnless(DOCKER_UP, "Docker is not running")
+    def test_run_code_keeps_jarvis_edits_for_review_and_no_tool_applies_them(self):
+        from core import sandbox_changes
+        from core.constants import BASE_DIR
+        probe = Path(BASE_DIR) / "sandbox-change-probe.txt"
+        self.assertFalse(probe.exists())
+        text = call({"command": "echo probe > sandbox-change-probe.txt", "copy_repo": True, "timeout_seconds": 300},
+                    is_admin=True)
+        self.assertIn("NOT applied", text)
+        self.assertFalse(probe.exists(), "the real folder is untouched")
+        pending = [c for c in sandbox_changes.list_pending() if c["session_id"] == "sbx-chat"]
+        self.assertTrue(pending and pending[0]["changes"] == [{"path": "sandbox-change-probe.txt", "status": "added"}])
+        for c in pending:
+            sandbox_changes.discard(c["id"])
+        names = [s.name for s in tool_registry.specs(tool_registry.OPENAI, True) + tool_registry.specs(tool_registry.CLAUDE, True)]
+        self.assertFalse([n for n in names if "apply" in n or "change" in n], names)
+
+    def test_the_review_routes_are_admin_only(self):
+        from fastapi.routing import APIRoute
+        from core.middleware import require_admin
+        from routes import sandbox_routes
+        routes = [r for r in sandbox_routes.router.routes if isinstance(r, APIRoute)]
+        self.assertEqual(len(routes), 4)
+        for route in routes:
+            self.assertIn(require_admin, [d.call for d in route.dependant.dependencies], route.path)
+
+    def test_the_apply_route_reports_a_conflict_as_nothing_applied(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routes import sandbox_routes
+        app_ = FastAPI()
+        app_.include_router(sandbox_routes.router)
+        client = TestClient(app_)
+        response = client.post(f"/api/sandbox/changes/{self.forged('../escaped.txt')}/apply")
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Nothing was applied", response.json()["detail"])
+        self.assertEqual(client.post("/api/sandbox/changes/nosuchid/apply").status_code, 404)
+
+
 def call(args, is_admin=False):
     return asyncio.run(tool_registry.call("run_code", args, tool_registry.ToolContext("sbx-chat", is_admin),
                                           tool_registry.OPENAI))

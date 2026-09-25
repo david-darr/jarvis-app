@@ -525,9 +525,18 @@ async def _run_code(args, ctx):
     except ValueError as e:
         return f"Not run: {e}"
     changes = "\n".join(f"  {c['status']}: {c['path']}" for c in result.changes) or "  none"
+    kept = ""
+    if copy_repo:
+        # Edits to the JARVIS code wait for the person (core/sandbox_changes.py);
+        # there is deliberately no tool that applies them.
+        from core import sandbox_changes
+        change_id = sandbox_changes.record(result, ctx.session_id)
+        if change_id:
+            kept = (f"These edits were kept as change set {change_id}. They are NOT applied: the person reviews "
+                    "and applies them in Settings > Administration > Sandbox changes. Tell them it is waiting.\n")
     return (f"exit_code={result.exit_code}{' (timed out)' if result.timed_out else ''}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}\n"
-            f"files changed in /work (not written anywhere real):\n{changes}\n"
+            f"files changed in /work (not written anywhere real):\n{changes}\n" + kept
             + (f"diff:\n{result.diff}" if result.diff else ""))
 
 

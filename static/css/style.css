@@ -1500,6 +1500,18 @@ button.dashboard-row:hover { background: rgba(255,255,255,.035); }
 .log-debug { color: var(--text-faint); }
 .log-warning { color: #d9b67d; }
 .log-error, .log-critical { color: var(--danger); }
+/* Settings > Administration > Sandbox changes */
+.sandbox-change { margin-top: 12px; }
+.sandbox-change-head { justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.sandbox-change-actions { gap: 6px; flex-wrap: wrap; }
+.sandbox-change-files { margin: 8px 0 0; padding-left: 18px; overflow-wrap: anywhere; }
+.sandbox-diff { margin: 10px 0 0; max-height: 50vh; overflow: auto; padding: 8px 10px; border: 1px solid var(--border);
+  border-radius: 8px; background: rgba(0, 0, 0, 0.22); font: 11.5px/1.5 'Cascadia Code', Consolas, monospace;
+  color: var(--text-dim); white-space: pre; }
+.sandbox-diff.hidden { display: none; }
+.sandbox-diff-line.add { color: var(--success); }
+.sandbox-diff-line.del { color: var(--danger); }
+.sandbox-diff-line.hunk { color: var(--accent); }
 .log-tag { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 6px; background: var(--accent-dim);
   color: var(--accent); max-width: 220px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; white-space: nowrap; }
 

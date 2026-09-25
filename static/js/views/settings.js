@@ -112,6 +112,8 @@ const SECTION_GROUPS = [
         keywords: ["backup", "export", "import", "diagnostics", "health", "reset", "wipe", "danger"] },
       { id: "logs", label: "Logs", render: renderLogsPanel,
         keywords: ["log", "logs", "errors", "debug", "troubleshoot", "crash", "backend", "desktop", "warnings"] },
+      { id: "sandbox-changes", label: "Sandbox changes", render: renderSandboxChangesPanel,
+        keywords: ["sandbox", "run_code", "diff", "change set", "apply", "review", "patch", "code changes"] },
       { id: "custom-tabs", label: "Custom Tabs", render: renderCustomTabsPanel, devMode: true,
         keywords: ["new tab", "developer mode", "custom tab"] },
     ],
@@ -1963,6 +1965,76 @@ async function renderSystemPanel(content) {
 // and stops by itself once the panel is gone.
 const LOG_FOLLOW_MS = 2000;
 const LOG_MAX_SHOWN = 1000;
+
+// Sandbox changes (Hermes phase 7, 2026-09-24): edits a model made to a
+// sandboxed copy of the JARVIS code wait here until an admin applies or
+// discards them (core/sandbox_changes.py). No model can apply one. Applying
+// is all or nothing and refuses if a file changed since the run; it does
+// not commit. Diffs are shown as text, never as HTML.
+async function renderSandboxChangesPanel(content) {
+  const [changes, chats] = await Promise.all([
+    api("/api/sandbox/changes"),
+    api("/api/sessions").catch(() => []),
+  ]);
+  const chatTitles = new Map(chats.map((c) => [c.id, c.title || "Untitled chat"]));
+  content.innerHTML = "";
+  content.append(el("p", { class: "meta", text:
+    "Code changes a model made in the sandbox, waiting for you. Applying writes them into the JARVIS folder only if "
+    + "none of those files has changed since; it does not commit. Unapplied changes expire after 7 days." }));
+  if (!changes.length) {
+    content.append(el("div", { class: "empty-state", text: "No sandbox changes waiting" }));
+    return;
+  }
+  for (const change of changes) {
+    const diffBox = el("pre", { class: "sandbox-diff hidden" });
+    const showBtn = el("button", { class: "btn", text: "Show diff" });
+    showBtn.addEventListener("click", async () => {
+      if (diffBox.classList.toggle("hidden")) { showBtn.textContent = "Show diff"; return; }
+      showBtn.textContent = "Hide diff";
+      if (diffBox.childElementCount) return;
+      const full = await api(`/api/sandbox/changes/${change.id}`);
+      for (const line of (full.diff || "No text diff (binary files only).").split("\n")) {
+        const kind = line.startsWith("+") && !line.startsWith("+++") ? "add"
+          : line.startsWith("-") && !line.startsWith("---") ? "del" : line.startsWith("@@") ? "hunk" : "";
+        diffBox.append(el("span", { class: `sandbox-diff-line ${kind}`, text: `${line}\n` }));
+      }
+    });
+    const applyBtn = el("button", { class: "btn", text: "Apply", disabled: !change.applicable });
+    applyBtn.addEventListener("click", async () => {
+      const ok = await confirmDialog({
+        title: "Apply these changes?",
+        message: `${change.changes.length} file(s) will be written into the JARVIS folder. Nothing is committed.`,
+        confirmLabel: "Apply changes",
+      });
+      if (!ok) return;
+      try {
+        await api(`/api/sandbox/changes/${change.id}/apply`, { method: "POST" });
+        toast("Changes applied", "success");
+      } catch (problem) { toast(problem.message.replace(/^\d+: /, ""), "error"); }
+      await renderSandboxChangesPanel(content);
+    });
+    const discardBtn = el("button", { class: "btn danger", text: "Discard" });
+    discardBtn.addEventListener("click", async () => {
+      await api(`/api/sandbox/changes/${change.id}`, { method: "DELETE" });
+      toast("Changes discarded", "success");
+      await renderSandboxChangesPanel(content);
+    });
+    content.append(el("div", { class: "glass bracket card sandbox-change", "data-change": change.id }, [
+      el("div", { class: "card-row sandbox-change-head" }, [
+        el("div", {}, [
+          el("div", { class: "title", text: `Change set ${change.id}` }),
+          el("div", { class: "meta", text: `${new Date(change.created * 1000).toLocaleString()} · `
+            + (change.session_id ? chatTitles.get(change.session_id) || "a chat" : "no chat") }),
+        ]),
+        el("div", { class: "card-row sandbox-change-actions" }, [showBtn, applyBtn, discardBtn]),
+      ]),
+      el("ul", { class: "sandbox-change-files" }, change.changes.map((c) =>
+        el("li", { class: "meta", text: `${c.status}: ${c.path}` }))),
+      change.applicable ? null : el("div", { class: "meta", text: "Too large to keep for applying; read only." }),
+      diffBox,
+    ]));
+  }
+}
 
 async function renderLogsPanel(content) {
   const [files, chats] = await Promise.all([

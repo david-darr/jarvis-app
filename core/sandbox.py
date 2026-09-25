@@ -48,6 +48,7 @@ MAX_TIMEOUT_SECONDS = 900
 MAX_OUTPUT_CHARS = 20_000
 MAX_DIFF_CHARS = 40_000
 MAX_INPUT_BYTES = 200 * 1024 * 1024
+MAX_CHANGE_BYTES = 5 * 1024 * 1024  # a change set larger than this is shown, never kept for applying
 SKIPPED_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "data"}
 LABEL = "jarvis-sandbox"
 
@@ -64,6 +65,13 @@ class SandboxResult:
     timed_out: bool = False
     changes: list[dict] = field(default_factory=list)  # {"path", "status": added|modified|deleted}
     diff: str = ""
+    # What core/sandbox_changes.py needs to apply the run to a real folder:
+    # the new bytes of each added or modified file (empty when they exceed
+    # MAX_CHANGE_BYTES), and the sha256 each modified or deleted file had
+    # when it was copied in.
+    contents: dict[str, bytes] = field(default_factory=dict)
+    base_hashes: dict[str, str] = field(default_factory=dict)
+    contents_complete: bool = True
 
 
 def hardening_args(memory: str, cpus: str, pids: int, network: bool = False) -> list[str]:
@@ -256,7 +264,7 @@ async def run(command: str, *, files: Optional[dict[str, str]] = None, source_di
 
         args = ["run", "--rm", "--name", name, "--label", LABEL, "--hostname", "sandbox",
                 *hardening_args(memory, cpus, pids, network),
-                "-e", "HOME=/tmp", "-v", f"{workspace}:/work", "-w", "/work", image,
+                "-e", "HOME=/tmp", "-e", "PYTHONDONTWRITEBYTECODE=1", "-v", f"{workspace}:/work", "-w", "/work", image,
                 "timeout", "-s", "KILL", f"{timeout}s", "sh", "-c", command]
         proc = await asyncio.create_subprocess_exec(
             "docker", *args, stdin=asyncio.subprocess.DEVNULL,
@@ -275,7 +283,16 @@ async def run(command: str, *, files: Optional[dict[str, str]] = None, source_di
         if code == 137:
             stderr += "\n[sandbox] killed: the run hit its time or memory limit\n"
         changes, diff = _changes(before, _snapshot(workspace), originals, workspace)
+        contents, total = {}, 0
+        for change in changes:
+            if change["status"] != "deleted":
+                data = (workspace / change["path"]).read_bytes()
+                total += len(data)
+                contents[change["path"]] = data
+        complete = total <= MAX_CHANGE_BYTES
         return SandboxResult(exit_code=code, stdout=_cap(out.decode(errors="replace")), stderr=_cap(stderr),
-                             timed_out=timed_out, changes=changes, diff=diff)
+                             timed_out=timed_out, changes=changes, diff=diff,
+                             contents=contents if complete else {}, contents_complete=complete,
+                             base_hashes={c["path"]: before[c["path"]] for c in changes if c["status"] != "added"})
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
