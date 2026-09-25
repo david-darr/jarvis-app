@@ -8,6 +8,7 @@ import { createOpenMic } from "../openMic.js";
 import { createChatActivity } from '../chatActivity.js';
 import { showPermissionPrompt, dismissPermissionPrompt } from '../permissionPrompt.js';
 import { mountSideChat, openSideChat, closeSideChat, mainOpened, sideChatSessionId, canSplit, SESSION_MIME } from '../sideChat.js';
+import { mountChatFind } from '../chatFind.js';
 
 // Composer rebuilt to match Odysseus's actual chat-input-bar structure
 // (David's ask 2026-08-31, cross-checked against the real repo at
@@ -87,6 +88,63 @@ let stagedAttachments = []; // [{id, filename}]
 let activeUnsubscribers = [];
 let shownPermission = null;
 
+// Message queue (Hermes-style, 2026-09-25): Enter while a reply is still
+// running queues the message instead of doing nothing. The next one sends
+// when the reply finishes; a Stop or a failure pauses the queue rather than
+// firing the next message into a turn that went wrong, and a queue found
+// waiting when a chat is reopened waits paused too. Text only - attachments
+// send with a message typed after the reply. Kept per chat, for this window.
+const queuedBySession = new Map();   // sessionId -> [text]
+const pausedQueues = new Set();      // sessionIds whose queue waits for Resume
+let composerRefs = null;             // { messages, input, sendBtn, attachStrip, queueHost } of the mounted view
+
+function renderQueue() {
+  const host = composerRefs?.queueHost;
+  if (!host) return;
+  const items = queuedBySession.get(activeSessionId) || [];
+  host.replaceChildren();
+  host.hidden = items.length === 0;
+  if (!items.length) return;
+  const paused = pausedQueues.has(activeSessionId);
+  const resume = el('button', { type: 'button', class: 'btn chat-queue-resume', text: 'Send next now', onclick: () => {
+    pausedQueues.delete(activeSessionId); sendNextQueued(activeSessionId);
+  } });
+  host.append(el('div', { class: 'chat-queue-head' }, [
+    el('span', { text: paused ? `Queue paused · ${items.length} waiting` : `Queued · sends when the reply finishes` }),
+    paused ? resume : null,
+  ]));
+  items.forEach((text, index) => {
+    host.append(el('div', { class: 'chat-queue-item' }, [
+      el('span', { class: 'chat-queue-text', text, title: text }),
+      el('button', { type: 'button', class: 'btn chat-queue-edit', text: 'Edit', onclick: () => {
+        items.splice(index, 1);
+        const { input } = composerRefs;
+        input.value = input.value ? `${text}\n${input.value}` : text;
+        input.dispatchEvent(new Event('input')); input.focus();
+        renderQueue();
+      } }),
+      el('button', { type: 'button', class: 'input-icon-btn chat-queue-remove', 'aria-label': 'Remove from queue', text: '×', onclick: () => {
+        items.splice(index, 1); renderQueue();
+      } }),
+    ]));
+  });
+}
+
+function sendNextQueued(sessionId) {
+  const items = queuedBySession.get(sessionId);
+  if (!composerRefs || sessionId !== activeSessionId || !items?.length || pausedQueues.has(sessionId)) return;
+  if (chatStream.getInFlight(sessionId)?.status === 'processing') return;
+  const { messages, input, sendBtn, attachStrip } = composerRefs;
+  if (!messages.isConnected) return;
+  const draft = input.value;
+  input.value = items.shift();
+  renderQueue();
+  sendMessage(messages, input, sendBtn, attachStrip).finally(() => {
+    // Whatever was being typed when the queued message went out stays put.
+    if (draft && !input.value) { input.value = draft; input.dispatchEvent(new Event('input')); }
+  });
+}
+
 // Drives a reply card's DOM from chatStream's shared state instead of a
 // local fetch loop (David's ask 2026-09-12) — used both right after
 // sending a message and when reopening a chat that's still generating, so
@@ -162,6 +220,10 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
         if (sessionsList) refreshSessions(sessionsList, messages);
         // The turn that just finished is what produced the new reading.
         refreshContextMeter(sessionId);
+        // A finished reply sends the next queued message; a stopped or
+        // failed one pauses the queue until Resume.
+        if (entry.status === "done") setTimeout(() => sendNextQueued(sessionId), 0);
+        else if (queuedBySession.get(sessionId)?.length) { pausedQueues.add(sessionId); renderQueue(); }
       }
     }
   };
@@ -379,7 +441,9 @@ export async function render(container, tabId, options = {}) {
   const inputBottom = el("div", { class: "chat-input-bottom" }, [inputLeft, inputRight]);
 
   const composer = el("div", { class: "glass chat-input-bar border-beam" }, [inputTop, inputBottom]);
-  const dock = el('div', { class: 'chat-composer-dock' }, [attachStrip, composer, el("div", { class: "composer-hint", text: "Enter to send · Shift + Enter for a new line" })]);
+  const queueHost = el('div', { class: 'chat-queue', hidden: true, 'aria-live': 'polite' });
+  const dock = el('div', { class: 'chat-composer-dock' }, [queueHost, attachStrip, composer, el("div", { class: "composer-hint", text: "Enter to send · Shift + Enter for a new line" })]);
+  composerRefs = { messages, input, sendBtn, attachStrip, queueHost };
   main.append(messages, dock);
   const dockObserver = new ResizeObserver(() => main.style.setProperty('--composer-height', `${dock.offsetHeight}px`));
   dockObserver.observe(dock);
@@ -406,6 +470,7 @@ export async function render(container, tabId, options = {}) {
     activeUnsubscribers.forEach(unsub => unsub());
     activeUnsubscribers.length = 0;
     activeSessionId = null;
+    renderQueue();
     stagedAttachments = [];
     renderAttachStrip(attachStrip);
     input.value = '';
@@ -472,11 +537,13 @@ export async function render(container, tabId, options = {}) {
   };
   document.addEventListener("click", dismissMenus);
   document.addEventListener("keydown", escapeMenus);
+  const disposeFind = mountChatFind(main, messages);
 
   let disposed = false;
   const cleanup = () => {
     if (disposed) return;
     disposed = true;
+    disposeFind();
     document.removeEventListener("click", dismissMenus);
     document.removeEventListener("keydown", escapeMenus);
     document.removeEventListener("visibilitychange", syncBeam);
@@ -1619,6 +1686,7 @@ async function createSession({ preserveAttachments = false } = {}) {
   const draftFiles = preserveAttachments ? stagedAttachments : [];
   const session = await api("/api/sessions", { method: "POST", body: JSON.stringify({}) });
   activeSessionId = session.id;
+  renderQueue();
   // A chat created while a project is selected joins it automatically
   // (David's ask 2026-09-12, matching Claude/ChatGPT's "new chat inside
   // this project" behavior) rather than landing unassigned and needing a
@@ -1647,6 +1715,10 @@ async function openSession(sessionId, sessionsList, messages) {
   activeUnsubscribers.length = 0;
   activeSessionId = sessionId;
   mainOpened(sessionId);
+  // A queue whose reply finished while this chat was not on screen waits
+  // for Resume rather than sending on its own.
+  if (queuedBySession.get(sessionId)?.length && chatStream.getInFlight(sessionId)?.status !== 'processing') pausedQueues.add(sessionId);
+  renderQueue();
   stagedAttachments = [];
   const attachStrip = document.getElementById("attach-strip");
   if (attachStrip) attachStrip.innerHTML = "";
@@ -1690,8 +1762,20 @@ export function openSessionById(sessionId) {
 }
 
 async function sendMessage(messages, input, sendBtn, attachStrip) {
-  if (sendBtn.disabled || chatStream.getInFlight(activeSessionId)?.status === 'processing') return;
+  if (sendBtn.disabled) return;
   const text = input.value.trim();
+  if (chatStream.getInFlight(activeSessionId)?.status === 'processing') {
+    // A reply is still running: queue it (see queuedBySession).
+    if (!text) return;
+    if (text.startsWith('/')) { toast('Slash commands run once the reply finishes', 'error'); return; }
+    if (stagedAttachments.length) { toast('Attachments send once the reply finishes', 'error'); return; }
+    if (!queuedBySession.has(activeSessionId)) queuedBySession.set(activeSessionId, []);
+    queuedBySession.get(activeSessionId).push(text);
+    input.value = '';
+    input.style.height = 'auto';
+    renderQueue();
+    return;
+  }
   if (!text && stagedAttachments.length === 0) return;
 
   if (text.startsWith("/")) {

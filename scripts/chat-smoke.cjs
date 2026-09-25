@@ -691,6 +691,43 @@ app.whenReady().then(async () => {
 
     pending.res.end('data: {"done":true}\n\n'); pending = null;
     await waitFor("document.querySelector('#chat-send').dataset.mode!=='stop'");
+
+    // -- message queue (2026-09-25): Enter mid-reply queues; a finished reply
+    // sends the next; a Stop pauses the queue until it is resumed.
+    const streams = () => requests.filter(r => r.path === '/api/chat/stream');
+    const enter = (text) => js(`(() => { const i = document.querySelector('#chat-input'); i.value = ${JSON.stringify(text)};
+      i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await enter('First in line');
+    await waitFor("document.querySelector('#chat-send').dataset.mode==='stop'");
+    while (!pending) await delay(20);
+    const sentBefore = streams().length;
+    await enter('Queued follow-up');
+    await enter('Changed my mind');
+    assert.equal(await js("document.querySelectorAll('.chat-queue-item').length"), 2, 'Enter mid-reply queues instead of doing nothing');
+    assert.equal(await js("document.querySelector('#chat-input').value"), '', 'A queued message leaves the box');
+    await js("document.querySelectorAll('.chat-queue-remove')[1].click()");
+    assert.equal(await js("document.querySelectorAll('.chat-queue-item').length"), 1);
+    assert.equal(streams().length, sentBefore, 'Nothing is sent while the reply runs');
+    await capture('chat-queue');
+    pending.res.end('data: {"done":true}\n\n'); pending = null;
+    for (let i = 0; i < 100 && streams().length === sentBefore; i++) await delay(40);
+    assert.equal(streams().at(-1).data.message, 'Queued follow-up', 'A finished reply sends the next queued message');
+    assert.equal(await js("document.querySelector('.chat-queue').hidden"), true);
+    while (!pending) await delay(20);
+    await enter('Waits after a stop');
+    const sentAtStop = streams().length;
+    await js("document.querySelector('#chat-send').click()");
+    await waitFor("!!document.querySelector('.chat-queue-resume')");
+    await delay(200);
+    assert.equal(streams().length, sentAtStop, 'A stopped reply pauses the queue');
+    pending.res.end(); pending = null;
+    await js("document.querySelector('.chat-queue-resume').click()");
+    for (let i = 0; i < 100 && streams().length === sentAtStop; i++) await delay(40);
+    assert.equal(streams().at(-1).data.message, 'Waits after a stop', 'Resume sends it');
+    while (!pending) await delay(20);
+    pending.res.end('data: {"done":true}\n\n'); pending = null;
+    await waitFor("document.querySelector('#chat-send').dataset.mode!=='stop'");
+
     await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
     await waitFor("matchMedia('(prefers-reduced-motion: reduce)').matches");
     await js("document.querySelector('.chat-header-new').click()");

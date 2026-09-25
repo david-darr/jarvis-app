@@ -335,3 +335,25 @@
 .side-chat-drop-hint.active { opacity: 1; }
 @media (max-width: 999px) { .chat-layout.has-side-chat .side-chat { display: none; } }
 @media (prefers-reduced-motion: reduce) { .side-chat-drop-hint { transition: none; } }
+
+/* Message queue (static/js/views/chat.js, 2026-09-25): messages typed while
+   a reply runs wait here and send when it finishes. */
+.chat-queue { display: flex; flex-direction: column; gap: 4px; margin: 0 0 8px; padding: 8px 10px; border: 1px dashed var(--border-strong);
+  border-radius: 12px; font-size: 12.5px; }
+.chat-queue[hidden] { display: none; }
+.chat-queue-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-faint); font-size: 11.5px; }
+.chat-queue-item { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.chat-queue-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); }
+.chat-queue-item .btn, .chat-queue-resume { font-size: 11px; padding: 3px 8px; flex-shrink: 0; }
+.chat-queue-remove { font-size: 16px; line-height: 1; flex-shrink: 0; }
+:root[data-chat-style='terminal'] .chat-queue { font-family: 'Cascadia Code', Consolas, monospace; border-radius: 6px; }
+
+/* Find in chat (static/js/chatFind.js, 2026-09-25). */
+.chat-find { position: absolute; top: 60px; right: 18px; z-index: 6; display: flex; align-items: center; gap: 4px;
+  padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--glass-sheen), var(--bg-panel-solid);
+  box-shadow: var(--shadow-elevated); max-width: calc(100% - 36px); }
+.chat-find[hidden] { display: none; }
+.chat-find-input { width: 200px; min-width: 0; font-size: 12.5px; padding: 4px 8px; }
+.chat-find-count { font-size: 11.5px; color: var(--text-faint); min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; }
+::highlight(chat-find) { background-color: rgba(var(--accent-rgb), .28); color: inherit; }
+::highlight(chat-find-current) { background-color: rgba(var(--accent-rgb), .75); color: #111; }

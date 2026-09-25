@@ -135,8 +135,13 @@ function build(session) {
   }
   syncSend();
 
-  const submit = () => {
-    if (busy()) { chatStream.stopTurn(sessionId); return; }
+  const submit = ({ fromKeyboard = false } = {}) => {
+    if (busy()) {
+      // Only the button stops a reply; Enter mid-reply must not end it.
+      if (fromKeyboard) toast('A reply is still running. Wait for it, or press Stop.', 'error');
+      else chatStream.stopTurn(sessionId);
+      return;
+    }
     const text = input.value.trim();
     if (!text) return;
     if (text.startsWith('/')) { toast('Slash commands work in the main chat', 'error'); return; }
@@ -150,9 +155,9 @@ function build(session) {
     syncSend();
     messages.scrollTop = messages.scrollHeight;
   };
-  send.addEventListener('click', submit);
+  send.addEventListener('click', () => submit());
   input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); }
+    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit({ fromKeyboard: true }); }
   });
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; });
 }

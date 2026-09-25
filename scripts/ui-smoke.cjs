@@ -513,6 +513,26 @@ app.whenReady().then(async () => {
     assert.equal(await sideId(), null);
     assert.equal(await js("document.querySelector('.chat-layout').classList.contains('has-side-chat')"), false);
     assert.equal(await js("localStorage.getItem('jarvis:side-chat')"), null, "a closed side chat does not come back");
+    // -- Find in chat (Ctrl+F, 2026-09-25).
+    await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true }))");
+    assert.equal(await js("document.querySelector('.chat-find').hidden"), false, "Ctrl+F opens the find bar");
+    assert.equal(await js("document.activeElement.classList.contains('chat-find-input')"), true);
+    const expected = await js("[...document.querySelectorAll('#chat-messages .msg-body')].map((b) => b.textContent.toLowerCase().split('workspace').length - 1).reduce((a, b) => a + b, 0)");
+    assert.ok(expected >= 2, "the fixture chat mentions the word more than once");
+    const findKey = (extra = '') => js(`document.querySelector('.chat-find-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true ${extra} }))`);
+    await js("document.querySelector('.chat-find-input').value = 'Workspace'");
+    await findKey();
+    assert.equal(await js("document.querySelector('.chat-find-count').textContent"), `${expected} of ${expected}`, "every match is found, case-insensitively, starting from the latest");
+    assert.equal(await js("CSS.highlights.get('chat-find').size"), expected);
+    await findKey();
+    assert.equal(await js("document.querySelector('.chat-find-count').textContent"), `1 of ${expected}`, "Enter wraps around");
+    await findKey(", shiftKey: true");
+    assert.equal(await js("document.querySelector('.chat-find-count').textContent"), `${expected} of ${expected}`, "Shift+Enter goes back");
+    assert.equal(await js("document.querySelectorAll('#chat-messages mark, #chat-messages .chat-find-hit').length"), 0, "the transcript's HTML is not rewritten");
+    await capture("desktop-chat-find");
+    await js("document.querySelector('.chat-find-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))");
+    assert.equal(await js("document.querySelector('.chat-find').hidden"), true, "Esc closes it");
+    assert.equal(await js("CSS.highlights.has('chat-find')"), false, "and clears the highlights");
     await js("document.querySelector('#chat-history-toggle').click()");
     await delay(300);
     assert.equal(await js("document.querySelector('#chat-sessions').inert"), false);
