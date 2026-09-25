@@ -415,13 +415,41 @@ export async function render(container, tabId, options = {}) {
     if (sendBtn.dataset.mode === 'stop') { chatStream.stopTurn(activeSessionId); return; }
     sendMessage(messages, input, sendBtn, attachStrip);
   });
+  // Composer history (Hermes-style, 2026-09-25, both chat styles): Up on an
+  // empty box, or on the first line of a recalled message, steps back
+  // through this chat's own messages; Down steps forward and finally
+  // restores what was being typed. Typing anything ends the recall.
+  let historyIndex = -1, historyDraft = "";
+  const setComposer = (text) => {
+    input.value = text;
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 200) + "px";
+    input.setSelectionRange(text.length, text.length);
+  };
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      historyIndex = -1;
       sendMessage(messages, input, sendBtn, attachStrip);
+      return;
+    }
+    if ((e.key !== "ArrowUp" && e.key !== "ArrowDown") || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+    const past = [...messages.querySelectorAll(".msg.user .msg-body")].map((body) => body._rawText || "").filter(Boolean).reverse();
+    const onFirstLine = !input.value.slice(0, input.selectionStart).includes("\n");
+    const onLastLine = !input.value.slice(input.selectionEnd).includes("\n");
+    if (e.key === "ArrowUp" && (input.value === "" || (historyIndex !== -1 && onFirstLine)) && historyIndex + 1 < past.length) {
+      e.preventDefault();
+      if (historyIndex === -1) historyDraft = input.value;
+      historyIndex += 1;
+      setComposer(past[historyIndex]);
+    } else if (e.key === "ArrowDown" && historyIndex !== -1 && onLastLine) {
+      e.preventDefault();
+      historyIndex -= 1;
+      setComposer(historyIndex === -1 ? historyDraft : past[historyIndex]);
     }
   });
   input.addEventListener("input", () => {
+    historyIndex = -1;
     input.style.height = "auto";
     input.style.height = Math.min(input.scrollHeight, 200) + "px";
   });

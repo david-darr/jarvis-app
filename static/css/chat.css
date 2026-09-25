@@ -258,3 +258,43 @@
 .permission-choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .permission-error { color: var(--danger); margin: 8px 0 0; }
 .permission-dialog :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* Terminal chat style (David's ask 2026-09-25, after Hermes's terminal UI):
+   Settings > Appearance > Chat style, or /terminal. Presentation only, and
+   scoped to the main chat (#chat-messages, #chat-input): School's course
+   panel reuses the .msg classes and keeps its own look. */
+:root[data-chat-style='terminal'] #chat-messages {
+  --term-font: 'Cascadia Code', 'Cascadia Mono', Consolas, 'Courier New', monospace;
+  font-family: var(--term-font); gap: 14px;
+}
+:root[data-chat-style='terminal'] #chat-messages > .msg { font-size: 13.5px; line-height: 1.6; align-items: flex-start; }
+:root[data-chat-style='terminal'] #chat-messages > .msg.user .msg-body {
+  max-width: 100%; padding: 0; border: 0; border-radius: 0; background: none; color: var(--text);
+}
+:root[data-chat-style='terminal'] #chat-messages > .msg.user .msg-body::before { content: 'you \276F  '; color: var(--accent); font-weight: 600; }
+:root[data-chat-style='terminal'] #chat-messages > .msg.assistant::before {
+  content: 'jarvis \276F'; color: var(--text-faint); font-weight: 600; margin-bottom: 2px;
+}
+:root[data-chat-style='terminal'] #chat-messages > .msg.assistant .msg-body { padding-left: 2ch; border-left: 1px solid var(--border); }
+:root[data-chat-style='terminal'] #chat-messages > .msg.user .msg-actions { justify-content: flex-start; }
+:root[data-chat-style='terminal'] #chat-messages .msg-body :is(h1, h2, h3, h4) { font-size: 1em; font-weight: 700; margin: .8em 0 .3em; }
+:root[data-chat-style='terminal'] #chat-messages .msg-body :is(h1, h2)::before { content: '# '; color: var(--text-faint); }
+:root[data-chat-style='terminal'] #chat-messages .msg-cursor {
+  width: .62em; height: 1.15em; margin-left: 1px; border-radius: 0; opacity: .85;
+}
+:root[data-chat-style='terminal'] #chat-messages .msg-thinking-text { font-family: var(--term-font); font-size: 12.5px; }
+:root[data-chat-style='terminal'] #chat-messages .msg-thinking-dot { border-radius: 0; width: 7px; height: 12px; }
+:root[data-chat-style='terminal'] #chat-messages .chat-activity { font-family: var(--term-font); font-size: 11.5px; padding: 0 0 0 2ch; margin: 0 0 6px; }
+:root[data-chat-style='terminal'] #chat-messages .chat-activity summary::before { content: '['; color: var(--text-faint); }
+:root[data-chat-style='terminal'] #chat-messages .chat-activity summary::after { content: ']'; color: var(--text-faint); }
+:root[data-chat-style='terminal'] .chat-input-bar { border-radius: 8px; }
+:root[data-chat-style='terminal'] .chat-input-top::before {
+  content: '\276F'; align-self: flex-start; padding: 4px 0 0 6px; color: var(--accent); font-weight: 700;
+  font-family: 'Cascadia Code', Consolas, monospace; font-size: 14px; line-height: 1.6;
+}
+:root[data-chat-style='terminal'] #chat-input {
+  font-family: 'Cascadia Code', 'Cascadia Mono', Consolas, 'Courier New', monospace; font-size: 13.5px; caret-shape: block;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-chat-style='terminal'] #chat-messages .msg-cursor { animation: none; }
+}

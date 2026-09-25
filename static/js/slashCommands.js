@@ -49,6 +49,17 @@ export const COMMANDS = {
     usage: "/new",
     handler: async (args, ctx) => { await ctx.createSession(); return "New chat created."; },
   },
+  terminal: {
+    category: "Chats",
+    help: "Switch chats between the terminal style and the standard one",
+    usage: "/terminal",
+    handler: async () => {
+      const { getAppearance, updateAppearance } = await import("./appearance.js");
+      const next = getAppearance().chatStyle === "terminal" ? "standard" : "terminal";
+      updateAppearance({ chatStyle: next });
+      return next === "terminal" ? "Terminal style on. /terminal again to switch back." : "Standard style on.";
+    },
+  },
   rename: {
     category: "Chats",
     help: "Rename the current chat",

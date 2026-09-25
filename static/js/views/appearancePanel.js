@@ -18,6 +18,21 @@ export function renderAppearancePanel(content) {
     } }, [el('span', { class: `appearance-mode-art art-${mode}`, 'aria-hidden': 'true' }), el('strong', { text: title }), el('span', { text: subtitle })]);
     modeButtons.set(mode, button); modes.append(button);
   }
+  // Chat style (David's ask 2026-09-25): Terminal reads like a terminal
+  // harness - monospace, prompt lines instead of bubbles. Also /terminal.
+  const styleButtons = new Map();
+  const chatStyles = el('div', { class: 'appearance-chat-styles', role: 'group', 'aria-label': 'Chat style' });
+  for (const [style, title, subtitle] of [['standard', 'Standard', 'Bubbles and prose'], ['terminal', 'Terminal', 'Monospace prompt lines']]) {
+    const button = el('button', { type: 'button', class: 'appearance-chat-style', 'data-chat-style': style, onclick: () => {
+      updateAppearance({ chatStyle: style }); sync();
+    } }, [el('span', { class: `appearance-chat-art art-${style}`, 'aria-hidden': 'true', text: style === 'terminal' ? '❯ _' : 'Aa' }),
+      el('strong', { text: title }), el('span', { text: subtitle })]);
+    styleButtons.set(style, button); chatStyles.append(button);
+  }
+  const chatStyleSection = el('section', { class: 'appearance-chat-style-setting' }, [
+    el('h3', { text: 'Chat style' }), chatStyles,
+    el('p', { class: 'meta', text: 'Terminal changes how chats look, not what JARVIS can do. Type /terminal in a chat to switch.' }),
+  ]);
   const color = el('input', { type: 'color', id: 'appearance-color', 'aria-label': 'Custom base color' });
   const hex = el('span', { class: 'appearance-color-value' });
   const swatches = el('div', { class: 'appearance-swatches', role: 'group', 'aria-label': 'Base colors' });
@@ -148,11 +163,12 @@ export function renderAppearancePanel(content) {
     overlayNote.textContent = 'Open the Windows desktop app to use the overlay.';
   }
   root.append(el('div', { class: 'appearance-heading' }, [el('div', {}, [el('h2', { text: 'Appearance' }),
-    el('p', { class: 'meta', text: 'A workspace that feels like yours.' })]), reset]), previewFrame, modes, palette, imageOptions, shaderOptions, overlaySection, status);
+    el('p', { class: 'meta', text: 'A workspace that feels like yours.' })]), reset]), previewFrame, modes, palette, imageOptions, shaderOptions, chatStyleSection, overlaySection, status);
   content.replaceChildren(root);
   function sync() {
     const value = getAppearance();
     for (const [mode, button] of modeButtons) button.setAttribute('aria-pressed', String(mode === value.mode));
+    for (const [style, button] of styleButtons) button.setAttribute('aria-pressed', String(style === value.chatStyle));
     palette.hidden = value.mode === 'default'; imageOptions.hidden = value.mode !== 'image'; shaderOptions.hidden = value.mode !== 'shader';
     color.value = value.color; hex.textContent = value.color.toUpperCase();
     for (const button of swatches.children) button.setAttribute('aria-pressed', String(button.dataset.color === value.color));

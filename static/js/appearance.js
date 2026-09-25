@@ -1,7 +1,7 @@
 // Device-local appearance. Images are decoded into canvas pixels, never
 // injected as URLs or uploaded. IndexedDB keeps them out of small JSON storage.
 const DEFAULTS = Object.freeze({ mode: 'default', color: '#23302e', tint: .65,
-  distortion: .35, swirl: .3, grainMixer: .2, grainOverlay: .12, motion: true });
+  distortion: .35, swirl: .3, grainMixer: .2, grainOverlay: .12, motion: true, chatStyle: 'standard' });
 const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
 const TOKENS = ['--bg', '--bg-panel', '--bg-panel-solid', '--surface-2', '--sidebar-bg',
   '--text', '--text-dim', '--text-faint', '--sidebar-text', '--sidebar-muted', '--sidebar-accent', '--border', '--border-strong', '--accent', '--accent-rgb'];
@@ -17,6 +17,9 @@ function normalize(raw = {}) {
     if (typeof raw[key] === 'number' && Number.isFinite(raw[key])) value[key] = Math.max(0, Math.min(1, raw[key]));
   }
   if (typeof raw.motion === 'boolean') value.motion = raw.motion;
+  // Terminal chat style (David's ask 2026-09-25): chats look and read like a
+  // terminal harness. Presentation only; see the [data-chat-style] rules.
+  if (['standard', 'terminal'].includes(raw.chatStyle)) value.chatStyle = raw.chatStyle;
   return value;
 }
 const rgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
@@ -146,6 +149,7 @@ function apply() {
   ensureCanvases();
   const root = document.documentElement;
   root.dataset.appearance = settings.mode;
+  root.dataset.chatStyle = settings.chatStyle;
   if (settings.mode === 'default') {
     TOKENS.forEach(key => root.style.removeProperty(key));
     root.style.removeProperty('color-scheme');

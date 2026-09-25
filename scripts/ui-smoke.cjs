@@ -467,6 +467,25 @@ app.whenReady().then(async () => {
     await waitFor("document.querySelectorAll('#chat-messages .msg').length === 2");
     await delay(400);
     await capture("desktop-conversation");
+    // -- Composer history and the terminal chat style (2026-09-25).
+    const lastUserText = await js("[...document.querySelectorAll('#chat-messages .msg.user .msg-body')].at(-1)._rawText");
+    const key = (name) => js(`(() => { const i = document.querySelector('#chat-input'); i.focus(); i.dispatchEvent(new KeyboardEvent('keydown', { key: '${name}', bubbles: true, cancelable: true })); return i.value; })()`);
+    await js("(() => { const i = document.querySelector('#chat-input'); i.value = ''; })()");
+    assert.equal(await key('ArrowUp'), lastUserText, "Up on an empty composer recalls the last message");
+    assert.equal(await key('ArrowUp'), lastUserText, "Up stops at the oldest message");
+    assert.equal(await key('ArrowDown'), '', "Down returns to what was being typed");
+    await js("(() => { const i = document.querySelector('#chat-input'); i.value = 'half typed'; })()");
+    assert.equal(await key('ArrowUp'), 'half typed', "Up never replaces text being typed");
+    await js("(() => { const i = document.querySelector('#chat-input'); i.value = ''; })()");
+    await js("import('/static/js/appearance.js').then((m) => m.updateAppearance({ chatStyle: 'terminal' }))");
+    assert.equal(await js("document.documentElement.dataset.chatStyle"), 'terminal');
+    assert.ok(await js("/Cascadia|Consolas/.test(getComputedStyle(document.querySelector('#chat-messages')).fontFamily)"), "Terminal style is monospace");
+    assert.equal(await js("getComputedStyle(document.querySelector('#chat-messages .msg.user .msg-body')).backgroundColor"), 'rgba(0, 0, 0, 0)', "No bubble in terminal style");
+    assert.ok(await js("getComputedStyle(document.querySelector('#chat-messages .msg.assistant'), '::before').content.includes('jarvis')"), "Assistant turns carry a prompt label");
+    assert.deepEqual(await overflow(), [], "terminal style overflow");
+    await capture("desktop-conversation-terminal");
+    await js("import('/static/js/appearance.js').then((m) => m.updateAppearance({ chatStyle: 'standard' }))");
+    assert.notEqual(await js("getComputedStyle(document.querySelector('#chat-messages .msg.user .msg-body')).backgroundColor"), 'rgba(0, 0, 0, 0)', "Standard style keeps the bubble");
     await js("document.querySelector('#chat-history-toggle').click()");
     await delay(300);
     assert.equal(await js("document.querySelector('#chat-sessions').inert"), false);
