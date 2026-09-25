@@ -158,17 +158,22 @@ def revoke(rule_id: str) -> bool:
     return False
 
 
+ADMIN_SHELL_TOOLS = ("Bash", "PowerShell", "run_shell")
+
+
 def ensure_seeded(tools: list[str]) -> None:
     """Make the app's own pre-approvals visible.
 
     These tools were already granted - hardcoded in core/brain.py, invisible
     and unrevocable. Writing them in as rules changes no behaviour and makes
     them inspectable and revocable. Admin shell tools are seeded when the
-    admin config includes them; non-admin configs never do.
+    admin config includes them; non-admin configs never do. run_shell, the
+    local models' admin shell, is seeded the same way (David, 2026-09-24:
+    automatic, but visible and revocable, like Claude's Bash).
     """
     data = _load()
     known = set(data["seeded"])
-    additions = [tool for tool in tools if tool not in known and tool != "run_shell"]
+    additions = [tool for tool in tools if tool not in known]
     if not additions:
         return
     now = time.time()
@@ -176,7 +181,7 @@ def ensure_seeded(tools: list[str]) -> None:
         data["rules"].append({"id": uuid.uuid4().hex, "tool": tool, "content": None,
                               "behavior": "allow", "scope": "forever", "granted_at": now,
                               "granted_by": "jarvis", "source": "built-in",
-                              "admin_only": tool in ("Bash", "PowerShell")})
+                              "admin_only": tool in ADMIN_SHELL_TOOLS})
         data["seeded"].append(tool)
     _save(data)
 
@@ -193,11 +198,11 @@ def grant_standing(tools: list[str], granted_by: str) -> None:
     """Grant tools whole and for good, when someone explicitly adds them
     (Settings > Agent Tools' extra allowed list). Seeding happens once per
     tool, so without this a tool revoked earlier could never be re-allowed
-    by adding it back. run_shell is never granted this way."""
+    by adding it back."""
     data = _load()
     held = {rule["tool"] for rule in data["rules"]
             if rule.get("behavior") == "allow" and not rule.get("content") and rule.get("scope") == "forever"}
-    additions = [tool for tool in tools if tool not in held and tool != "run_shell"]
+    additions = [tool for tool in tools if tool not in held]
     if not additions:
         return
     now = time.time()
@@ -205,7 +210,7 @@ def grant_standing(tools: list[str], granted_by: str) -> None:
         data["rules"].append({"id": uuid.uuid4().hex, "tool": tool, "content": None,
                               "behavior": "allow", "scope": "forever", "granted_at": now,
                               "granted_by": granted_by, "source": "settings",
-                              "admin_only": tool in ("Bash", "PowerShell")})
+                              "admin_only": tool in ADMIN_SHELL_TOOLS})
         if tool not in data["seeded"]:
             data["seeded"].append(tool)
         _record(data, {"decision": "granted", "tool": tool, "by": granted_by})

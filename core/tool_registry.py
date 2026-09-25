@@ -446,7 +446,17 @@ async def _write_repo_file(args, ctx):
     admin_only=True,
 )
 async def _run_shell(args, ctx):
-    result = await memory_tools.run_shell(args.get("command", ""), cwd=args.get("cwd"))
+    # Automatic through the seeded built-in grant (core/permissions.py); once
+    # revoked in Settings > Permissions, each command is asked about instead.
+    from core import permissions
+    command = args.get("command", "")
+    decision = await permissions.decide(
+        surface=f"chat:{ctx.session_id}" if ctx.session_id else "none", tool="run_shell",
+        arguments={"command": command}, title="Run a command on this computer",
+        description=command[:300], is_admin=ctx.is_admin)
+    if decision.behavior != "allow":
+        return f"Not run: {decision.reason or 'not allowed'}"
+    result = await memory_tools.run_shell(command, cwd=args.get("cwd"))
     return f"exit_code={result['exit_code']}\nstdout:\n{result['stdout']}\nstderr:\n{result['stderr']}"
 
 

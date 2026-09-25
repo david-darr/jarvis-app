@@ -43,6 +43,10 @@ class ExternalBrain:
         # for an admin, absent from a non-admin session's list entirely.
         self.is_admin = is_admin
         self.tools = tool_registry.openai_tools(is_admin)
+        if is_admin:
+            # A visible, revocable built-in grant, like Claude's Bash; see
+            # the run_shell tool in core/tool_registry.py.
+            permissions.ensure_seeded(["run_shell"])
         # MCP servers enabled for this chat (None: every registered one, as
         # for Claude), their tools found at connect() - see core/mcp_client.py.
         self.integration_ids = integration_ids

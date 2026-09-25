@@ -149,9 +149,15 @@ class BrokerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("mcp__hive_mind__list_notes", tools)
         self.assertIn("Bash", tools)
         self.assertIn("PowerShell", tools)
-        self.assertNotIn("run_shell", tools)
+        # run_shell, the local models' admin shell, is seeded like Bash since
+        # 2026-09-24 (David: automatic, but visible and revocable).
+        self.assertIn("run_shell", tools)
         self.assertIsNone(permissions.stored_decision("chat:user", "Bash", "git status"),
                           "the built-in shell grant cannot authorize a non-admin caller")
+        self.assertIsNone(permissions.stored_decision("chat:user", "run_shell", "git status"),
+                          "nor can the local models' one")
+        self.assertEqual(permissions.stored_decision("chat:admin", "run_shell", "git status",
+                                                     is_admin=True).behavior, "allow")
         self.assertEqual(permissions.stored_decision("chat:admin", "Bash", "git status",
                                                      is_admin=True).behavior, "allow")
         shell = next(rule for rule in permissions.list_rules() if rule["tool"] == "Bash")

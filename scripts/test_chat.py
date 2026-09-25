@@ -1358,6 +1358,28 @@ class ShellPermissionTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    def test_local_models_admin_shell_is_automatic_until_revoked(self):
+        """run_shell (David, 2026-09-24): no prompts by default, but a visible
+        built-in grant; revoked, each command is asked about, and with nobody
+        to ask it does not run."""
+        from core import tool_registry as reg
+        from core.external_brain import ExternalBrain
+        ExternalBrain("http://x", "m", None, session_id="shell-chat", is_admin=True)
+        rule = next(r for r in self.permissions.list_rules() if r["tool"] == "run_shell")
+        self.assertEqual((rule["source"], rule["admin_only"]), ("built-in", True))
+        marker = os.path.join(self.directory.name, "ran.txt")
+        command = f'python -c "open(r\'{marker}\', \'w\').write(\'x\')"'
+        ctx = reg.ToolContext("shell-chat", is_admin=True)
+        self.assertIn("exit_code=0", asyncio.run(reg.call("run_shell", {"command": command}, ctx, reg.OPENAI)))
+        self.assertTrue(os.path.exists(marker), "ran with no prompt: nobody is asked, nothing refused")
+        os.remove(marker)
+
+        self.assertTrue(self.permissions.revoke(rule["id"]))
+        ExternalBrain("http://x", "m", None, session_id="shell-chat", is_admin=True)  # a reconnect must not re-grant it
+        refused = asyncio.run(reg.call("run_shell", {"command": command}, ctx, reg.OPENAI))
+        self.assertTrue(refused.startswith("Not run:"), refused)
+        self.assertFalse(os.path.exists(marker), "a refused command never runs")
+
     def test_admin_shell_is_automatic_and_non_admin_shell_is_refused(self):
         from core import custom_tabs
         vault = tempfile.mkdtemp(prefix="jarvis-shell-")
