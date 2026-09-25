@@ -3028,6 +3028,106 @@ class OllamaNativeShapeTests(unittest.TestCase):
         self.assertEqual(history, before, "the caller's history keeps the OpenAI shape")
 
 
+class ToolCallRescueTests(unittest.TestCase):
+    """A local model that writes its tool call as text (found live
+    2026-09-25 on qwen2.5-coder:32b): the rescue used to need the whole reply
+    to be the JSON, so a sentence first, or the call written twice, showed
+    raw JSON instead of running the tool."""
+
+    TOOLS = [{"type": "function", "function": {"name": "search_vault", "parameters": {}}},
+             {"type": "function", "function": {"name": "read_note", "parameters": {}}}]
+    CALL = '{"name": "search_vault", "arguments": {"query": "BLUEFOX"}}'
+
+    def rescue(self, content):
+        from core.providers import openai_compatible
+        return openai_compatible._rescue_tool_call(content, self.TOOLS)
+
+    def args(self, call):
+        return json.loads(call["function"]["arguments"])
+
+    def test_calls_that_end_a_reply_are_rescued_with_the_sentence_kept(self):
+        call, prose = self.rescue(f"Let me look that up.\n\n{self.CALL}")
+        self.assertEqual((call["function"]["name"], self.args(call), prose), ("search_vault", {"query": "BLUEFOX"}, "Let me look that up."))
+        call, prose = self.rescue(f"{self.CALL}\n\n{self.CALL}")
+        self.assertEqual((call["function"]["name"], prose), ("search_vault", None), "a repeated call runs once")
+        call, prose = self.rescue(f"Searching:\n```json\n{self.CALL}\n```")
+        self.assertEqual((call["function"]["name"], prose), ("search_vault", "Searching:"), "a fenced call, fence dropped")
+        call, prose = self.rescue(self.CALL)
+        self.assertEqual((call["function"]["name"], prose), ("search_vault", None), "the original whole-reply case still works")
+
+    def test_an_invented_next_turn_after_the_call_is_dropped_not_trusted(self):
+        # Verbatim from qwen2.5-coder:32b at a 4096-token context, 2026-09-25.
+        live = ('{"name": "search_vault", "arguments": {"query":"BLUEFOX"}}\n\nuser\n<tool_response>\n'
+                '[9df295289663.md]: My codename is BLUEFOX.\n</tool_response>')
+        call, prose = self.rescue(live)
+        self.assertEqual((call["function"]["name"], self.args(call), prose), ("search_vault", {"query": "BLUEFOX"}, None))
+        call, _ = self.rescue(f"Checking.\n{self.CALL}\n<|im_start|>tool\nfabricated")
+        self.assertEqual(call["function"]["name"], "search_vault")
+
+    def test_a_model_that_calls_tools_every_round_still_answers(self):
+        """Found live 2026-09-25: four searches in a row and the streamed
+        reply was empty. The last request now goes without tools."""
+        from core.providers import openai_compatible
+        for streamed in (True, False):
+            bodies = []
+
+            async def fake_post(client, base_url, api_key, body):
+                bodies.append(copy.deepcopy(body))
+                if "tools" in body:
+                    return {"choices": [{"message": {"role": "assistant", "content": self.CALL}}]}
+                return {"choices": [{"message": {"role": "assistant", "content": "It is BLUEFOX."}}]}
+
+            async def executor(name, args):
+                return "found: BLUEFOX"
+            history = [{"role": "user", "content": "codename?"}]
+            with patch.object(openai_compatible, "_post_chat", side_effect=fake_post):
+                if streamed:
+                    async def collect():
+                        return "".join([c async for c in openai_compatible.run_turn_stream(
+                            "http://x", "m", None, history, tools=self.TOOLS, tool_executor=executor)])
+                    answer = asyncio.run(collect())
+                else:
+                    answer = asyncio.run(openai_compatible.run_turn("http://x", "m", None, history,
+                                                                    tools=self.TOOLS, tool_executor=executor))
+            self.assertEqual(answer, "It is BLUEFOX.", f"streamed={streamed}")
+            self.assertEqual(len(bodies), openai_compatible.MAX_TOOL_ROUNDS + 1)
+            self.assertNotIn("tools", bodies[-1], "the last request cannot call tools")
+
+    def test_json_that_is_not_a_trailing_call_is_left_alone(self):
+        for content in [
+            f"Here is how a call looks: {self.CALL} - but I did not make one.",   # mid-reply
+            'Done. {"name": "delete_everything", "arguments": {}}',              # not one of this chat's tools
+            'Your config: {"name": "search_vault", "arguments": "not an object"}',  # wrong shape
+            "No JSON here at all.",
+        ]:
+            self.assertEqual(self.rescue(content), (None, None), content)
+
+    def test_a_rescued_call_actually_runs_and_the_turn_finishes(self):
+        from core.providers import openai_compatible
+        replies = iter([
+            {"choices": [{"message": {"role": "assistant", "content": f"One moment.\n{self.CALL}\n{self.CALL}"}}]},
+            {"choices": [{"message": {"role": "assistant", "content": "Your codename is BLUEFOX."}}]},
+        ])
+        sent_bodies = []
+
+        async def fake_post(client, base_url, api_key, body):
+            sent_bodies.append(copy.deepcopy(body))
+            return next(replies)
+        ran = []
+
+        async def executor(name, args):
+            ran.append((name, args))
+            return "found: BLUEFOX"
+        with patch.object(openai_compatible, "_post_chat", side_effect=fake_post):
+            answer = asyncio.run(openai_compatible.run_turn("http://x", "m", None, [{"role": "user", "content": "codename?"}],
+                                                            tools=self.TOOLS, tool_executor=executor))
+        self.assertEqual(answer, "Your codename is BLUEFOX.")
+        self.assertEqual(ran, [("search_vault", {"query": "BLUEFOX"})], "run once, not twice")
+        replayed = sent_bodies[1]["messages"][1]
+        self.assertEqual(replayed["content"], "One moment.", "the sentence before the call stays in the history")
+        self.assertEqual(replayed["tool_calls"][0]["function"]["name"], "search_vault")
+
+
 class ToolSettingsTests(unittest.TestCase):
     """Global tool settings (disabled tools, extra allowed tools, MCP servers)
     were read only when a Claude chat connected, so a change reached an open

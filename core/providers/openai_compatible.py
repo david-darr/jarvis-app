@@ -50,6 +50,7 @@ turn. Appended as they happen, not at the end, so a stopped turn still
 records the tools that actually ran.
 """
 import json
+import re
 from typing import Awaitable, AsyncIterator, Callable, Optional
 from urllib.parse import urlparse
 
@@ -106,6 +107,102 @@ def _extract_fake_tool_call(content: Optional[str], tools: Optional[list[dict]])
     if name not in known_names:
         return None
     return {"id": f"rescued-{name}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+
+
+async def _answer_without_tools(client, base_url: str, api_key: Optional[str], model: str,
+                                working_messages: list[dict], num_ctx: Optional[int],
+                                on_usage: Optional[Callable[[dict], None]]) -> str:
+    """When a model spends every tool round calling tools, ask once more
+    with tools switched off, so it answers from what it gathered. The
+    streaming path used to end with no reply at all (found live 2026-09-25:
+    qwen2.5-coder:32b searched four times in a row and the chat got an empty
+    answer). A server that rejects the tool history without tools gets the
+    old, honest note instead of an error."""
+    body = {"model": model, "messages": _request_messages(base_url, model, working_messages + [
+        {"role": "user", "content": "[You have used all the tool calls available for this message. "
+                                    "Answer now from what you found, without calling any tools.]"}])}
+    if num_ctx:
+        body["num_ctx"] = num_ctx
+    try:
+        data = await _post_chat(client, base_url, api_key, body)
+    except httpx.HTTPError:
+        return "(no response after tool calls)"
+    if on_usage and data.get("usage"):
+        on_usage(data["usage"])
+    content = data["choices"][0]["message"].get("content") or ""
+    # Still trying to call something: say so plainly rather than show JSON.
+    if not content.strip() or _looks_like_call(content):
+        return "(no response after tool calls)"
+    return content
+
+
+def _looks_like_call(content: str) -> bool:
+    stripped = content.strip()
+    return stripped.startswith("{") and '"name"' in stripped and '"arguments"' in stripped
+
+
+_INVENTED_TURN = re.compile(r"(?:```\s*)?(?:<\|im_start\|>|<tool_response>|<\|?tool|(?:user|assistant|tool|function)\s*(?:\n|:))", re.I)
+
+
+def _rescue_tool_call(content: Optional[str], tools: Optional[list[dict]]) -> tuple[Optional[dict], Optional[str]]:
+    """The fake-tool-call rescue, widened (found live 2026-09-25 on
+    qwen2.5-coder:32b): besides a reply that is nothing but the call, accept
+    a call that ENDS the reply - after a sentence, repeated, or in a ```json
+    fence. Returns (call, the text before it), or (None, None).
+
+    Still strict where it matters: the object must name one of this turn's
+    real tools with an object of arguments, and nothing but more copies of
+    it, fences and whitespace may follow - so an answer that merely shows
+    some JSON mid-reply is left alone."""
+    whole = _extract_fake_tool_call(content, tools)
+    if whole or not tools or not content or len(content) > 20000:
+        return whole, None
+    decoder = json.JSONDecoder()
+    found = []  # (start, end, call)
+    at = content.find("{")
+    while at != -1:
+        try:
+            obj, end = decoder.raw_decode(content, at)
+        except json.JSONDecodeError:
+            at = content.find("{", at + 1)
+            continue
+        call = _extract_fake_tool_call(json.dumps(obj), tools) if isinstance(obj, dict) else None
+        if call:
+            found.append((at, end, call))
+        at = content.find("{", end)
+    if not found:
+        return None, None
+    # A model that writes its call as text can then run on and invent the
+    # next turn itself - "user", a <tool_response> with a made-up result -
+    # instead of stopping (seen live on qwen2.5-coder:32b with a 4096-token
+    # context). The invented part is discarded, never trusted: the real tool
+    # runs instead.
+    for index, (start, end, call) in enumerate(found):
+        if _INVENTED_TURN.match(content[end:].lstrip()):
+            content = content[:end]
+            found = found[:index + 1]
+            break
+
+    def filler(text: str) -> bool:
+        return not text.replace("```json", "").replace("```", "").strip()
+
+    # Walk back from the end over calls separated only by filler.
+    tail_start = None
+    cursor = len(content)
+    for start, end, call in reversed(found):
+        if not filler(content[end:cursor]):
+            break
+        if found[-1][2]["function"] != call["function"]:
+            break  # a different call earlier on is not a repeat of this one
+        tail_start, cursor = start, start
+    if tail_start is None:
+        return None, None
+    prose = content[:tail_start].rstrip()
+    if prose.endswith("```json"):
+        prose = prose[: -len("```json")].rstrip()
+    elif prose.endswith("```"):
+        prose = prose[:-3].rstrip()
+    return found[-1][2], (prose or None)
 
 
 def _without_tool_rounds(messages: list[dict]) -> list[dict]:
@@ -246,14 +343,15 @@ async def run_turn(base_url: str, model: str, api_key: Optional[str], messages: 
             message = data["choices"][0]["message"]
             tool_calls = message.get("tool_calls")
             if not tool_calls and tool_executor:
-                rescued = _extract_fake_tool_call(message.get("content"), tools)
+                rescued, prose = _rescue_tool_call(message.get("content"), tools)
                 if rescued:
                     tool_calls = [rescued]
                     # Rewrite so the appended history has a real tool_calls
                     # field instead of the raw hallucinated JSON text — some
                     # servers reject an assistant message followed by tool
                     # messages when it doesn't actually claim to have called one.
-                    message = {"role": "assistant", "content": None, "tool_calls": tool_calls}
+                    # Any sentence before the call stays as the message text.
+                    message = {"role": "assistant", "content": prose, "tool_calls": tool_calls}
             if not tool_calls or not tool_executor:
                 return message.get("content") or ""
 
@@ -267,9 +365,9 @@ async def run_turn(base_url: str, model: str, api_key: Optional[str], messages: 
                     "tool_call_id": call["id"],
                     "content": result,
                 })
-        # Ran out of rounds without a final answer — return whatever text
-        # came back on the last response rather than raising.
-        return message.get("content") or "(no response after tool calls)"
+        # Ran out of rounds without a final answer: one more request with
+        # tools off, so the model answers from what it gathered.
+        return await _answer_without_tools(client, base_url, api_key, model, working_messages, num_ctx, on_usage)
 
 
 async def run_turn_stream(base_url: str, model: str, api_key: Optional[str], messages: list[dict],
@@ -341,10 +439,10 @@ async def run_turn_stream(base_url: str, model: str, api_key: Optional[str], mes
             message = data["choices"][0]["message"]
             tool_calls = message.get("tool_calls")
             if not tool_calls and tool_executor:
-                rescued = _extract_fake_tool_call(message.get("content"), tools)
+                rescued, prose = _rescue_tool_call(message.get("content"), tools)
                 if rescued:
                     tool_calls = [rescued]
-                    message = {"role": "assistant", "content": None, "tool_calls": tool_calls}
+                    message = {"role": "assistant", "content": prose, "tool_calls": tool_calls}
             if not tool_calls or not tool_executor:
                 content = message.get("content") or ""
                 if content:
@@ -361,3 +459,6 @@ async def run_turn_stream(base_url: str, model: str, api_key: Optional[str], mes
                     "tool_call_id": call["id"],
                     "content": result,
                 })
+        # Ran out of rounds without a final answer (every round called a
+        # tool): this used to end the stream with nothing at all.
+        yield await _answer_without_tools(client, base_url, api_key, model, working_messages, num_ctx, on_usage)
