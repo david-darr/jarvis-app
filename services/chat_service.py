@@ -342,39 +342,47 @@ def _apply_open_mic_discipline(session_id: str, full_text: str) -> str:
     return full_text + OPEN_MIC_DISCIPLINE
 
 
-def _prepare_sent_text(session_id: str, index: int, text: str, attachment_ids: list[str] | None) -> str:
+def _prepare_sent_text(session_id: str, index: int, text: str, attachment_ids: list[str] | None,
+                       reference_context: str = "") -> str:
     """The user message as the model receives it - the attachment note and
     Open Mic instruction added - recorded beside the saved message so every
     later replay sends the same text (see SessionManager.record_sent_text).
     Deliberately before _prime_with_history: that wrapper is a one-off for
     a fresh connection, not part of the message."""
-    sent = _apply_open_mic_discipline(session_id, _apply_attachments(session_id, text, attachment_ids))
+    sent = _apply_open_mic_discipline(session_id, _apply_attachments(session_id, text, attachment_ids) + reference_context)
     session_manager.record_sent_text(session_id, index, text, sent)
     session_manager.record_image_attachments(session_id, index, attachments.image_ids(attachment_ids))
     return sent
 
 
-async def send_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> str:
+async def send_message(session_id: str, text: str, attachment_ids: list[str] | None = None,
+                       is_admin: bool = False, reference_context: str = "",
+                       references: list[dict] | None = None) -> str:
     # Every line logged during the turn names this chat (core/logs.py), so the
     # Logs view can pull out one conversation's trail.
     tag = log_files.set_log_tag(session_id)
     try:
         async with session_operation(session_id):
-            return await _send_message(session_id, text, attachment_ids, is_admin)
+            return await _send_message(session_id, text, attachment_ids, is_admin, reference_context, references)
     finally:
         log_files.reset_log_tag(tag)
 
 
-async def _send_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> str:
+async def _send_message(session_id: str, text: str, attachment_ids: list[str] | None = None,
+                        is_admin: bool = False, reference_context: str = "",
+                        references: list[dict] | None = None) -> str:
     image_ids = validate_image_attachments(session_id, attachment_ids)
-    index = session_manager.append_message(session_id, "user", text)
+    index = session_manager.append_message(session_id, "user", text,
+                                           extra={"references": references} if references else None)
     endpoint = _resolve_endpoint(session_id)
     if endpoint is None:
         session_manager.append_message(session_id, "assistant", NO_MODEL_MESSAGE)
         return NO_MODEL_MESSAGE
 
-    full_text = _prepare_sent_text(session_id, index, text, attachment_ids)
+    full_text = _prepare_sent_text(session_id, index, text, attachment_ids, reference_context)
     brain, just_created = await _get_brain(session_id, endpoint, is_admin)
+    if reference_context and isinstance(brain, (Brain, ExternalBrain)):
+        brain.pending_reference_taint = True
     full_text = _vision_input(endpoint, _prime_with_history(session_id, just_created, endpoint, full_text, brain), image_ids)
     session = session_manager.get_session(session_id) or {}
     try:
@@ -393,19 +401,25 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
     return reply
 
 
-async def stream_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> AsyncIterator[str]:
+async def stream_message(session_id: str, text: str, attachment_ids: list[str] | None = None,
+                         is_admin: bool = False, reference_context: str = "",
+                         references: list[dict] | None = None) -> AsyncIterator[str]:
     tag = log_files.set_log_tag(session_id)  # see send_message
     try:
         async with session_operation(session_id):
-            async for chunk in _stream_message(session_id, text, attachment_ids, is_admin):
+            async for chunk in _stream_message(session_id, text, attachment_ids, is_admin, reference_context,
+                                               references):
                 yield chunk
     finally:
         log_files.reset_log_tag(tag)
 
 
-async def _stream_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> AsyncIterator[str]:
+async def _stream_message(session_id: str, text: str, attachment_ids: list[str] | None = None,
+                          is_admin: bool = False, reference_context: str = "",
+                          references: list[dict] | None = None) -> AsyncIterator[str]:
     image_ids = validate_image_attachments(session_id, attachment_ids)
-    index = session_manager.append_message(session_id, "user", text)
+    index = session_manager.append_message(session_id, "user", text,
+                                           extra={"references": references} if references else None)
     endpoint = _resolve_endpoint(session_id)
     if endpoint is None:
         session_manager.append_message(session_id, "assistant", NO_MODEL_MESSAGE)
@@ -415,8 +429,10 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
     reply_parts: list[str] = []
     brain = None
     try:
-        full_text = _prepare_sent_text(session_id, index, text, attachment_ids)
+        full_text = _prepare_sent_text(session_id, index, text, attachment_ids, reference_context)
         brain, just_created = await _get_brain(session_id, endpoint, is_admin)
+        if reference_context and isinstance(brain, (Brain, ExternalBrain)):
+            brain.pending_reference_taint = True
         full_text = _vision_input(endpoint, _prime_with_history(session_id, just_created, endpoint, full_text, brain), image_ids)
         session = session_manager.get_session(session_id) or {}
         async with file_checkpoints.around_turn(f"chat:{session_id}", session.get("workspace_dir")):

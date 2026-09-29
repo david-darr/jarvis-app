@@ -153,6 +153,7 @@ class Brain:
         self.tool_fingerprint: str | None = None
         self._client: ClaudeSDKClient | None = None
         self.turn_taint = TurnTaint()
+        self.pending_reference_taint = False
 
     def _tool_config(self) -> tuple[list[str], list[str], dict]:
         """The parts of a connection that come from global settings rather
@@ -403,6 +404,9 @@ class Brain:
             raise RuntimeError("Brain.connect() must be called before run_turn_stream().")
 
         self.turn_taint.reset()
+        if self.pending_reference_taint:
+            self.turn_taint.mark("selected reference")
+            self.pending_reference_taint = False
         await self._client.query(user_text)
 
         response_iter = self._client.receive_response().__aiter__()

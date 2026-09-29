@@ -47,6 +47,7 @@ class ExternalBrain:
         self.allow_user_tab_source = allow_user_tab_source
         self.supports_images = supports_images
         self.turn_taint = TurnTaint()
+        self.pending_reference_taint = False
         self.tools = tool_registry.openai_tools(is_admin)
         if is_admin:
             # A visible, revocable built-in grant, like Claude's Bash; see
@@ -161,6 +162,9 @@ class ExternalBrain:
 
     async def run_turn(self, user_text: str | list[dict]) -> str:
         self.turn_taint.reset()
+        if self.pending_reference_taint:
+            self.turn_taint.mark("selected reference")
+            self.pending_reference_taint = False
         self._messages.append({"role": "user", "content": user_text})
         self.last_tool_rounds = []
         reply = await openai_compatible.run_turn(
@@ -175,6 +179,9 @@ class ExternalBrain:
 
     async def run_turn_stream(self, user_text: str | list[dict]) -> AsyncIterator[str]:
         self.turn_taint.reset()
+        if self.pending_reference_taint:
+            self.turn_taint.mark("selected reference")
+            self.pending_reference_taint = False
         self._messages.append({"role": "user", "content": user_text})
         self.last_tool_rounds = []
         parts: list[str] = []

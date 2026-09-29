@@ -3,13 +3,14 @@
 services/chat_service.py — routes own request/response shape, the service
 owns the actual turn logic.
 """
+import asyncio
 import json
 
 from fastapi import APIRouter, Depends, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 
-from core import attachments, chat_artifacts, chat_files, office_preview
+from core import attachments, chat_artifacts, chat_files, chat_references, office_preview
 from core.auth import auth_manager
 from core.middleware import require_user
 from services import chat_service
@@ -25,6 +26,12 @@ async def list_chat_files(session_id: str, user: str = Depends(require_user)) ->
 @router.get("/files/library")
 async def list_chat_files_library(user: str = Depends(require_user)) -> list[dict]:
     return chat_files.list_library()
+
+
+@router.get("/references")
+def search_chat_references(q: str = "", session_id: str | None = None,
+                           user: str = Depends(require_user)) -> list[dict]:
+    return chat_references.search(q, session_id)
 
 
 class PublishFileRequest(BaseModel):
@@ -88,6 +95,7 @@ class ChatRequest(BaseModel):
     session_id: str
     message: str
     attachment_ids: list[str] = []
+    references: list[dict] = []
 
 
 class ChatResponse(BaseModel):
@@ -119,9 +127,11 @@ async def send_chat_message(body: ChatRequest, user: str = Depends(require_user)
     is_admin = auth_manager.is_admin(user)
     try:
         chat_service.validate_image_attachments(body.session_id, body.attachment_ids)
+        reference_context = await asyncio.to_thread(chat_references.resolve, body.session_id, body.references)
     except ValueError as error:
         raise HTTPException(422, str(error))
-    reply = await chat_service.send_message(body.session_id, body.message, body.attachment_ids, is_admin)
+    reply = await chat_service.send_message(body.session_id, body.message, body.attachment_ids, is_admin,
+                                            reference_context, chat_references.metadata(body.references))
     return ChatResponse(reply=reply)
 
 
@@ -134,12 +144,14 @@ async def stream_chat_message(body: ChatRequest, user: str = Depends(require_use
         raise HTTPException(409, "This chat is busy. Wait for the current response to finish.")
     try:
         chat_service.validate_image_attachments(body.session_id, body.attachment_ids)
+        reference_context = await asyncio.to_thread(chat_references.resolve, body.session_id, body.references)
     except ValueError as error:
         raise HTTPException(422, str(error))
 
     async def event_source():
         try:
-            async for item in chat_service.stream_message(body.session_id, body.message, body.attachment_ids, is_admin):
+            async for item in chat_service.stream_message(body.session_id, body.message, body.attachment_ids, is_admin,
+                                                          reference_context, chat_references.metadata(body.references)):
                 # A dict is a typed event - today, a permission request raised
                 # while the reply was being produced. Text stays exactly as it
                 # was, so nothing about the existing protocol changes.

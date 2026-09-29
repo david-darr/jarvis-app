@@ -11,6 +11,7 @@ import { showPermissionPrompt, dismissPermissionPrompt } from '../permissionProm
 import { mountSideChat, openSideChat, closeSideChat, mainOpened, sideChatSessionId, canSplit, SESSION_MIME } from '../sideChat.js';
 import { mountChatFind } from '../chatFind.js';
 import { openWebCapture } from '../screenCapture.js';
+import { mountChatReferences } from '../chatReferences.js';
 
 // Composer rebuilt to match Odysseus's actual chat-input-bar structure
 // (David's ask 2026-08-31, cross-checked against the real repo at
@@ -146,7 +147,12 @@ async function rewindTo(session, keep, userMessage, { edit }) {
   const { messages, input, sendBtn, attachStrip } = composerRefs;
   const sessionsList = document.getElementById('sessions-list');
   await openSession(session.id, sessionsList, messages);
-  input.value = userMessage.content;
+  const references = userMessage.references || [];
+  const suffix = references.map(ref => `@${ref.kind}: ${ref.label}`).join('\n');
+  const separator = userMessage.content.endsWith(`\n\n${suffix}`) ? `\n\n${suffix}` : suffix;
+  input.value = suffix && userMessage.content.endsWith(separator)
+    ? userMessage.content.slice(0, -separator.length) : userMessage.content;
+  references.forEach(ref => chatReferences?.add(ref));
   input.dispatchEvent(new Event('input'));
   if (edit) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); return; }
   await sendMessage(messages, input, sendBtn, attachStrip);
@@ -157,6 +163,7 @@ let activeProjectFilter = null; // David's ask 2026-09-12 — null = "All Chats"
 let stagedAttachments = []; // [{id, filename}]
 let activeImagePreview = null;
 let activeWebCapture = null;
+let chatReferences = null;
 function clearStagedAttachments() {
   for (const item of stagedAttachments) if (item.preview) URL.revokeObjectURL(item.preview);
   stagedAttachments = [];
@@ -172,9 +179,9 @@ let shownPermission = null;
 // running queues the message instead of doing nothing. The next one sends
 // when the reply finishes; a Stop or a failure pauses the queue rather than
 // firing the next message into a turn that went wrong, and a queue found
-// waiting when a chat is reopened waits paused too. Text only - attachments
-// send with a message typed after the reply. Kept per chat, for this window.
-const queuedBySession = new Map();   // sessionId -> [text]
+// waiting when a chat is reopened waits paused too. Attachments send after
+// the reply; selected references travel with a queued draft.
+const queuedBySession = new Map();   // sessionId -> [{text, references}]
 const pausedQueues = new Set();      // sessionIds whose queue waits for Resume
 let composerRefs = null;             // { messages, input, sendBtn, attachStrip, queueHost } of the mounted view
 
@@ -193,13 +200,16 @@ function renderQueue() {
     el('span', { text: paused ? `Queue paused · ${items.length} waiting` : `Queued · sends when the reply finishes` }),
     paused ? resume : null,
   ]));
-  items.forEach((text, index) => {
+  items.forEach((item, index) => {
     host.append(el('div', { class: 'chat-queue-item' }, [
-      el('span', { class: 'chat-queue-text', text, title: text }),
+      el('span', { class: 'chat-queue-text',
+        text: [item.text, ...item.references.map(ref => `@${ref.label}`)].filter(Boolean).join(' · '),
+        title: [item.text, ...item.references.map(ref => `@${ref.label}`)].filter(Boolean).join(' · ') }),
       el('button', { type: 'button', class: 'btn chat-queue-edit', text: 'Edit', onclick: () => {
         items.splice(index, 1);
         const { input } = composerRefs;
-        input.value = input.value ? `${text}\n${input.value}` : text;
+        input.value = input.value ? `${item.text}\n${input.value}` : item.text;
+        item.references.forEach(ref => chatReferences?.add(ref));
         input.dispatchEvent(new Event('input')); input.focus();
         renderQueue();
       } }),
@@ -217,11 +227,16 @@ function sendNextQueued(sessionId) {
   const { messages, input, sendBtn, attachStrip } = composerRefs;
   if (!messages.isConnected) return;
   const draft = input.value;
-  input.value = items.shift();
+  const draftReferences = chatReferences?.getSelected() || [];
+  const queued = items.shift();
+  chatReferences?.clear();
+  input.value = queued.text;
+  queued.references.forEach(ref => chatReferences?.add(ref));
   renderQueue();
   sendMessage(messages, input, sendBtn, attachStrip).finally(() => {
     // Whatever was being typed when the queued message went out stays put.
     if (draft && !input.value) { input.value = draft; input.dispatchEvent(new Event('input')); }
+    draftReferences.forEach(ref => chatReferences?.add(ref));
   });
 }
 
@@ -467,6 +482,7 @@ export async function render(container, tabId, options = {}) {
   const versionWrap = el('div', { class: 'model-picker-wrap' }, [versionBtn, versionMenu]);
 
   const inputTop = el("div", { class: "chat-input-top" }, [input]);
+  chatReferences = mountChatReferences(input, inputTop, () => activeSessionId);
 
   // -- composer: bottom row (overflow "+" menu, workspace pill, send) --
   const overflowBtn = el("button", { type: "button", class: "input-icon-btn", id: "overflow-plus-btn", title: "More" });
@@ -533,7 +549,7 @@ export async function render(container, tabId, options = {}) {
 
   const composer = el("div", { class: "glass chat-input-bar border-beam" }, [inputTop, inputBottom]);
   const queueHost = el('div', { class: 'chat-queue', hidden: true, 'aria-live': 'polite' });
-  const dock = el('div', { class: 'chat-composer-dock' }, [queueHost, attachStrip, composer, el("div", { class: "composer-hint", text: "Enter to send · Shift + Enter for a new line" })]);
+  const dock = el('div', { class: 'chat-composer-dock' }, [queueHost, attachStrip, composer, el("div", { class: "composer-hint", text: "@ to add a file, note, or chat · Enter to send · Shift + Enter for a new line" })]);
   composerRefs = { messages, input, sendBtn, attachStrip, queueHost };
   main.append(messages, dock);
   const dockObserver = new ResizeObserver(() => main.style.setProperty('--composer-height', `${dock.offsetHeight}px`));
@@ -566,6 +582,7 @@ export async function render(container, tabId, options = {}) {
     activeSessionId = null;
     renderQueue();
     clearStagedAttachments();
+    chatReferences?.clear();
     renderAttachStrip(attachStrip);
     input.value = '';
     input.style.height = 'auto';
@@ -644,6 +661,8 @@ export async function render(container, tabId, options = {}) {
     if (disposed) return;
     disposed = true;
     disposeFind();
+    chatReferences?.dispose();
+    chatReferences = null;
     document.removeEventListener("click", dismissMenus);
     document.removeEventListener("keydown", escapeMenus);
     document.removeEventListener("visibilitychange", syncBeam);
@@ -1949,6 +1968,7 @@ async function openSession(sessionId, sessionsList, messages) {
   activeImagePreview?.();
   activeWebCapture?.();
   closeChatFiles();
+  chatReferences?.clear();
   // Disposed on session switch, not carried across: the pane belongs to the
   // conversation it was opened from, and in the desktop app leaving it
   // running would keep a native view (and its scripts and audio) alive over
@@ -2038,22 +2058,26 @@ export async function acceptQuickEntryDraft(draft) {
 
 async function sendMessage(messages, input, sendBtn, attachStrip) {
   if (sendBtn.disabled) return;
-  const text = input.value.trim();
+  const draft = input.value.trim();
+  const references = chatReferences?.getSelected() || [];
+  const referenceLabels = references.map(ref => `@${ref.kind}: ${ref.label}`).join('\n');
+  const text = [draft, referenceLabels].filter(Boolean).join('\n\n');
   if (chatStream.getInFlight(activeSessionId)?.status === 'processing') {
     // A reply is still running: queue it (see queuedBySession).
     if (!text) return;
-    if (text.startsWith('/')) { toast('Slash commands run once the reply finishes', 'error'); return; }
+    if (draft.startsWith('/')) { toast('Slash commands run once the reply finishes', 'error'); return; }
     if (stagedAttachments.length) { toast('Attachments send once the reply finishes', 'error'); return; }
     if (!queuedBySession.has(activeSessionId)) queuedBySession.set(activeSessionId, []);
-    queuedBySession.get(activeSessionId).push(text);
+    queuedBySession.get(activeSessionId).push({ text: draft, references });
     input.value = '';
+    chatReferences?.clear();
     input.style.height = 'auto';
     renderQueue();
     return;
   }
   if (!text && stagedAttachments.length === 0) return;
 
-  if (text.startsWith("/")) {
+  if (draft.startsWith("/") && !references.length) {
     if (stagedAttachments.length) {
       toast("Send the slash command separately from attachments", "error");
       return;
@@ -2118,6 +2142,7 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
   renderAttachStrip(attachStrip);
 
   input.value = "";
+  chatReferences?.clear();
   input.style.height = "auto";
   messages.appendChild(messageCard("user", text || (imageSources.length ? "" : "(attachment)"),
     undefined, "complete", imageSources));
@@ -2136,7 +2161,7 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
   // or is being reattached to on reopen.
   const sessionItem = document.querySelector(`.session-item[data-session-id="${activeSessionId}"]`);
   const sessionTitle = sessionItem?.dataset.title || "Chat";
-  chatStream.startTurn(activeSessionId, sessionTitle, text, attachmentIds);
+  chatStream.startTurn(activeSessionId, sessionTitle, text, attachmentIds, references);
   activeUnsubscribers.push(attachToInFlight(activeSessionId, messages, replyCard, replyBody, sendBtn));
 
   input.focus();

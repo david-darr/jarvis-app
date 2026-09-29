@@ -62,7 +62,7 @@ export function subscribeAll(callback) {
 // Synchronous: registers the in-flight entry immediately (so a caller can
 // subscribe() right after this returns and not race the first chunk),
 // then runs the actual request in the background.
-export function startTurn(sessionId, sessionTitle, text, attachmentIds) {
+export function startTurn(sessionId, sessionTitle, text, attachmentIds, references = []) {
   if (_inflight.get(sessionId)?.status === 'processing') throw new Error('This chat already has a response in progress');
   // The controller lives on the entry rather than in a closure so stopTurn()
   // can reach it from anywhere - the composer's stop button, a tab switch, or
@@ -71,16 +71,16 @@ export function startTurn(sessionId, sessionTitle, text, attachmentIds) {
   const entry = { text: "", status: "processing", connected: false, sessionTitle, error: null, controller, listeners: new Set() };
   _inflight.set(sessionId, entry);
   _notify(sessionId);
-  _runTurn(sessionId, entry, text, attachmentIds);
+  _runTurn(sessionId, entry, text, attachmentIds, references);
   return entry;
 }
 
-async function _runTurn(sessionId, entry, text, attachmentIds) {
+async function _runTurn(sessionId, entry, text, attachmentIds, references) {
   try {
     const res = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, message: text, attachment_ids: attachmentIds }),
+      body: JSON.stringify({ session_id: sessionId, message: text, attachment_ids: attachmentIds, references }),
       signal: entry.controller.signal,
     });
     if (!res.ok || !res.body) {
