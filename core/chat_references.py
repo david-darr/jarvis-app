@@ -126,16 +126,24 @@ def _chat_content(reference: dict, current_session_id: str) -> tuple[str, str]:
         raise ValueError("A referenced chat is no longer available")
     lines = []
     size = 0
+    limit = MAX_ITEM_CHARS - 250  # leave room for the title and truncation note
+    truncated = False
     for message in reversed(session.get("messages", [])):
         if message.get("role") not in ("user", "assistant"):
             continue
         line = f"{message['role']}: {message.get('content') or ''}"
-        lines.append(line[-MAX_ITEM_CHARS:])
-        size += len(lines[-1]) + 2
-        if size >= MAX_ITEM_CHARS:
+        remaining = limit - size
+        if len(line) > remaining:
+            lines.append(line[-remaining:])
+            truncated = True
             break
-    content = "\n\n".join(reversed(lines))[-MAX_ITEM_CHARS:]
-    if size >= MAX_ITEM_CHARS:
+        lines.append(line)
+        size += len(line) + 2
+        if size >= limit:
+            truncated = True
+            break
+    content = "\n\n".join(reversed(lines))
+    if truncated:
         content = "[Earlier messages omitted.]\n" + content
     return "selected chat", f"Chat: {session.get('title') or session_id}\n{content or '[This chat has no messages.]'}"
 

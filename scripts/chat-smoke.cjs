@@ -88,6 +88,11 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/projects') return json([]);
     if (url.pathname === '/api/chat/files/library') return json([{ session_id: 's1', title: chats.s1.title, files: chatFileRows }]);
     if (url.pathname === '/api/chat/files') return json(url.searchParams.get('session_id') === 's1' ? chatFileRows : []);
+    if (url.pathname === '/api/chat/references') return json([
+      { kind: 'file', id: 'aaaaaaaaaaaaaaaaaaaaaaaa', session_id: 's1', label: 'draft.txt', detail: 'A focused workspace' },
+      { kind: 'note', id: 'Active Priorities.md', label: 'Active Priorities', detail: 'Active Priorities.md' },
+      { kind: 'chat', id: 's2', label: 'Another conversation', detail: 'Conversation' },
+    ]);
     if (url.pathname === '/api/documents') return json([]);
     if (url.pathname === '/api/documents/search') return json([]);
     if (url.pathname === '/api/chat/attachments') return json({ id: 'staged-test', filename: 'draft.txt' });
@@ -807,6 +812,22 @@ app.whenReady().then(async () => {
     // only a transform animation represents composer movement.
     const runningAnimations = await js("document.querySelector('.chat-composer-dock').getAnimations().filter(a=>a.playState==='running' && a.effect.getKeyframes().some(frame=>'transform' in frame)).map(a=>a.effect.getKeyframes())");
     assert.deepEqual(runningAnimations, [], 'Reduced motion skips composer animation: ' + JSON.stringify(runningAnimations));
+    // @ chooses a structured reference before Enter can send, then carries
+    // the ID through the same stream request as an ordinary message.
+    const beforeReference = streams().length;
+    await js("{ const i=document.querySelector('#chat-input'); i.value='Summarize @active'; i.setSelectionRange(i.value.length,i.value.length); i.dispatchEvent(new Event('input')); }");
+    await waitFor("document.querySelectorAll('.chat-reference-option').length===3");
+    await js("{ const i=document.querySelector('#chat-input'); i.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true})); i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true})); }");
+    assert.equal(streams().length, beforeReference, 'Picker Enter selects a reference without sending');
+    assert.ok(await js("document.querySelector('.chat-reference-chip')?.textContent.includes('Active Priorities')"));
+    assert.equal(await js("document.querySelector('#chat-input').value"), 'Summarize ');
+    await js("document.querySelector('#chat-send').click()");
+    for (let i = 0; i < 100 && streams().length === beforeReference; i++) await delay(40);
+    assert.deepEqual(streams().at(-1).data.references.map(ref => [ref.kind, ref.id]), [['note', 'Active Priorities.md']]);
+    assert.ok(streams().at(-1).data.message.includes('@note: Active Priorities'));
+    while (!pending) await delay(20);
+    pending.res.end('data: {"done":true}\n\n'); pending = null;
+    await waitFor("document.querySelector('#chat-send').dataset.mode!=='stop'");
     assert.deepEqual(errors, []);
     fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: true, checks: ['centered landing and same-composer transition', 'first-message attachments and model-selection draft retention', 'reduced motion', 'rich Markdown and highlighting', 'model dispatch controls and reload persistence', 'artifact previews and Office fallback', 'isolated HTML and XSS filtering', 'session reattachment without duplicates', 'scroll position preservation', 'explicit stream completion', '320/390px mobile layouts'], requests, errors }, null, 2));
     console.log('PASS ' + output);
