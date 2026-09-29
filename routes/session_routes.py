@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from functools import wraps
 
 from core import workspace, model_catalog, model_endpoints
+from core.auth import auth_manager
 from core.middleware import require_admin, require_user
 from core.session_manager import session_manager
 from services import chat_service
@@ -53,6 +54,10 @@ class AppendMessageRequest(BaseModel):
 
 class RewindRequest(BaseModel):
     keep: int  # how many of the chat's messages stay; the rest are deleted
+
+
+class ForkRequest(BaseModel):
+    through_index: int  # include this message in the new chat
 
 
 class SetIntegrationsRequest(BaseModel):
@@ -262,6 +267,25 @@ async def rewind_session(session_id: str, body: RewindRequest, user: str = Depen
         raise HTTPException(status_code=400, detail=str(e))
     await chat_service.close_session_brain(session_id)
     return _for_client(session)
+
+
+@router.post("/{session_id}/fork")
+@idle_session
+async def fork_session(session_id: str, body: ForkRequest, user: str = Depends(require_user)) -> dict:
+    source = session_manager.get_session(session_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if source.get("workspace_dir"):
+        if not auth_manager.is_admin(user):
+            raise HTTPException(status_code=403, detail="Only an admin can fork a chat with a custom workspace")
+        if workspace.vet_workspace(source["workspace_dir"]) != source["workspace_dir"]:
+            raise HTTPException(status_code=400, detail="The source chat's workspace is no longer available")
+    try:
+        fork = session_manager.fork_session(session_id, body.through_index,
+                                            allow_workspace=auth_manager.is_admin(user))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return {"id": fork["id"], "title": fork["title"], "project_id": fork.get("project_id")}
 
 
 @router.post("/{session_id}/messages")

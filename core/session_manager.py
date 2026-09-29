@@ -14,6 +14,7 @@ on the index, so the two could disagree and strand a chat that was sitting
 right there on disk. The sibling's docstring has the full account. Public
 method signatures here did not change as part of that move.
 """
+import copy
 import time
 import uuid
 from typing import Optional
@@ -83,6 +84,75 @@ class SessionManager:
         }
         store.save_session(session)
         return session
+
+    def fork_session(self, session_id: str, through_index: int, *, allow_workspace: bool = False) -> dict:
+        """Copy a conversation through one message into a new independent chat.
+
+        Provider thread IDs and live state never cross into the fork. Saved
+        model-facing text stays with copied messages so attachments and
+        selected references still replay as they did in the source chat.
+        """
+        source = self._require(session_id)
+        messages = source.get("messages", [])
+        if isinstance(through_index, bool) or not isinstance(through_index, int) or not 0 <= through_index < len(messages):
+            raise ValueError("Choose a message in this chat to fork from")
+        if source.get("workspace_dir") and not allow_workspace:
+            raise PermissionError("Only an admin can fork a chat with a custom workspace")
+
+        now = time.time()
+        kept = copy.deepcopy(messages[:through_index + 1])
+        title = source.get("title") or "Chat"
+        fork = {
+            "id": uuid.uuid4().hex[:12],
+            "title": f"{title[:73]} (fork)",
+            "starred": False,
+            "created_at": now,
+            "updated_at": now,
+            "messages": kept,
+            "model_endpoint_id": source.get("model_endpoint_id"),
+            "model_override": source.get("model_override"),
+            "model_effort": source.get("model_effort"),
+            "workspace_dir": source.get("workspace_dir"),
+            "codex_thread_id": None,
+            "claude_session_id": None,
+            "claude_synced_through": 0,
+            "project_id": source.get("project_id"),
+            "enabled_integration_ids": copy.deepcopy(source.get("enabled_integration_ids")),
+            "forked_from": {"session_id": session_id, "message_index": through_index},
+        }
+        compactions = [copy.deepcopy(item) for item in source.get("compactions", [])
+                       if item.get("through_index", len(messages) + 1) <= len(kept)]
+        if compactions:
+            fork["compactions"] = compactions
+        archived_through = compactions[-1]["through_index"] if compactions else 0
+        for index, message in enumerate(kept):
+            if index >= archived_through:
+                message.pop("archived", None)
+
+        # Files from later turns must not appear in the earlier fork. An
+        # attachment's record can be written milliseconds after its user
+        # message, so also recognize the retained message's sent path.
+        cutoff = kept[-1].get("ts")
+        if kept[-1].get("role") == "assistant":
+            cutoff = messages[through_index + 1].get("ts") if through_index + 1 < len(messages) else now
+        sent_history = "\n".join(sent_text(message) for message in kept if message.get("role") == "user")
+        files = []
+        for entry in source.get("chat_files", []):
+            created = entry.get("created_at")
+            attached_here = entry.get("origin") == "attachment" and any(
+                name in sent_history for name in entry.get("internal_paths", []))
+            in_history = isinstance(cutoff, (int, float)) and isinstance(created, (int, float)) and (
+                created < cutoff if kept[-1].get("role") == "assistant" else created <= cutoff)
+            if attached_here or (entry.get("origin") != "attachment" and in_history):
+                files.append(copy.deepcopy(entry))
+        if files:
+            fork["chat_files"] = files
+        assistant_history = "\n".join(message.get("content") or "" for message in kept if message.get("role") == "assistant")
+        urls = [url for url in source.get("artifact_urls", []) if url in assistant_history]
+        if urls:
+            fork["artifact_urls"] = urls
+
+        return store.save_session(fork)
 
     def list_sessions(self) -> list[dict]:
         """Starred first, then newest-first within each group — metadata only

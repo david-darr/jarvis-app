@@ -97,7 +97,8 @@ function messageCard(role, text, ts, status = 'complete', imageSources = []) {
 // with everything after it removed. The model then gets the trimmed chat
 // replayed as text, which costs one full cache miss and, for Claude and
 // Codex, keeps earlier tool calls only as what the replies said about them.
-// Only messages after the latest compaction can be cut back to.
+// Only messages after the latest compaction can be cut back to. Forking
+// keeps the source intact and can begin at any saved message.
 function addRewindActions(messages, session) {
   const history = session.messages || [];
   const floor = (session.compactions || []).at(-1)?.through_index || 0;
@@ -106,7 +107,11 @@ function addRewindActions(messages, session) {
   const lastAssistant = history.map((m) => m.role).lastIndexOf('assistant');
   history.forEach((msg, index) => {
     const row = cards[index].querySelector('.msg-actions');
-    if (!row || index < floor) return;
+    if (!row) return;
+    row.prepend(el('button', { type: 'button', class: 'msg-action-btn msg-fork',
+      title: 'Fork chat from this message', text: 'Fork',
+      onclick: () => forkFrom(session, index) }));
+    if (index < floor) return;
     if (msg.role === 'user' && msg.content) {
       row.prepend(el('button', { type: 'button', class: 'msg-action-btn msg-edit', title: 'Edit and resend', text: 'Edit',
         onclick: () => rewindTo(session, index, msg, { edit: true }) }));
@@ -124,8 +129,28 @@ async function refreshRewindActions(sessionId, messages) {
   let session;
   try { session = await api(`/api/sessions/${sessionId}`); } catch { return; }
   if (sessionId !== activeSessionId || !messages.isConnected) return;
-  messages.querySelectorAll('.msg-edit, .msg-regenerate').forEach((button) => button.remove());
+  messages.querySelectorAll('.msg-edit, .msg-regenerate, .msg-fork').forEach((button) => button.remove());
   addRewindActions(messages, session);
+}
+
+async function forkFrom(session, index) {
+  if (!composerRefs || session.id !== activeSessionId) return;
+  if (chatStream.getInFlight(session.id)?.status === 'processing') {
+    toast('Wait for the reply to finish first', 'error');
+    return;
+  }
+  try {
+    const fork = await api(`/api/sessions/${session.id}/fork`, {
+      method: 'POST', body: JSON.stringify({ through_index: index }),
+    });
+    if (session.id !== activeSessionId) return;
+    const { messages } = composerRefs;
+    const sessionsList = document.getElementById('sessions-list');
+    await openSession(fork.id, sessionsList, messages);
+    toast('Chat forked from this message', 'success');
+  } catch (problem) {
+    toast(problem.message.replace(/^\d+: /, ''), 'error');
+  }
 }
 
 async function rewindTo(session, keep, userMessage, { edit }) {
