@@ -11,6 +11,28 @@ export async function render(container) {
   await renderList(container);
 }
 
+function section(title, description, icon, body) {
+  const glyph = el("span", { class: "library-section-icon", "aria-hidden": "true" });
+  glyph.innerHTML = ICONS[icon];
+  const count = el("span", { class: "library-count", text: "0" });
+  const summary = el("summary", { class: "library-section-summary" }, [
+    glyph,
+    el("span", { class: "library-section-copy" }, [
+      el("strong", { text: title }), el("small", { text: description }),
+    ]),
+    count,
+    el("span", { class: "library-chevron", "aria-hidden": "true", text: "›" }),
+  ]);
+  return { node: el("details", { class: "library-section", open: true }, [summary, body]), count };
+}
+
+function fileSize(size) {
+  if (size == null) return "";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 async function renderList(container) {
   container.innerHTML = "";
 
@@ -21,7 +43,7 @@ async function renderList(container) {
     ]),
   ]);
 
-  const searchInput = el("input", { placeholder: "Search documents...", style: "flex:1;" });
+  const searchInput = el("input", { placeholder: "Search documents and chat files...", style: "flex:1;" });
   const newBtn = el("button", { class: "btn primary", text: "+ New document" });
   // Plain file input + FileReader (David's ask 2026-09-01) — works
   // identically in the Electron shell and the plain-HTTP web-access path,
@@ -37,8 +59,12 @@ async function renderList(container) {
   ]);
 
   const grid = el("div", { id: "library-grid", class: "document-grid" });
+  const chatFiles = el("div", { class: "library-chat-files" });
+  const documentsSection = section("Documents", "Notes and drafts saved to your Library", "notes", grid);
+  const filesSection = section("Files by chat", "Attachments and files created in conversations", "chats", chatFiles);
+  const openChats = new Set();
 
-  const wrap = el("div", { class: "view-constrained" }, [header, toolbar, grid]);
+  const wrap = el("div", { class: "view-constrained library-view" }, [header, toolbar, documentsSection.node, filesSection.node]);
   container.append(wrap);
 
   newBtn.addEventListener("click", async () => {
@@ -64,25 +90,90 @@ async function renderList(container) {
   });
 
   let searchDebounce = null;
+  let searchVersion = 0;
+  const refresh = async (query) => {
+    const version = ++searchVersion;
+    const current = () => version === searchVersion && wrap.isConnected;
+    await Promise.all([
+      refreshGrid(grid, container, query, documentsSection, current),
+      refreshChatFileGroups(chatFiles, query, filesSection, openChats, current),
+    ]);
+  };
   searchInput.addEventListener("input", () => {
     clearTimeout(searchDebounce);
-    searchDebounce = setTimeout(() => refreshGrid(grid, container, searchInput.value.trim()), 200);
+    searchDebounce = setTimeout(() => refresh(searchInput.value.trim()), 200);
   });
 
-  await refreshGrid(grid, container, "");
+  await refresh("");
 }
 
-async function refreshGrid(grid, container, query) {
-  grid.innerHTML = "";
+async function refreshChatFileGroups(host, query, section, openChats, current) {
+  const groups = await api("/api/chat/files/library");
+  if (!current()) return;
+  host.replaceChildren();
+  const wanted = query.toLowerCase();
+  let shown = 0;
+  for (const group of groups) {
+    const files = group.files.filter(file => !wanted
+      || group.title.toLowerCase().includes(wanted) || file.name.toLowerCase().includes(wanted));
+    if (!files.length) continue;
+    shown += files.length;
+    const list = el("div", { class: "library-file-list" });
+    for (const file of files) {
+      const label = file.origin === "attachment" ? "Sent to chat"
+        : file.origin === "created" ? "Created by model" : "Generated";
+      const kind = file.name.includes(".") ? file.name.split(".").pop().slice(0, 5).toUpperCase() : "FILE";
+      const card = el("button", { type: "button", class: "library-file-row document-card", title: file.name,
+        disabled: !file.exists,
+        onclick: async () => {
+          const { switchTab } = await import("../app.js");
+          await switchTab("chat", { sessionId: group.session_id });
+          const { openArtifact } = await import("../chatContent.js");
+          await openArtifact(group.session_id, file.url, file.name, null);
+        } }, [
+        el("span", { class: "library-file-kind", "aria-hidden": "true", text: kind }),
+        el("span", { class: "library-file-copy" }, [
+          el("strong", { text: file.name }),
+          el("small", { text: file.exists ? [label, fileSize(file.size)].filter(Boolean).join(" · ") : `${label} · No longer available` }),
+        ]),
+        el("span", { class: "library-row-arrow", "aria-hidden": "true", text: "→" }),
+      ]);
+      list.append(card);
+    }
+    const chat = el("details", { class: "library-chat-group", open: !!wanted || openChats.has(group.session_id) }, [
+      el("summary", { class: "library-chat-summary", title: group.title }, [
+        el("span", { class: "library-chat-title library-chat-heading", text: group.title }),
+        el("span", { class: "library-count", text: String(files.length) }),
+        el("span", { class: "library-chevron", "aria-hidden": "true", text: "›" }),
+      ]),
+      list,
+    ]);
+    chat.addEventListener("toggle", () => {
+      if (wanted) return;
+      if (chat.open) openChats.add(group.session_id);
+      else openChats.delete(group.session_id);
+    });
+    host.append(chat);
+  }
+  section.count.textContent = String(shown);
+  if (wanted && shown) section.node.open = true;
+  if (!shown) host.append(el("div", { class: "library-empty", text: query ? "No chat files match this search." : "Files sent to or created in chats will appear here." }));
+}
+
+async function refreshGrid(grid, container, query, section, current) {
   const results = query
     ? await api(`/api/documents/search?q=${encodeURIComponent(query)}`)
     : (await api("/api/documents")).map((d) => ({ ...d, snippet: null }));
+  if (!current()) return;
+  grid.replaceChildren();
+  section.count.textContent = String(results.length);
+  if (query && results.length) section.node.open = true;
 
   if (results.length === 0) {
     // Grid is a CSS grid — span the empty state across all columns so it
     // centers on the page rather than sitting in the first cell.
     const empty = query
-      ? emptyState({ icon: ICONS.search, title: "No matches", hint: `Nothing in your library matches "${query}".` })
+      ? emptyState({ icon: ICONS.search, title: "No documents match", hint: `No documents match "${query}". Chat files are listed below.` })
       : emptyState({
           icon: ICONS.library,
           title: "No documents yet",
@@ -103,12 +194,15 @@ async function refreshGrid(grid, container, query) {
       ? (item.snippet || "Title match")
       : `Updated ${new Date(item.updated_at * 1000).toLocaleDateString()}`;
     const card = el("button", {
-      type: "button", class: "glass card document-card",
+      type: "button", class: "library-document-card document-card", title: item.title,
       onclick: () => renderEditor(container, item.id),
     }, [
-      el("span", { class: "document-glyph", text: "◇", "aria-hidden": "true" }),
-      el("div", { class: "title", text: item.title }),
-      el("div", { class: "meta", style: "margin-top:6px;", text: meta }),
+      el("span", { class: "library-document-icon", "aria-hidden": "true", text: "▤" }),
+      el("span", { class: "library-document-copy" }, [
+        el("strong", { text: item.title }),
+        el("small", { text: meta }),
+      ]),
+      el("span", { class: "library-row-arrow", "aria-hidden": "true", text: "→" }),
     ]);
     grid.appendChild(card);
   }

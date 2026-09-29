@@ -32,6 +32,7 @@ class CreateEndpointRequest(BaseModel):
     # instead and needs neither base_url nor api_key. codex_cli (2026-09-11)
     # is the same shape, routing through core/codex_brain.py instead.
     num_ctx: Optional[int] = None  # local only — see model_endpoints.DEFAULT_LOCAL_NUM_CTX
+    supports_images: bool = False
 
 
 @router.get("")
@@ -95,7 +96,8 @@ async def refresh_quota(body: RefreshQuotaRequest, user: str = Depends(require_a
 @router.post("")
 async def create_endpoint(body: CreateEndpointRequest, user: str = Depends(require_admin)) -> dict:
     try:
-        return model_endpoints.create_endpoint(body.name, body.base_url, body.model, body.api_key, body.kind, body.num_ctx)
+        return model_endpoints.create_endpoint(body.name, body.base_url, body.model, body.api_key, body.kind, body.num_ctx,
+                                               body.supports_images)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -106,6 +108,20 @@ async def delete_endpoint(endpoint_id: str, user: str = Depends(require_admin)) 
         raise HTTPException(status_code=404, detail="endpoint not found")
     model_endpoints.delete_endpoint(endpoint_id)
     return {"ok": True}
+
+
+class ImageSupportRequest(BaseModel):
+    enabled: bool
+
+
+@router.patch("/{endpoint_id}/image-support")
+async def set_image_support(endpoint_id: str, body: ImageSupportRequest, user: str = Depends(require_admin)) -> dict:
+    try:
+        return model_endpoints.set_image_support(endpoint_id, body.enabled)
+    except KeyError:
+        raise HTTPException(404, "endpoint not found")
+    except ValueError as error:
+        raise HTTPException(400, str(error))
 
 
 @router.post("/{endpoint_id}/test")

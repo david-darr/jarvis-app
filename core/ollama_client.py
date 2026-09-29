@@ -71,6 +71,16 @@ def _native_messages(messages: list[dict]) -> list[dict]:
     renders the same prompt and keeps its cached prefix."""
     native = []
     for m in messages:
+        if isinstance(m.get("content"), list):
+            content = m["content"]
+            images = [part["image_url"]["url"].split(",", 1)[1] for part in content
+                      if isinstance(part, dict) and part.get("type") == "image_url"
+                      and isinstance(part.get("image_url"), dict)
+                      and part["image_url"].get("url", "").startswith("data:image/")]
+            m = {**m, "content": "\n".join(part.get("text", "") for part in content
+                                            if isinstance(part, dict) and part.get("type") == "text")}
+            if images:
+                m["images"] = images
         calls = m.get("tool_calls")
         if calls and any(isinstance((c.get("function") or {}).get("arguments"), str) for c in calls):
             converted = []

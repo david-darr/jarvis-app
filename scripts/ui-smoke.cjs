@@ -108,6 +108,7 @@ function fixture(url) {
     m3: { fresh_tokens: 842000, cache_read_tokens: 0, unsplit_tokens: 0, total_tokens: 842000 },
   };
   if (route === "/api/documents") return list(docs);
+  if (route === "/api/chat/files/library") return list([]);
   if (route === "/api/documents/search") return list(docs.filter(d => d.title.toLowerCase().includes(url.searchParams.get("q").toLowerCase())));
   if (route.startsWith("/api/documents/")) return { ...docs[0], content: "# Design principles\n\nMake the important things easy to find." };
   if (route === "/api/skills") return list([

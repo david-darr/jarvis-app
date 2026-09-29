@@ -65,6 +65,7 @@ def _masked(ep: dict) -> dict:
         "has_api_key": bool(ep.get("api_key_encrypted")),
         "kind": ep.get("kind", "api"),
         "num_ctx": ep.get("num_ctx"),
+        "supports_images": ep.get("kind") in ("claude_cli", "codex_cli") or bool(ep.get("supports_images")),
     }
 
 
@@ -77,7 +78,7 @@ def get_endpoint(endpoint_id: str) -> Optional[dict]:
 
 
 def create_endpoint(name: str, base_url: str = "", model: str = "", api_key: Optional[str] = None,
-                     kind: str = "api", num_ctx: Optional[int] = None) -> dict:
+                     kind: str = "api", num_ctx: Optional[int] = None, supports_images: bool = False) -> dict:
     if kind not in ("local", "api", "claude_cli", "codex_cli"):
         raise ValueError("kind must be 'local', 'api', 'claude_cli', or 'codex_cli'")
     if kind not in ("claude_cli", "codex_cli") and not base_url:
@@ -95,6 +96,7 @@ def create_endpoint(name: str, base_url: str = "", model: str = "", api_key: Opt
         "model": model,
         "api_key_encrypted": encrypt(api_key) if api_key else None,
         "kind": kind,
+        "supports_images": bool(supports_images) if kind in ("local", "api") else True,
         # Only meaningful for "local" — the serving engine's own context-
         # window cap (Ollama's `options.num_ctx`; other local servers that
         # don't recognize the field just ignore it). None for api/claude_cli.
@@ -102,6 +104,18 @@ def create_endpoint(name: str, base_url: str = "", model: str = "", api_key: Opt
     }
     write_json_atomic(ENDPOINTS_FILE, data)
     return _masked(data[endpoint_id])
+
+
+def set_image_support(endpoint_id: str, enabled: bool) -> dict:
+    data = _load()
+    endpoint = data.get(endpoint_id)
+    if endpoint is None:
+        raise KeyError(endpoint_id)
+    if endpoint.get("kind") not in ("local", "api"):
+        raise ValueError("CLI models use their file tools for images.")
+    endpoint["supports_images"] = bool(enabled)
+    write_json_atomic(ENDPOINTS_FILE, data)
+    return _masked(endpoint)
 
 
 def delete_endpoint(endpoint_id: str) -> None:

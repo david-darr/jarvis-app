@@ -10,7 +10,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from core import events, logs as log_files
+from core import events, file_checkpoints, logs as log_files
 from core.brain import Brain
 from core.builtin_tasks import BUILTIN_TASKS
 from core.channels import registry as channel_registry
@@ -76,7 +76,8 @@ async def _run_card(card: dict) -> None:
     try:
         brain = _task_brain(card)
         await brain.connect()
-        output = await brain.run_turn(task_service.card_prompt(card))
+        async with file_checkpoints.around_turn(f"card:{card['id']}"):
+            output = await brain.run_turn(task_service.card_prompt(card))
         task_service.finish_card(card["id"], output)
         events.emit("card.review", f"{card['name']} is ready for review", task_id=card["id"])
         logger.info("card '%s' (%s) finished; waiting for review", card["name"], card["id"])
@@ -116,7 +117,8 @@ async def _run_task_tagged(task: dict) -> None:
     try:
         brain = _task_brain(task)
         await brain.connect()
-        output = await brain.run_turn(task["prompt"])
+        async with file_checkpoints.around_turn(f"task:{task['id']}"):
+            output = await brain.run_turn(task["prompt"])
         delivered = await _deliver(task, output)
         task_service.record_run(task["id"], output=output, delivered=delivered)
         events.emit("task.run", f"{task['name']} ran successfully", task_id=task["id"])
@@ -149,7 +151,8 @@ async def _run_builtin_task(task: dict, builtin_id: str) -> None:
             brain = _task_brain(task)
             try:
                 await brain.connect()
-                output = await brain.run_turn(prompt)
+                async with file_checkpoints.around_turn(f"task:{task['id']}"):
+                    output = await brain.run_turn(prompt)
             finally:
                 await brain.disconnect()
         delivered = await _deliver(task, output)

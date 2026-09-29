@@ -32,6 +32,8 @@
     },
     "files": [
       "*.js",
+      "screen-grab-*.html",
+      "screen-grab-*.css",
       "icon.png",
       "icon.ico",
       "node_modules/**/*",

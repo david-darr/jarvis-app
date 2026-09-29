@@ -19,6 +19,23 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("jarvis", {
   pickVaultFolder: () => ipcRenderer.invoke("pick-vault-folder"),
 
+  screenGrab: {
+    capture: () => ipcRenderer.invoke("screen-grab:capture"),
+    shortcut: () => ipcRenderer.invoke("screen-grab:shortcut"),
+    onModelsRequest: (handler) => {
+      const wrapped = (_event, requestId) => handler(requestId);
+      ipcRenderer.on("screen-grab:models-request", wrapped);
+      return () => ipcRenderer.removeListener("screen-grab:models-request", wrapped);
+    },
+    replyModels: (requestId, models) => ipcRenderer.send("screen-grab:models-reply", requestId, models),
+    replyQuickDraft: (requestId, result) => ipcRenderer.send("screen-grab:quick-result", requestId, result),
+    onQuickDraft: (handler) => {
+      const wrapped = (_event, draft) => handler(draft);
+      ipcRenderer.on("screen-grab:quick-draft", wrapped);
+      return () => ipcRenderer.removeListener("screen-grab:quick-draft", wrapped);
+    },
+  },
+
   usageOverlay: {
     state: () => ipcRenderer.invoke("usage-overlay:state"),
     setVisible: (visible) => ipcRenderer.invoke("usage-overlay:set-visible", !!visible),

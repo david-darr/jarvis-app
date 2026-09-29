@@ -317,9 +317,14 @@ function isOpen() {
   return !!(view && !view.webContents.isDestroyed());
 }
 
+async function captureStill() {
+  if (!isOpen()) return null;
+  return view.webContents.capturePage();
+}
+
 module.exports = {
   PARTITION, attach, open, navigate, setBounds, setVisible,
-  goBack, goForward, reload, openExternal, close, isOpen, state,
+  goBack, goForward, reload, openExternal, close, isOpen, state, captureStill,
   // Exported for scripts/browser-smoke.cjs, which asserts the blocking rules
   // directly rather than inferring them from behaviour. _webContents lets
   // that suite run JS inside the loaded page to prove the sandbox is real —

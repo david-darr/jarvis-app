@@ -8,7 +8,7 @@ import re
 from urllib.parse import unquote, urlsplit
 
 from fastapi import HTTPException
-from core import image_gen, office_preview
+from core import chat_files, image_gen, office_preview
 from core.session_manager import session_manager
 
 LINK = re.compile(r"!?\[[^\]]*\]\(<?(/generated-(?:images|files)/[^\s)>]+)>?\)")
@@ -26,21 +26,29 @@ def resolve(session_id: str, url: str) -> tuple[Path, dict]:
     session = session_manager.get_session(session_id)
     if session is None:
         raise HTTPException(404, "session not found")
-    allowed = {unquote(match) for m in session.get("messages", []) if m["role"] == "assistant" for match in LINK.findall(m["content"])}
-    allowed.update(unquote(item) for item in session.get("artifact_urls", []))
-    if unquote(url) not in allowed:
-        raise HTTPException(404, "This file is not referenced by this chat")
     parsed = urlsplit(url)
     if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
         raise HTTPException(400, "invalid artifact URL")
     decoded = unquote(parsed.path)
     prefix, _, name = decoded.lstrip("/").partition("/")
-    if prefix not in ("generated-images", "generated-files") or not name or any(c in name for c in ("/", "\\", ":", "\x00")) or name in (".", ".."):
+    if not name or any(c in name for c in ("/", "\\", ":", "\x00")) or name in (".", ".."):
         raise HTTPException(400, "invalid artifact path")
-    root = Path(image_gen.GENERATED_DIR if prefix == "generated-images" else image_gen.GENERATED_FILES_DIR).resolve()
-    target = (root / name).resolve()
-    if target.parent != root or not target.is_file():
-        raise HTTPException(404, "The generated file is no longer available")
+    if prefix == "chat-files":
+        if len(name) != 24 or any(char not in "0123456789abcdef" for char in name):
+            raise HTTPException(400, "invalid chat file id")
+        target = chat_files.resolve_local(session_id, name)
+        name = target.name
+    else:
+        allowed = {unquote(match) for m in session.get("messages", []) if m["role"] == "assistant" for match in LINK.findall(m["content"])}
+        allowed.update(unquote(item) for item in session.get("artifact_urls", []))
+        if unquote(url) not in allowed:
+            raise HTTPException(404, "This file is not referenced by this chat")
+        if prefix not in ("generated-images", "generated-files"):
+            raise HTTPException(400, "invalid artifact path")
+        root = Path(image_gen.GENERATED_DIR if prefix == "generated-images" else image_gen.GENERATED_FILES_DIR).resolve()
+        target = (root / name).resolve()
+        if target.parent != root or not target.is_file():
+            raise HTTPException(404, "The generated file is no longer available")
     ext = target.suffix.lower()
     size = target.stat().st_size
     # Office formats are checked before the generic text branch: .csv is in

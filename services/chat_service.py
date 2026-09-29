@@ -12,14 +12,16 @@ them to go add one, instead of silently spending a real Claude turn.
 """
 import asyncio
 import logging
+import os
 import time
+from pathlib import Path
 from typing import AsyncIterator, Optional, Union
 from contextlib import asynccontextmanager
 from fastapi import HTTPException
 
 from claude_agent_sdk import CLIJSONDecodeError
 
-from core import attachments, logs as log_files, mcp_oauth, model_catalog, model_endpoints, model_marks, permissions, token_usage
+from core import attachments, chat_files, file_checkpoints, logs as log_files, mcp_oauth, model_catalog, model_endpoints, model_marks, permissions, token_usage
 from core.brain import Brain
 from core.codex_brain import CodexBrain
 from core.external_brain import ExternalBrain
@@ -172,7 +174,8 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
     return ExternalBrain(base_url, model, api_key, history=session_manager.effective_messages(session_id, exclude_last=True),
                          session_id=session_id, num_ctx=num_ctx, is_admin=is_admin, project_id=project_id,
                          endpoint_id=endpoint["id"], integration_ids=integration_ids,
-                         allow_user_tab_source=(endpoint.get("kind") == "api" and model_marks.mark_for(endpoint) == "openai"))
+                         allow_user_tab_source=(endpoint.get("kind") == "api" and model_marks.mark_for(endpoint) == "openai"),
+                         supports_images=bool(endpoint.get("supports_images")))
 
 
 def _prime_with_history(session_id: str, just_created: bool, endpoint: dict, full_text: str,
@@ -260,12 +263,44 @@ def _apply_attachments(session_id: str, text: str, attachment_ids: list[str] | N
     session = session_manager.get_session(session_id) or {}
     cwd = session.get("workspace_dir") or resolve_vault_dir()
     names, warnings = attachments.resolve_for_turn(attachment_ids, session_id, cwd)
+    for attachment_id in attachment_ids:
+        original = attachments.staged_file_info(attachment_id)
+        if original:
+            path, display_name = original
+            chat_files.record_local(session_id, str(attachments.STAGING_DIR),
+                                    Path(path).name, "attachment", display_name, names)
     if not names:
         return text
     note = "\n\n[Attached file(s), read with your file tools relative to your working directory: " + ", ".join(names) + "]"
     if warnings:
         note += " (" + "; ".join(warnings) + ")"
     return text + note
+
+
+def validate_image_attachments(session_id: str, attachment_ids: list[str] | None) -> list[str]:
+    for item in attachment_ids or []:
+        if not attachments.staged_file_info(item):
+            raise ValueError("An attachment is no longer available; attach it again.")
+    images = attachments.image_ids(attachment_ids)
+    if not images:
+        return []
+    if len(images) > 4:
+        raise ValueError("Attach at most four images in one message.")
+    size = sum(os.path.getsize(attachments.staged_file_info(item)[0]) for item in images)
+    if size > 15 * 1024 * 1024:
+        raise ValueError("Images in one message must total 15 MB or less.")
+    endpoint = _resolve_endpoint(session_id)
+    if not endpoint:
+        raise ValueError("Choose a model before sending an image.")
+    if endpoint["kind"] in ("local", "api") and not endpoint.get("supports_images", False):
+        raise ValueError("This model is not marked as accepting images. Enable image input for it in Settings > Models, or choose a vision model.")
+    return images
+
+
+def _vision_input(endpoint: dict, text: str, image_ids: list[str]) -> str | list[dict]:
+    if image_ids and endpoint["kind"] in ("local", "api"):
+        return attachments.openai_image_content(text, image_ids)
+    return text
 
 
 # Spoken replies are heard, not read, and David's note after the first real
@@ -315,6 +350,7 @@ def _prepare_sent_text(session_id: str, index: int, text: str, attachment_ids: l
     a fresh connection, not part of the message."""
     sent = _apply_open_mic_discipline(session_id, _apply_attachments(session_id, text, attachment_ids))
     session_manager.record_sent_text(session_id, index, text, sent)
+    session_manager.record_image_attachments(session_id, index, attachments.image_ids(attachment_ids))
     return sent
 
 
@@ -330,6 +366,7 @@ async def send_message(session_id: str, text: str, attachment_ids: list[str] | N
 
 
 async def _send_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> str:
+    image_ids = validate_image_attachments(session_id, attachment_ids)
     index = session_manager.append_message(session_id, "user", text)
     endpoint = _resolve_endpoint(session_id)
     if endpoint is None:
@@ -338,9 +375,11 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
 
     full_text = _prepare_sent_text(session_id, index, text, attachment_ids)
     brain, just_created = await _get_brain(session_id, endpoint, is_admin)
-    full_text = _prime_with_history(session_id, just_created, endpoint, full_text, brain)
+    full_text = _vision_input(endpoint, _prime_with_history(session_id, just_created, endpoint, full_text, brain), image_ids)
+    session = session_manager.get_session(session_id) or {}
     try:
-        reply = await brain.run_turn(full_text)
+        async with file_checkpoints.around_turn(f"chat:{session_id}", session.get("workspace_dir")):
+            reply = await brain.run_turn(full_text)
     except CLIJSONDecodeError:
         await close_session_brain(session_id)
         reply = ATTACHMENT_TOO_LARGE_MESSAGE
@@ -365,6 +404,7 @@ async def stream_message(session_id: str, text: str, attachment_ids: list[str] |
 
 
 async def _stream_message(session_id: str, text: str, attachment_ids: list[str] | None = None, is_admin: bool = False) -> AsyncIterator[str]:
+    image_ids = validate_image_attachments(session_id, attachment_ids)
     index = session_manager.append_message(session_id, "user", text)
     endpoint = _resolve_endpoint(session_id)
     if endpoint is None:
@@ -377,11 +417,13 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
     try:
         full_text = _prepare_sent_text(session_id, index, text, attachment_ids)
         brain, just_created = await _get_brain(session_id, endpoint, is_admin)
-        full_text = _prime_with_history(session_id, just_created, endpoint, full_text, brain)
-        async for item in _stream_with_permission_prompts(session_id, brain, full_text):
-            if isinstance(item, str):
-                reply_parts.append(item)
-            yield item
+        full_text = _vision_input(endpoint, _prime_with_history(session_id, just_created, endpoint, full_text, brain), image_ids)
+        session = session_manager.get_session(session_id) or {}
+        async with file_checkpoints.around_turn(f"chat:{session_id}", session.get("workspace_dir")):
+            async for item in _stream_with_permission_prompts(session_id, brain, full_text):
+                if isinstance(item, str):
+                    reply_parts.append(item)
+                yield item
     except CLIJSONDecodeError:
         await close_session_brain(session_id)
         reply_parts.append(ATTACHMENT_TOO_LARGE_MESSAGE)

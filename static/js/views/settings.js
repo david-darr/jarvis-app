@@ -114,6 +114,8 @@ const SECTION_GROUPS = [
         keywords: ["log", "logs", "errors", "debug", "troubleshoot", "crash", "backend", "desktop", "warnings"] },
       { id: "sandbox-changes", label: "Sandbox changes", render: renderSandboxChangesPanel,
         keywords: ["sandbox", "run_code", "diff", "change set", "apply", "review", "patch", "code changes"] },
+      { id: "file-checkpoints", label: "File checkpoints", render: renderFileCheckpointsPanel,
+        keywords: ["checkpoint", "rollback", "restore", "undo", "files", "vault", "history"] },
       { id: "custom-tabs", label: "Custom Tabs", render: renderCustomTabsPanel, devMode: true,
         keywords: ["new tab", "developer mode", "custom tab"] },
     ],
@@ -479,6 +481,9 @@ function modelCard(title, subtitle, kind, onAdded) {
   // alone ate ~21GB of RAM). Local-only: sent as Ollama's `options.num_ctx`;
   // other local servers that don't recognize it just ignore the field.
   const ctxInput = el("input", { type: "number", placeholder: "Context window (default 4096)", style: "flex:1;" });
+  const imageInput = el("input", { type: "checkbox" });
+  const imageLabel = el("label", { class: "meta", style: "display:flex;align-items:center;gap:7px;margin-top:9px;" },
+    [imageInput, el("span", { text: "This model accepts image input (vision)" })]);
   const err = el("div", { class: "meta", style: "color:var(--danger);" });
   const addBtn = el("button", { class: "btn", text: "+ Add" });
 
@@ -520,9 +525,10 @@ function modelCard(title, subtitle, kind, onAdded) {
           api_key: keyInput.value.trim() || null,
           kind,
           num_ctx: kind === "local" && ctxInput.value.trim() ? parseInt(ctxInput.value.trim(), 10) : null,
+          supports_images: !isCliKind && imageInput.checked,
         }),
       });
-      nameInput.value = ""; urlInput.value = ""; modelInput.value = ""; keyInput.value = ""; ctxInput.value = "";
+      nameInput.value = ""; urlInput.value = ""; modelInput.value = ""; keyInput.value = ""; ctxInput.value = ""; imageInput.checked = false;
       if (providerSelect) providerSelect.value = "";
       onAdded();
     } catch (e) { err.textContent = e.message.replace(/^\d+: /, ""); }
@@ -537,6 +543,7 @@ function modelCard(title, subtitle, kind, onAdded) {
     el("div", { class: "title", text: title }),
     el("div", { class: "meta", style: "margin:4px 0 10px;", text: subtitle }),
     el("div", { class: "card-row", style: "flex-wrap:wrap;gap:8px;" }, [...fields, addBtn]),
+    ...(isCliKind ? [] : [imageLabel]),
     err,
   ]);
 }
@@ -596,12 +603,21 @@ async function renderAddedModelsPanel(content) {
     const metaText = ep.kind === "claude_cli" || ep.kind === "codex_cli"
       ? `Model: ${ep.model || "CLI default"}`
       : `${ep.model} · ${ep.base_url}${ep.has_api_key ? " · key saved" : ""}${ep.kind === "local" && ep.num_ctx ? ` · ctx ${ep.num_ctx}` : ""}`;
+    const imageBtn = el("button", { class: "btn", text: ep.supports_images ? "Images: On" : "Images: Off" });
+    imageBtn.addEventListener("click", async () => {
+      const updated = await api(`/api/models/${ep.id}/image-support`, {
+        method: "PATCH", body: JSON.stringify({ enabled: !ep.supports_images }),
+      });
+      ep.supports_images = updated.supports_images;
+      imageBtn.textContent = ep.supports_images ? "Images: On" : "Images: Off";
+    });
     const row = el("div", { class: "card-row", style: "justify-content:space-between;align-items:center;margin-top:8px;" }, [
       el("div", {}, [
         el("div", { class: "title model-row-title", style: "font-size:12.5px;" }, [modelMark(ep.mark, ep.name), ep.name].filter(Boolean)),
         el("div", { class: "meta", text: metaText }),
       ]),
-      el("div", { class: "card-row", style: "gap:6px;" }, [resultEl, testBtn, delBtn]),
+      el("div", { class: "card-row", style: "gap:6px;" },
+        [resultEl, ...(ep.kind === "local" || ep.kind === "api" ? [imageBtn] : []), testBtn, delBtn]),
     ]);
     rowsByEndpoint[ep.id] = testBtn;
     return row;
@@ -1965,6 +1981,81 @@ async function renderSystemPanel(content) {
 // and stops by itself once the panel is gone.
 const LOG_FOLLOW_MS = 2000;
 const LOG_MAX_SHOWN = 1000;
+
+async function renderFileCheckpointsPanel(content) {
+  const events = await api("/api/file-checkpoints");
+  content.innerHTML = "";
+  content.append(el("p", { class: "meta", text:
+    "Each model turn saves the Vault and its working folder before and after. Review the files here, then restore selected files. "
+    + "Checkpoint cards remain as history after a restore. A file changed again cannot be restored from an older checkpoint. "
+    + "Large files listed as skipped were not protected." }));
+  const changed = events.filter((event) => event.status === "changed");
+  if (!changed.length) {
+    content.append(el("div", { class: "empty-state", text: "No file changes recorded yet" }));
+    return;
+  }
+  for (const event of changed) {
+    const details = el("div", { class: "hidden" });
+    const show = el("button", { class: "btn", text: "Review" });
+    show.addEventListener("click", async () => {
+      if (!details.classList.contains("hidden")) {
+        details.classList.add("hidden");
+        show.textContent = "Review";
+        return;
+      }
+      const full = await api(`/api/file-checkpoints/${event.id}`);
+      details.innerHTML = "";
+      const choices = [];
+      for (const root of full.roots) {
+        if (!root.changes?.length && !root.before_skipped?.length && !root.after_skipped?.length) continue;
+        details.append(el("div", { class: "meta", text: root.path }));
+        for (const change of root.changes || []) {
+          const available = change.restore_state === "available";
+          const check = el("input", { type: "checkbox", ...(available ? { checked: "" } : { disabled: "" }) });
+          if (available) choices.push({ check, root: root.path, path: change.path });
+          const state = change.restore_state === "restored" ? " · Restored"
+            : change.restore_state === "at_before" ? " · Already at previous state"
+            : change.restore_state === "changed_since" ? " · Changed again; restore unavailable" : "";
+          const label = el("label", { class: "card-row" }, [check,
+            el("span", { class: "meta", text: change.path + state })]);
+          const diff = el("pre", { class: "sandbox-diff", text: change.diff || "No text diff." });
+          details.append(label, diff);
+        }
+        const skipped = [...new Set([...(root.before_skipped || []), ...(root.after_skipped || [])])];
+        if (skipped.length) details.append(el("div", { class: "meta", text: `Skipped: ${skipped.join(", ")}` }));
+      }
+      const restore = el("button", { class: "btn danger", text: choices.length ? "Restore selected files" : "Nothing left to restore",
+        disabled: !choices.length });
+      restore.addEventListener("click", async () => {
+        const files = choices.filter((c) => c.check.checked).map(({ root, path }) => ({ root, path }));
+        if (!files.length) return;
+        const ok = await confirmDialog({ title: "Restore selected files?",
+          message: `${files.length} file(s) will return to their state before this model turn.`,
+          confirmLabel: "Restore files" });
+        if (!ok) return;
+        try {
+          await api(`/api/file-checkpoints/${event.id}/restore`, { method: "POST", body: JSON.stringify({ files }) });
+          toast("Files restored", "success");
+          await renderFileCheckpointsPanel(content);
+        } catch (problem) { toast(problem.message.replace(/^\d+: /, ""), "error"); }
+      });
+      details.append(restore);
+      details.classList.remove("hidden");
+      show.textContent = "Hide";
+    });
+    const count = event.roots.reduce((sum, root) => sum + root.changes.length, 0);
+    const restored = event.roots.reduce((sum, root) => sum + root.changes.filter((change) => change.restored_at).length, 0);
+    content.append(el("div", { class: "glass bracket card sandbox-change" }, [
+      el("div", { class: "card-row" }, [
+        el("div", {}, [el("div", { class: "title", text: event.source }),
+          el("div", { class: "meta", text: `${new Date(event.created * 1000).toLocaleString()} · ${count} file(s)`
+            + (restored ? ` · ${restored} restored` : "")
+            + (event.overlap ? " · another turn overlapped; review attribution carefully" : "") })]),
+        show,
+      ]), details,
+    ]));
+  }
+}
 
 // Sandbox changes (Hermes phase 7, 2026-09-24): edits a model made to a
 // sandboxed copy of the JARVIS code wait here until an admin applies or

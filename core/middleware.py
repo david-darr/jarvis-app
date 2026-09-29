@@ -72,7 +72,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # cannot silently downgrade to a plaintext page.
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; "
-            "frame-src 'self' https:"
+            "frame-src 'self' https:; img-src 'self' data: blob:"
         )
         # Odysseus applies this same no-cache rule to .js/.css/.html source
         # files specifically (see specs/frontend.md) — without it, Electron's

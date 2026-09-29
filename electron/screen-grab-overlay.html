@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; script-src 'self'; style-src 'unsafe-inline'">
+<title>Select region or window</title>
+<style>
+  * { box-sizing:border-box; }
+  body { margin:0; overflow:hidden; cursor:crosshair; user-select:none; }
+  #screen { width:100vw; height:100vh; object-fit:fill; pointer-events:none; }
+  #shade { position:fixed; inset:0; background:rgba(0,0,0,.28); pointer-events:none; }
+  #selection { display:none; position:fixed; border:2px solid #a5caff; box-shadow:0 0 0 9999px rgba(0,0,0,.34); pointer-events:none; }
+  #hint { position:fixed; top:18px; left:50%; transform:translateX(-50%); color:white; background:#152030e8; padding:10px 16px; border-radius:9px; font:14px system-ui; pointer-events:none; }
+</style>
+<img id="screen" alt="">
+<div id="shade"></div>
+<div id="selection"></div>
+<div id="hint">Drag to capture a region · Click a window · Esc to cancel</div>
+<script src="screen-grab-overlay.js"></script>
+</html>

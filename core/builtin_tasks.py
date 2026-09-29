@@ -259,6 +259,7 @@ async def _run_triage_email() -> str:
     One small call a day, headers only, no message bodies fetched.
     """
     from core.brain import Brain
+    from core import file_checkpoints
 
     accounts = email_service.list_accounts()
     if not accounts:
@@ -299,7 +300,8 @@ async def _run_triage_email() -> str:
     brain = Brain()
     try:
         await brain.connect()
-        raw = await brain.run_turn(prompt)
+        async with file_checkpoints.around_turn("task:triage-email"):
+            raw = await brain.run_turn(prompt)
     finally:
         await brain.disconnect()
 

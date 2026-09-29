@@ -13,6 +13,7 @@ tools, regardless of whether a workspace is set.
 import os
 import shutil
 import uuid
+import base64
 
 try:
     import pypdfium2 as pdfium  # BSD-3-Clause/Apache-2.0 — safe to bundle, unlike AGPL PDF libs
@@ -104,6 +105,51 @@ def _find_staged_path(attachment_id: str) -> str | None:
         if name.startswith(prefix):
             return os.path.join(STAGING_DIR, name)
     return None
+
+
+def staged_file_info(attachment_id: str) -> tuple[str, str] | None:
+    """Original upload path and display name for a file sent to a chat."""
+    path = _find_staged_path(attachment_id)
+    if path is None:
+        return None
+    filename = os.path.basename(path).split("_", 1)[1]
+    return path, filename
+
+
+def image_mime(attachment_id: str) -> str | None:
+    """Recognize supported image bytes, regardless of a supplied filename."""
+    info = staged_file_info(attachment_id)
+    if not info:
+        return None
+    with open(info[0], "rb") as handle:
+        head = handle.read(12)
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return "image/webp"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    return None
+
+
+def image_ids(attachment_ids: list[str] | None) -> list[str]:
+    return [item for item in attachment_ids or [] if image_mime(item)]
+
+
+def openai_image_content(text: str, attachment_ids: list[str]) -> list[dict]:
+    """OpenAI-compatible image parts; IDs resolve only inside our staging area."""
+    parts = [{"type": "text", "text": text}]
+    for attachment_id in attachment_ids:
+        info = staged_file_info(attachment_id)
+        mime = image_mime(attachment_id)
+        if not info or not mime:
+            raise ValueError("An attached image is no longer available; attach it again.")
+        with open(info[0], "rb") as handle:
+            encoded = base64.b64encode(handle.read()).decode("ascii")
+        parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}", "detail": "auto"}})
+    return parts
 
 
 def resolve_for_turn(attachment_ids: list[str], session_id: str, cwd: str) -> tuple[list[str], list[str]]:

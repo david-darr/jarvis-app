@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; script-src 'self'; style-src 'self'">
+  <title>JARVIS Quick Entry</title>
+  <link rel="stylesheet" href="screen-grab-style.css">
+</head>
+<body class="quick-entry">
+  <main>
+    <div class="quick-intro drag-area">
+      <div><span class="eyebrow">JARVIS</span><h1>Quick Entry</h1><p>Ask about what you see.</p></div>
+      <div class="window-actions">
+        <button class="icon-button" id="settings-toggle" type="button" title="Shortcut settings" aria-label="Shortcut settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg></button>
+        <button class="icon-button" id="close" type="button" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19"/></svg></button>
+      </div>
+    </div>
+    <textarea id="message" placeholder="What would you like to know?" aria-label="Message"></textarea>
+    <button id="capture" type="button" class="capture-action"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/></svg><span><strong>Capture screen</strong><small>Choose a region, window, or display</small></span></button>
+    <div class="preview-card" id="preview-card">
+      <div class="preview-card-head"><strong>Screenshot attached</strong><button id="remove" type="button">Remove</button></div>
+      <img id="preview" alt="Screenshot preview">
+    </div>
+    <div class="bottom"><label for="model">Model</label><select id="model"><option value="">Choose model</option></select><button id="send" type="button">Send</button></div>
+    <div id="settings"><label for="shortcut">Quick Entry shortcut</label><div class="settings-row"><input id="shortcut" spellcheck="false"><button id="save-shortcut" type="button">Save</button></div></div>
+    <div id="status" role="status"></div>
+  </main>
+  <script src="screen-grab-quick.js"></script>
+</body>
+</html>

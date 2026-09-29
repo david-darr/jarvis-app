@@ -244,7 +244,7 @@ def _can_carry_marker(message: dict) -> bool:
     content = message.get("content")
     if isinstance(content, str):
         return content != ""
-    return isinstance(content, list) and bool(content) and isinstance(content[-1], dict)
+    return isinstance(content, list) and any(isinstance(part, dict) and part.get("type") == "text" for part in content)
 
 
 def _marked(message: dict) -> dict:
@@ -252,7 +252,9 @@ def _marked(message: dict) -> dict:
     if isinstance(content, str):
         parts = [{"type": "text", "text": content, "cache_control": dict(_CACHE_MARKER)}]
     else:
-        parts = [*content[:-1], {**content[-1], "cache_control": dict(_CACHE_MARKER)}]
+        parts = list(content)
+        index = max(i for i, part in enumerate(parts) if isinstance(part, dict) and part.get("type") == "text")
+        parts[index] = {**parts[index], "cache_control": dict(_CACHE_MARKER)}
     return {**message, "content": parts}
 
 

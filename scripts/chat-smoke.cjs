@@ -18,6 +18,8 @@ function samplePDF() {
   return out + `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
 }
 const files = {
+  '/chat-files/aaaaaaaaaaaaaaaaaaaaaaaa': { filename: 'draft.txt', extension: 'txt', kind: 'text', text: 'Sent draft' },
+  '/chat-files/bbbbbbbbbbbbbbbbbbbbbbbb': { filename: 'notes.md', extension: 'md', kind: 'markdown', text: '# Model notes' },
   '/generated-files/012345abcdef_Project%20brief.md': { filename: 'Project brief.md', extension: 'md', kind: 'markdown', text: '# Project brief\n\nA **focused** workspace.\n\n- Clear next steps\n- Room to think' },
   '/generated-files/012345abcdef_preview.html': { filename: 'preview.html', extension: 'html', kind: 'html', text: '<html><style>h1{color:teal}</style><h1>A focused workspace</h1><script>parent.__xss=1</script><img src="https://example.test/tracker"><a href="https://example.test">Escape</a></html>' },
   // 'office' rather than 'download' as of the Office preview work
@@ -56,6 +58,11 @@ const chats = {
   s1: { id: 's1', title: 'A focused workspace', model_endpoint_id: 'claude', messages: [{ role: 'user', content: 'Help me shape this into a clear plan.' }, { role: 'assistant', content: rich }] },
   s2: { id: 's2', title: 'Another conversation', model_endpoint_id: 'codex', messages: [] },
 };
+const chatFileRows = [
+  { id: 'aaaaaaaaaaaaaaaaaaaaaaaa', name: 'draft.txt', origin: 'attachment', url: '/chat-files/aaaaaaaaaaaaaaaaaaaaaaaa', size: 10, exists: true },
+  { id: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'notes.md', origin: 'created', url: '/chat-files/bbbbbbbbbbbbbbbbbbbbbbbb', size: 13, exists: true },
+  { id: 'cccccccccccccccccccccccc', name: 'Project brief.md', origin: 'generated', url: '/generated-files/012345abcdef_Project%20brief.md', size: 20, exists: true },
+];
 let pending = null;
 const answers = [];
 let deferFirstChunk = false;
@@ -79,7 +86,12 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/models/catalog') return json(catalog);
     if (url.pathname === '/api/models') return json(models);
     if (url.pathname === '/api/projects') return json([]);
+    if (url.pathname === '/api/chat/files/library') return json([{ session_id: 's1', title: chats.s1.title, files: chatFileRows }]);
+    if (url.pathname === '/api/chat/files') return json(url.searchParams.get('session_id') === 's1' ? chatFileRows : []);
+    if (url.pathname === '/api/documents') return json([]);
+    if (url.pathname === '/api/documents/search') return json([]);
     if (url.pathname === '/api/chat/attachments') return json({ id: 'staged-test', filename: 'draft.txt' });
+    if (url.pathname === '/api/chat/validate-attachments') return json({ ok: true });
     if (url.pathname === '/api/sessions') {
       if (req.method === 'POST') {
         const id = 'new-' + Object.keys(chats).length;
@@ -195,6 +207,27 @@ app.whenReady().then(async () => {
     assert.equal(await js("document.querySelectorAll('.chat-code-header button').length"), 1);
     assert.ok(await js("!!document.querySelector('code .hljs-keyword')"));
     assert.equal(await js("document.querySelectorAll('.artifact-card').length"), 8);
+    // Chat files share the preview pane, and Library groups the same files
+    // under their source chat even when document search has no results.
+    await js("document.querySelector('.chat-files-toggle').click()");
+    await waitFor("document.querySelectorAll('.chat-file-row').length===3");
+    assert.deepEqual(await js("[...document.querySelectorAll('.chat-files-heading')].map(n=>n.textContent)"),
+      ['Sent to this chat', 'Created by a model', 'Generated files']);
+    await capture('desktop-chat-files');
+    await js("document.querySelector('.chat-file-row').click()");
+    await waitFor("!!document.querySelector('.artifact-source, .artifact-document')");
+    assert.equal(await js("document.querySelectorAll('.chat-files-panel').length"), 0);
+    await js("document.querySelector('.chat-files-toggle').click()");
+    await waitFor("document.querySelectorAll('.chat-file-row').length===3");
+    assert.equal(await js("document.querySelectorAll('.artifact-panel:not(.chat-files-panel)').length"), 0);
+    await js("document.querySelector('[aria-label=\"Close chat files\"]').click()");
+    await js("(async () => { const host=document.createElement('div'); host.id='library-smoke'; host.hidden=true; document.body.append(host); await import('/static/js/views/library.js').then(m=>m.render(host)); })()");
+    await waitFor("document.querySelectorAll('#library-smoke .library-chat-files .document-card').length===3");
+    assert.equal(await js("document.querySelector('#library-smoke .library-chat-heading').textContent"), 'A focused workspace');
+    await js("{ const input=document.querySelector('#library-smoke input[placeholder^=\"Search documents\"]'); input.value='notes.md'; input.dispatchEvent(new Event('input')); }");
+    await waitFor("document.querySelectorAll('#library-smoke .library-chat-files .document-card').length===1");
+    assert.ok(await js("document.querySelector('#library-smoke #library-grid').textContent.includes('No documents match')"));
+    await js("document.querySelector('#library-smoke').remove()");
     await js("document.querySelector('#chat-messages').scrollTop=0");
     await capture('desktop-chat');
     await js("document.querySelector('#model-version-btn').click(); document.querySelector('#chat-model-id').value='exact-test-model'; document.querySelector('.model-version-form').requestSubmit()");

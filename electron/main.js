@@ -26,6 +26,7 @@ const fs = require("fs");
 const path = require("path");
 const { autoUpdater } = require("electron-updater");
 const sideBrowser = require("./browser");
+const { installScreenGrab } = require("./screen-grab");
 const { createDesktopLog } = require("./desktop-log");
 const { createUiSecret, uiCookie, browserHandoffUrl } = require("./ui-access");
 
@@ -61,6 +62,7 @@ let tray = null;
 let mainWindow = null;
 let isQuitting = false;
 let usageOverlay = null;
+let screenGrab = null;
 let usageOverlayVisible = false;
 let backendReady = false;
 // The notch's own settings (Appearance): which monitor and screen edge it sits
@@ -327,6 +329,7 @@ function updateTrayMenu() {
   if (!tray) return;
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "Open JARVIS", click: showWindow },
+    { label: "Quick Entry", enabled: !!screenGrab, click: () => screenGrab?.showQuickEntry() },
     {
       label: "Open in browser",
       click: () => openInBrowser().catch(console.error),
@@ -348,7 +351,11 @@ async function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
-    backgroundColor: "#0a0a0f",
+    backgroundColor: "#101113",
+    titleBarStyle: "hidden",
+    ...(process.platform === "win32" ? { titleBarOverlay: {
+      color: "#101113", symbolColor: "#b0afb8", height: 32,
+    } } : {}),
     autoHideMenuBar: true,
     icon: windowIcon(),
     webPreferences: {
@@ -466,7 +473,17 @@ async function createWindow() {
   // Before the first page loads: with accounts off, the backend answers only
   // requests carrying this (ui-access.js). The usage overlay shares the session.
   if (UI_SECRET) await session.defaultSession.cookies.set(uiCookie(BACKEND_URL, UI_SECRET));
-  win.loadURL(BACKEND_URL);
+  await win.loadURL(BACKEND_URL);
+  if (process.platform === "win32" && !screenGrab) {
+    screenGrab = installScreenGrab({
+      getMainWindow: () => mainWindow,
+      showMainWindow: showWindow,
+      python: resolveBackendPython,
+      repoRoot: REPO_ROOT,
+      sideBrowser,
+    });
+    updateTrayMenu();
+  }
   if (usageOverlayVisible) setUsageOverlayVisible(true).catch(console.error);
 }
 

@@ -3354,6 +3354,10 @@ class SentTextTests(unittest.TestCase):
         chat_service._busy.clear()
         _FakeClaudeClient.instances = []
         _FakeClaudeClient.refuse_resume = False
+        staged = Path(attachments.STAGING_DIR) / f"att-1_{self.NOTE_PATH}"
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        staged.write_bytes(b"%PDF-1.4\n")
+        self.addCleanup(staged.unlink)
         self.sid = session_manager.create_session("sent")["id"]
         self.endpoint = ENDPOINTS["local"]
         patches = [

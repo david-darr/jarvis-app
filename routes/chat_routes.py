@@ -9,12 +9,22 @@ from fastapi import APIRouter, Depends, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 
-from core import attachments, chat_artifacts, office_preview
+from core import attachments, chat_artifacts, chat_files, office_preview
 from core.auth import auth_manager
 from core.middleware import require_user
 from services import chat_service
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+
+@router.get("/files")
+async def list_chat_files(session_id: str, user: str = Depends(require_user)) -> list[dict]:
+    return chat_files.list_for_session(session_id)
+
+
+@router.get("/files/library")
+async def list_chat_files_library(user: str = Depends(require_user)) -> list[dict]:
+    return chat_files.list_library()
 
 
 class PublishFileRequest(BaseModel):
@@ -84,6 +94,22 @@ class ChatResponse(BaseModel):
     reply: str
 
 
+class ValidateAttachmentsRequest(BaseModel):
+    session_id: str
+    attachment_ids: list[str]
+
+
+@router.post("/validate-attachments")
+async def validate_attachments(body: ValidateAttachmentsRequest, user: str = Depends(require_user)) -> dict:
+    if chat_service.session_manager.get_session(body.session_id) is None:
+        raise HTTPException(404, "session not found")
+    try:
+        chat_service.validate_image_attachments(body.session_id, body.attachment_ids)
+    except ValueError as error:
+        raise HTTPException(422, str(error))
+    return {"ok": True}
+
+
 @router.post("", response_model=ChatResponse)
 async def send_chat_message(body: ChatRequest, user: str = Depends(require_user)) -> ChatResponse:
     # Shell execution for connected AI models (David's ask 2026-09-02,
@@ -91,6 +117,10 @@ async def send_chat_message(body: ChatRequest, user: str = Depends(require_user)
     # _options() and core/external_brain.py) is admin-only; this is the
     # single point that decides that for every turn.
     is_admin = auth_manager.is_admin(user)
+    try:
+        chat_service.validate_image_attachments(body.session_id, body.attachment_ids)
+    except ValueError as error:
+        raise HTTPException(422, str(error))
     reply = await chat_service.send_message(body.session_id, body.message, body.attachment_ids, is_admin)
     return ChatResponse(reply=reply)
 
@@ -102,6 +132,10 @@ async def stream_chat_message(body: ChatRequest, user: str = Depends(require_use
         raise HTTPException(404, "session not found")
     if chat_service.is_busy(body.session_id):
         raise HTTPException(409, "This chat is busy. Wait for the current response to finish.")
+    try:
+        chat_service.validate_image_attachments(body.session_id, body.attachment_ids)
+    except ValueError as error:
+        raise HTTPException(422, str(error))
 
     async def event_source():
         try:
@@ -134,3 +168,16 @@ async def upload_attachment(file: UploadFile, user: str = Depends(require_user))
         from fastapi import HTTPException
         raise HTTPException(status_code=413, detail="file too large (25MB max)")
     return attachments.stage_file(file.filename or "file", content)
+
+
+@router.get("/images/{session_id}/{attachment_id}")
+async def chat_image(session_id: str, attachment_id: str, user: str = Depends(require_user)):
+    session = chat_service.session_manager.get_session(session_id)
+    if not session or not any(attachment_id in message.get("image_attachment_ids", [])
+                              for message in session.get("messages", [])):
+        raise HTTPException(404, "image not found in this chat")
+    info = attachments.staged_file_info(attachment_id)
+    mime = attachments.image_mime(attachment_id)
+    if not info or not mime:
+        raise HTTPException(404, "image not found")
+    return FileResponse(info[0], media_type=mime, headers={"Cache-Control": "private, no-store"})

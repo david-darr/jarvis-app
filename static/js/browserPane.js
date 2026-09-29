@@ -65,6 +65,7 @@ export function openBrowser(initialUrl) {
   // One right-hand pane at a time. Imported lazily to avoid a static import
   // cycle: chatContent.js opens this pane for external links.
   import('./chatContent.js').then(m => m.closeArtifact()).catch(() => {});
+  import('./chatFilesPane.js').then(m => m.closeChatFiles()).catch(() => {});
   closeBrowser();
 
   const host = document.querySelector('.chat-layout');

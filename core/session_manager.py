@@ -164,6 +164,11 @@ class SessionManager:
         if sent != typed:
             store.update_message_fields(session_id, index, {"sent": sent})
 
+    def record_image_attachments(self, session_id: str, index: int, attachment_ids: list[str]) -> None:
+        """Keep image IDs so API/local replay rebuilds the same vision input."""
+        if attachment_ids:
+            store.update_message_fields(session_id, index, {"image_attachment_ids": attachment_ids})
+
     def set_model_endpoint(self, session_id: str, model_endpoint_id: Optional[str], model_override: Optional[str] = None,
                            model_effort: Optional[str] = None) -> dict:
         """Pin an endpoint and optional CLI model; None means no model chosen.
@@ -257,6 +262,15 @@ class SessionManager:
         if url not in urls:
             urls.append(url)
             store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
+
+    def register_chat_file(self, session_id: str, entry: dict) -> None:
+        """Keep one record per local file, across later edits to that file."""
+        session = self._require(session_id)
+        files = session.setdefault("chat_files", [])
+        if any(item.get("id") == entry["id"] for item in files):
+            return
+        files.append(entry)
+        store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def set_open_mic(self, session_id: str, active: bool) -> dict:
         """Marks a session as an Open Mic conversation (David's ask

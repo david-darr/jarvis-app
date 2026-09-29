@@ -2,13 +2,15 @@ import { api, el, toast, confirmDialog, modelMark } from "../api.js";
 import { runSlashCommand } from "../slashCommands.js";
 import * as chatStream from "../chatStream.js";
 import { renderMessageBody, copyText, closeArtifact } from "../chatContent.js";
-import { openBrowser, closeBrowser } from "../browserPane.js";
+import { openBrowser, closeBrowser, suppressBrowser, releaseBrowser } from "../browserPane.js";
+import { openChatFiles, closeChatFiles, refreshChatFiles } from "../chatFilesPane.js";
 import { createRecorder, transcribeBlob, getSpeechStatus, isRecordingSupported } from "../voiceInput.js";
 import { createOpenMic } from "../openMic.js";
 import { createChatActivity } from '../chatActivity.js';
 import { showPermissionPrompt, dismissPermissionPrompt } from '../permissionPrompt.js';
 import { mountSideChat, openSideChat, closeSideChat, mainOpened, sideChatSessionId, canSplit, SESSION_MIME } from '../sideChat.js';
 import { mountChatFind } from '../chatFind.js';
+import { openWebCapture } from '../screenCapture.js';
 
 // Composer rebuilt to match Odysseus's actual chat-input-bar structure
 // (David's ask 2026-08-31, cross-checked against the real repo at
@@ -27,6 +29,7 @@ import { mountChatFind } from '../chatFind.js';
 // the difference: the whole document goes into the message up front.
 
 const ICON_ATTACH = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
+const ICON_CAPTURE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><rect x="7" y="8" width="10" height="8" rx="1"/></svg>';
 const ICON_DOC = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
 const ICON_WORKSPACE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
 const ICON_PROMPT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 2 4 4"/><path d="m17 7 3-3"/><path d="M19 9 8.7 19.3c-1 1-2.5 1-3.4 0l-.6-.6c-1-1-1-2.5 0-3.4L15 5"/><path d="m9 11 4 4"/></svg>';
@@ -60,7 +63,7 @@ const ICON_GEAR = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" s
 //
 // ts is a unix-seconds float (session_manager.append_message) or omitted
 // for a card being built live during streaming (uses "now").
-function messageCard(role, text, ts, status = 'complete') {
+function messageCard(role, text, ts, status = 'complete', imageSources = []) {
   const time = new Date((ts || Date.now() / 1000) * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const body = el("div", { class: "msg-body" });
   renderMessageBody(body, text, activeSessionId, role === 'assistant');
@@ -74,6 +77,15 @@ function messageCard(role, text, ts, status = 'complete') {
   const actions = el("div", { class: "msg-actions" }, [copyBtn, el("span", { class: "msg-time", text: time })]);
 
   const card = el("div", { class: `msg ${role}` }, [body, actions]);
+  if (role === "user" && imageSources.length) {
+    const images = el("div", { class: "msg-images" });
+    for (const source of imageSources) {
+      const img = el("img", { src: source, alt: "Attached image", loading: "lazy" });
+      img.addEventListener("click", () => showImagePreview(source, "Attached image"));
+      images.append(img);
+    }
+    card.insertBefore(images, actions);
+  }
   if (status === 'interrupted') card.append(el('div', { class: 'msg-interrupted', text: 'Response interrupted · Partial reply saved' }));
   return card;
 }
@@ -143,6 +155,12 @@ async function rewindTo(session, keep, userMessage, { edit }) {
 let activeSessionId = null;
 let activeProjectFilter = null; // David's ask 2026-09-12 — null = "All Chats"
 let stagedAttachments = []; // [{id, filename}]
+let activeImagePreview = null;
+let activeWebCapture = null;
+function clearStagedAttachments() {
+  for (const item of stagedAttachments) if (item.preview) URL.revokeObjectURL(item.preview);
+  stagedAttachments = [];
+}
 // chatStream subscriptions made by whatever's currently mounted, unwound by
 // render()'s returned unmount function (David's ask 2026-09-12 — see
 // chatStream.js's docstring) — without this, leaving Chat mid-reattachment
@@ -285,6 +303,7 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
         // A finished reply sends the next queued message; a stopped or
         // failed one pauses the queue until Resume.
         refreshRewindActions(sessionId, messages);
+        refreshChatFiles(sessionId);
         if (entry.status === "done") setTimeout(() => sendNextQueued(sessionId), 0);
         else if (queuedBySession.get(sessionId)?.length) { pausedQueues.add(sessionId); renderQueue(); }
       }
@@ -334,9 +353,11 @@ function renderWelcome(messages) {
 }
 
 export async function render(container, tabId, options = {}) {
+  closeDocumentsMenu?.();
+  closeChatFiles();
   container.innerHTML = "";
   container.classList.add("chat-layout");
-  stagedAttachments = [];
+  clearStagedAttachments();
   // Belt-and-suspenders reset (David's ask 2026-09-12): app.js's switchTab()
   // already calls the previous mount's returned unmount — see the bottom of
   // this function — which drains this same array before a fresh render()
@@ -470,6 +491,10 @@ export async function render(container, tabId, options = {}) {
   const overflowWrap = el("div", { class: "overflow-wrapper" }, [overflowBtn, overflowMenu, fileInput]);
 
   const workspacePill = el("div", { id: "workspace-pill-slot" });
+  const filesBtn = el("button", { type: "button", class: "input-icon-btn chat-files-toggle",
+    title: "Files in this chat", "aria-label": "Files in this chat",
+    onclick: () => activeSessionId ? openChatFiles(activeSessionId) : toast("Open a chat to see its files", "error") });
+  filesBtn.insertAdjacentHTML("beforeend", ICON_DOC);
   // Context meter (David's ask 2026-09-15) — how full THIS chat's context
   // currently is, which is a different question from the Home tab's
   // cumulative token spend. Hidden until a turn actually reports usable
@@ -489,7 +514,10 @@ export async function render(container, tabId, options = {}) {
   const sendBtn = el("button", { class: "btn", id: "chat-send", title: "Send" });
   sendBtn.insertAdjacentHTML("beforeend", ICON_SEND);
 
-  const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, workspacePill, contextPill, compactBtn]);
+  const captureBtn = el("button", { type: "button", class: "input-icon-btn", title: "Capture screen",
+    "aria-label": "Capture from this device", onclick: () => captureScreenshot(attachStrip) });
+  captureBtn.insertAdjacentHTML("beforeend", ICON_CAPTURE);
+  const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, captureBtn, filesBtn, workspacePill, contextPill, compactBtn]);
   // Dictation (David's ask 2026-09-15). Hidden outright when the browser
   // cannot record, rather than offered and then failing on click.
   const micBtn = el("button", { type: "button", class: "input-icon-btn chat-mic-btn", id: "chat-mic", title: "Dictate", "aria-label": "Dictate a message" });
@@ -530,11 +558,14 @@ export async function render(container, tabId, options = {}) {
 
   function startNewChat() {
     closeArtifact();
+    activeImagePreview?.();
+    activeWebCapture?.();
+    closeChatFiles();
     activeUnsubscribers.forEach(unsub => unsub());
     activeUnsubscribers.length = 0;
     activeSessionId = null;
     renderQueue();
-    stagedAttachments = [];
+    clearStagedAttachments();
     renderAttachStrip(attachStrip);
     input.value = '';
     input.style.height = 'auto';
@@ -587,6 +618,12 @@ export async function render(container, tabId, options = {}) {
     input.style.height = "auto";
     input.style.height = Math.min(input.scrollHeight, 200) + "px";
   });
+  input.addEventListener("paste", async event => {
+    const images = [...(event.clipboardData?.files || [])].filter(file => file.type.startsWith("image/"));
+    if (!images.length) return;
+    event.preventDefault();
+    await stageFiles(images, attachStrip);
+  });
 
   const dismissMenus = () => { closeMenu(overflowMenu); closeMenu(modelMenu); closeMenu(versionMenu); closeMenu(projectPickerMenu); };
   const escapeMenus = (event) => {
@@ -614,7 +651,11 @@ export async function render(container, tabId, options = {}) {
     dockObserver.disconnect();
     dock.getAnimations().forEach(animation => animation.cancel());
     closeSessionMenu();
+    closeDocumentsMenu?.();
     closeArtifact();
+    activeImagePreview?.();
+    activeWebCapture?.();
+    closeChatFiles();
     closeBrowser();
     // A live microphone must never outlive the view that owns it.
     if (openMic) { openMic.stop(); openMic = null; }
@@ -691,12 +732,22 @@ function closeMenu(menu) { menu.classList.add("hidden"); }
 async function handleFilePicked(fileInput, attachStrip) {
   const files = [...fileInput.files];
   fileInput.value = "";
+  await stageFiles(files, attachStrip);
+}
+
+async function stageFiles(files, attachStrip) {
+  let added = 0;
   for (const file of files) {
     const form = new FormData();
     form.append("file", file);
     try {
       const staged = await api("/api/chat/attachments", { method: "POST", headers: {}, body: form });
+      if (file.type.startsWith("image/")) {
+        staged.preview = URL.createObjectURL(file);
+        staged.file = file;
+      }
       stagedAttachments.push(staged);
+      added += 1;
     } catch (e) {
       // Was a raw window.alert() — unstyleable OS chrome that blocked the
       // whole UI in an otherwise glass-skinned app (audit 2026-09-03).
@@ -704,16 +755,83 @@ async function handleFilePicked(fileInput, attachStrip) {
     }
   }
   renderAttachStrip(attachStrip);
+  return added;
+}
+
+async function captureScreenshot(attachStrip) {
+  if (!window.jarvis?.screenGrab) {
+    activeWebCapture?.();
+    activeWebCapture = openWebCapture({
+      onAttach: file => stageFiles([file], attachStrip),
+      onClose: () => { activeWebCapture = null; },
+    });
+    return;
+  }
+  try {
+    const dataUrl = await window.jarvis.screenGrab.capture();
+    if (!dataUrl) return;
+    await stageFiles([screenshotFile(dataUrl)], attachStrip);
+  } catch (error) {
+    toast(`Couldn't capture screen: ${error.message}`, "error");
+  }
+}
+
+function screenshotFile(dataUrl) {
+  if (!/^data:image\/(png|jpeg);base64,/.test(dataUrl)) throw new Error("Invalid screenshot data.");
+  const [header, encoded] = dataUrl.split(",", 2);
+  const bytes = Uint8Array.from(atob(encoded), char => char.charCodeAt(0));
+  const png = header.includes("image/png");
+  return new File([bytes], `Screenshot-${Date.now()}.${png ? "png" : "jpg"}`,
+    { type: png ? "image/png" : "image/jpeg" });
+}
+
+function imageDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function showImagePreview(source, label) {
+  activeImagePreview?.();
+  suppressBrowser();
+  const backdrop = el("div", { class: "chat-image-preview", role: "dialog", "aria-label": `Preview ${label}` });
+  const full = el("img", { src: source, alt: label });
+  const close = el("button", { type: "button", class: "btn", text: "Close" });
+  const onKey = event => { if (event.key === "Escape") dismiss(); };
+  const dismiss = () => {
+    document.removeEventListener("keydown", onKey);
+    backdrop.remove();
+    releaseBrowser();
+    if (activeImagePreview === dismiss) activeImagePreview = null;
+  };
+  activeImagePreview = dismiss;
+  close.onclick = dismiss;
+  backdrop.onclick = event => { if (event.target === backdrop) dismiss(); };
+  backdrop.append(full, close);
+  document.body.append(backdrop);
+  document.addEventListener("keydown", onKey);
+  close.focus();
 }
 
 function renderAttachStrip(attachStrip) {
   attachStrip.innerHTML = "";
   for (const a of stagedAttachments) {
     const chip = el("div", { class: "attach-chip" }, [el("span", { text: a.filename })]);
+    if (a.preview) {
+      const preview = el("button", { type: "button", class: "attach-chip-preview-button",
+        title: "Preview image", "aria-label": `Preview ${a.filename}` });
+      preview.append(el("img", { src: a.preview, alt: "", class: "attach-chip-preview" }));
+      preview.addEventListener("click", () => showImagePreview(a.preview, a.filename));
+      chip.prepend(preview);
+    }
     const removeBtn = el("button", { type: "button", title: "Remove" });
     removeBtn.insertAdjacentHTML("beforeend", ICON_X);
     removeBtn.addEventListener("click", () => {
       stagedAttachments = stagedAttachments.filter((s) => s.id !== a.id);
+      if (a.preview) URL.revokeObjectURL(a.preview);
       renderAttachStrip(attachStrip);
     });
     chip.appendChild(removeBtn);
@@ -748,29 +866,87 @@ async function openPromptMenu(anchor) {
 }
 
 // -- documents (backed by the Library tab, Phase 7) ------------------------
+let closeDocumentsMenu = null;
 async function openDocumentsMenu(anchor) {
+  closeDocumentsMenu?.();
   const docs = await api("/api/documents");
-  const menu = el("div", { class: "overflow-menu", style: "position:absolute; bottom:calc(100% + 8px); left:0; z-index:60;" });
-  if (docs.length === 0) {
-    menu.appendChild(el("div", { class: "overflow-menu-item", text: "No documents yet (see Library tab)" }));
-  } else {
-    for (const d of docs) {
-      menu.appendChild(menuItem(ICON_DOC, d.title, async () => {
+  const host = anchor.closest(".overflow-wrapper");
+  if (!host?.isConnected) return;
+  const menu = el("div", { class: "overflow-menu documents-popover", role: "dialog", "aria-label": "Library documents" });
+  const rows = el("div", { class: "documents-menu-rows" });
+  const search = el("input", { type: "search", class: "documents-menu-search", placeholder: "Find a document…", "aria-label": "Find a document" });
+  const count = el("span", { class: "library-count", text: String(docs.length) });
+  const group = el("details", { class: "documents-menu-group", open: true }, [
+    el("summary", { class: "documents-menu-summary" }, [
+      el("span", { text: "Documents" }), count,
+      el("span", { class: "library-chevron", "aria-hidden": "true", text: "›" }),
+    ]),
+    rows,
+  ]);
+  const close = () => {
+    menu.remove();
+    document.removeEventListener("click", outside);
+    document.removeEventListener("keydown", onKey);
+    if (closeDocumentsMenu === close) closeDocumentsMenu = null;
+  };
+  const outside = (event) => { if (!menu.contains(event.target)) close(); };
+  const onKey = (event) => { if (event.key === "Escape") { event.preventDefault(); close(); anchor.focus(); } };
+  const renderRows = () => {
+    rows.replaceChildren();
+    const wanted = search.value.trim().toLowerCase();
+    const matches = docs.filter(d => d.title.toLowerCase().includes(wanted));
+    count.textContent = String(matches.length);
+    if (wanted) group.open = true;
+    if (!matches.length) {
+      rows.append(el("div", { class: "documents-menu-empty", text: wanted ? "No documents match this search." : "No documents yet. Create one in Library." }));
+      return;
+    }
+    for (const d of matches) {
+      const icon = el("span", { class: "documents-menu-icon", "aria-hidden": "true" });
+      icon.innerHTML = ICON_DOC;
+      rows.append(el("button", { type: "button", class: "documents-menu-row", title: d.title, onclick: async () => {
         const full = await api(`/api/documents/${d.id}`);
         const input = document.getElementById("chat-input");
+        if (!input) { close(); return; }
         input.value = (input.value ? input.value + "\n\n" : "") + `[Document: ${full.title}]\n${full.content}`;
         input.dispatchEvent(new Event("input"));
         input.focus();
-        menu.remove();
-      }));
+        close();
+      } }, [
+        icon,
+        el("span", { class: "documents-menu-copy" }, [el("strong", { text: d.title }), el("small", { text: "Insert into message" })]),
+        el("span", { class: "library-row-arrow", "aria-hidden": "true", text: "→" }),
+      ]));
     }
-  }
-  anchor.parentElement.style.position = "relative";
-  anchor.parentElement.appendChild(menu);
-  setTimeout(() => document.addEventListener("click", function close() {
-    menu.remove();
-    document.removeEventListener("click", close);
-  }), 0);
+  };
+  search.addEventListener("input", renderRows);
+  menu.append(
+    el("div", { class: "documents-menu-heading" }, [
+      el("strong", { text: "Library documents" }),
+      el("span", { text: "Add saved text to this message" }),
+    ]),
+    search,
+    group,
+  );
+  menu.addEventListener("click", event => event.stopPropagation());
+  host.append(menu);
+  const rect = host.getBoundingClientRect();
+  const above = rect.top - 12;
+  const below = innerHeight - rect.bottom - 12;
+  const opensBelow = above < 320 && below > above;
+  menu.style.top = opensBelow ? "calc(100% + 8px)" : "auto";
+  menu.style.bottom = opensBelow ? "auto" : "calc(100% + 8px)";
+  menu.style.maxHeight = `${Math.max(140, Math.min(380, opensBelow ? below : above))}px`;
+  menu.style.maxWidth = "calc(100vw - 24px)";
+  const bounds = menu.getBoundingClientRect();
+  menu.style.transform = `translateX(${bounds.left < 12 ? 12 - bounds.left : Math.min(0, innerWidth - 12 - bounds.right)}px)`;
+  closeDocumentsMenu = close;
+  renderRows();
+  setTimeout(() => {
+    if (!menu.isConnected) return;
+    document.addEventListener("click", outside);
+    document.addEventListener("keydown", onKey);
+  }, 0);
 }
 
 // -- workspace (real folder confinement — core/workspace.py) --------------
@@ -1760,6 +1936,7 @@ async function createSession({ preserveAttachments = false } = {}) {
   const sessionsList = document.getElementById("sessions-list");
   const messages = document.getElementById("chat-messages");
   await refreshSessions(sessionsList, messages);
+  if (preserveAttachments) stagedAttachments = [];
   await openSession(session.id, sessionsList, messages);
   if (preserveAttachments && activeSessionId === session.id && messages.isConnected) {
     stagedAttachments = draftFiles;
@@ -1769,6 +1946,9 @@ async function createSession({ preserveAttachments = false } = {}) {
 
 async function openSession(sessionId, sessionsList, messages) {
   closeArtifact();
+  activeImagePreview?.();
+  activeWebCapture?.();
+  closeChatFiles();
   // Disposed on session switch, not carried across: the pane belongs to the
   // conversation it was opened from, and in the desktop app leaving it
   // running would keep a native view (and its scripts and audio) alive over
@@ -1782,7 +1962,7 @@ async function openSession(sessionId, sessionsList, messages) {
   // for Resume rather than sending on its own.
   if (queuedBySession.get(sessionId)?.length && chatStream.getInFlight(sessionId)?.status !== 'processing') pausedQueues.add(sessionId);
   renderQueue();
-  stagedAttachments = [];
+  clearStagedAttachments();
   const attachStrip = document.getElementById("attach-strip");
   if (attachStrip) attachStrip.innerHTML = "";
   [...sessionsList.children].forEach((c) => c.classList.remove("active"));
@@ -1790,7 +1970,8 @@ async function openSession(sessionId, sessionsList, messages) {
   if (!messages.isConnected || activeSessionId !== sessionId) return;
   messages.innerHTML = "";
   for (const msg of session.messages) {
-    messages.appendChild(messageCard(msg.role, msg.content, msg.ts, msg.status));
+    messages.appendChild(messageCard(msg.role, msg.content, msg.ts, msg.status,
+      (msg.image_attachment_ids || []).map(id => `/api/chat/images/${encodeURIComponent(sessionId)}/${encodeURIComponent(id)}`)));
   }
   addRewindActions(messages, session);
   // Reattach to a turn still generating (David's ask 2026-09-12) — its
@@ -1825,6 +2006,36 @@ export function openSessionById(sessionId) {
   if (sessionsList && messages) return openSession(sessionId, sessionsList, messages);
 }
 
+export async function acceptQuickEntryDraft(draft) {
+  const refs = composerRefs;
+  if (!refs?.input?.isConnected) throw new Error("Chat is still loading. Try again.");
+  if (!draft.modelEndpointId) throw new Error("Choose a model before sending.");
+  if ((draft.text || "").trim().startsWith("/")) {
+    throw new Error("Send slash commands from the main chat composer.");
+  }
+  try {
+    // Quick Entry starts a fresh chat. createSession opens it and clears the
+    // composer, so populate the draft only after the new chat is ready.
+    await createSession();
+    await api(`/api/sessions/${activeSessionId}/model`, {
+      method: "POST", body: JSON.stringify({ model_endpoint_id: draft.modelEndpointId }),
+    });
+    await refreshModelPicker(draft.modelEndpointId);
+    refs.input.value = draft.text || "";
+    refs.input.dispatchEvent(new Event("input"));
+    if (draft.image && !await stageFiles([screenshotFile(draft.image)], refs.attachStrip)) {
+      throw new Error("The screenshot couldn't be attached.");
+    }
+    await sendMessage(refs.messages, refs.input, refs.sendBtn, refs.attachStrip);
+    if (refs.input.value.trim() || stagedAttachments.length) {
+      throw new Error("The message stayed in the composer. Check its attachment and model, then send it there.");
+    }
+  } catch (error) {
+    refs.input.focus();
+    throw error;
+  }
+}
+
 async function sendMessage(messages, input, sendBtn, attachStrip) {
   if (sendBtn.disabled) return;
   const text = input.value.trim();
@@ -1843,6 +2054,10 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
   if (!text && stagedAttachments.length === 0) return;
 
   if (text.startsWith("/")) {
+    if (stagedAttachments.length) {
+      toast("Send the slash command separately from attachments", "error");
+      return;
+    }
     input.value = "";
     input.style.height = "auto";
     messages.appendChild(messageCard("user", text));
@@ -1882,12 +2097,30 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
     sendBtn.disabled = false;
     if (!messages.isConnected) return;
   }
-  stagedAttachments = [];
+  if (stagedAttachments.length) {
+    try {
+      await api("/api/chat/validate-attachments", {
+        method: "POST", body: JSON.stringify({ session_id: activeSessionId, attachment_ids: attachmentIds }),
+      });
+    } catch (error) {
+      toast(error.message.replace(/^\d+: /, ""), "error");
+      return;
+    }
+  }
+  let imageSources;
+  try {
+    imageSources = await Promise.all(stagedAttachments.filter(item => item.file).map(item => imageDataUrl(item.file)));
+  } catch (error) {
+    toast(`Couldn't preview the attached image: ${error.message}`, "error");
+    return;
+  }
+  clearStagedAttachments();
   renderAttachStrip(attachStrip);
 
   input.value = "";
   input.style.height = "auto";
-  messages.appendChild(messageCard("user", text || "(attachment)"));
+  messages.appendChild(messageCard("user", text || (imageSources.length ? "" : "(attachment)"),
+    undefined, "complete", imageSources));
   const replyCard = messageCard("assistant", "");
   const replyBody = replyCard.querySelector(".msg-body");
   messages.appendChild(replyCard);

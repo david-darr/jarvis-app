@@ -9,6 +9,7 @@ import { closeBrowser, openBrowser } from "./browserPane.js";
 import { initAppearance } from "./appearance.js";
 
 restoreSidebar();
+if (window.jarvis?.browser) document.documentElement.classList.add("electron-shell");
 
 // Nav order matches David's Figma wireframe, minus "New Chat" and "Search"
 // as separate items (David's call, 2026-08-31) — both live inside the Chats
@@ -430,6 +431,22 @@ async function startApp() {
   window.jarvis?.browser?.onOpenRequest(async (url) => {
     if (activeTab !== "chat") await switchTab("chat");
     openBrowser(url);
+  });
+  window.jarvis?.screenGrab?.onModelsRequest(async (requestId) => {
+    const models = await api("/api/models").catch(() => []);
+    window.jarvis.screenGrab.replyModels(requestId, models.map(({ id, name, model, kind, supports_images }) =>
+      ({ id, supportsImages: supports_images,
+        label: `${name} (${kind === "claude_cli" || kind === "codex_cli" ? model || "CLI default" : model})` })));
+  });
+  window.jarvis?.screenGrab?.onQuickDraft(async (draft) => {
+    try {
+      await switchTab("chat");
+      const chat = await loadModule("chat");
+      await chat.acceptQuickEntryDraft(draft);
+      window.jarvis.screenGrab.replyQuickDraft(draft.requestId, { ok: true });
+    } catch (error) {
+      window.jarvis.screenGrab.replyQuickDraft(draft.requestId, { ok: false, error: error.message });
+    }
   });
   await switchTab("home");
 }

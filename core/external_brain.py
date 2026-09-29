@@ -25,7 +25,7 @@ hive mind") — same reasoning, same shared engine (core/memory_tools.py).
 """
 from typing import AsyncIterator
 
-from core import integrations, mcp_client, mcp_oauth, permissions, projects, system_prompt, tool_registry
+from core import attachments, integrations, mcp_client, mcp_oauth, permissions, projects, system_prompt, tool_registry
 from core.providers import openai_compatible
 from core.session_manager import sent_text
 from core.turn_taint import TurnTaint
@@ -34,7 +34,8 @@ class ExternalBrain:
     def __init__(self, base_url: str, model: str, api_key: str | None, history: list[dict] | None = None,
                  session_id: str | None = None, num_ctx: int | None = None, is_admin: bool = False,
                  project_id: str | None = None, endpoint_id: str | None = None,
-                 integration_ids: list[str] | None = None, allow_user_tab_source: bool = False):
+                 integration_ids: list[str] | None = None, allow_user_tab_source: bool = False,
+                 supports_images: bool = False):
         self.base_url = base_url
         self.model = model
         self.api_key = api_key
@@ -44,6 +45,7 @@ class ExternalBrain:
         # for an admin, absent from a non-admin session's list entirely.
         self.is_admin = is_admin
         self.allow_user_tab_source = allow_user_tab_source
+        self.supports_images = supports_images
         self.turn_taint = TurnTaint()
         self.tools = tool_registry.openai_tools(is_admin)
         if is_admin:
@@ -62,7 +64,7 @@ class ExternalBrain:
         # Claude. Only prepended once, on a session with no prior history —
         # an existing conversation already carries its own system message
         # from when it was first created.
-        seeded = self._seed(history or [], endpoint_id)
+        seeded = self._seed(history or [], endpoint_id, supports_images)
         if not seeded or seeded[0].get("role") != "system":
             # Projects (David's ask 2026-09-12) appended the same way as
             # core/brain.py/core/codex_brain.py — see core/projects.py's
@@ -82,7 +84,7 @@ class ExternalBrain:
         self.last_tool_rounds: list[dict] = []
 
     @staticmethod
-    def _seed(history: list[dict], endpoint_id: str | None) -> list[dict]:
+    def _seed(history: list[dict], endpoint_id: str | None, supports_images: bool = False) -> list[dict]:
         """The saved transcript as this endpoint should see it, tool rounds
         included (prompt-cache audit finding 2, 2026-09-22). Each reply's
         rounds are saved on that reply and replayed just before it, which
@@ -102,7 +104,10 @@ class ExternalBrain:
             # What this endpoint was actually sent, attachment note and Open
             # Mic instruction included, so the rebuilt history still matches
             # the cached one (prompt-cache audit finding 4).
-            seeded.append({"role": m["role"], "content": sent_text(m)})
+            content = sent_text(m)
+            if supports_images and m["role"] == "user" and m.get("image_attachment_ids"):
+                content = attachments.openai_image_content(content, m["image_attachment_ids"])
+            seeded.append({"role": m["role"], "content": content})
         return seeded
 
     async def _execute_tool(self, name: str, args: dict) -> str:
@@ -154,7 +159,7 @@ class ExternalBrain:
             for name, spec in self._mcp_tools.items()
         ]
 
-    async def run_turn(self, user_text: str) -> str:
+    async def run_turn(self, user_text: str | list[dict]) -> str:
         self.turn_taint.reset()
         self._messages.append({"role": "user", "content": user_text})
         self.last_tool_rounds = []
@@ -168,7 +173,7 @@ class ExternalBrain:
         self._messages.append({"role": "assistant", "content": reply})
         return reply
 
-    async def run_turn_stream(self, user_text: str) -> AsyncIterator[str]:
+    async def run_turn_stream(self, user_text: str | list[dict]) -> AsyncIterator[str]:
         self.turn_taint.reset()
         self._messages.append({"role": "user", "content": user_text})
         self.last_tool_rounds = []

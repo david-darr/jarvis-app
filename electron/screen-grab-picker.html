@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; script-src 'self'; style-src 'self'">
+  <title>Capture from this device</title>
+  <link rel="stylesheet" href="screen-grab-style.css">
+</head>
+<body class="source-picker">
+  <main>
+    <div class="picker-intro drag-area"><div><span class="eyebrow">SCREEN CAPTURE</span><h1>Choose what to capture</h1><p>Select a source or choose an area on a display.</p></div><button id="cancel" class="icon-button" type="button" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19"/></svg></button></div>
+    <div class="region-card"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9V4h5m8 0h5v5M3 15v5h5m8 0h5v-5"/></svg><div class="region-copy"><strong>Region or window</strong><small>Drag a rectangle, or click a window on the chosen display.</small></div><select id="region-display" aria-label="Display for region capture"></select><button id="region" type="button">Select area</button></div>
+    <div class="toolbar"><div class="filters" role="group" aria-label="Source type"><button type="button" class="active" data-filter="all" aria-pressed="true">All</button><button type="button" data-filter="window" aria-pressed="false">Windows</button><button type="button" data-filter="screen" aria-pressed="false">Displays</button><button type="button" data-filter="tab" aria-pressed="false">JARVIS tab</button></div><input id="search" type="search" placeholder="Find a window" aria-label="Find a source"></div>
+    <div id="error" role="status"></div>
+    <div id="sources"><div id="empty">No sources match this view.</div></div>
+    <footer>The image is attached to your draft. Nothing is sent until you choose Send.</footer>
+  </main>
+  <script src="screen-grab-picker.js"></script>
+</body>
+</html>
