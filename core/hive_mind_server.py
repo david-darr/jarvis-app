@@ -37,16 +37,18 @@ from core import tool_registry
 def _handler(name: str, ctx: tool_registry.ToolContext):
     async def run(args: dict) -> dict:
         text = await tool_registry.call(name, args, ctx, tool_registry.CLAUDE)
+        if ctx.turn_taint:
+            ctx.turn_taint.mark(f"MCP result: {name}")
         return {"content": [{"type": "text", "text": text}]}
     return run
 
 
-def get_hive_mind_server(exclude_session_id: str | None = None, is_admin: bool = False):
+def get_hive_mind_server(exclude_session_id: str | None = None, is_admin: bool = False, turn_taint=None):
     """exclude_session_id isn't threaded into the tool call itself (the SDK
     tool signature is fixed at server-creation time) — Brain passes its own
     session id in by building a fresh server per connection instead of one
     shared global instance, so a session never "finds" its own history."""
-    ctx = tool_registry.ToolContext(session_id=exclude_session_id, is_admin=is_admin)
+    ctx = tool_registry.ToolContext(session_id=exclude_session_id, is_admin=is_admin, turn_taint=turn_taint)
     tools = [tool(spec.name, spec.description, spec.schema)(_handler(spec.name, ctx))
              for spec in tool_registry.specs(tool_registry.CLAUDE)]
     return create_sdk_mcp_server(name="hive_mind", tools=tools)

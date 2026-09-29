@@ -39,6 +39,7 @@ plugs in any model, not just this session's own testing setup.
 """
 
 from core import image_gen
+from core.custom_tabs import USER_TAB_CODE_DIRS
 
 
 # The missing half of the "files in chat" feature, found live 2026-09-12:
@@ -70,7 +71,10 @@ Your file tools (Read/Glob/Grep/Write/Edit) are already scoped to the vault dire
 """ + _GENERATED_FILES_ADDENDUM("your file tools", "call the save_generated_file tool with that path and a short description (or save_generated_image for an image you already have a local file for)")
 
 _EXTERNAL_ADDENDUM = """
-You have these tools available: search_vault and read_vault_file (the vault), search_sessions (other conversations), list_skills and read_skill (saved procedures), list_notes (open todos/priorities), list_tasks and list_task_runs (scheduled jobs and what they produced), list_upcoming_events (calendar), list_documents and read_document (the Library), list_contacts (people), list_specs and read_spec (architecture docs). You can also write, not just read: create_note/update_note/delete_note, create_task/update_task/delete_task, create_event/update_event/delete_event — use these whenever the user wants something added, changed, or removed. You additionally have list_repo_directory/read_repo_file/write_repo_file for real read/write access to jarvis-app's own source code (core/, routes/, services/, static/, scripts/, specs/, mcp_servers/, electron/ — not data/, which holds credentials) for actual development work on the app itself. Use these tools when a question or request calls for it — don't guess, claim no memory exists, or say you can't make a change without checking/trying first."""
+You have these tools available: search_vault and read_vault_file (the vault), search_sessions (other conversations), list_skills and read_skill (saved procedures), list_notes (open todos/priorities), list_tasks and list_task_runs (scheduled jobs and what they produced), list_upcoming_events (calendar), list_documents and read_document (the Library), list_contacts (people), list_specs and read_spec (architecture docs). You can also write, not just read: create_note/update_note/delete_note, create_task/update_task/delete_task, create_event/update_event/delete_event — use these whenever the user wants something added, changed, or removed. You additionally have list_repo_directory/read_repo_file/write_repo_file for real read/write access to jarvis-app's own source code (core/, routes/, services/, static/, scripts/, specs/, mcp_servers/, electron/) for actual development work on the app itself. Use these tools when a question or request calls for it — don't guess, claim no memory exists, or say you can't make a change without checking/trying first."""
+
+_EXTERNAL_CUSTOM_TABS_ADDENDUM = """
+You also have file-tool access to user-built tab source through custom-tabs/routes/, custom-tabs/services/, and custom-tabs/views/. No other data/ paths are available through file tools."""
 
 
 _SHELL_ADDENDUM = """
@@ -84,8 +88,9 @@ def for_claude(is_admin: bool = False) -> str:
     return _SHARED_CORE + _CLAUDE_ADDENDUM + (_SHELL_ADDENDUM if is_admin else "")
 
 
-def for_external(is_admin: bool = False) -> str:
-    return _SHARED_CORE + _EXTERNAL_ADDENDUM + (_EXTERNAL_SHELL_ADDENDUM if is_admin else "")
+def for_external(is_admin: bool = False, allow_user_tab_source: bool = False) -> str:
+    tab_access = _EXTERNAL_CUSTOM_TABS_ADDENDUM if allow_user_tab_source else ""
+    return _SHARED_CORE + _EXTERNAL_ADDENDUM + tab_access + (_EXTERNAL_SHELL_ADDENDUM if is_admin else "")
 
 
 # Codex CLI, Phase 1 (added 2026-09-11): full hive-mind tool parity via a
@@ -130,10 +135,10 @@ Available subcommands:
 
 Before telling a user you don't know something, or that nothing's recorded/scheduled, check first: priorities/todos → list_notes; scheduled/automated jobs, or what one actually produced → list_tasks / list_task_runs; what's coming up → list_upcoming_events; a saved document → list_documents/read_document; a person → list_contacts; something discussed in a different conversation → search_sessions; a procedure JARVIS already knows → list_skills/read_skill; how JARVIS itself is built → list_specs/read_spec.
 
-Your shell and file tools are otherwise native to the Codex CLI itself (not separate Read/Write/Bash tools) and scoped to your working directory — the vault, or a pinned workspace folder if this chat has one."""
+Your shell and file tools are otherwise native to the Codex CLI itself (not separate Read/Write/Bash tools) and scoped to your working directory — the vault, or a pinned workspace folder if this chat has one. You also have writable access to the user-built tab source directories at {', '.join(USER_TAB_CODE_DIRS)}. They contain routes, services, and views only; other app data remains outside your file access."""
 
 
-_CODEX_ADMIN_ADDENDUM = " You also have write access to jarvis-app's own source (core/, routes/, services/, static/, scripts/, specs/, mcp_servers/, electron/ — not data/, which holds credentials) for real development work on the app itself."
+_CODEX_ADMIN_ADDENDUM = " You also have write access to jarvis-app's own source (core/, routes/, services/, static/, scripts/, specs/, mcp_servers/, electron/) for real development work on the app itself. Other data/ paths, which hold credentials and session state, remain outside your file access."
 
 
 def for_codex(python_exe: str, cli_script: str, is_admin: bool = False) -> str:

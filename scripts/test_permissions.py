@@ -76,6 +76,20 @@ class BrokerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(permissions.list_rules(), [], "once means once")
         self.assertIsNone(permissions.stored_decision("chat:1", "Bash", "npm test"))
 
+    async def test_tainted_turn_rechecks_instead_of_using_a_standing_grant(self):
+        permissions.ensure_seeded(["run_shell"])
+        queue = permissions.open_channel("chat:1")
+        asking = asyncio.ensure_future(permissions.decide(
+            surface="chat:1", tool="run_shell", arguments={"command": "python script.py"},
+            is_admin=True, force_prompt=True, timeout=30))
+        request = await self.answer_next(queue, "reject")
+        decision = await asking
+        self.assertEqual(request["tool"], "run_shell")
+        self.assertEqual(decision.behavior, "deny")
+        self.assertEqual(permissions.stored_decision("chat:1", "run_shell", "python script.py",
+                                                     is_admin=True).behavior, "allow",
+                         "the one-time refusal does not revoke the standing grant for clean turns")
+
     async def test_always_is_scoped_to_what_was_asked_not_to_the_tool(self):
         queue = permissions.open_channel("chat:1")
         asking = asyncio.ensure_future(permissions.decide(

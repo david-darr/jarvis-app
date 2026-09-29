@@ -45,10 +45,12 @@ import json
 import os
 import shutil
 import sys
+import tomllib
 
 from core.auth import INTERNAL_TOOL_TOKEN
 from core import image_gen
 from core.constants import BASE_DIR, REPO_CODE_DIRS
+from core.custom_tabs import USER_TAB_CODE_DIRS, ensure_user_tab_dirs
 from core.middleware import local_api_base
 from core.session_manager import sent_text, session_manager
 from core.vault import resolve_vault_dir
@@ -66,6 +68,42 @@ HIVE_MIND_CLI_PATH = os.path.join(BASE_DIR, "mcp_servers", "hive_mind_cli.py")
 # TURN_MESSAGE_TIMEOUT_SECONDS, so a hung/crashed codex process doesn't spin
 # the chat UI forever with no error.
 CODEX_MESSAGE_TIMEOUT_SECONDS = 180
+
+
+def _writable_roots_override() -> str:
+    """Add JARVIS user-tab source dirs without dropping the user's Codex roots.
+
+    Codex config overrides replace arrays. Preserve writable roots from the
+    user's active config/profile before appending the three source folders.
+    Only this setting is read; no config content is passed to the model.
+    """
+    codex_home = os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+    roots: list[str] = []
+    config_path = os.path.join(codex_home, "config.toml")
+    try:
+        with open(config_path, "rb") as handle:
+            config = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        config = {}
+    configured = (config.get("sandbox_workspace_write") or {}).get("writable_roots") or []
+    if isinstance(configured, list):
+        roots.extend(path for path in configured if isinstance(path, str))
+    profile = config.get("profile")
+    if isinstance(profile, str) and profile:
+        profile_path = os.path.join(codex_home, f"{profile}.config.toml")
+        try:
+            with open(profile_path, "rb") as handle:
+                profile_config = tomllib.load(handle)
+        except (OSError, tomllib.TOMLDecodeError):
+            profile_config = {}
+        profile_sandbox = profile_config.get("sandbox_workspace_write") or {}
+        if "writable_roots" in profile_sandbox:
+            configured = profile_sandbox.get("writable_roots") or []
+            roots = [path for path in configured if isinstance(path, str)] if isinstance(configured, list) else []
+    for path in USER_TAB_CODE_DIRS:
+        if path not in roots:
+            roots.append(path)
+    return json.dumps(roots)
 
 
 async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
@@ -152,13 +190,18 @@ class CodexBrain:
         # exec --strict-config` checks unknown config KEYS but not their
         # values, confirmed live, so an unvalidated effort would pass
         # parsing and only surface later as a failed turn.
-        effort_args = ["-c", f'model_reasoning_effort="{self.effort}"'] if self.effort else []
+        # Apply this on fresh and resumed turns: Codex resume keeps the
+        # original workspace and does not accept --add-dir.
+        ensure_user_tab_dirs()
+        config_args = ["-c", f"sandbox_workspace_write.writable_roots={_writable_roots_override()}"]
+        if self.effort:
+            config_args += ["-c", f'model_reasoning_effort="{self.effort}"']
         if self.thread_id:
             # Resume doesn't take -C/-s — the original invocation already
             # fixed the working directory and sandbox mode for this thread.
-            args = [codex, "exec", *effort_args, "resume", self.thread_id, "--json", "--skip-git-repo-check"]
+            args = [codex, "exec", *config_args, "resume", self.thread_id, "--json", "--skip-git-repo-check"]
         else:
-            args = [codex, "exec", *effort_args, "--json", "--skip-git-repo-check", "-s", "workspace-write", "-C", self.cwd]
+            args = [codex, "exec", *config_args, "--json", "--skip-git-repo-check", "-s", "workspace-write", "-C", self.cwd]
             # A generated file needs somewhere to be built that isn't the
             # vault (David's ask 2026-09-12 — see system_prompt.py's
             # _GENERATED_FILES_ADDENDUM), granted unconditionally: unlike
@@ -208,7 +251,9 @@ class CodexBrain:
                 prompt_text += f"\n\n[Earlier conversation, for context:]\n{transcript}\n[End of earlier conversation]"
             prompt = f"[System instructions:]\n{prompt_text}\n\n[User message:]\n{user_text}"
         else:
-            prompt = user_text
+            prompt = (f"{user_text}\n\n[JARVIS file access for this turn: your writable user-tab source "
+                      f"directories are {', '.join(USER_TAB_CODE_DIRS)}. They contain only custom-tab "
+                      "routes, services, and views; other app data remains outside your file access.]")
 
         # search_sessions (hive_mind_cli.py) excludes this session's own
         # history the same way core/hive_mind_server.py's Claude tool does —

@@ -169,11 +169,11 @@ app.include_router(sandbox_routes.router)
 # an older build, before discovery runs.
 custom_tabs.migrate_user_tabs()
 custom_tabs.mount_all(app)
+app.include_router(system_routes.custom_views_router)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-# User-built tab views, served from the data directory. Same-origin, so the
-# `script-src 'self'` CSP in core/middleware.py covers the dynamic import().
-app.mount(custom_tabs.USER_VIEWS_URL, StaticFiles(directory=custom_tabs.USER_VIEWS_DIR), name="custom-views")
+# User-built tab views use a guarded route that verifies the approved source
+# fingerprint before returning JavaScript (routes/system_routes.py).
 # Generated images (David's ask 2026-09-10 — image generation for chat and
 # Discord). StaticFiles needs the directory to exist before mounting, same
 # reason custom_tabs.ensure_user_tab_dirs() runs before its own mount above.

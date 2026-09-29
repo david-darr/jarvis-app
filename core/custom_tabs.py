@@ -17,9 +17,12 @@ file outside REPO_CODE_DIRS (core/constants.py) and so isn't part of the
 surface a connected model can edit.
 """
 import importlib
+import hashlib
 import logging
 import os
+import re
 import shutil
+import sys
 from types import ModuleType
 
 from core import settings as settings_store
@@ -45,6 +48,10 @@ USER_TABS_DIR = os.path.join(DATA_DIR, "tabs")
 USER_ROUTES_DIR = os.path.join(USER_TABS_DIR, "routes")
 USER_SERVICES_DIR = os.path.join(USER_TABS_DIR, "services")
 USER_VIEWS_DIR = os.path.join(USER_TABS_DIR, "views")
+# These are the only user-data directories that contain executable tab source.
+USER_TAB_CODE_DIRS = (USER_ROUTES_DIR, USER_SERVICES_DIR, USER_VIEWS_DIR)
+_TAB_SLUG = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_APPROVED_FINGERPRINTS_KEY = "approved_custom_tab_fingerprints"
 
 # Browser path the user-tab views are served from (mounted in app.py).
 USER_VIEWS_URL = "/custom-views"
@@ -161,6 +168,168 @@ def set_template_enabled(slug: str, enabled: bool) -> dict:
     return {"slug": slug, "enabled": enabled}
 
 
+def _user_code_files() -> list[tuple[str, str]]:
+    """Every file that can contribute executable user-tab code.
+
+    The same tree fingerprint is attached to every tab approval. This is
+    deliberately conservative: an added helper module can be imported by an
+    otherwise unchanged tab, so changing any file invalidates all approvals.
+    Symlinks fail closed rather than letting a tab import code outside data/tabs.
+    """
+    files = []
+    is_junction = getattr(os.path, "isjunction", lambda _path: False)
+    if os.path.islink(USER_TABS_DIR) or is_junction(USER_TABS_DIR):
+        raise ValueError("custom-tab source root cannot be a symlink or junction")
+    for directory in USER_TAB_CODE_DIRS:
+        if os.path.islink(directory) or is_junction(directory):
+            raise ValueError("custom-tab source directories cannot be symlinks")
+        if not os.path.isdir(directory):
+            continue
+        for root, dirs, names in os.walk(directory, followlinks=False):
+            # Bytecode caches are not source, but Python may execute a planted
+            # .pyc whose timestamp and size match approved source. Remove
+            # them before approval checks and keep Python from recreating them.
+            if "__pycache__" in dirs:
+                cache_dir = os.path.join(root, "__pycache__")
+                if os.path.islink(cache_dir) or is_junction(cache_dir):
+                    raise ValueError("custom-tab bytecode cache cannot be a symlink")
+                shutil.rmtree(cache_dir)
+            dirs[:] = sorted(name for name in dirs if name != "__pycache__")
+            if any(os.path.islink(os.path.join(root, name)) or is_junction(os.path.join(root, name))
+                   for name in dirs):
+                raise ValueError(f"custom-tab source directories cannot contain symlinked folders: {root}")
+            for name in sorted(names):
+                path = os.path.join(root, name)
+                if os.path.islink(path) or is_junction(path) or not os.path.isfile(path):
+                    raise ValueError("custom-tab source files cannot be symlinks")
+                files.append((os.path.relpath(path, USER_TABS_DIR).replace(os.sep, "/"), path))
+    return sorted(files)
+
+
+def user_code_fingerprint() -> tuple[str, list[str]]:
+    """Hash paths and bytes, so adds, removals, renames and edits all revoke approval."""
+    digest = hashlib.sha256()
+    files = _user_code_files()
+    paths = []
+    for relative, path in files:
+        encoded_path = relative.encode("utf-8")
+        size = os.path.getsize(path)
+        digest.update(len(encoded_path).to_bytes(8, "big"))
+        digest.update(encoded_path)
+        digest.update(size.to_bytes(8, "big"))
+        read_size = 0
+        with open(path, "rb") as handle:
+            before = os.fstat(handle.fileno())
+            while chunk := handle.read(1024 * 1024):
+                read_size += len(chunk)
+                digest.update(chunk)
+            after = os.fstat(handle.fileno())
+        if (read_size != size or before.st_size != after.st_size
+                or before.st_mtime_ns != after.st_mtime_ns):
+            raise OSError(f"custom-tab source changed while fingerprinting: {relative}")
+        paths.append(relative)
+    return digest.hexdigest(), paths
+
+
+def _user_tab_slugs() -> list[str]:
+    if not os.path.isdir(USER_ROUTES_DIR):
+        return []
+    slugs = []
+    for filename in sorted(os.listdir(USER_ROUTES_DIR)):
+        if filename.startswith(TAB_MODULE_PREFIX) and filename.endswith(".py"):
+            slug = filename[len(TAB_MODULE_PREFIX):-3]
+            if _TAB_SLUG.fullmatch(slug):
+                slugs.append(slug)
+    return slugs
+
+
+def _import_tab_module(module_name: str) -> ModuleType:
+    """Import a tab without writing bytecode into its user-controlled tree."""
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        return importlib.import_module(f"routes.{module_name}")
+    finally:
+        sys.dont_write_bytecode = previous
+
+
+def _approved_fingerprints() -> dict[str, str]:
+    value = settings_store.get_setting(_APPROVED_FINGERPRINTS_KEY) or {}
+    return value if isinstance(value, dict) else {}
+
+
+def user_tab_is_approved(slug: str) -> bool:
+    if not _TAB_SLUG.fullmatch(slug):
+        return False
+    try:
+        fingerprint, _ = user_code_fingerprint()
+    except (OSError, ValueError):
+        logger.exception("custom_tabs: couldn't verify user-tab source fingerprints")
+        return False
+    return _approved_fingerprints().get(slug) == fingerprint
+
+
+def pending_approvals() -> list[dict]:
+    """List tabs whose current executable source tree has not been approved."""
+    slugs = _user_tab_slugs()
+    if not slugs:
+        return []
+    try:
+        fingerprint, files = user_code_fingerprint()
+    except (OSError, ValueError):
+        logger.exception("custom_tabs: couldn't fingerprint user-tab source")
+        return [{"id": slug, "fingerprint": None, "files": [], "blocked": True}
+                for slug in slugs]
+    approved = _approved_fingerprints()
+    return [{"id": slug, "fingerprint": fingerprint, "files": files,
+             "previous_fingerprint": approved.get(slug), "approved": approved.get(slug) == fingerprint,
+             "blocked": False}
+            for slug in slugs]
+
+
+def approve_user_tab(slug: str, expected_fingerprint: str) -> dict:
+    """Approve only the exact source tree shown to the admin for review."""
+    if not _TAB_SLUG.fullmatch(slug) or slug not in _user_tab_slugs():
+        raise KeyError(slug)
+    current, files = user_code_fingerprint()
+    if not expected_fingerprint or current != expected_fingerprint:
+        raise ValueError("custom-tab source changed while approval was pending; review the new files and try again")
+    approved = dict(_approved_fingerprints())
+    approved[slug] = current
+    settings_store.update_settings(**{_APPROVED_FINGERPRINTS_KEY: approved})
+    return {"id": slug, "fingerprint": current, "files": files, "restart_required": True}
+
+
+def approved_view_path(slug: str) -> str | None:
+    """A view is served only while its owning tab's full source tree is approved."""
+    if not _TAB_SLUG.fullmatch(slug) or not user_tab_is_approved(slug):
+        return None
+    path = os.path.join(USER_VIEWS_DIR, f"{slug}.js")
+    return path if os.path.isfile(path) and not os.path.islink(path) else None
+
+
+def approved_view_bytes(slug: str) -> bytes | None:
+    """Capture the exact approved view bytes before returning them to a client.
+
+    Recheck the tree after the read to avoid serving bytes from a source tree
+    that changed between approval validation and opening the view.
+    """
+    path = approved_view_path(slug)
+    if not path:
+        return None
+    try:
+        before, _ = user_code_fingerprint()
+        with open(path, "rb") as handle:
+            content = handle.read()
+        after, _ = user_code_fingerprint()
+    except (OSError, ValueError):
+        logger.exception("custom_tabs: couldn't validate user-tab view while serving")
+        return None
+    if before != after or not user_tab_is_approved(slug):
+        return None
+    return content
+
+
 def discover() -> list[tuple[str, ModuleType]]:
     """(slug, imported module) for every discovered tab, sorted by slug.
 
@@ -193,9 +362,12 @@ def discover() -> list[tuple[str, ModuleType]]:
 
     found = []
     for slug in sorted(candidates):
+        if candidates[slug] and not user_tab_is_approved(slug):
+            logger.warning("custom_tabs: user tab '%s' is not approved for its current source fingerprint", slug)
+            continue
         module_name = f"{TAB_MODULE_PREFIX}{slug}"
         try:
-            mod = importlib.import_module(f"routes.{module_name}")
+            mod = _import_tab_module(module_name)
         except Exception:
             # A broken custom tab shouldn't take the whole app down — same
             # "degrade gracefully" posture as core/channels/discord_channel.py's
@@ -222,8 +394,11 @@ def mount_one(app, slug: str) -> bool:
     premade tab works immediately instead of "now restart the server."
     FastAPI accepts include_router after startup; the route table is just a
     list. Idempotent — mounting an already-mounted prefix is skipped."""
+    if os.path.isfile(os.path.join(USER_ROUTES_DIR, f"{TAB_MODULE_PREFIX}{slug}.py")) and not user_tab_is_approved(slug):
+        logger.warning("custom_tabs: refusing to mount unapproved user tab '%s'", slug)
+        return False
     try:
-        mod = importlib.import_module(f"routes.{TAB_MODULE_PREFIX}{slug}")
+        mod = _import_tab_module(f"{TAB_MODULE_PREFIX}{slug}")
     except Exception:
         logger.exception("custom_tabs: couldn't import routes.tab_%s", slug)
         return False
@@ -302,4 +477,8 @@ def delete(slug: str) -> dict:
         if os.path.exists(path):
             os.remove(path)
             removed.append(os.path.basename(path))
+    approved = dict(_approved_fingerprints())
+    if slug in approved:
+        del approved[slug]
+        settings_store.update_settings(**{_APPROVED_FINGERPRINTS_KEY: approved})
     return {"removed": removed}

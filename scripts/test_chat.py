@@ -258,13 +258,14 @@ class ChatTests(unittest.TestCase):
             # so a resumed thread picks the new level up too.
             brain = CodexBrain(vault_dir=str(self.root), effort="high")
             fresh = brain._build_args("codex")
-            self.assertEqual(fresh[fresh.index("-c") + 1], 'model_reasoning_effort="high"')
+            self.assertIn('model_reasoning_effort="high"', fresh)
             brain.thread_id = "t-1"
             resumed = brain._build_args("codex")
             self.assertLess(resumed.index("-c"), resumed.index("resume"))
-            # Unset effort must produce byte-identical argv to before the
-            # feature existed — an unused option changes nothing.
-            self.assertNotIn("-c", CodexBrain(vault_dir=str(self.root))._build_args("codex"))
+            # Unset effort must not add a reasoning-effort override. The
+            # writable-root override is still required for custom-tab access.
+            unset = CodexBrain(vault_dir=str(self.root))._build_args("codex")
+            self.assertNotIn('model_reasoning_effort="', unset)
         asyncio.run(run())
 
     def test_context_state_is_occupancy_not_cumulative_spend(self):
@@ -1344,6 +1345,60 @@ class ClaudeResumeTests(unittest.TestCase):
                          (900, 40, 3))
 
 
+class CustomTabApprovalTests(unittest.TestCase):
+    def setUp(self):
+        from core import custom_tabs, settings as settings_store
+        self.tabs = custom_tabs
+        self.tmp = tempfile.TemporaryDirectory(prefix="jarvis-tab-approval-", dir=str(Path(__file__).resolve().parent))
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "tabs"
+        self.routes = self.root / "routes"
+        self.services = self.root / "services"
+        self.views = self.root / "views"
+        for directory in (self.routes, self.services, self.views):
+            directory.mkdir(parents=True)
+        for name, value in (("USER_TABS_DIR", str(self.root)), ("USER_ROUTES_DIR", str(self.routes)),
+                            ("USER_SERVICES_DIR", str(self.services)), ("USER_VIEWS_DIR", str(self.views)),
+                            ("USER_TAB_CODE_DIRS", (str(self.routes), str(self.services), str(self.views)))):
+            p = patch.object(custom_tabs, name, value)
+            p.start(); self.addCleanup(p.stop)
+        self.saved = {}
+        get_patch = patch.object(settings_store, "get_setting", side_effect=lambda key: self.saved.get(key))
+        update_patch = patch.object(settings_store, "update_settings",
+                                     side_effect=lambda **fields: self.saved.update(fields) or self.saved)
+        get_patch.start(); update_patch.start()
+        self.addCleanup(get_patch.stop); self.addCleanup(update_patch.stop)
+        (self.routes / "tab_minecraft.py").write_text("TAB_MANIFEST = {}\n", encoding="utf-8")
+        (self.services / "minecraft_service.py").write_text("def answer(): return 42\n", encoding="utf-8")
+        (self.views / "minecraft.js").write_text("export default {};\n", encoding="utf-8")
+
+    def test_exact_tree_fingerprint_must_be_approved_and_any_change_revokes_it(self):
+        pending = self.tabs.pending_approvals()
+        self.assertEqual([item["id"] for item in pending], ["minecraft"])
+        first = pending[0]["fingerprint"]
+        self.assertFalse(self.tabs.user_tab_is_approved("minecraft"))
+        approved = self.tabs.approve_user_tab("minecraft", first)
+        self.assertEqual(approved["fingerprint"], first)
+        self.assertTrue(self.tabs.user_tab_is_approved("minecraft"))
+
+        (self.views / "minecraft.js").write_text("export default { changed: true };\n", encoding="utf-8")
+        self.assertFalse(self.tabs.user_tab_is_approved("minecraft"))
+        with self.assertRaisesRegex(ValueError, "source changed"):
+            self.tabs.approve_user_tab("minecraft", first)
+
+    def test_served_view_is_the_approved_snapshot_and_bytecode_cache_is_removed(self):
+        pending = self.tabs.pending_approvals()[0]
+        cache = self.routes / "__pycache__"
+        cache.mkdir()
+        (cache / "tab_minecraft.cpython-313.pyc").write_bytes(b"untrusted bytecode")
+        approved = self.tabs.approve_user_tab("minecraft", pending["fingerprint"])
+        self.assertEqual(approved["fingerprint"], pending["fingerprint"])
+        self.assertFalse(cache.exists(), "Python bytecode must not be accepted as approved source")
+        self.assertIn(b"export default {}", self.tabs.approved_view_bytes("minecraft"))
+        (self.views / "minecraft.js").write_text("alert('changed');", encoding="utf-8")
+        self.assertIsNone(self.tabs.approved_view_bytes("minecraft"))
+
+
 class ShellPermissionTests(unittest.TestCase):
     """Admin shell grants are automatic, visible and revocable; non-admin
     sessions cannot use the native shell tools."""
@@ -1384,8 +1439,12 @@ class ShellPermissionTests(unittest.TestCase):
         from core import custom_tabs
         vault = tempfile.mkdtemp(prefix="jarvis-shell-")
         admin = Brain(vault_dir=vault, is_admin=True)._options()
-        self.assertIn("Bash", admin.allowed_tools)
-        self.assertIn("PowerShell", admin.allowed_tools)
+        self.assertNotIn("Bash", admin.allowed_tools,
+                         "the permission callback must see Bash so tainted turns can recheck it")
+        self.assertNotIn("PowerShell", admin.allowed_tools)
+        self.assertEqual(admin.permission_mode, "default")
+        self.assertIsNotNone(self.permissions.stored_decision("chat:admin", "Bash", "git status", is_admin=True),
+                             "the broker keeps clean admin shell use automatic")
         self.assertIsNotNone(admin.can_use_tool)
         self.assertIn(custom_tabs.USER_TABS_DIR, admin.add_dirs)
         self.assertNotIn(os.path.dirname(custom_tabs.USER_TABS_DIR), admin.add_dirs,
@@ -1399,13 +1458,51 @@ class ShellPermissionTests(unittest.TestCase):
 
     def test_revoking_one_shell_grant_stops_preapproval(self):
         admin = Brain(vault_dir=tempfile.gettempdir(), is_admin=True)
-        self.assertIn("Bash", admin._options().allowed_tools)
+        self.assertNotIn("Bash", admin._options().allowed_tools)
         rule = next(r for r in self.permissions.list_rules()
                     if r["tool"] == "Bash" and r.get("source") == "built-in")
         self.assertTrue(self.permissions.revoke(rule["id"]))
-        allowed = admin._options().allowed_tools
-        self.assertNotIn("Bash", allowed)
-        self.assertIn("PowerShell", allowed)
+        self.assertIsNone(self.permissions.stored_decision("chat:admin", "Bash", "git status", is_admin=True))
+
+    def test_tainted_claude_shell_uses_the_broker_even_with_its_builtin_grant(self):
+        from types import SimpleNamespace
+        brain = Brain(vault_dir=tempfile.gettempdir(), session_id="broker-chat", is_admin=True)
+        brain._options()  # seed the visible built-in allow
+        async def exercise():
+            clean = await brain._permission("Bash", {"command": "git status"}, SimpleNamespace())
+            self.assertEqual(type(clean).__name__, "PermissionResultAllow")
+            brain.turn_taint.mark("MCP result")
+            queue = self.permissions.open_channel("chat:broker-chat")
+            asking = asyncio.create_task(brain._permission(
+                "Bash", {"command": "git status"}, SimpleNamespace(title="Run command")))
+            request = await asyncio.wait_for(queue.get(), timeout=5)
+            self.assertEqual(request["tool"], "Bash")
+            self.assertTrue(self.permissions.answer(request["id"], "reject", "alice"))
+            self.assertEqual(type(await asking).__name__, "PermissionResultDeny")
+        asyncio.run(exercise())
+
+    def test_tainted_openai_custom_tab_write_is_refused_before_writing(self):
+        from core import memory_tools, tool_registry as reg
+        from core.external_brain import ExternalBrain
+        brain = ExternalBrain("http://x", "m", None, session_id="tab-write-chat",
+                              is_admin=True, allow_user_tab_source=True)
+        brain.turn_taint.mark("browse result")
+        queue = self.permissions.open_channel("chat:tab-write-chat")
+
+        async def exercise():
+            with patch.object(memory_tools, "write_repo_file", return_value="written") as write:
+                task = asyncio.create_task(brain._execute_tool("write_repo_file", {
+                    "path": "custom-tabs/routes/tab_minecraft.py", "content": "malicious = True\n"}))
+                request = await asyncio.wait_for(queue.get(), timeout=5)
+                self.assertEqual(request["tool"], "write_custom_tab_source")
+                self.assertTrue(self.permissions.answer(request["id"], "reject", "alice"))
+                result = await task
+                self.assertTrue(result.startswith("Not run:"), result)
+                write.assert_not_called()
+        try:
+            asyncio.run(exercise())
+        finally:
+            self.permissions.close_channel("chat:tab-write-chat")
 
 
 class UsageTotalsTests(unittest.TestCase):

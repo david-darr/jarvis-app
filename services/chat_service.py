@@ -19,7 +19,7 @@ from fastapi import HTTPException
 
 from claude_agent_sdk import CLIJSONDecodeError
 
-from core import attachments, logs as log_files, mcp_oauth, model_catalog, model_endpoints, permissions, token_usage
+from core import attachments, logs as log_files, mcp_oauth, model_catalog, model_endpoints, model_marks, permissions, token_usage
 from core.brain import Brain
 from core.codex_brain import CodexBrain
 from core.external_brain import ExternalBrain
@@ -171,7 +171,8 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
     # doubled request could never match the one rebuilt after a reconnect.
     return ExternalBrain(base_url, model, api_key, history=session_manager.effective_messages(session_id, exclude_last=True),
                          session_id=session_id, num_ctx=num_ctx, is_admin=is_admin, project_id=project_id,
-                         endpoint_id=endpoint["id"], integration_ids=integration_ids)
+                         endpoint_id=endpoint["id"], integration_ids=integration_ids,
+                         allow_user_tab_source=(endpoint.get("kind") == "api" and model_marks.mark_for(endpoint) == "openai"))
 
 
 def _prime_with_history(session_id: str, just_created: bool, endpoint: dict, full_text: str,

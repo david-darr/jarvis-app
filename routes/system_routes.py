@@ -7,6 +7,7 @@ import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
+from fastapi.responses import Response
 
 from core import custom_tabs, events, logs as log_files, model_endpoints, settings as settings_store, system_admin, task_scheduler
 from core.channels import discord_channel
@@ -16,6 +17,7 @@ from core.vault import resolve_vault_dir
 from services.task_service import task_service
 
 router = APIRouter(prefix="/api/system", tags=["system"])
+custom_views_router = APIRouter(tags=["custom-tabs"])
 
 
 @router.get("/status")
@@ -84,6 +86,35 @@ async def list_custom_tabs(user: str = Depends(require_user)) -> list[dict]:
     rest of this file: every user needs this to render the sidebar, it's
     not a diagnostic/admin surface."""
     return custom_tabs.list_manifests()
+
+
+@router.get("/custom-tabs/pending-approvals")
+async def pending_custom_tab_approvals(user: str = Depends(require_admin)) -> list[dict]:
+    return custom_tabs.pending_approvals()
+
+
+class ApproveCustomTabRequest(BaseModel):
+    fingerprint: str
+
+
+@router.post("/custom-tabs/{slug}/approve")
+async def approve_custom_tab(slug: str, body: ApproveCustomTabRequest,
+                             user: str = Depends(require_admin)) -> dict:
+    try:
+        return custom_tabs.approve_user_tab(slug, body.fingerprint)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="custom tab not found")
+    except (OSError, ValueError) as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@custom_views_router.get("/custom-views/{slug}.js")
+async def custom_tab_view(slug: str, user: str = Depends(require_user)):
+    result = custom_tabs.approved_view_bytes(slug)
+    if result is None:
+        raise HTTPException(status_code=404, detail="custom tab view is not approved")
+    return Response(content=result, media_type="application/javascript",
+                    headers={"Cache-Control": "no-store"})
 
 
 @router.get("/tab-templates")

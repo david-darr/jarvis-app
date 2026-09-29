@@ -21,6 +21,7 @@ the turn.
 """
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
+from core.turn_taint import TurnTaint
 
 from core import image_gen, memory_tools
 
@@ -32,6 +33,8 @@ BOTH = frozenset({CLAUDE, OPENAI})
 class ToolContext:
     session_id: Optional[str] = None
     is_admin: bool = False
+    allow_user_tab_source: bool = False
+    turn_taint: TurnTaint | None = None
 
 
 @dataclass(frozen=True)
@@ -106,10 +109,16 @@ def _fields(args: dict, key: str) -> tuple[str, dict]:
 )
 async def _search_sessions(args, ctx):
     if args.get("this_chat"):
-        return memory_tools.format_archive_hits(memory_tools.search_this_chat_archive(ctx.session_id, args["query"]))
+        result = memory_tools.format_archive_hits(memory_tools.search_this_chat_archive(ctx.session_id, args["query"]))
+        if ctx.turn_taint and result:
+            ctx.turn_taint.mark("chat history")
+        return result
     results = memory_tools.search_sessions(args["query"], exclude_session_id=ctx.session_id, max_results=5)
-    return "\n\n".join(f"[{r['session_title']}] ({r['role']}): {r['snippet']}" for r in results) \
+    result = "\n\n".join(f"[{r['session_title']}] ({r['role']}): {r['snippet']}" for r in results) \
         or "No matches in other sessions."
+    if ctx.turn_taint and results:
+        ctx.turn_taint.mark("chat history")
+    return result
 
 
 @register(
@@ -127,7 +136,10 @@ async def _list_skills(args, ctx):
 @register("read_skill", "Read one Skill's full procedure by its slug (from list_skills).",
           _object({"slug": _str("The skill's slug, from list_skills")}, ("slug",)))
 async def _read_skill(args, ctx):
-    return memory_tools.read_skill(args["slug"])
+    result = memory_tools.read_skill(args["slug"])
+    if ctx.turn_taint:
+        ctx.turn_taint.mark("skill content")
+    return result
 
 
 @register(
@@ -192,7 +204,10 @@ async def _list_documents(args, ctx):
 @register("read_document", "Read one Library document's full content by id (from list_documents).",
           _object({"doc_id": _str("The document's id, from list_documents")}, ("doc_id",)))
 async def _read_document(args, ctx):
-    return memory_tools.read_document(args["doc_id"])
+    result = memory_tools.read_document(args["doc_id"])
+    if ctx.turn_taint:
+        ctx.turn_taint.mark("Library document")
+    return result
 
 
 @register("list_contacts", "List synced contacts (name/email/phone).", _object())
@@ -392,7 +407,10 @@ def _register_artifact(ctx: ToolContext, url: str) -> None:
     surfaces=frozenset({OPENAI}),
 )
 async def _search_vault(args, ctx):
-    return "\n\n".join(f"[{r['path']}]: {r['snippet']}" for r in memory_tools.search_vault(args.get("query", ""))) \
+    results = memory_tools.search_vault(args.get("query", ""))
+    if ctx.turn_taint and results:
+        ctx.turn_taint.mark("vault content")
+    return "\n\n".join(f"[{r['path']}]: {r['snippet']}" for r in results) \
         or "No matches in the vault."
 
 
@@ -403,37 +421,65 @@ async def _search_vault(args, ctx):
     surfaces=frozenset({OPENAI}),
 )
 async def _read_vault_file(args, ctx):
-    return memory_tools.read_vault_file(args.get("path", ""))
+    result = memory_tools.read_vault_file(args.get("path", ""))
+    if ctx.turn_taint:
+        ctx.turn_taint.mark("vault file")
+    return result
 
 
 @register(
     "list_repo_directory",
-    "List one level of jarvis-app's own source tree (not recursive — call again with a sub-path to descend). Omit path to list the top-level accessible directories.",
+    "List one level of jarvis-app source or user-built tab source (not recursive — call again with a sub-path to descend). Omit path to list the top-level accessible directories; custom-tabs/ is available only to supported OpenAI models.",
     _object({"path": _str()}),
     surfaces=frozenset({OPENAI}),
 )
 async def _list_repo_directory(args, ctx):
-    return "\n".join(memory_tools.list_repo_directory(args.get("path", ""))) or "(empty)"
+    path = args.get("path", "")
+    normalized = path.replace("\\", "/").strip("/") if isinstance(path, str) else ""
+    if normalized.startswith("custom-tabs") and not ctx.allow_user_tab_source:
+        return "User-built tab source is not available to this model."
+    entries = memory_tools.list_repo_directory(path)
+    if not ctx.allow_user_tab_source and not normalized:
+        entries = [entry for entry in entries if entry != "custom-tabs/"]
+    return "\n".join(entries) or "(empty)"
 
 
 @register(
     "read_repo_file",
-    "Read one file from jarvis-app's own source, by path relative to the repo root (e.g. 'core/brain.py').",
+    "Read one file from jarvis-app source (e.g. 'core/brain.py'); supported OpenAI models can also read user-built tab source (e.g. 'custom-tabs/routes/tab_minecraft.py').",
     _object({"path": _str()}, ("path",)),
     surfaces=frozenset({OPENAI}),
 )
 async def _read_repo_file(args, ctx):
-    return memory_tools.read_repo_file(args["path"])
+    path = args["path"]
+    if isinstance(path, str) and path.replace("\\", "/").lstrip("/").startswith("custom-tabs/") and not ctx.allow_user_tab_source:
+        return "User-built tab source is not available to this model."
+    result = memory_tools.read_repo_file(path)
+    if ctx.turn_taint and isinstance(path, str) and path.replace("\\", "/").lstrip("/").startswith("custom-tabs/"):
+        ctx.turn_taint.mark("user custom-tab source")
+    return result
 
 
 @register(
     "write_repo_file",
-    "Create or overwrite one file in jarvis-app's own source with the given full content (full-file replacement, not a patch/diff). Creates parent directories if needed.",
+    "Create or overwrite one file in jarvis-app source with the given full content (full-file replacement, not a patch/diff). Supported OpenAI models can also write user tabs under custom-tabs/routes/, custom-tabs/services/, and custom-tabs/views/. Creates parent directories if needed.",
     _object({"path": _str(), "content": _str()}, ("path", "content")),
     surfaces=frozenset({OPENAI}),
 )
 async def _write_repo_file(args, ctx):
-    return memory_tools.write_repo_file(args["path"], args["content"])
+    path = args["path"]
+    if isinstance(path, str) and path.replace("\\", "/").lstrip("/").startswith("custom-tabs/") and not ctx.allow_user_tab_source:
+        return "User-built tab source is not available to this model."
+    if isinstance(path, str) and path.replace("\\", "/").lstrip("/").startswith("custom-tabs/") and ctx.turn_taint and ctx.turn_taint.tainted:
+        from core import permissions
+        decision = await permissions.decide(
+            surface=f"chat:{ctx.session_id}" if ctx.session_id else "none", tool="write_custom_tab_source",
+            arguments={"path": path}, title="Write custom-tab source after reading untrusted content",
+            description=f"This turn read {ctx.turn_taint.reason}. Write {path}.", is_admin=ctx.is_admin,
+            force_prompt=True)
+        if decision.behavior != "allow":
+            return f"Not run: {decision.reason or 'custom-tab source write was not approved'}"
+    return memory_tools.write_repo_file(path, args["content"])
 
 
 # Shell execution (David's ask 2026-09-02, modeled on Odysseus's own agent-tool
@@ -453,7 +499,9 @@ async def _run_shell(args, ctx):
     decision = await permissions.decide(
         surface=f"chat:{ctx.session_id}" if ctx.session_id else "none", tool="run_shell",
         arguments={"command": command}, title="Run a command on this computer",
-        description=command[:300], is_admin=ctx.is_admin)
+        description=(f"This turn read {ctx.turn_taint.reason}. " if ctx.turn_taint and ctx.turn_taint.tainted else "")
+                    + command[:300], is_admin=ctx.is_admin,
+        force_prompt=bool(ctx.turn_taint and ctx.turn_taint.tainted))
     if decision.behavior != "allow":
         return f"Not run: {decision.reason or 'not allowed'}"
     result = await memory_tools.run_shell(command, cwd=args.get("cwd"))
@@ -524,7 +572,9 @@ async def _run_code(args, ctx):
         decision = await permissions.decide(
             surface=f"chat:{ctx.session_id}" if ctx.session_id else "none", tool="run_code_internet",
             arguments={"command": command}, title="Run code with internet access",
-            description=f"In the sandbox, reaching public websites only: {command[:300]}", is_admin=ctx.is_admin)
+            description=(f"This turn read {ctx.turn_taint.reason}. " if ctx.turn_taint and ctx.turn_taint.tainted else "")
+                        + f"In the sandbox, reaching public websites only: {command[:300]}",
+            is_admin=ctx.is_admin, force_prompt=bool(ctx.turn_taint and ctx.turn_taint.tainted))
         if decision.behavior != "allow":
             return f"Not run: {decision.reason or 'internet access was not allowed'}"
     try:
@@ -569,6 +619,8 @@ async def _browse(args, ctx):
         return f"Not opened: {e}"
     except sandbox.SandboxUnavailable as e:
         return f"Not opened: the sandbox is unavailable ({e})."
+    if ctx.turn_taint:
+        ctx.turn_taint.mark("browse result")
     if page["error"]:
         return f"Could not read {page['url']}: {page['error']}"
     links = "\n".join(f"- {l['text'] or '(no text)'}: {l['url']}" for l in page["links"]) or "(none)"

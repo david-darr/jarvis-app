@@ -260,10 +260,13 @@ def drop_session(surface: str) -> None:
 
 async def decide(*, surface: str, tool: str, arguments: dict, title: str = "", description: str = "",
                  target: str | None = None, choices: list[dict] | None = None,
-                 timeout: float = DEFAULT_TIMEOUT_SECONDS, is_admin: bool = False) -> Decision:
+                 timeout: float = DEFAULT_TIMEOUT_SECONDS, is_admin: bool = False,
+                 force_prompt: bool = False) -> Decision:
     """Answer from a rule, or ask the person and wait."""
     target = target if target is not None else derive_target(tool, arguments)
-    saved = stored_decision(surface, tool, target, is_admin)
+    # A tainted turn can force a fresh decision without revoking the person's
+    # standing grant for future clean turns.
+    saved = None if force_prompt else stored_decision(surface, tool, target, is_admin)
     if saved:
         return saved
     queue = _channels.get(surface)

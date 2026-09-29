@@ -28,12 +28,13 @@ from typing import AsyncIterator
 from core import integrations, mcp_client, mcp_oauth, permissions, projects, system_prompt, tool_registry
 from core.providers import openai_compatible
 from core.session_manager import sent_text
+from core.turn_taint import TurnTaint
 
 class ExternalBrain:
     def __init__(self, base_url: str, model: str, api_key: str | None, history: list[dict] | None = None,
                  session_id: str | None = None, num_ctx: int | None = None, is_admin: bool = False,
                  project_id: str | None = None, endpoint_id: str | None = None,
-                 integration_ids: list[str] | None = None):
+                 integration_ids: list[str] | None = None, allow_user_tab_source: bool = False):
         self.base_url = base_url
         self.model = model
         self.api_key = api_key
@@ -42,6 +43,8 @@ class ExternalBrain:
         # The shared hive-mind tools (core/tool_registry.py); run_shell only
         # for an admin, absent from a non-admin session's list entirely.
         self.is_admin = is_admin
+        self.allow_user_tab_source = allow_user_tab_source
+        self.turn_taint = TurnTaint()
         self.tools = tool_registry.openai_tools(is_admin)
         if is_admin:
             # A visible, revocable built-in grant, like Claude's Bash; see
@@ -64,7 +67,8 @@ class ExternalBrain:
             # Projects (David's ask 2026-09-12) appended the same way as
             # core/brain.py/core/codex_brain.py — see core/projects.py's
             # project_addendum().
-            seeded.insert(0, {"role": "system", "content": system_prompt.for_external(is_admin) + projects.project_addendum(project_id)})
+            seeded.insert(0, {"role": "system", "content": system_prompt.for_external(is_admin, allow_user_tab_source)
+                             + projects.project_addendum(project_id)})
         self._messages: list[dict] = seeded
         # Set on every completed turn that reported usage (David's ask
         # 2026-09-01, per-model token usage on Home) — best-effort, since
@@ -104,8 +108,9 @@ class ExternalBrain:
     async def _execute_tool(self, name: str, args: dict) -> str:
         if name in self._mcp_tools:
             return await self._call_mcp(name, args)
-        return await tool_registry.call(name, args, tool_registry.ToolContext(self.session_id, self.is_admin),
-                                        tool_registry.OPENAI)
+        return await tool_registry.call(name, args, tool_registry.ToolContext(
+                                            self.session_id, self.is_admin, self.allow_user_tab_source,
+                                            self.turn_taint), tool_registry.OPENAI)
 
     async def _call_mcp(self, name: str, args: dict) -> str:
         """A third-party tool: asked about first, like Claude's MCP calls,
@@ -126,7 +131,9 @@ class ExternalBrain:
         await mcp_oauth.refresh_due(self.integration_ids)
         config = integrations.list_mcp_servers_runtime(self.integration_ids).get(spec["server"], spec["config"])
         try:
-            return await mcp_client.call_tool(config, spec["name"], args)
+            result = await mcp_client.call_tool(config, spec["name"], args)
+            self.turn_taint.mark(f"MCP result: {name}")
+            return result
         except Exception as e:
             return f"Tool error: {e}"
 
@@ -148,6 +155,7 @@ class ExternalBrain:
         ]
 
     async def run_turn(self, user_text: str) -> str:
+        self.turn_taint.reset()
         self._messages.append({"role": "user", "content": user_text})
         self.last_tool_rounds = []
         reply = await openai_compatible.run_turn(
@@ -161,6 +169,7 @@ class ExternalBrain:
         return reply
 
     async def run_turn_stream(self, user_text: str) -> AsyncIterator[str]:
+        self.turn_taint.reset()
         self._messages.append({"role": "user", "content": user_text})
         self.last_tool_rounds = []
         parts: list[str] = []

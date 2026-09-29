@@ -2141,16 +2141,64 @@ async function renderLogsPanel(content) {
 // -- Admin: Custom Tabs (Developer Mode, David's ask 2026-09-01) ------------
 async function renderCustomTabsPanel(content) {
   const tabs = await api("/api/system/custom-tabs");
+  const approvals = await api("/api/system/custom-tabs/pending-approvals").catch(() => []);
   content.innerHTML = "";
   content.append(
     el("div", { class: "title", text: "Custom Tabs" }),
     el("div", { class: "meta", style: "margin-top:6px;", text: "Reorder, keep building, or delete tabs your AI model has built." }),
   );
 
-  if (tabs.length === 0) {
+  const pending = approvals.filter((entry) => !entry.approved);
+  const waitingForRestart = approvals.filter((entry) => entry.approved && !tabs.some((tab) => tab.id === entry.id));
+  if (pending.length) {
+    const section = el("div", { class: "card", style: "margin-top:12px;border-color:var(--danger);" }, [
+      el("div", { class: "title", text: "Source awaiting approval" }),
+      el("div", { class: "meta", style: "margin-top:6px;", text: "User tab code runs inside JARVIS. Review these files in your JARVIS data folder before approving. Any source change invalidates all tab approvals." }),
+    ]);
+    pending.forEach((entry) => {
+      const approveBtn = el("button", { class: "btn primary", text: "Approve this source" });
+      approveBtn.addEventListener("click", async () => {
+        const files = entry.files.join("\n");
+        const ok = await confirmDialog({
+          title: `Approve the "${entry.id}" tab source?`,
+          message: `This allows these files to run as JARVIS custom-tab code. Inspect all files before approving.\n\n${files}\n\nFingerprint: ${entry.fingerprint}`,
+          confirmLabel: "Approve source",
+          danger: false,
+        });
+        if (!ok) return;
+        try {
+          await api(`/api/system/custom-tabs/${encodeURIComponent(entry.id)}/approve`, {
+            method: "POST", body: JSON.stringify({ fingerprint: entry.fingerprint }),
+          });
+          toast(`Source approved. Restart JARVIS to load the tab.`, "success");
+          await renderCustomTabsPanel(content);
+        } catch (error) {
+          toast(error.message || "Approval failed; review the current source again.", "error");
+          await renderCustomTabsPanel(content);
+        }
+      });
+      section.append(el("div", { class: "card-row", style: "justify-content:space-between;gap:8px;margin-top:12px;" }, [
+        el("div", {}, [
+          el("strong", { text: entry.id }),
+          el("div", { class: "meta", text: entry.blocked ? "Fingerprint unavailable; source is blocked." : `Files: ${entry.files.join(", ")}` }),
+          entry.fingerprint && el("div", { class: "meta", text: `SHA-256: ${entry.fingerprint}` }),
+        ]),
+        approveBtn,
+      ]));
+      if (entry.blocked) approveBtn.disabled = true;
+    });
+    content.appendChild(section);
+  }
+  if (waitingForRestart.length) {
+    content.append(el("div", { class: "meta", style: "margin-top:10px;color:var(--warning);", text: `Approved source for ${waitingForRestart.map((entry) => entry.id).join(", ")}. Restart JARVIS to load it.` }));
+  }
+
+  if (tabs.length === 0 && pending.length === 0 && waitingForRestart.length === 0) {
     content.append(el("div", { class: "meta", style: "margin-top:10px;", text: "No custom tabs yet — use \"+ New Tab\" in the sidebar." }));
     return;
   }
+
+  if (tabs.length === 0) return;
 
   // Real bug found live 2026-09-02: "Keep Building" created a session with
   // no model_endpoint_id, so it silently did nothing but return the canned

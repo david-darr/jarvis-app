@@ -316,12 +316,26 @@ def list_task_runs(task_id: Optional[str] = None) -> list[dict]:
 # projects") — Claude gets this natively via its own Read/Write/Edit tools
 # once core/brain.py adds REPO_CODE_DIRS to add_dirs; a plain OpenAI-
 # compatible external model has no native file tools at all, so it needs
-# the equivalent as real function-calling tools. Both are scoped to the
-# exact same REPO_CODE_DIRS allow-list (core/constants.py) so every model
-# sees the same app-source surface — deliberately excludes data/, same
-# credential-exposure reasoning as everywhere else in this file.
+# the equivalent as real function-calling tools. App source is scoped to
+# REPO_CODE_DIRS (core/constants.py); user-tab source is separately limited
+# to data/tabs/{routes,services,views}. All other data/ paths remain excluded.
 
 def _resolve_repo_path(relative_path: str) -> str:
+    normalized = relative_path.replace("\\", "/").lstrip("/")
+    if normalized == "custom-tabs":
+        raise ValueError("choose custom-tabs/routes, custom-tabs/services, or custom-tabs/views")
+    if normalized.startswith("custom-tabs/"):
+        _, area, *parts = normalized.split("/")
+        from core.custom_tabs import USER_ROUTES_DIR, USER_SERVICES_DIR, USER_VIEWS_DIR
+        roots = {"routes": USER_ROUTES_DIR, "services": USER_SERVICES_DIR, "views": USER_VIEWS_DIR}
+        root = roots.get(area)
+        if not root:
+            raise ValueError("custom tab access is limited to routes/, services/, and views/")
+        root = os.path.realpath(root)
+        full_path = os.path.realpath(os.path.join(root, *parts))
+        if os.path.commonpath([full_path, root]) != root:
+            raise ValueError(f"'{relative_path}' is outside the custom-tab source directories")
+        return full_path
     full_path = os.path.realpath(os.path.join(BASE_DIR, relative_path.lstrip("/\\")))
     if not any(
         full_path == d or os.path.commonpath([full_path, d]) == d
@@ -340,7 +354,9 @@ def list_repo_directory(relative_path: str = "") -> list[str]:
     search_vault/read_vault_file). relative_path="" lists the top-level
     allowed directories themselves."""
     if not relative_path:
-        return [os.path.basename(d) for d in REPO_CODE_DIRS if os.path.isdir(d)]
+        return [os.path.basename(d) for d in REPO_CODE_DIRS if os.path.isdir(d)] + ["custom-tabs/"]
+    if relative_path.replace("\\", "/").strip("/") == "custom-tabs":
+        return ["routes/", "services/", "views/"]
     full_path = _resolve_repo_path(relative_path)
     if not os.path.isdir(full_path):
         raise ValueError(f"not a directory: {relative_path}")

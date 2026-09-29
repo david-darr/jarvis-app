@@ -30,8 +30,9 @@ from claude_agent_sdk import (
 from claude_agent_sdk.types import StreamEvent
 
 from core import custom_tabs, hive_mind_server, image_gen, integrations, mcp_oauth, permissions, projects, settings as settings_store, system_prompt
-from core.constants import REPO_CODE_DIRS
+from core.constants import DATA_DIR, REPO_CODE_DIRS
 from core.vault import resolve_vault_dir
+from core.turn_taint import TurnTaint
 
 # David's ask 2026-09-03: run_turn_stream() used to await the Claude Code CLI
 # subprocess with no timeout at all, so a hung/crashed subprocess (or a
@@ -40,6 +41,38 @@ from core.vault import resolve_vault_dir
 # turn, so a legitimately long tool-call chain that's still making progress
 # isn't cut off — only real silence trips it.
 TURN_MESSAGE_TIMEOUT_SECONDS = 180
+
+
+def _is_user_tab_source_path(path: str) -> bool:
+    absolute = os.path.normcase(os.path.abspath(path))
+    for root in custom_tabs.USER_TAB_CODE_DIRS:
+        root = os.path.normcase(os.path.abspath(root))
+        try:
+            if os.path.commonpath([absolute, root]) == root:
+                return True
+        except ValueError:  # different drives on Windows
+            continue
+    return False
+
+
+def _untrusted_claude_read_path(path: str, cwd: str) -> bool:
+    absolute = os.path.normcase(os.path.abspath(os.path.join(cwd, path)))
+    roots = [os.path.normcase(os.path.abspath(root)) for root in
+             (*custom_tabs.USER_TAB_CODE_DIRS, DATA_DIR)]
+    for root in roots:
+        try:
+            if os.path.commonpath([absolute, root]) == root:
+                return True
+        except ValueError:
+            continue
+    for source_root in REPO_CODE_DIRS:
+        root = os.path.normcase(os.path.abspath(source_root))
+        try:
+            if os.path.commonpath([absolute, root]) == root:
+                return False  # JARVIS source is the trusted development surface.
+        except ValueError:
+            continue
+    return True
 
 
 class Brain:
@@ -119,6 +152,7 @@ class Brain:
         # see tool_config_changed().
         self.tool_fingerprint: str | None = None
         self._client: ClaudeSDKClient | None = None
+        self.turn_taint = TurnTaint()
 
     def _tool_config(self) -> tuple[list[str], list[str], dict]:
         """The parts of a connection that come from global settings rather
@@ -214,7 +248,7 @@ class Brain:
         # rules. Anything outside it used to hang on a prompt nothing could
         # answer; it now reaches the person instead. Admin shell grants are
         # seeded here too, so Settings can show and revoke the auto behavior.
-        permissions.ensure_seeded(allowed_tools)
+        permissions.ensure_seeded([*allowed_tools, "Write", "Edit"])
         # Only what still has a standing grant is pre-approved. Revoking a
         # built-in in Settings > Permissions used to change nothing: this list
         # was passed whole, and the SDK never consults can_use_tool for a tool
@@ -222,7 +256,11 @@ class Brain:
         # because this list feeds the fingerprint, an open chat picks the
         # revocation up on its next message.
         grants = permissions.standing_grants()
-        allowed_tools = [tool for tool in allowed_tools if tool in grants and tool not in disabled]
+        # Route shell and file edits through can_use_tool so the current turn's
+        # taint can override a standing allow. If these remain in allowed_tools
+        # (or acceptEdits mode), Claude skips the callback entirely.
+        allowed_tools = [tool for tool in allowed_tools
+                         if tool in grants and tool not in disabled and tool not in ("Bash", "PowerShell")]
         return disabled, allowed_tools, mcp_servers
 
     @staticmethod
@@ -253,7 +291,8 @@ class Brain:
         # Claude already has native file-tool access to the vault (its own
         # cwd below) — the only real gap is cross-session search, added
         # in-process (no subprocess/network hop) here.
-        mcp_servers = {**mcp_servers, "hive_mind": hive_mind_server.get_hive_mind_server(self.session_id, self.is_admin)}
+        mcp_servers = {**mcp_servers, "hive_mind": hive_mind_server.get_hive_mind_server(
+            self.session_id, self.is_admin, self.turn_taint)}
 
         # A generated file needs somewhere to be built that isn't the vault
         # (David's ask 2026-09-12, after a live test found Claude writing a
@@ -285,7 +324,7 @@ class Brain:
             # further than that so one truly runaway response still hits a
             # real ceiling instead of growing memory unbounded.
             max_buffer_size=10 * 1024 * 1024,
-            permission_mode="acceptEdits",
+            permission_mode="default",
             disallowed_tools=disabled,
             mcp_servers=mcp_servers,
             allowed_tools=allowed_tools,
@@ -320,14 +359,23 @@ class Brain:
                     break
             if rule_content:
                 break
+        args = arguments if isinstance(arguments, dict) else {}
+        user_tab_write = False
+        if tool_name in ("Write", "Edit", "MultiEdit"):
+            path = args.get("file_path") or args.get("path")
+            user_tab_write = isinstance(path, str) and _is_user_tab_source_path(path)
+        force_prompt = bool(self.turn_taint.tainted and (
+            tool_name in ("Bash", "PowerShell") or user_tab_write
+        ))
         decision = await permissions.decide(
             surface=self.surface,
             tool=tool_name,
-            arguments=arguments if isinstance(arguments, dict) else {},
+            arguments=args,
             is_admin=self.is_admin,
             target=rule_content or permissions.derive_target(tool_name, arguments),
             title=getattr(context, "title", None) or getattr(context, "display_name", None) or tool_name,
             description=getattr(context, "description", None) or getattr(context, "decision_reason", None) or "",
+            force_prompt=force_prompt,
         )
         if decision.behavior == "allow":
             return PermissionResultAllow()
@@ -354,11 +402,13 @@ class Brain:
         if self._client is None:
             raise RuntimeError("Brain.connect() must be called before run_turn_stream().")
 
+        self.turn_taint.reset()
         await self._client.query(user_text)
 
         response_iter = self._client.receive_response().__aiter__()
         streamed_blocks = {}
         has_text = False
+        untrusted_tool_ids: dict[str, str] = {}
         while True:
             try:
                 message = await asyncio.wait_for(
@@ -384,6 +434,30 @@ class Brain:
                         streamed_blocks[index] = streamed_blocks.get(index, "") + chunk
                         has_text = True
                         yield chunk
+            # Claude's native WebFetch/WebSearch, file reads, and connected
+            # MCP servers do not all pass through JARVIS's own tool registry.
+            # Pair tool requests with their results so only returned content
+            # taints the rest of this turn.
+            for block in getattr(message, "content", ()) or ():
+                block_type = type(block).__name__
+                if block_type == "ToolUseBlock":
+                    name = getattr(block, "name", "") or ""
+                    block_id = getattr(block, "id", None)
+                    tool_input = getattr(block, "input", {}) or {}
+                    if block_id and name.startswith("mcp__"):
+                        untrusted_tool_ids[block_id] = "MCP output"
+                    elif block_id and name in ("WebFetch", "WebSearch"):
+                        untrusted_tool_ids[block_id] = "web content"
+                    elif block_id and name == "Read":
+                        path = tool_input.get("file_path") or tool_input.get("path")
+                        if isinstance(path, str) and _untrusted_claude_read_path(
+                                path, self.cwd_override or self.vault_dir):
+                            untrusted_tool_ids[block_id] = "file content"
+                elif block_type == "ToolResultBlock":
+                    tool_use_id = getattr(block, "tool_use_id", None)
+                    source = untrusted_tool_ids.pop(tool_use_id, None)
+                    if source and not getattr(block, "is_error", False):
+                        self.turn_taint.mark(source)
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):
