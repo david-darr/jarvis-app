@@ -12,6 +12,7 @@ import { mountSideChat, openSideChat, closeSideChat, mainOpened, sideChatSession
 import { mountChatFind } from '../chatFind.js';
 import { openWebCapture } from '../screenCapture.js';
 import { mountChatReferences } from '../chatReferences.js';
+import { mountChatTimeline } from '../chatTimeline.js';
 
 // Composer rebuilt to match Odysseus's actual chat-input-bar structure
 // (David's ask 2026-08-31, cross-checked against the real repo at
@@ -149,6 +150,7 @@ async function refreshRewindActions(sessionId, messages) {
   messages.querySelectorAll('.msg-edit, .msg-regenerate, .msg-fork, .msg-fallback, .chat-fallback-panel')
     .forEach((node) => node.remove());
   addRewindActions(messages, session);
+  activeTimeline?.update(session);
 }
 
 async function forkFrom(session, index) {
@@ -313,6 +315,7 @@ async function rewindTo(session, keep, userMessage, { edit, fallbackEndpointId =
 }
 
 let activeSessionId = null;
+let activeTimeline = null;
 let activeProjectFilter = null; // David's ask 2026-09-12 — null = "All Chats"
 let stagedAttachments = []; // [{id, filename}]
 let activeImagePreview = null;
@@ -707,6 +710,8 @@ export async function render(container, tabId, options = {}) {
   const dock = el('div', { class: 'chat-composer-dock' }, [queueHost, attachStrip, composer, el("div", { class: "composer-hint", text: "@ to add a file, note, or chat · Enter to send · Shift + Enter for a new line" })]);
   composerRefs = { messages, input, sendBtn, attachStrip, queueHost };
   main.append(messages, dock);
+  const timeline = mountChatTimeline(main, messages, () => activeSessionId);
+  activeTimeline = timeline;
   const dockObserver = new ResizeObserver(() => main.style.setProperty('--composer-height', `${dock.offsetHeight}px`));
   dockObserver.observe(dock);
   const jump = el('button', { type: 'button', class: 'chat-jump btn', text: '↓ Latest', hidden: true, onclick: () => messages.scrollTo({ top: messages.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }) });
@@ -742,6 +747,7 @@ export async function render(container, tabId, options = {}) {
     input.value = '';
     input.style.height = 'auto';
     jump.hidden = true;
+    timeline.reset();
     renderWelcome(messages);
     closeSessionsDrawer();
     refreshSessions(sessionsList, messages).catch(error => toast(error.message, 'error'));
@@ -816,6 +822,8 @@ export async function render(container, tabId, options = {}) {
     if (disposed) return;
     disposed = true;
     disposeFind();
+    timeline.dispose();
+    if (activeTimeline === timeline) activeTimeline = null;
     chatReferences?.dispose();
     chatReferences = null;
     document.removeEventListener("click", dismissMenus);
@@ -2050,6 +2058,7 @@ function showSessionMenu(x, y, session, item, sessionsList, messages) {
       if (sideChatSessionId() === session.id) closeSideChat();
       if (activeSessionId === session.id) {
         activeSessionId = null;
+        activeTimeline?.reset();
         messages.innerHTML = "";
       }
       await refreshSessions(sessionsList, messages);
@@ -2119,6 +2128,7 @@ async function createSession({ preserveAttachments = false } = {}) {
 }
 
 async function openSession(sessionId, sessionsList, messages) {
+  activeTimeline?.reset();
   closeArtifact();
   activeImagePreview?.();
   activeWebCapture?.();
@@ -2149,6 +2159,7 @@ async function openSession(sessionId, sessionsList, messages) {
       (msg.image_attachment_ids || []).map(id => `/api/chat/images/${encodeURIComponent(sessionId)}/${encodeURIComponent(id)}`), msg));
   }
   addRewindActions(messages, session);
+  activeTimeline?.update(session);
   // Reattach to a turn still generating (David's ask 2026-09-12) — its
   // reply isn't in session.messages yet (the backend only persists it once
   // the full turn completes), so it renders as one extra live card on top
@@ -2246,7 +2257,7 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
       sessionId: () => activeSessionId,
       createSession,
       refreshSessions: () => refreshSessions(sessionsList, messages),
-      onCurrentSessionDeleted: () => { activeSessionId = null; messages.innerHTML = ""; },
+      onCurrentSessionDeleted: () => { activeSessionId = null; activeTimeline?.reset(); messages.innerHTML = ""; },
       onWorkspaceCleared: () => syncWorkspacePill(null),
     });
     messages.appendChild(messageCard("assistant", output));

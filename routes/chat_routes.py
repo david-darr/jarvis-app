@@ -14,6 +14,7 @@ from core import attachments, chat_artifacts, chat_files, chat_references, offic
 from core.auth import auth_manager
 from core.middleware import require_user
 from services import chat_service
+from services import chat_summary
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -177,6 +178,21 @@ class CompactRequest(BaseModel):
 @router.post("/compact")
 async def compact_chat(body: CompactRequest, user: str = Depends(require_user)) -> dict:
     return await chat_service.compact_session(body.session_id)
+
+
+@router.get("/summary")
+async def get_chat_summary(session_id: str, user: str = Depends(require_user)) -> dict:
+    return chat_summary.get_summary(session_id)
+
+
+class SummaryRequest(BaseModel):
+    session_id: str
+    force: bool = False
+
+
+@router.post("/summary")
+async def generate_chat_summary(body: SummaryRequest, user: str = Depends(require_user)) -> dict:
+    return await chat_summary.generate_summary(body.session_id, force=body.force)
 
 
 @router.post("/attachments")
