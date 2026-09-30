@@ -1,7 +1,7 @@
-import { api, el, toast } from "./api.js";
+import { api, el, toast, confirmDialog } from "./api.js";
 import { renderMessageBody } from "./chatContent.js";
 
-// Brain tab's Vault view (David's ask 2026-09-01) — force-directed graph of
+// Library's optional Vault Map view (first built 2026-09-01) — force-directed graph of
 // the vault's folders/notes, ported from the original JARVIS kiosk
 // (voice-visualizer/index.html's Vault tab), restyled onto this app's own
 // design tokens (see specs/frontend-style.md). Same radial-tree-plus-light-
@@ -510,12 +510,19 @@ export function createVaultGraph(container) {
   }
   load().catch(() => { if (!disposed) counts.textContent = "Couldn't load the vault. Reopen this view to retry."; });
 
-  return function destroy() {
-    simRunning = false;
-    disposed = true;
-    if (raf) cancelAnimationFrame(raf);
-    observer.disconnect();
-    document.removeEventListener("visibilitychange", redraw);
-    reducedMotion.removeEventListener("change", redraw);
+  return {
+    async canLeave() {
+      const editor = panelBody.querySelector("#vault-note-editor");
+      if (!editor || editor.value === panelRawContent) return true;
+      return confirmDialog({ title: "Discard note edits?", message: "Your unsaved changes to this Vault note will be lost.", confirmLabel: "Discard changes" });
+    },
+    destroy() {
+      simRunning = false;
+      disposed = true;
+      if (raf) cancelAnimationFrame(raf);
+      observer.disconnect();
+      document.removeEventListener("visibilitychange", redraw);
+      reducedMotion.removeEventListener("change", redraw);
+    },
   };
 }

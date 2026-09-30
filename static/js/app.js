@@ -28,7 +28,7 @@ const NAV = [
   { id: "calendar", label: "Calendar", icon: "calendar" },
   { id: "email", label: "Email", icon: "email" },
   { id: "tasks", label: "Tasks", icon: "tasks" },
-  { id: "brain", label: "Brain", icon: "brain" },
+  { id: "tool-store", label: "Tool Store", icon: "store" },
   { id: "cookbook", label: "Cookbook", icon: "cookbook" },
 ];
 
@@ -150,7 +150,7 @@ async function buildSidebar() {
   // bug, 2026-09-01).
   nav.innerHTML = "";
   for (const item of NAV) {
-    if (item.id === "notes" || item.id === "brain") {
+    if (item.id === "notes" || item.id === "tool-store") {
       const label = document.createElement("div");
       label.className = "nav-group-label";
       label.textContent = item.id === "notes" ? "Workspace" : "Intelligence";
@@ -346,7 +346,7 @@ async function buildSidebarFooter() {
 }
 
 // Shared by the sidebar gear button and the command palette (Ctrl+K).
-async function openSettings() {
+async function openSettings(options = {}) {
   const settings = await import("./views/settings.js");
   // Mobile gets a real full-screen page, not the floating popup window
   // (David's ask 2026-09-01) — same setup switchTab() does (stop any
@@ -365,10 +365,10 @@ async function openSettings() {
     view.replaceWith(settingsView);
     view = settingsView;
     closeMobileMenu();
-    await settings.renderMobilePage(view);
+    await settings.renderMobilePage(view, options.section);
     return;
   }
-  await settings.openSettingsWindow();
+  await settings.openSettingsWindow(options.section);
 }
 
 async function boot() {
@@ -411,7 +411,7 @@ async function startApp() {
   setupMobileMenu();
   document.addEventListener("jarvis:navigate", (event) => {
     const { tab, ...options } = event.detail;
-    tab === "settings" ? openSettings() : switchTab(tab, options);
+    tab === "settings" ? openSettings(options) : switchTab(tab, options);
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeMobileMenu();

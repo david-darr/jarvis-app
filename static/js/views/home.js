@@ -89,7 +89,7 @@ export function render(container) {
       el("div", { class: "eyebrow", text: "A little space to think" }),
       el("h1", { text: "Your day, in focus." }),
       el("p", { text: "Your conversations, knowledge, and next steps. All connected, right here." }),
-      el("div", { class: "dashboard-actions" }, [action("Start a conversation", "chat", true), action("Explore your vault ↗", "brain", false, { section: "vault" })]),
+      el("div", { class: "dashboard-actions" }, [action("Start a conversation", "chat", true), action("Explore your vault ↗", "library", false, { section: "vault" })]),
       nextTaskLabel,
     ]),
     el("div", { class: "dashboard-core" }, [coreHost, el("div", { class: "core-caption" }, [coreState, coreToggle])]),

@@ -1,80 +1,16 @@
-import { api, el, toast, confirmDialog, iconButton, emptyState } from "../api.js";
-import { ICONS } from "../icons.js";
-import { createVaultGraph } from "../vaultGraph.js";
+import { api, el, toast, confirmDialog, iconButton, emptyState } from "./api.js";
+import { ICONS } from "./icons.js";
 
-// Brain tab: Skills (portable SKILL.md procedures) and Vault (David's ask
-// 2026-09-01 — a browsable graph of the vault itself, "kind of similar to
-// the VAULT tab in our original jarvis kiosk"), toggled via a segmented tab
-// pair rather than two separate top-level nav items, since both are really
-// "how JARVIS's memory works" facets of one Brain concept.
-let activeSection = "skills";
-
-export async function render(container, tabId, options = {}) {
-  if (options.section === "vault" || options.section === "skills") activeSection = options.section;
-  container.innerHTML = "";
-  let vaultCleanup = null;
-
-  const header = el("div", { class: "view-header" }, [
-    el("div", {}, [
-      el("h2", { text: "Brain" }),
-      el("div", { class: "sub", text: "A connected home for everything JARVIS knows." }),
-    ]),
-  ]);
-
-  const tabs = el("div", { class: "segmented-tabs" });
-  const body = el("div", { style: "flex:1;min-height:0;display:flex;flex-direction:column;" });
-
-  function renderTabs() {
-    tabs.innerHTML = "";
-    for (const [id, label] of [["skills", "Skills"], ["vault", "Vault"]]) {
-      const tab = el("button", {
-        type: "button",
-        class: "segmented-tab" + (activeSection === id ? " active" : ""),
-        text: label,
-        onclick: () => switchSection(id),
-      });
-      tabs.appendChild(tab);
-    }
-  }
-
-  async function switchSection(id) {
-    if (vaultCleanup) { vaultCleanup(); vaultCleanup = null; }
-    activeSection = id;
-    renderTabs();
-    body.innerHTML = "";
-    body.classList.toggle("view-constrained", id === "skills");
-    if (id === "skills") {
-      await renderSkillsSection(body);
-    } else {
-      vaultCleanup = createVaultGraph(body);
-    }
-  }
-
-  // Skills is a normal constrained list; the Vault graph is full-bleed on
-  // purpose (it needs the whole canvas), so the constraint is applied per
-  // section in switchSection() rather than to the whole view.
-  container.append(header, tabs, body);
-  await switchSection(activeSection);
-
-  return () => { if (vaultCleanup) vaultCleanup(); };
-}
-
-async function renderSkillsSection(container) {
+// The Tool Store's local-skill management panel. Kept separate from catalog
+// cards so create/import/edit/delete and exact-content approval share one UI.
+export async function renderSkillManager(container, focusSlug = null) {
+  container.replaceChildren();
   const form = el("div", { class: "glass card" });
   const nameInput = el("input", { placeholder: "Skill name...", style: "flex:1;" });
   const descInput = el("input", { placeholder: "One-line description...", style: "flex:1;" });
   const addBtn = el("button", { class: "btn", text: "Create" });
 
-  // Import from a local file (David's ask 2026-09-01) — a plain HTML file
-  // input + FileReader works identically in the Electron desktop shell and
-  // the plain-HTTP web-access path, so this no longer needs Electron's
-  // pickSkillFile IPC bridge (window.jarvis) at all. That IPC path used to
-  // hide the button entirely outside Electron; real bug found live from
-  // that: the hiding logic handed a bare `null` to the native
-  // Element.append() below (this `form` is a plain DOM element, not the
-  // el() helper), which stringifies a lone `null` argument into a literal
-  // "null" text node instead of skipping it — visible garbage text in the
-  // web view. Fixed at the root by removing the conditional entirely.
+  // File input and FileReader work in both Electron and the web client.
   const fileInput = el("input", { type: "file", accept: ".md,.txt", style: "display:none;" });
   const importBtn = el("button", { class: "btn", text: "Import from File...", onclick: () => fileInput.click() });
   const importStatus = el("span", { class: "meta" });
@@ -90,7 +26,7 @@ async function renderSkillsSection(container) {
   form.append(importReview);
 
   const list = el("div", { id: "skills-list", style: "margin-top:14px;" });
-  container.append(form, list);
+  container.append(el("h3", { class: "tool-store-heading", text: "Your skills" }), form, list);
 
   addBtn.addEventListener("click", async () => {
     const name = nameInput.value.trim();
@@ -160,6 +96,10 @@ async function renderSkillsSection(container) {
   }
 
   await refresh(list);
+  if (focusSlug) {
+    const focused = Array.from(list.children).find((node) => node.dataset.skill === focusSlug);
+    focused?.scrollIntoView({ block: "nearest" });
+  }
 }
 
 async function refresh(list) {
@@ -180,7 +120,7 @@ async function refresh(list) {
 
 // Editing an already-imported skill (David's ask 2026-09-02) — the backend
 // (PUT /api/skills/{slug}, services/skills_service.py's update_skill)
-// already supported this; the gap was purely that the Brain tab only ever
+// already supported this; the older skill view only ever
 // showed slug + description with a Delete button, no way to open or change
 // a skill's body. list_skills() deliberately omits body (list stays light,
 // same convention as every other list/get pair in this app — Notes, Tasks,
@@ -201,7 +141,7 @@ async function buildSkillCard(skill, list) {
     const full = await api(`/api/skills/${skill.slug}`);
     card.replaceWith(buildSkillEditor(full, list));
   });
-  const card = el("div", { class: "glass bracket card has-row-actions" }, [
+  const card = el("div", { class: "glass bracket card has-row-actions", "data-skill": skill.slug }, [
     el("div", { class: "card-row" }, [
       el("div", {}, [
         el("div", { class: "title", text: skill.slug }),

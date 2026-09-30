@@ -888,7 +888,7 @@ async function openPromptMenu(anchor) {
   const skills = await api("/api/skills");
   const menu = el("div", { class: "overflow-menu", style: "position:absolute; bottom:calc(100% + 8px); left:0; z-index:60;" });
   if (skills.length === 0) {
-    menu.appendChild(el("div", { class: "overflow-menu-item", text: "No skills saved yet (see Brain tab)" }));
+    menu.appendChild(el("div", { class: "overflow-menu-item", text: "No skills saved yet (see Tool Store)" }));
   } else {
     for (const s of skills) {
       menu.appendChild(menuItem(ICON_PROMPT, s.slug, async () => {

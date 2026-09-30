@@ -29,7 +29,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 """Advisory authoring checks for a SKILL.md. Findings never block anything;
-they are shown on the skill's card in the Brain tab so the author can act."""
+they are shown in Tool Store's skill manager so the author can act."""
 
 import re
 from dataclasses import asdict, dataclass

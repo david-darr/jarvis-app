@@ -1,10 +1,9 @@
-"""Skills: disk-backed SKILL.md files (frontmatter + body), the Brain tab's
-skills half. Matches the pattern researched from Odysseus (specs/memory-skills.md)
+"""Skills: disk-backed SKILL.md files (frontmatter + body), managed in Tool Store.
+Matches the pattern researched from Odysseus (specs/memory-skills.md)
 — portable, user-editable procedure files, not a bespoke DB table.
 
-Auto-extraction from conversations and import-from-URL (both real Odysseus
-features) are deliberately out of this pass — this is the CRUD foundation
-those would build on top of, not a commitment to build them yet.
+Public GitHub SKILL.md imports use this service's community scan and
+provenance path. Auto-extraction from conversations remains out of scope.
 """
 import logging
 import os
@@ -61,8 +60,8 @@ def _parse(raw: str) -> dict:
         value = line.split(":", 1)[1].strip()
         # YAML block scalar ("description: |" / ">") — the real text is the
         # indented lines that follow, not the marker. The bundled humanizer
-        # skill uses this form, and without handling it the Brain tab showed
-        # its description as a literal "|".
+        # skill uses this form, and without handling it the skill manager
+        # showed its description as a literal "|".
         if value in ("|", ">", "|-", ">-"):
             collected = []
             for follow in lines[i + 1:]:
@@ -197,15 +196,13 @@ def update_skill(slug: str, description: str, body: str) -> dict:
     return {"slug": slug, "description": description, "body": body}
 
 
-def import_skill(filename: str, raw_content: str, confirmed: bool = False) -> dict:
-    """Imports a skill from an arbitrary local file (Brain tab's "import from
-    file" — David's ask, 2026-08-31, via Electron's native file picker;
-    electron/main.js's ipcMain handler does the actual filesystem read, this
-    just parses whatever text comes back).
+def import_skill(filename: str, raw_content: str, confirmed: bool = False, *,
+                 name: str | None = None, origin: str | None = None,
+                 replace: bool = True) -> dict:
+    """Import local file text or a fetched community SKILL.md.
 
-    Unlike create_skill(), this upserts rather than rejecting a duplicate
-    name — re-importing the same file (e.g. after editing it externally) is
-    a normal, expected action for a file-backed import flow, not an error.
+    Local imports may replace an existing skill; URL installs set replace=False
+    so an online source cannot silently overwrite a user's skill.
     If the file already has SKILL.md-shaped frontmatter, its description is
     used; otherwise the whole file becomes the body with no description.
 
@@ -216,16 +213,16 @@ def import_skill(filename: str, raw_content: str, confirmed: bool = False) -> di
     overrides a dangerous verdict.
     """
     from services import skill_curator
-    name = os.path.splitext(os.path.basename(filename))[0]
+    name = name or os.path.splitext(os.path.basename(filename))[0]
     parsed = _parse(raw_content)
     slug = _slugify(name)
     path = _skill_path(slug)
     rendered = _render(parsed["description"], parsed["body"], parsed.get("frontmatter", ""))
     scan = skill_curator.check_import(slug, rendered, confirmed=confirmed)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w" if replace else "x", encoding="utf-8") as f:
         f.write(rendered)
-    skill_curator.record(slug, skill_curator.IMPORTED, origin=os.path.basename(filename))
+    skill_curator.record(slug, skill_curator.IMPORTED, origin=origin or os.path.basename(filename))
     return {"slug": slug, "description": parsed["description"], "body": parsed["body"],
             "scan": scan["verdict"]}
 

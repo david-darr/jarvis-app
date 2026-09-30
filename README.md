@@ -16,9 +16,9 @@ This is the real product (v2). [jarvis-starter-kit](https://github.com/david-dar
 - **A side browser** in the chat, opened when you ask for it or when you follow a link in a reply. In the desktop app it runs as a real sandboxed browser view with its own cookies, separate from the app's, and it cannot reach JARVIS's own backend. In a plain browser tab it falls back to an embedded frame, with open-in-new-tab always available for sites that refuse to be embedded.
 - **Home dashboard**: recent conversations, projects, upcoming events, connected systems, and a live activity feed around a responsive particle core.
 - **A focused workspace**: a centered new-chat composer that settles below the conversation, independently collapsible chat history, and a 52px icon rail. Layout preferences are remembered; mobile keeps full navigation and chat-history drawers.
-- **Notes, Calendar, Email, Library** — one unified place for priorities and todos (due-dated notes render on the calendar), CalDAV/iCal calendar sync, IMAP/SMTP email accounts, and a searchable document library.
+- **Notes, Calendar, Email, Library** — one unified place for priorities and todos (due-dated notes render on the calendar), CalDAV/iCal calendar sync, IMAP/SMTP email accounts, documents and chat files. Library also lets you browse, search, read and edit Vault notes, with a Map for their links.
 - **Tasks** — scheduled automations, either your own prompts or built-in ones (Daily Brief, tidy-up jobs, skill audits). Output can be delivered to a connected channel rather than just sitting in the tab.
-- **Brain** — reusable `SKILL.md` procedures, plus a browsable graph of your Obsidian-style vault, which is where the assistant's long-term memory actually lives.
+- **Tool Store** — find and manage reusable `SKILL.md` procedures, install a public GitHub skill file, and browse or connect MCP tool servers.
 - **One memory, not two** — checkbox items in your vault's `Active Priorities.md` are synced into Notes on every launch, grouped by their vault headings, so asking about your priorities returns what's actually written in your vault. Ticking one in the app ticks it in the vault file too.
 - **Channels** — reach the same assistant from Discord, with conversation state shared through the same sessions and vault.
 - **Cookbook** — download and run local models without a separate install.
@@ -31,7 +31,7 @@ Memory is a folder of markdown notes, not a database — so it stays readable, p
 | ![Chat](docs/img/chat.png) | ![Tasks](docs/img/tasks.png) |
 | **Chat** — per-conversation model choice, attachments, folder-scoped workspaces | **Tasks** — built-in and custom automations, delivered where you want them |
 | ![Vault graph](docs/img/vault.png) | ![Settings](docs/img/settings.png) |
-| **Brain** — your vault rendered as the linked graph it already is | **Models** — Claude, local servers, or any API provider |
+| **Library > Vault > Map** — your notes rendered as a linked graph | **Models** — Claude, local servers, or any API provider |
 
 <details>
 <summary>See the compact sidebar</summary>

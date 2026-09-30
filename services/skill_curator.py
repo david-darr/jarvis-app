@@ -160,7 +160,7 @@ def approve(slug: str) -> dict:
 
 
 def describe(slug: str) -> Optional[dict]:
-    """Provenance, scan and lint for one skill, as the Brain tab shows it."""
+    """Provenance, scan and lint for one skill, as Tool Store shows it."""
     with _LOCK:
         data = _load()
         before = repr(data.get(slug))

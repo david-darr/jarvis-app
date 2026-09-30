@@ -138,7 +138,8 @@ export async function render(container) {
   await openSettingsWindow();
 }
 
-export async function openSettingsWindow() {
+export async function openSettingsWindow(section) {
+  if (section === "integrations") activeSectionId = section;
   if (pillEl) { pillEl.remove(); pillEl = null; }
   cachedStatus = await api("/api/auth/status");
   // Guards against a stale activeSectionId from a previous visit if
@@ -167,7 +168,8 @@ export async function openSettingsWindow() {
 // mounted directly into the tab's own view content — no backdrop, no
 // minimize (that's a "floating window" concept a full page doesn't have),
 // "back" instead of "close".
-export async function renderMobilePage(container) {
+export async function renderMobilePage(container, section) {
+  if (section === "integrations") activeSectionId = section;
   if (pillEl) { pillEl.remove(); pillEl = null; }
   // Guards against the (unlikely but possible) case of the floating modal
   // having been created earlier in this same page load — it and the mobile

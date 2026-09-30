@@ -1,4 +1,4 @@
-"""Vault graph + note read/write — the Brain tab's Vault view (David's ask
+"""Vault graph + note read/write — Library's Vault view (David's ask
 2026-09-01, ported from the original kiosk's /vault-graph and /vault-note)."""
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel

@@ -38,7 +38,8 @@ export const COMMANDS = {
       "  Tasks — scheduled/recurring jobs the agent runs on its own\n" +
       "  Calendar — real events plus Notes' due-dated items in one view\n" +
       "  Email — connect an account, read/compose (agent never auto-sends)\n" +
-      "  Brain — Skills: reusable saved prompts/procedures (insert into Chat via /prompt or the \"+\" menu)\n" +
+      "  Library — documents, chat files, and your Vault notes\n" +
+      "  Tool Store — reusable skills and connected tools\n" +
       "  Cookbook — register other models (local or cloud) and pin a chat to one\n" +
       "  Settings — vault location, Discord connection\n" +
       "This is a text summary, not an interactive click-through tour — that's a real Odysseus feature we haven't built.",
@@ -109,7 +110,17 @@ export const COMMANDS = {
   tasks: toolCommand("tasks", "Open Tasks"),
   calendar: toolCommand("calendar", "Open Calendar"),
   email: toolCommand("email", "Open Email"),
-  brain: toolCommand("brain", "Open Brain"),
+  vault: {
+    category: "Tools", help: "Open Vault in Library", usage: "/vault",
+    handler: () => {
+      document.dispatchEvent(new CustomEvent("jarvis:navigate", { detail: { tab: "library", section: "vault" } }));
+      return "Opened Vault in Library.";
+    },
+  },
+  store: {
+    category: "Tools", help: "Open Tool Store", usage: "/store",
+    handler: () => { switchTab("tool-store"); return "Opened Tool Store."; },
+  },
   cookbook: toolCommand("cookbook", "Open Cookbook"),
   // Settings moved out of the main nav (David's ask 2026-08-31 — it's the
   // sidebar-footer user card now), so this can't click a .nav-item anymore
@@ -182,7 +193,7 @@ export const COMMANDS = {
 
 async function listSkills() {
   const skills = await api("/api/skills");
-  if (skills.length === 0) return "No skills saved yet. Add one in the Brain tab.";
+  if (skills.length === 0) return "No skills saved yet. Add one in Tool Store.";
   return skills.map((s) => `/${s.slug}${s.description ? " — " + s.description : ""}`).join("\n");
 }
 

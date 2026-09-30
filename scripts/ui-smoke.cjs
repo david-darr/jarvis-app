@@ -234,7 +234,7 @@ app.whenReady().then(async () => {
     await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
     await delay(350);
     assert.equal(await railWidth(), 52, "Collapsed state survives reload");
-    for (const tab of ["chat", "notes", "library", "calendar", "tasks", "email", "brain", "cookbook", "school"]) {
+    for (const tab of ["chat", "notes", "library", "calendar", "tasks", "email", "tool-store", "cookbook", "school"]) {
       await navigate(tab);
       assert.deepEqual(await overflow(), [], "collapsed " + tab);
       if (tab === 'chat') await capture('desktop-chat-minimal');
@@ -262,8 +262,8 @@ app.whenReady().then(async () => {
     for (const [label, width, height] of [["desktop", 1440, 900], ["mobile", 390, 844]]) {
       win.setContentSize(width, height);
       await delay(100);
-      for (const tab of ["home", "chat", "notes", "library", "calendar", "tasks", "email", "brain", "cookbook", "school"]) {
-        await navigate(tab, tab === "brain" ? { section: "skills" } : {});
+      for (const tab of ["home", "chat", "notes", "library", "calendar", "tasks", "email", "tool-store", "cookbook", "school"]) {
+        await navigate(tab);
         if (tab === "home") {
           await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
           await waitFor("document.querySelectorAll('.dashboard-model-usage').length > 0");
@@ -288,7 +288,8 @@ app.whenReady().then(async () => {
         assert.deepEqual(await overflow(), [], label + " overflow in " + tab);
         await capture(label + "-" + tab);
       }
-      await navigate("brain", { section: "vault" });
+      await navigate("library", { section: "vault" });
+      await js("[...document.querySelectorAll('.library-vault-modes button')].find(b => b.textContent === 'Map').click()");
       await waitFor("document.querySelector('.vault-caption').textContent.includes('130 notes')");
       await delay(400);
       await capture(label + "-vault");
@@ -595,8 +596,8 @@ app.whenReady().then(async () => {
     await navigate("chat");
     assert.ok(await js("document.querySelector('#chat-main').classList.contains('is-empty')"));
     empty = true;
-    for (const tab of ["home", "chat", "notes", "library", "calendar", "tasks", "email", "brain", "cookbook", "school"]) {
-      await navigate(tab, tab === "brain" ? { section: "skills" } : {});
+    for (const tab of ["home", "chat", "notes", "library", "calendar", "tasks", "email", "tool-store", "cookbook", "school"]) {
+      await navigate(tab);
       if (tab === "home") await waitFor("document.querySelector('.dashboard-stat-value')?.textContent === '0'");
       assert.deepEqual(await overflow(), [], "empty " + tab);
     }
@@ -609,7 +610,7 @@ app.whenReady().then(async () => {
     // data. Neither the live backend nor personal screenshots are a source.
     if (updateChatImage && !updateDocImages) fs.copyFileSync(path.join(output, 'desktop-conversation.png'), path.join(root, 'docs', 'img', 'chat.png'));
     if (updateDocImages) {
-      const mapping = { home: "desktop-home", chat: "desktop-conversation", "chat-new": "desktop-chat-minimal", tasks: "desktop-tasks", vault: "desktop-vault", calendar: "desktop-calendar", notes: "desktop-notes", brain: "desktop-brain", settings: "desktop-settings", library: "desktop-library", "sidebar-collapsed": "desktop-sidebar-collapsed" };
+      const mapping = { home: "desktop-home", chat: "desktop-conversation", "chat-new": "desktop-chat-minimal", tasks: "desktop-tasks", vault: "desktop-vault", calendar: "desktop-calendar", notes: "desktop-notes", settings: "desktop-settings", library: "desktop-library", "sidebar-collapsed": "desktop-sidebar-collapsed" };
       for (const [name, source] of Object.entries(mapping)) fs.copyFileSync(path.join(output, source + ".png"), path.join(root, "docs", "img", name + ".png"));
     }
     for (const [label, width, height] of [["desktop",1440,900],["mobile",390,844]]) {

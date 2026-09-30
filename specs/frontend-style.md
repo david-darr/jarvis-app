@@ -54,7 +54,7 @@ The header's panel toggle collapses the desktop sidebar from `--sidebar-width: 2
 
 An editorial hero pairs the conversation action with a particle core. A summary strip and two-column workspace expose conversations, open notes, enabled automations, the next seven days, projects, models, recent activity, and connected systems. On phones these stack in normal flow.
 
-Summary requests are read-only; missing data gets an unavailable state, not a fabricated zero. Home links use `jarvis:navigate` with a real session/project/Brain section when applicable. Date-only calendar entries are local days. Clear countdown and refresh timers when leaving the view.
+Summary requests are read-only; missing data gets an unavailable state, not a fabricated zero. Home links use `jarvis:navigate` with a real session/project/Library section when applicable. Date-only calendar entries are local days. Clear countdown and refresh timers when leaving the view.
 
 ## Chat and motion
 

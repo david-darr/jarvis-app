@@ -1,5 +1,7 @@
 import { api, el, toast, confirmDialog, emptyState } from "../api.js";
 import { ICONS } from "../icons.js";
+import { createVaultExplorer } from "../vaultExplorer.js";
+import { createVaultGraph } from "../vaultGraph.js";
 
 // Library tab (Phase 7, David's ask 2026-09-01 "let's move on to the next
 // stage") — real document storage + bounded keyword search, deliberately
@@ -7,8 +9,80 @@ import { ICONS } from "../icons.js";
 // vector DB, embeddings, PDF/Office extraction, versioning). See
 // services/documents_service.py's module docstring for the full reasoning.
 
-export async function render(container) {
-  await renderList(container);
+let activeSection = "documents";
+let activeVaultView = null;
+
+export async function render(container, tabId, options = {}) {
+  if (options.section === "vault" || options.section === "documents") activeSection = options.section;
+  if (activeSection === "vault") renderVault(container);
+  else await renderList(container);
+  return () => disposeVault();
+}
+
+function disposeVault() {
+  activeVaultView?.destroy();
+  activeVaultView = null;
+}
+
+function libraryChrome(container, current) {
+  const header = el("div", { class: "view-header" }, [
+    el("div", {}, [
+      el("h2", { text: "Library" }),
+      el("div", { class: "sub", text: current === "vault"
+        ? "Browse and read the notes in your connected Vault."
+        : "A home for your references, drafts, and ideas worth keeping." }),
+    ]),
+  ]);
+  const tabs = el("div", { class: "segmented-tabs library-tabs", role: "group", "aria-label": "Library section" });
+  for (const [id, label] of [["documents", "Documents & files"], ["vault", "Vault"]]) {
+    const button = el("button", { type: "button", class: "segmented-tab" + (id === current ? " active" : ""),
+      text: label, "aria-pressed": id === current ? "true" : "false" });
+    button.addEventListener("click", async () => {
+      if (id === current) return;
+      if (activeVaultView?.canLeave && !await activeVaultView.canLeave()) return;
+      if (id === "vault") renderVault(container);
+      else await renderList(container);
+    });
+    tabs.append(button);
+  }
+  return [header, tabs];
+}
+
+function renderVault(container) {
+  disposeVault();
+  activeSection = "vault";
+  container.replaceChildren();
+  const [header, tabs] = libraryChrome(container, "vault");
+  const modes = el("div", { class: "segmented-tabs library-vault-modes", role: "group", "aria-label": "Vault view" });
+  const host = el("div", { class: "library-vault-host" });
+  container.append(el("div", { class: "library-vault-page" }, [
+    header, tabs,
+    el("div", { class: "library-vault-intro" }, [
+      el("div", {}, [el("h3", { text: "Vault" }), el("p", { text: "Your Markdown notes, organized by folder. Open Map to explore their connections." })]),
+      modes,
+    ]),
+    host,
+  ]));
+  let mode = "browse";
+  const drawModes = () => {
+    modes.replaceChildren();
+    for (const [id, label] of [["browse", "Browse"], ["map", "Map"]]) {
+      const button = el("button", { type: "button", class: "segmented-tab" + (mode === id ? " active" : ""),
+        text: label, "aria-pressed": mode === id ? "true" : "false" });
+      button.addEventListener("click", async () => {
+        if (mode === id) return;
+        if (activeVaultView?.canLeave && !await activeVaultView.canLeave()) return;
+        disposeVault();
+        mode = id;
+        drawModes();
+        host.replaceChildren();
+        activeVaultView = mode === "browse" ? createVaultExplorer(host) : createVaultGraph(host);
+      });
+      modes.append(button);
+    }
+  };
+  drawModes();
+  activeVaultView = createVaultExplorer(host);
 }
 
 function section(title, description, icon, body) {
@@ -34,20 +108,16 @@ function fileSize(size) {
 }
 
 async function renderList(container) {
+  disposeVault();
+  activeSection = "documents";
   container.innerHTML = "";
-
-  const header = el("div", { class: "view-header" }, [
-    el("div", {}, [
-      el("h2", { text: "Library" }),
-      el("div", { class: "sub", text: "A home for your references, drafts, and ideas worth keeping." }),
-    ]),
-  ]);
+  const [header, tabs] = libraryChrome(container, "documents");
 
   const searchInput = el("input", { placeholder: "Search documents and chat files...", style: "flex:1;" });
   const newBtn = el("button", { class: "btn primary", text: "+ New document" });
   // Plain file input + FileReader (David's ask 2026-09-01) — works
   // identically in the Electron shell and the plain-HTTP web-access path,
-  // so import is no longer gated behind window.jarvis (see brain.js's
+  // so import is no longer gated behind window.jarvis (see skillManager.js's
   // matching change and the real "null" bug it fixed there).
   const fileInput = el("input", { type: "file", accept: ".md,.txt", style: "display:none;" });
   const importBtn = el("button", { class: "btn", text: "Import from File...", onclick: () => fileInput.click() });
@@ -64,7 +134,7 @@ async function renderList(container) {
   const filesSection = section("Files by chat", "Attachments and files created in conversations", "chats", chatFiles);
   const openChats = new Set();
 
-  const wrap = el("div", { class: "view-constrained library-view" }, [header, toolbar, documentsSection.node, filesSection.node]);
+  const wrap = el("div", { class: "view-constrained library-view" }, [header, tabs, toolbar, documentsSection.node, filesSection.node]);
   container.append(wrap);
 
   newBtn.addEventListener("click", async () => {

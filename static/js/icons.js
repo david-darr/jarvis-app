@@ -19,6 +19,7 @@ export const ICONS = {
   email: `<svg viewBox="0 0 24 24" ${S}><rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="M4 6l8 7 8-7"/></svg>`,
   tasks: `<svg viewBox="0 0 24 24" ${S}><path d="M5 7h14M5 12h14M5 17h14"/><circle cx="5" cy="7" r="0.8" fill="currentColor"/><circle cx="5" cy="12" r="0.8" fill="currentColor"/><circle cx="5" cy="17" r="0.8" fill="currentColor"/></svg>`,
   brain: `<svg viewBox="0 0 24 24" ${S}><circle cx="12" cy="12" r="8"/><path d="M12 4v16M6 8l12 8M18 8L6 16"/></svg>`,
+  store: `<svg viewBox="0 0 24 24" ${S}><path d="M3 10h18l-2-6H5l-2 6zM5 10v10h14V10M9 20v-7h6v7"/><path d="M3 10c0 2 3 3 4.5 0 1.5 3 3.5 3 4.5 0 1.5 3 3.5 3 4.5 0 1.5 3 4.5 2 4.5 0"/></svg>`,
   cookbook: `<svg viewBox="0 0 24 24" ${S}><path d="M4 4h13a3 3 0 013 3v13H7a3 3 0 01-3-3V4z"/><path d="M4 17a3 3 0 013-3h13"/></svg>`,
   settings: `<svg viewBox="0 0 24 24" ${S}><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.3-2l2-1.5-2-3.4-2.3.9a7 7 0 00-1.7-1L14 2h-4l-.7 2.6a7 7 0 00-1.7 1l-2.3-.9-2 3.4L5.3 10a7 7 0 000 4l-2 1.5 2 3.4 2.3-.9a7 7 0 001.7 1L10 22h4l.7-2.6a7 7 0 001.7-1l2.3.9 2-3.4-2-1.5c.2-.6.3-1.3.3-2z"/></svg>`,
   // Mobile drawer toggle (David's ask 2026-09-01) — hamburger / close.

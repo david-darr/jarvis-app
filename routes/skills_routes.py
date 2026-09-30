@@ -1,9 +1,9 @@
-"""Skills CRUD — the Brain tab's skills half."""
+"""Skills CRUD and scanned community installs for Tool Store."""
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from core.middleware import require_admin, require_user
-from services import skill_curator, skills_service
+from services import remote_skill_source, skill_curator, skills_service
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
 
@@ -27,6 +27,12 @@ class ImportSkillRequest(BaseModel):
     confirmed: bool = False
 
 
+class InstallSkillUrlRequest(BaseModel):
+    url: str
+    confirmed: bool = False
+    expected_sha256: str | None = None
+
+
 @router.get("")
 async def list_skills(user: str = Depends(require_user)) -> list[dict]:
     return [{**skill, "curation": skill_curator.describe(skill["slug"])}
@@ -46,7 +52,7 @@ async def import_skill(body: ImportSkillRequest, user: str = Depends(require_use
     try:
         return skills_service.import_skill(body.filename, body.content, confirmed=body.confirmed)
     except skill_curator.SkillImportRefused as e:
-        # 409 with the scan itself, so the Brain tab can show what was found
+        # 409 with the scan itself, so Tool Store can show what was found
         # and, for a caution verdict only, offer "Import anyway".
         raise HTTPException(status_code=409, detail={
             "message": "This skill was not imported: its scan found something that needs a look.",
@@ -54,6 +60,33 @@ async def import_skill(body: ImportSkillRequest, user: str = Depends(require_use
             "report": e.report,
             "findings": e.findings,
         })
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/install-url")
+async def install_skill_url(body: InstallSkillUrlRequest, user: str = Depends(require_admin)) -> dict:
+    """Install one public GitHub SKILL.md through the existing community scan."""
+    try:
+        source = await remote_skill_source.fetch_skill(body.url)
+        if body.confirmed and source.sha256 != body.expected_sha256:
+            raise HTTPException(status_code=409, detail="The skill changed since review. Start the install again.")
+        result = skills_service.import_skill("SKILL.md", source.content, confirmed=body.confirmed,
+                                             name=source.name, origin=source.source_url, replace=False)
+        return {"slug": result["slug"], "description": result["description"],
+                "scan": result["scan"], "source_url": source.source_url}
+    except skill_curator.SkillImportRefused as e:
+        raise HTTPException(status_code=409, detail={
+            "message": "This skill needs review before installation.",
+            "needs_confirmation": e.needs_confirmation,
+            "report": e.report,
+            "findings": e.findings,
+            "sha256": source.sha256,
+        })
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail="A skill with this name already exists. Remove or rename it first.")
+    except remote_skill_source.RemoteSkillError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

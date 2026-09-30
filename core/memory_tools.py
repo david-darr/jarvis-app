@@ -18,6 +18,7 @@ nothing here is stuffed into every prompt by default.
 """
 import asyncio
 import os
+import re
 from typing import Optional
 
 from core.constants import BASE_DIR, REPO_CODE_DIRS
@@ -114,6 +115,27 @@ def list_skills() -> list[dict]:
     return [s for s in skills_service.list_skills() if skill_curator.model_visible(s["slug"])]
 
 
+def search_skills(query: str, max_results: int = 5) -> list[dict]:
+    """Find skill descriptions first; full instructions stay behind read_skill."""
+    terms = set(re.findall(r"[a-z0-9]+", (query or "").lower()))
+    if not terms:
+        return []
+    ranked = []
+    for skill in list_skills():
+        name = skill["slug"].replace("-", " ").lower()
+        description = (skill.get("description") or "").lower()
+        name_terms = set(re.findall(r"[a-z0-9]+", name))
+        description_terms = set(re.findall(r"[a-z0-9]+", description))
+        overlap = terms & (name_terms | description_terms)
+        if overlap:
+            score = 4 * len(terms & name_terms) + len(terms & description_terms)
+            if query.lower() in name:
+                score += 8
+            ranked.append((-score, skill["slug"], skill))
+    ranked.sort()
+    return [skill for _, _, skill in ranked[:max(1, min(max_results, 10))]]
+
+
 # A safety stop, not a budget. Hermes's number: skill_manager_tool refuses
 # past 100k, while its linter warns from 24k that a body is getting heavy.
 SKILL_HARD_LIMIT_CHARS = 100_000
@@ -137,7 +159,7 @@ def read_skill(slug: str) -> str:
     if not skill_curator.model_visible(slug):
         raise ValueError(
             f"skill '{slug}' is held back: its content scanned as dangerous and has not been "
-            "approved. The user can review and approve it in the Brain tab."
+            "approved. The user can review and approve it in Tool Store."
         )
     text = skill["body"]
     if len(text) > SKILL_HARD_LIMIT_CHARS:

@@ -25,7 +25,7 @@ hive mind") — same reasoning, same shared engine (core/memory_tools.py).
 """
 from typing import AsyncIterator
 
-from core import attachments, integrations, mcp_client, mcp_oauth, permissions, projects, system_prompt, tool_registry
+from core import attachments, integrations, mcp_client, mcp_oauth, permissions, projects, system_prompt, tool_registry, tool_search
 from core.providers import openai_compatible
 from core.session_manager import sent_text
 from core.turn_taint import TurnTaint
@@ -112,6 +112,25 @@ class ExternalBrain:
         return seeded
 
     async def _execute_tool(self, name: str, args: dict) -> str:
+        args = args if isinstance(args, dict) else {}
+        if name == tool_search.SEARCH:
+            result = tool_search.search(self._mcp_tools, args.get("query", ""), args.get("limit", 5))
+            if result.startswith("["):
+                self.turn_taint.mark("MCP tool catalog")
+            return result
+        if name == tool_search.DESCRIBE:
+            selected = args.get("name", "")
+            result = tool_search.describe(self._mcp_tools, selected)
+            if isinstance(selected, str) and selected in self._mcp_tools:
+                self.turn_taint.mark("MCP tool catalog")
+            return result
+        if name == tool_search.CALL:
+            selected = args.get("name", "")
+            if not isinstance(selected, str) or selected not in self._mcp_tools:
+                return "Tool not available in this chat. Search again for an enabled tool."
+            if not isinstance(args.get("arguments"), dict):
+                return "Tool arguments must be an object. Call jarvis_tool_describe to see its schema."
+            return await self._call_mcp(selected, args["arguments"])
         if name in self._mcp_tools:
             return await self._call_mcp(name, args)
         return await tool_registry.call(name, args, tool_registry.ToolContext(
@@ -124,6 +143,9 @@ class ExternalBrain:
         window open, a scheduled run) the broker refuses and says where to
         grant it."""
         spec = self._mcp_tools[name]
+        current = integrations.list_mcp_servers_runtime(self.integration_ids).get(spec["server"])
+        if not self._same_mcp_endpoint(spec["config"], current):
+            return "Not run: this integration is no longer enabled for the chat."
         decision = await permissions.decide(
             surface=f"chat:{self.session_id}" if self.session_id else "none",
             tool=name, arguments=args if isinstance(args, dict) else {},
@@ -135,13 +157,22 @@ class ExternalBrain:
         # A signed-in server's token can expire during a long chat; the
         # config is re-read so each call carries the current one.
         await mcp_oauth.refresh_due(self.integration_ids)
-        config = integrations.list_mcp_servers_runtime(self.integration_ids).get(spec["server"], spec["config"])
+        config = integrations.list_mcp_servers_runtime(self.integration_ids).get(spec["server"])
+        if not self._same_mcp_endpoint(spec["config"], config):
+            return "Not run: this integration is no longer enabled for the chat."
         try:
             result = await mcp_client.call_tool(config, spec["name"], args)
             self.turn_taint.mark(f"MCP result: {name}")
             return result
         except Exception as e:
             return f"Tool error: {e}"
+
+    @staticmethod
+    def _same_mcp_endpoint(discovered: dict, current: dict | None) -> bool:
+        """Token refresh is fine; a replaced server with the same name is not."""
+        return current is not None and all(
+            discovered.get(key) == current.get(key) for key in ("type", "url", "command", "args")
+        )
 
     async def connect(self) -> None:
         """Find the tools of the MCP servers this chat may use. Only for a
@@ -154,11 +185,8 @@ class ExternalBrain:
         if not servers:
             return
         self._mcp_tools = await mcp_client.discover(servers)
-        self.tools = self.tools + [
-            {"type": "function", "function": {"name": name, "parameters": spec["schema"],
-                                              "description": f"[{spec['server']} MCP server] {spec['description']}".strip()}}
-            for name, spec in self._mcp_tools.items()
-        ]
+        if self._mcp_tools:
+            self.tools = self.tools + tool_search.bridge_schemas()
 
     async def run_turn(self, user_text: str | list[dict]) -> str:
         self.turn_taint.reset()

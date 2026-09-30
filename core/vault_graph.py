@@ -1,4 +1,4 @@
-"""Vault graph — the Brain tab's Vault view (David's ask 2026-09-01: "kind of
+"""Vault graph — Library's optional Vault Map view (first built 2026-09-01: "kind of
 similar to the VAULT tab in our original jarvis kiosk"). Ported from the real
 kiosk implementation (voice-visualizer/server.py's build_vault_graph() /
 _vault_real_path() / read_vault_note() / write_vault_note()), adapted to use

@@ -124,22 +124,34 @@ async def _search_sessions(args, ctx):
 @register(
     "list_skills",
     "List every available Skill (a portable, saved procedure for how to do something) by "
-    "name and one-line description. Skills live outside the vault, so this is the only way "
-    "to discover them — call read_skill afterward for the full procedure.",
+    "name and one-line description. For a specific topic, search_skills is shorter. "
+    "Call read_skill afterward for the full procedure.",
     _object(),
 )
 async def _list_skills(args, ctx):
     skills = memory_tools.list_skills()
+    if skills and ctx.turn_taint:
+        ctx.turn_taint.mark("skill descriptions")
     return "\n".join(f"- {s['slug']}: {s['description'] or '(no description)'}" for s in skills) or "No skills saved yet."
 
 
-@register("read_skill", "Read one Skill's full procedure by its slug (from list_skills).",
-          _object({"slug": _str("The skill's slug, from list_skills")}, ("slug",)))
+@register("read_skill", "Read one Skill's full procedure by its slug (from search_skills or list_skills).",
+          _object({"slug": _str("The skill's slug, from search_skills or list_skills")}, ("slug",)))
 async def _read_skill(args, ctx):
     result = memory_tools.read_skill(args["slug"])
     if ctx.turn_taint:
         ctx.turn_taint.mark("skill content")
     return result
+
+
+@register("search_skills", "Search available Skills by name and short description. Returns matching slugs; "
+          "call read_skill for the full procedure only when needed.",
+          _object({"query": _str("Topic or task to find a saved Skill for")}, ("query",)))
+async def _search_skills(args, ctx):
+    skills = memory_tools.search_skills(args["query"])
+    if skills and ctx.turn_taint:
+        ctx.turn_taint.mark("skill descriptions")
+    return "\n".join(f"- {s['slug']}: {s['description'] or '(no description)'}" for s in skills) or "No matching Skills."
 
 
 @register(

@@ -186,6 +186,7 @@ class Brain:
         allowed_tools = [
             "mcp__hive_mind__search_sessions",
             "mcp__hive_mind__list_skills",
+            "mcp__hive_mind__search_skills",
             "mcp__hive_mind__read_skill",
             "mcp__hive_mind__list_notes",
             "mcp__hive_mind__list_tasks",

@@ -128,6 +128,7 @@ def main() -> None:
     sub.add_parser("list_contacts")
     sub.add_parser("list_task_runs")
     sub.add_parser("list_skills")
+    p = sub.add_parser("search_skills"); p.add_argument("--query", required=True)
 
     p = sub.add_parser("search_sessions"); p.add_argument("--query", required=True)
     p.add_argument("--this_chat", action="store_true", help="search this chat's compacted earlier messages instead")
@@ -204,6 +205,8 @@ def main() -> None:
             print(_fmt_task_runs(memory_tools.list_task_runs()))
         elif args.command == "list_skills":
             print(_fmt_skills(memory_tools.list_skills()))
+        elif args.command == "search_skills":
+            print(_fmt_skills(memory_tools.search_skills(args.query)))
         elif args.command == "search_sessions" and args.this_chat:
             this_chat = os.environ.get("JARVIS_CODEX_SESSION_ID") or None
             print(memory_tools.format_archive_hits(memory_tools.search_this_chat_archive(this_chat, args.query)))
