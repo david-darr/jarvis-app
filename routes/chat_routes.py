@@ -158,8 +158,14 @@ async def stream_chat_message(body: ChatRequest, user: str = Depends(require_use
                 payload = item if isinstance(item, dict) else {"chunk": item}
                 yield f"data: {json.dumps(payload)}\n\n"
             yield "data: {\"done\": true}\n\n"
-        except Exception:
-            yield f"data: {json.dumps({'error': 'The response was interrupted. Check the selected model and CLI connection, then try again. Any partial reply has been saved.'})}\n\n"
+        except Exception as error:
+            kind = chat_service.failure_kind(error)
+            message = ("The selected model is rate limited. Choose another model to retry."
+                       if kind == "rate_limited" else
+                       "The message could not be completed. Check its attachments and references before retrying."
+                       if kind == "request_error" else
+                       "The selected model failed. Check its connection or choose another model. Any partial reply has been saved.")
+            yield f"data: {json.dumps({'error': message, 'error_kind': kind})}\n\n"
 
     return StreamingResponse(event_source(), media_type="text/event-stream")
 

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from functools import wraps
 
-from core import workspace, model_catalog, model_endpoints
+from core import attachments, chat_references, workspace, model_catalog, model_endpoints
 from core.auth import auth_manager
 from core.middleware import require_admin, require_user
 from core.session_manager import session_manager
@@ -41,6 +41,11 @@ class SetModelRequest(BaseModel):
     # doesn't know about efforts keeps sending. Validated against
     # core/model_catalog.py below, never passed through blind.
     effort: str | None = None
+
+
+class FallbackRequest(BaseModel):
+    model_endpoint_id: str
+    failed_index: int
 
 
 class SetWorkspaceRequest(BaseModel):
@@ -156,6 +161,56 @@ async def set_session_model(session_id: str, body: SetModelRequest, user: str = 
             session_manager.set_codex_thread_id(session_id, None)
         session_manager.set_model_endpoint(session_id, body.model_endpoint_id, override, effort)
     return {"ok": True, "model_endpoint_id": body.model_endpoint_id, "model_override": override, "effort": effort}
+
+
+@router.post("/{session_id}/fallback")
+@idle_session
+async def retry_with_model(session_id: str, body: FallbackRequest, user: str = Depends(require_user)) -> dict:
+    """Explicitly switch providers and remove only a failed empty turn for retry.
+
+    The client resends the saved user message after this returns. Validation
+    happens before changing the transcript, so a stale UI or lost attachment
+    cannot silently delete the user's last question.
+    """
+    session = session_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(404, "session not found")
+    endpoint = model_endpoints.get_endpoint(body.model_endpoint_id)
+    if endpoint is None:
+        raise HTTPException(400, "model endpoint not found")
+    messages = session.get("messages", [])
+    index = body.failed_index
+    if index != len(messages) - 1 or index < 1 or messages[index]["role"] != "assistant" or \
+            messages[index].get("status") != "failed" or messages[index - 1]["role"] != "user":
+        raise HTTPException(409, "This chat has changed since the failed response. Reopen it before retrying.")
+    failed, original = messages[index], messages[index - 1]
+    if failed.get("failure_kind") not in ("model_error", "rate_limited"):
+        raise HTTPException(409, "This turn is not eligible for model fallback")
+    if failed.get("content") or failed.get("failure_had_tools"):
+        raise HTTPException(409, "This failed response has partial text or tool activity. Switch models and continue instead.")
+    if endpoint["id"] == failed.get("failure_model_endpoint_id"):
+        raise HTTPException(400, "Choose a different model for fallback")
+    floor = (session.get("compactions") or [{}])[-1].get("through_index", 0)
+    if index - 1 < floor:
+        raise HTTPException(409, "This message is inside a compacted part of the chat")
+    saved_attachments = original.get("attachments") or []
+    if not saved_attachments and "[Attached file(s)" in (original.get("sent") or ""):
+        raise HTTPException(409, "The original attachments cannot be restored. Reattach them before sending again.")
+    if any(not isinstance(item, dict) or not isinstance(item.get("id"), str) or
+           not attachments.staged_file_info(item["id"])
+           for item in saved_attachments):
+        raise HTTPException(409, "An original attachment is no longer available. Reattach it before sending again.")
+    if original.get("image_attachment_ids") and endpoint["kind"] in ("local", "api") and not endpoint.get("supports_images"):
+        raise HTTPException(400, "Choose an image-capable model for this message")
+    if original.get("references"):
+        try:
+            chat_references.resolve(session_id, original["references"])
+        except ValueError:
+            raise HTTPException(409, "A selected reference is no longer available. Choose it again before sending.")
+    await chat_service.close_session_brain(session_id)
+    session_manager.rewind(session_id, index - 1)
+    session_manager.set_model_endpoint(session_id, endpoint["id"])
+    return {"ok": True, "model_endpoint_id": endpoint["id"]}
 
 
 @router.get("/{session_id}/context")

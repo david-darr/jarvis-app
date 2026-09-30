@@ -346,6 +346,11 @@ class CodexBrain:
                 failure = event.get("message") or (event.get("error") or {}).get("message") or "Codex could not complete this turn"
 
         rc = await proc.wait()
+        if failure and any(term in failure.lower() for term in
+                           ("429", "rate limit", "rate_limit", "too many requests")):
+            # A fresh thread cannot repair an account limit. Surface it so
+            # Chat can offer an explicit different model instead.
+            raise RuntimeError("Codex rate limited this turn")
         if rc != 0:
             # Self-heal any failed resume — not just the "no rollout found"
             # case (a persisted thread_id archived/deleted/pruned on the

@@ -42,6 +42,14 @@ async def list_endpoints(user: str = Depends(require_admin)) -> list[dict]:
     return [{**endpoint, "mark": model_marks.mark_for(endpoint)} for endpoint in model_endpoints.list_endpoints()]
 
 
+@router.get("/choices")
+async def model_choices(user: str = Depends(require_user)) -> list[dict]:
+    """Model-picker metadata, without connection URLs or credential state."""
+    return [{key: endpoint[key] for key in ("id", "name", "model", "kind", "supports_images")}
+            | {"mark": model_marks.mark_for(endpoint)}
+            for endpoint in model_endpoints.list_endpoints()]
+
+
 @router.get("/catalog")
 async def get_catalog(user: str = Depends(require_user)) -> dict:
     """Selectable models and their reasoning levels per endpoint kind — the

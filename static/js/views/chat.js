@@ -64,7 +64,7 @@ const ICON_GEAR = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" s
 //
 // ts is a unix-seconds float (session_manager.append_message) or omitted
 // for a card being built live during streaming (uses "now").
-function messageCard(role, text, ts, status = 'complete', imageSources = []) {
+function messageCard(role, text, ts, status = 'complete', imageSources = [], failure = null) {
   const time = new Date((ts || Date.now() / 1000) * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const body = el("div", { class: "msg-body" });
   renderMessageBody(body, text, activeSessionId, role === 'assistant');
@@ -88,6 +88,17 @@ function messageCard(role, text, ts, status = 'complete', imageSources = []) {
     card.insertBefore(images, actions);
   }
   if (status === 'interrupted') card.append(el('div', { class: 'msg-interrupted', text: 'Response interrupted · Partial reply saved' }));
+  if (status === 'failed') {
+    card.classList.add('msg-failed');
+    const label = failure?.failure_model_name || 'The selected model';
+    const partial = !!text || !!failure?.failure_had_tools;
+    card.append(el('div', { class: 'msg-interrupted', role: 'status',
+      text: failure?.failure_kind === 'rate_limited'
+        ? `${label} is rate limited. ${partial ? 'The partial attempt was saved; choose another model to continue.' : 'Choose another model to retry.'}`
+        : failure?.failure_kind === 'request_error'
+        ? 'The message could not be completed. Check its attachments and references before retrying.'
+        : `${label} failed. ${partial ? 'The partial attempt was saved; choose another model to continue.' : 'Choose another model to retry.'}` }));
+  }
   return card;
 }
 
@@ -117,6 +128,12 @@ function addRewindActions(messages, session) {
         onclick: () => rewindTo(session, index, msg, { edit: true }) }));
     }
     if (index === lastAssistant && index > floor && history[index - 1]?.role === 'user') {
+      if (msg.status === 'failed' && ['model_error', 'rate_limited'].includes(msg.failure_kind)) {
+        row.prepend(el('button', { type: 'button', class: 'msg-action-btn msg-fallback',
+          title: 'Choose another model after this failure',
+          text: msg.content || msg.failure_had_tools ? 'Switch model' : 'Try another model',
+          onclick: () => offerFallback(session, index, cards[index]) }));
+      }
       row.prepend(el('button', { type: 'button', class: 'msg-action-btn msg-regenerate', title: 'Regenerate this reply', text: 'Regenerate',
         onclick: () => rewindTo(session, index - 1, history[index - 1], { edit: false }) }));
     }
@@ -129,7 +146,8 @@ async function refreshRewindActions(sessionId, messages) {
   let session;
   try { session = await api(`/api/sessions/${sessionId}`); } catch { return; }
   if (sessionId !== activeSessionId || !messages.isConnected) return;
-  messages.querySelectorAll('.msg-edit, .msg-regenerate, .msg-fork').forEach((button) => button.remove());
+  messages.querySelectorAll('.msg-edit, .msg-regenerate, .msg-fork, .msg-fallback, .chat-fallback-panel')
+    .forEach((node) => node.remove());
   addRewindActions(messages, session);
 }
 
@@ -153,33 +171,144 @@ async function forkFrom(session, index) {
   }
 }
 
-async function rewindTo(session, keep, userMessage, { edit }) {
+async function offerFallback(session, failedIndex, card) {
+  if (!composerRefs || session.id !== activeSessionId) return;
+  if (chatStream.getInFlight(session.id)?.status === 'processing') {
+    toast('Wait for the reply to finish first', 'error');
+    return;
+  }
+  card.querySelector('.chat-fallback-panel')?.remove();
+  const failed = session.messages[failedIndex];
+  const original = session.messages[failedIndex - 1];
+  const switchOnly = !!failed.content || !!failed.failure_had_tools;
+  const panel = el('div', { class: 'chat-fallback-panel', role: 'group', 'aria-label': 'Other models' }, [
+    el('div', { class: 'chat-fallback-head' }, [
+      el('strong', { text: switchOnly ? 'Continue with another model' : 'Retry with another model' }),
+      el('button', { type: 'button', class: 'btn quiet', text: 'Close', onclick: () => panel.remove() }),
+    ]),
+    el('p', { text: switchOnly
+      ? 'This attempt has a partial reply or tool activity. Switching keeps it in the chat; you can ask the new model to continue.'
+      : 'The failed attempt will be replaced and your message sent again. Actions already taken by the failed model cannot be undone.' }),
+  ]);
+  const choices = el('div', { class: 'chat-fallback-choices' });
+  panel.append(choices);
+  card.append(panel);
+  let endpoints;
+  try { endpoints = await api('/api/models/choices'); }
+  catch (error) { choices.textContent = `Couldn't load models: ${error.message}`; return; }
+  if (!panel.isConnected || session.id !== activeSessionId) return;
+  const source = endpoints.find(endpoint => endpoint.id === failed.failure_model_endpoint_id);
+  const needsImages = !!original.image_attachment_ids?.length;
+  const alternatives = endpoints.filter(endpoint => endpoint.id !== failed.failure_model_endpoint_id &&
+    (!needsImages || endpoint.supports_images || ['claude_cli', 'codex_cli'].includes(endpoint.kind)));
+  alternatives.sort((a, b) => Number(a.kind === source?.kind) - Number(b.kind === source?.kind));
+  if (!alternatives.length) {
+    choices.append(el('span', { class: 'meta', text: needsImages
+      ? 'No other image-capable model is configured. Add one in Settings > Models.'
+      : 'No other model is configured. Add one in Settings > Models.' }));
+    return;
+  }
+  for (const endpoint of alternatives) {
+    const button = el('button', { type: 'button', class: 'btn quiet',
+      text: `${endpoint.name} · ${endpoint.model || 'CLI default'}` });
+    button.addEventListener('click', async () => {
+      if (session.id !== activeSessionId || chatStream.getInFlight(session.id)?.status === 'processing') return;
+      let latest;
+      try { latest = await api(`/api/sessions/${session.id}`); }
+      catch (error) { toast(error.message, 'error'); return; }
+      if (session.id !== activeSessionId || !panel.isConnected) return;
+      if (latest.messages.length !== failedIndex + 1 || latest.messages[failedIndex]?.status !== 'failed') {
+        toast('This chat changed since the failure. Reopen it before retrying.', 'error'); return;
+      }
+      if (!switchOnly && (composerRefs.input.value.trim() || stagedAttachments.length || chatReferences?.getSelected().length)) {
+        toast('Finish or clear the current draft before retrying the failed message.', 'error'); return;
+      }
+      button.disabled = true;
+      try {
+        if (switchOnly) {
+          await api(`/api/sessions/${session.id}/model`, { method: 'POST',
+            body: JSON.stringify({ model_endpoint_id: endpoint.id }) });
+          if (session.id === activeSessionId) await refreshModelPicker(endpoint.id);
+          panel.remove();
+          toast(`Switched to ${endpoint.name}. The partial attempt remains in this chat.`, 'success');
+        } else {
+          await rewindTo(latest, failedIndex - 1, latest.messages[failedIndex - 1],
+            { edit: false, fallbackEndpointId: endpoint.id });
+        }
+      } catch (error) {
+        if (!/^\d+: /.test(error.message)) toast(error.message, 'error');
+      }
+      finally { button.disabled = false; }
+    });
+    choices.append(button);
+  }
+}
+
+async function rewindTo(session, keep, userMessage, { edit, fallbackEndpointId = null }) {
   if (!composerRefs || session.id !== activeSessionId) return;
   if (chatStream.getInFlight(session.id)?.status === 'processing') { toast('Wait for the reply to finish first', 'error'); return; }
   const removed = (session.messages || []).length - keep;
   const hadAttachments = !!userMessage.sent && userMessage.sent !== userMessage.content && /attach/i.test(userMessage.sent);
+  const retryAttachments = fallbackEndpointId ? (userMessage.attachments || []) : [];
+  if (fallbackEndpointId && hadAttachments && !retryAttachments.length) {
+    toast('The original attachments are unavailable for retry. Reattach them and send with a new model.', 'error');
+    return;
+  }
+  const retryImageFiles = new Map();
+  for (const id of userMessage.image_attachment_ids || []) {
+    if (!fallbackEndpointId) break;
+    try {
+      const response = await fetch(`/api/chat/images/${encodeURIComponent(session.id)}/${encodeURIComponent(id)}`);
+      if (response.ok) retryImageFiles.set(id, await response.blob());
+    } catch { /* The saved image still sends; only the immediate preview is missing. */ }
+  }
   const notes = [];
   if (edit && removed > 2) notes.push(`The ${removed - 1} messages after it will be deleted.`);
-  if (hadAttachments) notes.push("Its attachments aren't sent again; attach them anew if the reply needs them.");
+  if (hadAttachments && !fallbackEndpointId) notes.push("Its attachments aren't sent again; attach them anew if the reply needs them.");
   if (notes.length) {
     const ok = await confirmDialog({ title: edit ? 'Edit this message?' : 'Regenerate this reply?', message: notes.join(' '),
       confirmLabel: edit ? 'Edit message' : 'Regenerate' });
     if (!ok) return;
   }
+  if (fallbackEndpointId && (session.id !== activeSessionId || composerRefs.input.value.trim() ||
+      stagedAttachments.length || chatReferences?.getSelected().length)) {
+    toast('Finish or clear the current draft before retrying the failed message.', 'error');
+    return;
+  }
   try {
-    await api(`/api/sessions/${session.id}/rewind`, { method: 'POST', body: JSON.stringify({ keep }) });
-  } catch (problem) { toast(problem.message.replace(/^\d+: /, ''), 'error'); return; }
+    if (fallbackEndpointId) {
+      await api(`/api/sessions/${session.id}/fallback`, { method: 'POST',
+        body: JSON.stringify({ failed_index: keep + 1, model_endpoint_id: fallbackEndpointId }) });
+    } else {
+      await api(`/api/sessions/${session.id}/rewind`, { method: 'POST', body: JSON.stringify({ keep }) });
+    }
+  } catch (problem) {
+    if (!/^\d+: /.test(problem.message)) toast(problem.message, 'error');
+    return;
+  }
   const { messages, input, sendBtn, attachStrip } = composerRefs;
   const sessionsList = document.getElementById('sessions-list');
-  await openSession(session.id, sessionsList, messages);
+  try { await openSession(session.id, sessionsList, messages); }
+  catch (error) {
+    toast(`The chat could not reopen after the model changed: ${error.message}`, 'error');
+    // Keep the original question below as an editable draft.
+    edit = true;
+  }
+  if (session.id !== activeSessionId || !messages.isConnected) return;
   const references = userMessage.references || [];
   const suffix = references.map(ref => `@${ref.kind}: ${ref.label}`).join('\n');
   const separator = userMessage.content.endsWith(`\n\n${suffix}`) ? `\n\n${suffix}` : suffix;
   input.value = suffix && userMessage.content.endsWith(separator)
     ? userMessage.content.slice(0, -separator.length) : userMessage.content;
   references.forEach(ref => chatReferences?.add(ref));
+  if (retryAttachments.length) {
+    stagedAttachments = retryAttachments.map(item => ({ id: item.id, filename: item.filename,
+      ...(retryImageFiles.has(item.id) ? { file: retryImageFiles.get(item.id) } : {}) }));
+    renderAttachStrip(attachStrip);
+  }
   input.dispatchEvent(new Event('input'));
   if (edit) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); return; }
+  if (fallbackEndpointId) toast('Model switched. Retrying your message now.', 'success');
   await sendMessage(messages, input, sendBtn, attachStrip);
 }
 
@@ -320,7 +449,8 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
     } else if (entry.status === "failed") {
       cursor.remove();
       renderMessageBody(replyBody, entry.text, sessionId);
-      replyCard.append(el('div', { class: 'msg-interrupted', role: 'status', text: entry.error || 'Response interrupted. Try sending your message again.' }));
+      replyCard.append(el('div', { class: 'msg-interrupted', role: 'status',
+        text: `${entry.error || 'The selected model failed.'}${entry.text ? ' The partial reply was saved.' : ''}` }));
       replyCard.classList.add("msg-failed");
       toast(`Message failed: ${entry.error || "connection dropped"}`, "error");
       unsubscribe();
@@ -1488,7 +1618,7 @@ async function refreshModelPicker(currentEndpointId, modelOverride = null, model
   const menu = document.getElementById("model-picker-menu");
   if (!label || !menu) return;
   const sessionId = activeSessionId;
-  const endpoints = await api("/api/models").catch(() => []);
+  const endpoints = await api("/api/models/choices").catch(() => []);
   if (sessionId !== activeSessionId || !menu.isConnected) return;
   menu.innerHTML = "";
 
@@ -2016,7 +2146,7 @@ async function openSession(sessionId, sessionsList, messages) {
   messages.innerHTML = "";
   for (const msg of session.messages) {
     messages.appendChild(messageCard(msg.role, msg.content, msg.ts, msg.status,
-      (msg.image_attachment_ids || []).map(id => `/api/chat/images/${encodeURIComponent(sessionId)}/${encodeURIComponent(id)}`)));
+      (msg.image_attachment_ids || []).map(id => `/api/chat/images/${encodeURIComponent(sessionId)}/${encodeURIComponent(id)}`), msg));
   }
   addRewindActions(messages, session);
   // Reattach to a turn still generating (David's ask 2026-09-12) — its

@@ -254,6 +254,26 @@ def _tool_rounds(brain: Optional[AnyBrain], endpoint: dict) -> Optional[dict]:
     return {"tool_rounds": {"endpoint_id": endpoint["id"], "messages": list(rounds)}}
 
 
+def failure_kind(error: BaseException) -> str:
+    """Expose only a coarse provider failure category, never raw exception text."""
+    if isinstance(error, (HTTPException, ValueError)):
+        return "request_error"
+    detail = f"{type(error).__name__} {error}".lower()
+    return "rate_limited" if any(term in detail for term in
+                                  ("429", "rate limit", "rate_limit", "ratelimit", "too many requests")) else "model_error"
+
+
+def _user_message_extra(references: list[dict] | None, attachment_ids: list[str] | None) -> dict:
+    extra = {"references": references} if references else {}
+    if attachment_ids:
+        saved = []
+        for item in attachment_ids:
+            info = attachments.staged_file_info(item)
+            saved.append({"id": item, "filename": info[1] if info else "Attachment"})
+        extra["attachments"] = saved
+    return extra
+
+
 def _apply_attachments(session_id: str, text: str, attachment_ids: list[str] | None) -> str:
     """Copies staged attachments into the session's active cwd (workspace if
     set, else the vault) and appends a note listing their paths so the
@@ -373,7 +393,7 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
                         references: list[dict] | None = None) -> str:
     image_ids = validate_image_attachments(session_id, attachment_ids)
     index = session_manager.append_message(session_id, "user", text,
-                                           extra={"references": references} if references else None)
+                                           extra=_user_message_extra(references, attachment_ids))
     endpoint = _resolve_endpoint(session_id)
     if endpoint is None:
         session_manager.append_message(session_id, "assistant", NO_MODEL_MESSAGE)
@@ -419,7 +439,7 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
                           references: list[dict] | None = None) -> AsyncIterator[str]:
     image_ids = validate_image_attachments(session_id, attachment_ids)
     index = session_manager.append_message(session_id, "user", text,
-                                           extra={"references": references} if references else None)
+                                           extra=_user_message_extra(references, attachment_ids))
     endpoint = _resolve_endpoint(session_id)
     if endpoint is None:
         session_manager.append_message(session_id, "assistant", NO_MODEL_MESSAGE)
@@ -428,8 +448,10 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
 
     reply_parts: list[str] = []
     brain = None
+    provider_started = False
     try:
         full_text = _prepare_sent_text(session_id, index, text, attachment_ids, reference_context)
+        provider_started = True
         brain, just_created = await _get_brain(session_id, endpoint, is_admin)
         if reference_context and isinstance(brain, (Brain, ExternalBrain)):
             brain.pending_reference_taint = True
@@ -448,8 +470,14 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
         # Includes client cancellation: preserve the visible partial answer.
         # Tools that ran before the Stop really happened; keep them, or the
         # next turn would not know a note was already created.
-        session_manager.append_message(session_id, "assistant", "".join(reply_parts), status="interrupted",
-                                       extra=_tool_rounds(brain, endpoint))
+        failed = isinstance(exc, Exception)
+        extra = _tool_rounds(brain, endpoint) or {}
+        if failed:
+            extra.update({"failure_kind": failure_kind(exc) if provider_started else "request_error",
+                          "failure_model_endpoint_id": endpoint["id"],
+                          "failure_model_name": endpoint["name"], "failure_had_tools": bool(extra)})
+        session_manager.append_message(session_id, "assistant", "".join(reply_parts),
+                                       status="failed" if failed else "interrupted", extra=extra)
         _remember_claude_session(session_id, brain, succeeded=False,
                                  cancelled=isinstance(exc, (asyncio.CancelledError, GeneratorExit)))
         await close_session_brain(session_id)
