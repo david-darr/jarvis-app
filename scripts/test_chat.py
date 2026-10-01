@@ -46,6 +46,7 @@ ENDPOINTS = {
     "claude": {"id": "claude", "kind": "claude_cli", "model": "endpoint-model"},
     "codex": {"id": "codex", "kind": "codex_cli", "model": "endpoint-model"},
     "local": {"id": "local", "kind": "local", "model": "local-model"},
+    "api": {"id": "api", "kind": "api", "model": "gpt-5.5", "base_url": "https://api.openai.com/v1"},
 }
 
 def _efforts(*names):
@@ -148,6 +149,19 @@ class ChatTests(unittest.TestCase):
             self.assertEqual(self.select(endpoint, override).status_code, 400)
         self.assertEqual(self.select("local").status_code, 200)
         self.assertEqual(client.post('/api/sessions/missing/model', json={}).status_code, 404)
+
+    def test_api_model_override_is_per_chat_and_reaches_runtime(self):
+        self.assertEqual(self.select("api", "gpt-6-astra").status_code, 200)
+        self.assertEqual(session_manager.get_session(self.sid)["model_override"], "gpt-6-astra")
+        with patch.object(chat_service.model_endpoints, "resolve_runtime",
+                          return_value=("https://api.openai.com/v1", "gpt-5.5", "test-key", None)):
+            brain = chat_service._build_brain(ENDPOINTS["api"], self.sid)
+        self.assertEqual(brain.model, "gpt-6-astra")
+        self.assertEqual(ENDPOINTS["api"]["model"], "gpt-5.5")
+        self.assertEqual(self.select("api", None).status_code, 200)
+        with patch.object(chat_service.model_endpoints, "resolve_runtime",
+                          return_value=("https://api.openai.com/v1", "gpt-5.5", "test-key", None)):
+            self.assertEqual(chat_service._build_brain(ENDPOINTS["api"], self.sid).model, "gpt-5.5")
 
     def test_busy_model_and_turn_are_rejected(self):
         chat_service._busy.add(self.sid)

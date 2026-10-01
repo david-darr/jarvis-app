@@ -243,9 +243,9 @@ class SessionManager:
 
     def set_model_endpoint(self, session_id: str, model_endpoint_id: Optional[str], model_override: Optional[str] = None,
                            model_effort: Optional[str] = None) -> dict:
-        """Pin an endpoint and optional CLI model; None means no model chosen.
+        """Pin an endpoint and optional chat-local model; None means no model chosen.
         model_override: None inherits the endpoint, empty string uses the CLI
-        default, a nonempty string selects an exact model for this chat only.
+        default (or API endpoint model), a nonempty string selects an exact model for this chat only.
         model_effort: None sends no reasoning effort at all (the behaviour
         every session had before the option existed); otherwise a value the
         caller has already validated against core/model_catalog.py.

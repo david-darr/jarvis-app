@@ -40,7 +40,7 @@ let speechStatus = { engine_available: true, active_model: null, models: [
   { name: 'tiny.en', label: 'Tiny', size_mb: 75, downloaded: false },
   { name: 'base.en', label: 'Base', size_mb: 142, downloaded: false },
 ] };
-const models = [{ id: 'claude', name: 'Claude Code', kind: 'claude_cli', model: 'configured-model' }, { id: 'codex', name: 'Codex CLI', kind: 'codex_cli', model: '' }, { id: 'local', name: 'Local', kind: 'local', model: 'local-model' }];
+const models = [{ id: 'claude', name: 'Claude Code', kind: 'claude_cli', model: 'configured-model' }, { id: 'codex', name: 'Codex CLI', kind: 'codex_cli', model: '' }, { id: 'local', name: 'Local', kind: 'local', model: 'local-model' }, { id: 'openai', name: 'OpenAI API', kind: 'api', model: 'gpt-5.5' }];
 // Stands in for core/model_catalog.py's response. "ultra" belongs to one
 // codex model and not the other on purpose — same asymmetry the backend
 // suite relies on, so the effort row is proven to be per-model here too.
@@ -54,6 +54,7 @@ const catalog = {
     { id: 'configured-model', display_name: 'Configured Model', description: 'Curated entry.', alias: null, default_effort: null, supported_efforts: effortList(['low', 'high']), context_window: 200000, effective_context_percent: null, source: 'curated', estimated: true },
   ],
 };
+const apiCatalog = [{ id: 'gpt-6-astra', display_name: 'GPT-6 Astra', description: '', alias: null, default_effort: null, supported_efforts: [], context_window: null, effective_context_percent: null, source: 'openai_api', estimated: false }];
 const chats = {
   s1: { id: 's1', title: 'A focused workspace', model_endpoint_id: 'claude', messages: [{ role: 'user', content: 'Help me shape this into a clear plan.' }, { role: 'assistant', content: rich }] },
   s2: { id: 's2', title: 'Another conversation', model_endpoint_id: 'codex', messages: [] },
@@ -84,6 +85,10 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/speech/status') return json(speechStatus);
     if (url.pathname === '/api/speech/transcribe') return json({ text: 'what is the weather' });
     if (url.pathname === '/api/models/catalog') return json(catalog);
+    if (url.pathname.startsWith('/api/models/') && url.pathname.endsWith('/catalog')) {
+      const id = url.pathname.split('/')[3];
+      return json(id === 'openai' ? apiCatalog : catalog[models.find(m => m.id === id)?.kind] || []);
+    }
     if (url.pathname === '/api/models') return json(models);
     if (url.pathname === '/api/projects') return json([]);
     if (url.pathname === '/api/chat/files/library') return json([{ session_id: 's1', title: chats.s1.title, files: chatFileRows }]);
@@ -115,7 +120,7 @@ const server = http.createServer(async (req, res) => {
         return json(chat);
       }
       if (match[2] === '/model') {
-        Object.assign(chat, { model_effort: data.effort ?? null, ...data });
+        Object.assign(chat, { model_override: data.model_override ?? null, model_effort: data.effort ?? null, ...data });
         // Mirrors core/session_manager.py: a model change invalidates the
         // stored occupancy, because the capacity it was measured against
         // no longer applies.
@@ -235,7 +240,9 @@ app.whenReady().then(async () => {
     await js("document.querySelector('#library-smoke').remove()");
     await js("document.querySelector('#chat-messages').scrollTop=0");
     await capture('desktop-chat');
-    await js("document.querySelector('#model-version-btn').click(); document.querySelector('#chat-model-id').value='exact-test-model'; document.querySelector('.model-version-form').requestSubmit()");
+    await js("document.querySelector('#model-version-btn').click()");
+    await waitFor("!!document.querySelector('#chat-model-id')");
+    await js("document.querySelector('#chat-model-id').value='exact-test-model'; document.querySelector('.model-version-form').requestSubmit()");
     await waitFor("document.querySelector('#model-version-btn').textContent==='exact-test-model'");
     assert.equal(chats.s1.model_override, 'exact-test-model');
     assert.equal(models[0].model, 'configured-model');
@@ -275,10 +282,24 @@ app.whenReady().then(async () => {
     assert.equal(requests.filter(r => r.path === '/api/sessions/s1/model' && r.data.effort === 'ultra').length, 1);
     // The smaller model genuinely advertises fewer levels — proving the row
     // is driven per-model, not by one shared provider-wide list.
-    await js("document.querySelector('#model-version-btn').click(); [...document.querySelectorAll('.model-catalog-item')].find(b=>b.textContent.includes('Catalog Lite')).click()");
+    await js("document.querySelector('#model-version-btn').click()");
+    await waitFor("[...document.querySelectorAll('.model-catalog-item')].some(b=>b.textContent.includes('Catalog Lite'))");
+    await js("[...document.querySelectorAll('.model-catalog-item')].find(b=>b.textContent.includes('Catalog Lite')).click()");
     await waitFor("document.querySelector('#model-version-btn').textContent==='Catalog Lite'");
     await js("document.querySelector('#model-version-btn').click()");
     await waitFor("document.querySelectorAll('.model-effort-btn').length===3");
+
+    // API connections share the version picker and persist a chat-local ID.
+    await js("document.querySelector('#model-picker-btn').click(); [...document.querySelectorAll('#model-picker-menu button')].find(b=>b.textContent.startsWith('OpenAI')).click()");
+    await waitFor("document.querySelector('#model-version-btn').textContent==='gpt-5.5'");
+    await js("document.querySelector('#model-version-btn').click()");
+    await waitFor("[...document.querySelectorAll('.model-catalog-name')].some(n=>n.textContent==='GPT-6 Astra')");
+    await js("[...document.querySelectorAll('.model-catalog-item')].find(b=>b.textContent.includes('GPT-6 Astra')).click()");
+    await waitFor("document.querySelector('#model-version-btn').textContent==='GPT-6 Astra'");
+    assert.equal(chats.s1.model_override, 'gpt-6-astra');
+    assert.equal(models.find(m=>m.id==='openai').model, 'gpt-5.5');
+    await js("document.querySelector('#model-picker-btn').click(); [...document.querySelectorAll('#model-picker-menu button')].find(b=>b.textContent.startsWith('Codex')).click()");
+    await waitFor("document.querySelector('#model-version-btn').textContent==='CLI default'");
 
     // -- context meter --------------------------------------------------
     // Hidden entirely until the server reports a real measurement.
@@ -336,7 +357,9 @@ app.whenReady().then(async () => {
     await js("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))");
     await waitFor("document.querySelectorAll('.browser-panel').length===0");
 
-    await js("document.querySelector('#model-version-btn').click(); [...document.querySelectorAll('#model-version-menu button')].find(b=>b.textContent==='Use CLI default').click()");
+    await js("document.querySelector('#model-version-btn').click()");
+    await waitFor("[...document.querySelectorAll('#model-version-menu button')].some(b=>b.textContent==='Use CLI default')");
+    await js("[...document.querySelectorAll('#model-version-menu button')].find(b=>b.textContent==='Use CLI default').click()");
     await waitFor("document.querySelector('#model-version-btn').textContent==='CLI default'");
     await waitFor("fetch('/api/sessions/s1').then(r=>r.json()).then(s=>s.model_override==='')");
     assert.equal(chats.s1.model_override, '');

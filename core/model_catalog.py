@@ -5,10 +5,12 @@ core/token_usage.py's context helpers and services/chat_service.py).
 
 Why this isn't one hardcoded table
 ----------------------------------
-The two CLI providers differ in what they'll actually tell us, so this module
-treats them differently rather than inventing a uniform fiction:
+The two CLI providers differ in what they'll actually tell us. The chat picker
+uses core/model_discovery.py for live, connection-scoped lists; this module
+keeps effort validation, context capacity, and offline fallbacks:
 
-- **codex_cli** reads Codex's OWN local catalog at `$CODEX_HOME/models_cache.json`
+- **codex_cli** uses Codex app-server's live model/list when available, shared
+  here for effort validation. Its fallback reads Codex's OWN local catalog at `$CODEX_HOME/models_cache.json`
   (default `~/.codex`). Verified live before writing this: the file is real,
   refreshed by the CLI itself, and carries exactly the fields needed —
   `slug`, `display_name`, `description`, `default_reasoning_level`,
@@ -22,7 +24,9 @@ treats them differently rather than inventing a uniform fiction:
   through the connected CLI" is exactly right, and this file IS what the
   connected CLI believes it can reach.
 
-- **claude_cli** has no equivalent. Checked before falling back to a curated
+- **claude_cli** has no local equivalent. Live discovery reads the current
+  Claude Code OAuth access token without refreshing or changing it; this
+  module retains a curated fallback. Checked before falling back to a curated
   table: `claude --help` documents aliases and full names but offers no
   non-interactive model list, and `~/.claude/stats-cache.json` — the only
   local file carrying a `contextWindow` field — was stale (last computed
@@ -46,6 +50,7 @@ never changes a turn.
 """
 import logging
 import os
+import time
 import typing
 
 from core.atomic_io import read_json
@@ -121,6 +126,13 @@ def _codex_cache_path() -> str:
 # be re-rendered on every session switch, so it is parsed only when the file
 # on disk actually changes.
 _codex_cache: tuple[tuple[float, int], list[dict]] | None = None
+_codex_live: tuple[float, list[dict]] | None = None
+
+
+def remember_codex_live(models: list[dict], ttl_seconds: int = 300) -> None:
+    """Share the app-server's current effort/capacity data with validation."""
+    global _codex_live
+    _codex_live = (time.monotonic() + ttl_seconds, models)
 
 
 def _load_codex_models() -> list[dict]:
@@ -201,6 +213,8 @@ def list_models(kind: str) -> list[dict]:
     model-ID field stays available either way, so the picker degrades to
     exactly the pre-catalog behaviour instead of blocking."""
     if kind == "codex_cli":
+        if _codex_live and time.monotonic() < _codex_live[0]:
+            return _codex_live[1]
         return _load_codex_models()
     if kind == "claude_cli":
         return _claude_catalog()

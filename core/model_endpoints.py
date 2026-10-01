@@ -4,14 +4,14 @@ OpenRouter/OpenAI itself, or the Claude Agent SDK/CLI). Mirrors Odysseus's
 core.database.ModelEndpoint (name/base_url/api_key/model list), JSON-backed
 here to match this project's storage convention rather than a SQL table.
 
-David's ask 2026-08-31: JARVIS ships with NO default model. `local`/`api`
-endpoints are treated as a plain OpenAI-compatible chat-completions API — one
-client (core/providers/openai_compatible.py) handles all of them, no
-per-vendor SDK. `claude_cli` is different: it's the Claude Agent SDK path
+David's ask 2026-08-31: JARVIS ships with NO default model. `local` endpoints
+and custom API URLs use OpenAI-compatible chat completions. Official Anthropic
+and OpenAI API hosts use native Messages and Responses transports through the
+same tool loop. `claude_cli` is different: it's the Claude Agent SDK path
 (core/brain.py, a tool-using agent with vault file access, not just a chat
 endpoint) wrapping the real `claude` CLI already logged in on the machine —
-no base_url or api_key needed, since that auth lives outside this app
-entirely. A chat session with no endpoint chosen at all gets a canned
+no base_url or api_key needed for chat. Model discovery reads the CLI's current
+access token without changing its login. A chat session with no endpoint gets a canned
 "add a model first" reply instead of silently falling back to any one of
 these (see services/chat_service.py).
 

@@ -644,7 +644,21 @@ export async function render(container, tabId, options = {}) {
   modelBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(modelMenu); });
   const versionBtn = el('button', { type: 'button', class: 'model-picker-btn', id: 'model-version-btn', text: 'Model version', hidden: true });
   const versionMenu = el('div', { class: 'model-picker-menu hidden version-menu', id: 'model-version-menu' });
-  versionBtn.addEventListener('click', e => { e.stopPropagation(); toggleMenu(versionMenu); });
+  versionBtn.addEventListener('click', async e => {
+    e.stopPropagation();
+    if (!versionMenu.classList.contains('hidden')) { toggleMenu(versionMenu); return; }
+    const sessionId = activeSessionId;
+    if (!sessionId) return;
+    versionBtn.disabled = true;
+    try {
+      const session = await api(`/api/sessions/${sessionId}`);
+      if (activeSessionId !== sessionId) return;
+      await refreshModelPicker(session.model_endpoint_id, session.model_override ?? null, session.model_effort ?? null);
+      if (activeSessionId === sessionId) toggleMenu(versionMenu);
+    } finally {
+      versionBtn.disabled = false;
+    }
+  });
   versionMenu.addEventListener('click', e => e.stopPropagation());
   const versionWrap = el('div', { class: 'model-picker-wrap' }, [versionBtn, versionMenu]);
 
@@ -1645,25 +1659,22 @@ function syncChatBusy(busy) {
   if (busy) document.querySelectorAll('.model-picker-menu').forEach(m => m.classList.add('hidden'));
 }
 
-// Fetched once per page load and shared by every chat — the catalog is
-// per-provider, not per-session, and re-fetching it on each session switch
-// would re-read Codex's ~220KB cache for no new information. A failure
-// caches an empty list rather than retrying in a loop: the custom model-ID
-// field stays available, so the picker degrades instead of breaking.
-let modelCatalogPromise = null;
-async function loadModelCatalog(kind) {
-  if (!modelCatalogPromise) modelCatalogPromise = api('/api/models/catalog').catch(() => ({}));
-  const catalog = await modelCatalogPromise;
-  return (catalog && catalog[kind]) || [];
+// Ask for this connection's catalog on each picker refresh. The server has a
+// short credential-scoped TTL, so a newly released model appears without a
+// browser reload while repeated chat switches do not hammer the provider.
+async function loadModelCatalog(endpoint) {
+  return api(`/api/models/${endpoint.id}/catalog`).catch(() => []);
 }
 
+let modelPickerGeneration = 0;
 async function refreshModelPicker(currentEndpointId, modelOverride = null, modelEffort = null) {
+  const generation = ++modelPickerGeneration;
   const label = document.getElementById("model-picker-label");
   const menu = document.getElementById("model-picker-menu");
   if (!label || !menu) return;
   const sessionId = activeSessionId;
   const endpoints = await api("/api/models/choices").catch(() => []);
-  if (sessionId !== activeSessionId || !menu.isConnected) return;
+  if (generation !== modelPickerGeneration || sessionId !== activeSessionId || !menu.isConnected) return;
   menu.innerHTML = "";
 
   const options = endpoints.map((ep) => ({
@@ -1706,16 +1717,16 @@ async function refreshModelPicker(currentEndpointId, modelOverride = null, model
   const versionBtn = document.getElementById('model-version-btn');
   const versionMenu = document.getElementById('model-version-menu');
   if (!versionBtn || !versionMenu) return;
-  const cli = ep && ['claude_cli', 'codex_cli'].includes(ep.kind);
-  versionBtn.hidden = !cli;
+  const selectable = ep && ['claude_cli', 'codex_cli', 'api'].includes(ep.kind);
+  versionBtn.hidden = !selectable;
   versionMenu.replaceChildren();
-  if (cli) {
+  if (selectable) {
     label.textContent = ep.name;
     // The model this chat will actually use: the session's own override
     // when set, otherwise whatever the endpoint is configured with.
     const effectiveModel = (modelOverride === null ? ep.model : modelOverride) || '';
-    const catalog = await loadModelCatalog(ep.kind);
-    if (sessionId !== activeSessionId || !versionMenu.isConnected) return;
+    const catalog = await loadModelCatalog(ep);
+    if (generation !== modelPickerGeneration || sessionId !== activeSessionId || !versionMenu.isConnected) return;
     const known = catalog.find(m => m.id === effectiveModel || m.alias === effectiveModel) || null;
     versionBtn.textContent = (known ? known.display_name : effectiveModel) || 'CLI default';
     if (modelEffort) versionBtn.textContent += ` · ${modelEffort}`;
@@ -1768,7 +1779,7 @@ async function refreshModelPicker(currentEndpointId, modelOverride = null, model
         || m.id.toLowerCase().includes(q)
         || (m.description || '').toLowerCase().includes(q));
       if (!matches.length) {
-        listWrap.appendChild(el('p', { class: 'muted', text: catalog.length ? 'No models match that search.' : 'No model list available for this CLI — enter an exact ID below.' }));
+        listWrap.appendChild(el('p', { class: 'muted', text: catalog.length ? 'No models match that search.' : 'No model list available for this connection — enter an exact ID below.' }));
         return;
       }
       for (const m of matches) {
@@ -1795,12 +1806,11 @@ async function refreshModelPicker(currentEndpointId, modelOverride = null, model
     renderList('');
 
     // -- custom ID, kept as a secondary escape hatch exactly as before: the
-    // catalog is what the CLI advertises locally, which is not a promise
-    // about what a given account can reach.
+    // Discovery can be unavailable or incomplete; keep the exact-ID path.
     const input = el('input', { id: 'chat-model-id', type: 'text', maxlength: '160', value: modelOverride ?? ep.model ?? '', placeholder: 'Exact model ID', autocomplete: 'off', spellcheck: 'false' });
     const form = el('form', { class: 'model-version-form', onsubmit: e => { e.preventDefault(); save(input.value.trim()); } }, [
       el('label', { for: 'chat-model-id', text: 'Custom model ID' }), input,
-      el('p', { class: 'muted', text: 'For a model your CLI account can reach that is not listed above. Applies to this chat only.' }),
+      el('p', { class: 'muted', text: 'For a model this connection can reach that is not listed above. Applies to this chat only.' }),
       el('button', { type: 'submit', class: 'btn', text: 'Apply model' }),
     ]);
 
@@ -1809,7 +1819,7 @@ async function refreshModelPicker(currentEndpointId, modelOverride = null, model
       listWrap,
       ...(effortRow.childElementCount ? [effortRow] : []),
       el('details', { class: 'model-custom-details' }, [el('summary', { text: 'Custom model ID' }), form]),
-      el('button', { type: 'button', class: 'model-picker-item', text: 'Use CLI default', onclick: () => save('') }),
+      ...(ep.kind === 'api' ? [] : [el('button', { type: 'button', class: 'model-picker-item', text: 'Use CLI default', onclick: () => save('') })]),
       el('button', { type: 'button', class: 'model-picker-item', text: 'Use endpoint setting', onclick: () => save(null) }));
   }
   syncChatBusy(chatStream.getInFlight(activeSessionId)?.status === 'processing');

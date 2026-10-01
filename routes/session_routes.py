@@ -131,14 +131,14 @@ async def star_session(session_id: str, body: StarSessionRequest, user: str = De
 
 @router.post("/{session_id}/model")
 async def set_session_model(session_id: str, body: SetModelRequest, user: str = Depends(require_user)) -> dict:
-    """Select a provider and (CLI only) a session-local model variant."""
+    """Select a provider and a session-local model variant."""
     endpoint = model_endpoints.get_endpoint(body.model_endpoint_id) if body.model_endpoint_id else None
     if body.model_endpoint_id and endpoint is None:
         raise HTTPException(400, "model endpoint not found")
     override = body.model_override
     if override is not None:
-        if not endpoint or endpoint["kind"] not in ("claude_cli", "codex_cli"):
-            raise HTTPException(400, "Model versions are available only for CLI endpoints")
+        if not endpoint or endpoint["kind"] not in ("claude_cli", "codex_cli", "api"):
+            raise HTTPException(400, "Model versions are available only for CLI and API endpoints")
         override = override.strip()
         import re
         if len(override) > 160 or (override and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/+\[\]-]*", override)):

@@ -1,8 +1,6 @@
-"""Generic OpenAI-compatible chat client — the one implementation every
-"bring your own model" endpoint routes through (local vLLM/Ollama/LM Studio,
-or a hosted API like OpenRouter/OpenAI), matching Odysseus's approach of
-treating every registered endpoint as an OpenAI-compatible /chat/completions
-API rather than writing a bespoke client per provider.
+"""Common API tool loop. Custom and local endpoints use OpenAI-compatible
+chat completions. Official Anthropic and OpenAI hosts use native Messages and
+Responses transports through core/providers/native_api.py.
 
 Real tool-calling loop added (David's ask 2026-08-31: shared memory +
 cross-session awareness "out of the box for all imported AI models both
@@ -57,6 +55,7 @@ from urllib.parse import urlparse
 import httpx
 
 from core import ollama_client
+from core.providers import native_api
 
 TIMEOUT_SECONDS = 120
 MAX_TOOL_ROUNDS = 4  # bounded so a model that keeps calling tools can't loop forever
@@ -290,6 +289,9 @@ async def _post_chat(client: httpx.AsyncClient, base_url: str, api_key: Optional
     than left in the JSON sent to non-Ollama servers verbatim, since this
     function is the boundary that decides which transport handles it."""
     num_ctx = body.pop("num_ctx", None)
+    if native_api.mode(base_url):
+        return await native_api.post(client, base_url, body["model"], api_key,
+                                     body["messages"], body.get("tools"))
     if num_ctx and ollama_client.is_ollama_url(base_url):
         return await ollama_client.chat_capped(
             body["model"], body["messages"], num_ctx, tools=body.get("tools"), base_url=base_url,
@@ -388,6 +390,15 @@ async def run_turn_stream(base_url: str, model: str, api_key: Optional[str], mes
     chat_capped() call and yields the whole reply at once (correctness over
     token-by-token smoothness for that specific case)."""
     if not tools:
+        if native_api.mode(base_url):
+            async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+                data = await native_api.post(client, base_url, model, api_key, messages)
+            if on_usage and data.get("usage"):
+                on_usage(data["usage"])
+            content = data["choices"][0]["message"].get("content") or ""
+            if content:
+                yield content
+            return
         if num_ctx and ollama_client.is_ollama_url(base_url):
             data = await ollama_client.chat_capped(model, messages, num_ctx, base_url=base_url)
             if on_usage and data.get("usage"):

@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from core import model_catalog, model_endpoints, model_marks, quota_usage, token_usage
+from core import model_catalog, model_discovery, model_endpoints, model_marks, quota_usage, token_usage
 from core.middleware import require_admin, require_user
 from core.providers import openai_compatible
 
@@ -52,8 +52,8 @@ async def model_choices(user: str = Depends(require_user)) -> list[dict]:
 
 @router.get("/catalog")
 async def get_catalog(user: str = Depends(require_user)) -> dict:
-    """Selectable models and their reasoning levels per endpoint kind — the
-    chat composer's model picker (David's ask 2026-09-15).
+    """Compatibility catalog for CLI models. The chat picker uses the
+    connection-scoped route below for live model discovery.
 
     require_user, not require_admin like the rest of this router: picking a
     model for your own chat is a normal per-session action (see
@@ -68,6 +68,16 @@ async def get_catalog(user: str = Depends(require_user)) -> dict:
     pre-catalog behaviour rather than blocking.
     """
     return {kind: model_catalog.list_models(kind) for kind in model_catalog.CATALOG_KINDS}
+
+
+@router.get("/{endpoint_id}/catalog")
+async def get_endpoint_catalog(endpoint_id: str, refresh: bool = False,
+                               user: str = Depends(require_user)) -> list[dict]:
+    """Current account-scoped choices for one connection; never exposes its key."""
+    endpoint = model_endpoints.get_endpoint(endpoint_id)
+    if endpoint is None:
+        raise HTTPException(404, "model endpoint not found")
+    return await model_discovery.list_for_endpoint(endpoint, force=refresh)
 
 
 @router.get("/usage")
