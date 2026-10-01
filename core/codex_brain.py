@@ -286,8 +286,12 @@ class CodexBrain:
         # default sent the calls to whatever was on 8420 (see
         # core/middleware.py's local_api_base). Full os.environ is preserved;
         # only these three vars are added.
+        from core import google_workspace
+        google_token = google_workspace.issue_chat_token(self.session_id) if self.is_admin and self.session_id else ""
         env = {**os.environ, "JARVIS_CODEX_SESSION_ID": self.session_id or "",
                "JARVIS_INTERNAL_TOKEN": INTERNAL_TOOL_TOKEN, "JARVIS_API_BASE": local_api_base()}
+        if google_token:
+            env["JARVIS_GOOGLE_CHAT_TOKEN"] = google_token
 
         proc = await asyncio.create_subprocess_exec(
             *args,
@@ -304,6 +308,8 @@ class CodexBrain:
             async for chunk in self._consume_process(proc, stderr_task, is_fresh_thread, user_text):
                 yield chunk
         finally:
+            if google_token:
+                google_workspace.revoke_chat_token(google_token)
             await _kill_process_tree(proc)
             if not stderr_task.done():
                 stderr_task.cancel()

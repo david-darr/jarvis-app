@@ -563,6 +563,16 @@ ipcMain.on("usage-overlay:hide", (event) => {
 });
 ipcMain.on("usage-overlay:open-app", (event) => { if (fromOverlayWindow(event)) showWindow(); });
 
+ipcMain.handle("google:open-sign-in", async (event, url) => {
+  if (!fromAppWindow(event)) return false;
+  let target;
+  try { target = new URL(url); } catch { return false; }
+  if (target.protocol !== "https:" || target.hostname !== "accounts.google.com"
+      || target.pathname !== "/o/oauth2/v2/auth") return false;
+  await shell.openExternal(target.toString());
+  return true;
+});
+
 ipcMain.handle("browser:open", (event, url, bounds) => {
   if (!fromAppWindow(event)) return { ok: false, reason: "denied" };
   return sideBrowser.open(url, bounds);

@@ -216,6 +216,9 @@ class Brain:
             # The read-only sandboxed browser, public pages only (David's call).
             "mcp__hive_mind__browse",
             "mcp__hive_mind__save_generated_file",
+            "mcp__hive_mind__google_drive",
+            "mcp__hive_mind__google_sheets",
+            "mcp__hive_mind__google_forms",
             # Canva image/design generation (David's ask 2026-09-10, "have
             # their claude code use Canva"). Pre-approves only the
             # generate-and-export surface actually needed for "create an

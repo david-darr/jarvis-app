@@ -50,5 +50,5 @@ def get_hive_mind_server(exclude_session_id: str | None = None, is_admin: bool =
     shared global instance, so a session never "finds" its own history."""
     ctx = tool_registry.ToolContext(session_id=exclude_session_id, is_admin=is_admin, turn_taint=turn_taint)
     tools = [tool(spec.name, spec.description, spec.schema)(_handler(spec.name, ctx))
-             for spec in tool_registry.specs(tool_registry.CLAUDE)]
+             for spec in tool_registry.specs(tool_registry.CLAUDE, is_admin)]
     return create_sdk_mcp_server(name="hive_mind", tools=tools)

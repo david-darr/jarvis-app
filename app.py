@@ -27,6 +27,7 @@ from routes import (
     workspace_routes,
     system_routes,
     integrations_routes,
+    google_routes,
     channels_routes,
     document_routes,
     vault_routes,
@@ -152,6 +153,7 @@ app.include_router(speech_routes.router)
 app.include_router(workspace_routes.router)
 app.include_router(system_routes.router)
 app.include_router(integrations_routes.router)
+app.include_router(google_routes.router)
 app.include_router(channels_routes.router)
 app.include_router(document_routes.router)
 app.include_router(vault_routes.router)

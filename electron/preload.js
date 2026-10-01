@@ -18,6 +18,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 // renderer the entire IPC surface and undo the point of this file.
 contextBridge.exposeInMainWorld("jarvis", {
   pickVaultFolder: () => ipcRenderer.invoke("pick-vault-folder"),
+  openGoogleSignIn: (url) => ipcRenderer.invoke("google:open-sign-in", url),
 
   screenGrab: {
     capture: () => ipcRenderer.invoke("screen-grab:capture"),

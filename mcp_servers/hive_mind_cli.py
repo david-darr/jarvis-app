@@ -59,6 +59,7 @@ failed with 401 (reproduced 2026-09-22). With no address, a write refuses
 rather than guess.
 """
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -82,6 +83,19 @@ def _internal_request(method: str, path: str, json_body: dict | None = None) -> 
     )
     resp.raise_for_status()
     return resp.json() if resp.content else {}
+
+
+def _google_request(area: str, arguments: dict) -> str:
+    api_base = os.environ.get("JARVIS_API_BASE")
+    token = os.environ.get("JARVIS_GOOGLE_CHAT_TOKEN")
+    if not api_base or not token:
+        raise RuntimeError("Google Workspace chat access is available only in an admin JARVIS chat")
+    response = httpx.post(
+        f"{api_base}/google/chat/tool", json={"area": area, "arguments": arguments},
+        headers={"X-JARVIS-Google-Chat-Token": token}, timeout=120.0,
+    )
+    response.raise_for_status()
+    return response.json()["result"]
 
 
 def _fmt_notes(notes: list[dict]) -> str:
@@ -186,10 +200,21 @@ def main() -> None:
 
     p = sub.add_parser("delete_event"); p.add_argument("--event_id", required=True)
 
+    for name in ("google_drive", "google_sheets", "google_forms"):
+        p = sub.add_parser(name)
+        p.add_argument("--action", required=True)
+        p.add_argument("--args_json", default="{}", help="Other action arguments as a JSON object")
+
     args = parser.parse_args()
 
     try:
-        if args.command == "list_notes":
+        if args.command in ("google_drive", "google_sheets", "google_forms"):
+            arguments = json.loads(args.args_json)
+            if not isinstance(arguments, dict):
+                raise ValueError("--args_json must be a JSON object")
+            print(_google_request(args.command.removeprefix("google_"),
+                                  {**arguments, "action": args.action}))
+        elif args.command == "list_notes":
             print(_fmt_notes(memory_tools.list_notes()))
         elif args.command == "list_tasks":
             print(_fmt_tasks(memory_tools.list_tasks()))

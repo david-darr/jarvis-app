@@ -2,6 +2,7 @@ import { api, el, toast, confirmDialog, emptyState } from "../api.js";
 import { ICONS } from "../icons.js";
 import { createVaultExplorer } from "../vaultExplorer.js";
 import { createVaultGraph } from "../vaultGraph.js";
+import { renderGoogleWorkspace } from "../googleWorkspace.js";
 
 // Library tab (Phase 7, David's ask 2026-09-01 "let's move on to the next
 // stage") — real document storage + bounded keyword search, deliberately
@@ -13,8 +14,9 @@ let activeSection = "documents";
 let activeVaultView = null;
 
 export async function render(container, tabId, options = {}) {
-  if (options.section === "vault" || options.section === "documents") activeSection = options.section;
+  if (["vault", "documents", "google"].includes(options.section)) activeSection = options.section;
   if (activeSection === "vault") renderVault(container);
+  else if (activeSection === "google") renderGoogle(container);
   else await renderList(container);
   return () => disposeVault();
 }
@@ -30,22 +32,31 @@ function libraryChrome(container, current) {
       el("h2", { text: "Library" }),
       el("div", { class: "sub", text: current === "vault"
         ? "Browse and read the notes in your connected Vault."
+        : current === "google" ? "Your connected Google Drive, Sheets, and Forms."
         : "A home for your references, drafts, and ideas worth keeping." }),
     ]),
   ]);
   const tabs = el("div", { class: "segmented-tabs library-tabs", role: "group", "aria-label": "Library section" });
-  for (const [id, label] of [["documents", "Documents & files"], ["vault", "Vault"]]) {
+  for (const [id, label] of [["documents", "Documents & files"], ["vault", "Vault"], ["google", "Google Drive"]]) {
     const button = el("button", { type: "button", class: "segmented-tab" + (id === current ? " active" : ""),
       text: label, "aria-pressed": id === current ? "true" : "false" });
     button.addEventListener("click", async () => {
       if (id === current) return;
       if (activeVaultView?.canLeave && !await activeVaultView.canLeave()) return;
       if (id === "vault") renderVault(container);
+      else if (id === "google") renderGoogle(container);
       else await renderList(container);
     });
     tabs.append(button);
   }
   return [header, tabs];
+}
+
+function renderGoogle(container) {
+  disposeVault();
+  activeSection = "google";
+  const [header, tabs] = libraryChrome(container, "google");
+  renderGoogleWorkspace(container, header, tabs);
 }
 
 function renderVault(container) {

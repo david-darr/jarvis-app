@@ -1253,6 +1253,44 @@ input[type="checkbox"]:checked::after { border-color: #141318; }
 .library-empty { padding: 20px; color: var(--text-dim); font-size: 12px; }
 .library-section-summary:focus-visible, .library-chat-summary:focus-visible, .library-document-card:focus-visible, .library-file-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 .library-tabs { margin: -8px 0 18px; }
+.google-workspace { display: grid; gap: 14px; padding-bottom: 28px; }
+.google-connect { display: grid; gap: 16px; padding: 22px; }
+.google-connect .meta { max-width: 76ch; line-height: 1.6; }
+.google-field-row, .google-toolbar, .google-actions, .google-breadcrumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.google-field-row input, .google-toolbar input[type='search'] { min-width: min(100%, 220px); flex: 1; }
+.google-account-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-panel); }
+.google-account-line strong { color: var(--text); font-size: 13px; }
+.google-toolbar { padding: 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-panel); }
+.google-toolbar select { min-width: 100px; }
+.google-trash-toggle { display: inline-flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 11px; }
+.google-breadcrumbs { min-height: 28px; }
+.google-browser { display: grid; grid-template-columns: minmax(240px, 360px) minmax(0, 1fr); min-height: 540px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-panel); overflow: hidden; }
+.google-file-list { min-width: 0; max-height: 70vh; overflow: auto; padding: 8px; border-right: 1px solid var(--border); }
+.google-file-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px; border: 0; border-radius: 8px; background: none; color: var(--text); text-align: left; cursor: pointer; }
+.google-file-row:hover, .google-file-row:focus-visible { background: var(--accent-dim); outline: none; }
+.google-type { flex: none; width: 52px; padding: 5px 2px; border-radius: 5px; background: var(--accent-dim); color: var(--accent); text-align: center; font-size: 9px; font-weight: 700; }
+.google-file-copy { min-width: 0; flex: 1; display: grid; gap: 3px; }
+.google-file-copy strong, .google-file-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.google-file-copy strong { font-size: 12px; }
+.google-file-copy small { color: var(--text-dim); font-size: 10px; }
+.google-detail { min-width: 0; max-height: 70vh; overflow: auto; padding: 22px; }
+.google-detail-head { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; }
+.google-detail-head h3 { margin: 3px 0 0; font-size: 19px; font-weight: 600; overflow-wrap: anywhere; }
+.google-actions { margin: 18px 0; }
+.google-detail-extra { display: grid; gap: 14px; }
+.google-detail .disclosure-panel { margin-top: 12px; }
+.google-inline-prompt { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px; margin: 0 0 12px; border: 1px solid var(--accent); border-radius: 9px; background: var(--bg-panel); }
+.google-inline-prompt label { width: 100%; color: var(--text-dim); font-size: 11px; }
+.google-inline-prompt input { flex: 1; min-width: min(100%, 160px); }
+.google-share-form, .google-member, .google-form-item, .google-editor-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.google-share-form input { flex: 1; min-width: 140px; }
+.google-member, .google-form-item { padding: 8px 0; border-bottom: 1px solid var(--border); color: var(--text-dim); font-size: 12px; }
+.google-editor-head { padding-top: 10px; border-top: 1px solid var(--border); }
+.google-sheet-grid { display: grid; grid-template-columns: repeat(var(--google-sheet-columns, 12), minmax(78px, 1fr)); overflow: auto; max-height: 450px; border: 1px solid var(--border); border-radius: 8px; }
+.google-folder-results { max-height: 230px; overflow: auto; display: grid; gap: 3px; }
+.google-sheet-grid input { width: 100%; min-width: 78px; padding: 7px; border: 1px solid var(--border); border-radius: 0; background: transparent; font-size: 11px; }
+.google-form-responses pre { padding: 10px; border: 1px solid var(--border); border-radius: 8px; overflow: auto; font-size: 11px; }
+@media (max-width: 760px) { .google-browser { display: flex; flex-direction: column; } .google-file-list { max-height: 300px; border-right: 0; border-bottom: 1px solid var(--border); } .google-detail { max-height: none; } }
 .library-vault-page { width: 100%; max-width: 1440px; margin: 0 auto; padding-bottom: 24px; }
 .library-vault-page .view-header { margin-bottom: 20px; }
 .library-vault-intro { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 24px 0 14px; }

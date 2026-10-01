@@ -637,3 +637,40 @@ async def _browse(args, ctx):
         return f"Could not read {page['url']}: {page['error']}"
     links = "\n".join(f"- {l['text'] or '(no text)'}: {l['url']}" for l in page["links"]) or "(none)"
     return f"Title: {page['title']}\nURL: {page['url']}\n\n{page['text']}\n\nLinks:\n{links}"
+
+
+# Google Workspace uses one permission decision per mutation, inside the
+# shared handler. The CLI wrapper calls that same handler through the backend.
+_google_fields = {
+    "action": _str("Operation to perform"), "file_id": _str("Google file ID"),
+    "query": _str("Drive name search"), "parent": _str("Drive folder ID"),
+    "kind": _str("all, folder, sheet, or form"), "trashed": {"type": "boolean"},
+    "page_token": _str(), "name": _str(), "permission_id": _str(),
+    "email": _str(), "role": _str("reader, commenter, or writer"),
+    "permission_type": _str("user, group, domain, or anyone"), "domain": _str(),
+    "title": _str(), "cell_range": _str("Sheets A1 range"),
+    "local_path": _str("Local file to upload to Google Drive, up to 25 MB"),
+    "values": {"type": "array"}, "requests": {"type": "array"},
+    "published": {"type": "boolean"},
+}
+
+
+@register("google_drive", "Manage connected Google Drive. Actions: list, info, upload, create_folder, rename, move, copy, trash, restore, star, unstar, delete, permissions, share, update_permission, revoke, revisions. Use Library to connect an account first.",
+          _object(_google_fields, ("action",)), admin_only=True)
+async def _google_drive(args, ctx):
+    from core.google_chat_tools import execute
+    return await execute("drive", args, ctx)
+
+
+@register("google_sheets", "Read and edit Google Sheets. Actions: get (metadata), values (provide cell_range), create, update, append, clear, batch. Use Google Drive list to find spreadsheet IDs.",
+          _object(_google_fields, ("action",)), admin_only=True)
+async def _google_sheets(args, ctx):
+    from core.google_chat_tools import execute
+    return await execute("sheets", args, ctx)
+
+
+@register("google_forms", "Create and manage Google Forms. Actions: get, responses, create, batch, publish. Use Google Drive list to find form IDs.",
+          _object(_google_fields, ("action",)), admin_only=True)
+async def _google_forms(args, ctx):
+    from core.google_chat_tools import execute
+    return await execute("forms", args, ctx)
