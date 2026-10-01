@@ -316,6 +316,15 @@ async function rewindTo(session, keep, userMessage, { edit, fallbackEndpointId =
 
 let activeSessionId = null;
 let activeTimeline = null;
+function syncPermissionMode(mode = 'base') {
+  const select = document.getElementById('chat-permission-mode');
+  if (!select) return;
+  select.value = mode === 'auto' ? 'auto' : 'base';
+  select.dataset.saved = select.value;
+  select.closest('.chat-permission-control').dataset.mode = select.value;
+  const notice = document.getElementById('chat-permission-notice');
+  if (notice) notice.hidden = select.value !== 'auto';
+}
 let activeProjectFilter = null; // David's ask 2026-09-12 — null = "All Chats"
 let stagedAttachments = []; // [{id, filename}]
 let activeImagePreview = null;
@@ -669,6 +678,29 @@ export async function render(container, tabId, options = {}) {
     title: "Files in this chat", "aria-label": "Files in this chat",
     onclick: () => activeSessionId ? openChatFiles(activeSessionId) : toast("Open a chat to see its files", "error") });
   filesBtn.insertAdjacentHTML("beforeend", ICON_DOC);
+  const autoModeOption = el('option', { value: 'auto', text: 'Auto', disabled: true });
+  const permissionMode = el('select', { id: 'chat-permission-mode', 'aria-label': 'Chat permission mode',
+    title: 'Base uses current permissions. Auto approves chat tool requests; Codex Auto also removes its workspace sandbox. Admin only.' }, [
+    el('option', { value: 'base', text: 'Base' }), autoModeOption,
+  ]);
+  const permissionControl = el('label', { class: 'chat-permission-control', 'data-mode': 'base' }, [
+    el('span', { text: 'Mode' }), permissionMode,
+  ]);
+  api('/api/auth/status').then(status => { autoModeOption.disabled = !status.is_admin; }).catch(() => {});
+  permissionMode.addEventListener('change', async () => {
+    const requested = permissionMode.value;
+    const previous = permissionMode.dataset.saved || 'base';
+    let target = activeSessionId;
+    permissionMode.disabled = true;
+    try {
+      if (!target) target = (await createSession({ preserveAttachments: true })).id;
+      const result = await api(`/api/sessions/${target}/permission-mode`, { method: 'POST',
+        body: JSON.stringify({ mode: requested }) });
+      if (activeSessionId === target) syncPermissionMode(result.mode);
+    } catch {
+      if (!target || activeSessionId === target) syncPermissionMode(previous);
+    } finally { permissionMode.disabled = false; }
+  });
   // Context meter (David's ask 2026-09-15) — how full THIS chat's context
   // currently is, which is a different question from the Home tab's
   // cumulative token spend. Hidden until a turn actually reports usable
@@ -691,7 +723,7 @@ export async function render(container, tabId, options = {}) {
   const captureBtn = el("button", { type: "button", class: "input-icon-btn", title: "Capture screen",
     "aria-label": "Capture from this device", onclick: () => captureScreenshot(attachStrip) });
   captureBtn.insertAdjacentHTML("beforeend", ICON_CAPTURE);
-  const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, captureBtn, filesBtn, workspacePill, contextPill, compactBtn]);
+  const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, captureBtn, filesBtn, permissionControl, workspacePill, contextPill, compactBtn]);
   // Dictation (David's ask 2026-09-15). Hidden outright when the browser
   // cannot record, rather than offered and then failing on click.
   const micBtn = el("button", { type: "button", class: "input-icon-btn chat-mic-btn", id: "chat-mic", title: "Dictate", "aria-label": "Dictate a message" });
@@ -707,7 +739,10 @@ export async function render(container, tabId, options = {}) {
 
   const composer = el("div", { class: "glass chat-input-bar border-beam" }, [inputTop, inputBottom]);
   const queueHost = el('div', { class: 'chat-queue', hidden: true, 'aria-live': 'polite' });
-  const dock = el('div', { class: 'chat-composer-dock' }, [queueHost, attachStrip, composer, el("div", { class: "composer-hint", text: "@ to add a file, note, or chat · Enter to send · Shift + Enter for a new line" })]);
+  const dock = el('div', { class: 'chat-composer-dock' }, [queueHost, attachStrip, composer,
+    el('div', { id: 'chat-permission-notice', class: 'chat-permission-notice', hidden: true,
+      text: 'Auto approves chat permission requests, including after reading outside content. Codex Auto also removes its workspace sandbox.' }),
+    el("div", { class: "composer-hint", text: "@ to add a file, note, or chat · Enter to send · Shift + Enter for a new line" })]);
   composerRefs = { messages, input, sendBtn, attachStrip, queueHost };
   main.append(messages, dock);
   const timeline = mountChatTimeline(main, messages, () => activeSessionId);
@@ -740,6 +775,7 @@ export async function render(container, tabId, options = {}) {
     activeUnsubscribers.forEach(unsub => unsub());
     activeUnsubscribers.length = 0;
     activeSessionId = null;
+    syncPermissionMode();
     renderQueue();
     clearStagedAttachments();
     chatReferences?.clear();
@@ -2125,6 +2161,7 @@ async function createSession({ preserveAttachments = false } = {}) {
     stagedAttachments = draftFiles;
     renderAttachStrip(document.getElementById('attach-strip'));
   }
+  return session;
 }
 
 async function openSession(sessionId, sessionsList, messages) {
@@ -2153,6 +2190,7 @@ async function openSession(sessionId, sessionsList, messages) {
   [...sessionsList.children].forEach((c) => c.classList.remove("active"));
   const session = await api(`/api/sessions/${sessionId}`);
   if (!messages.isConnected || activeSessionId !== sessionId) return;
+  syncPermissionMode(session.permission_mode);
   messages.innerHTML = "";
   for (const msg of session.messages) {
     messages.appendChild(messageCard(msg.role, msg.content, msg.ts, msg.status,

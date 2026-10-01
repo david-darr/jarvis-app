@@ -79,13 +79,26 @@ function build(session) {
   const title = el('div', { class: 'side-chat-title', text: session.title, title: session.title });
   const makeMain = el('button', { type: 'button', class: 'btn side-chat-promote', text: 'Make main', title: 'Swap this chat with the main one' });
   const close = el('button', { type: 'button', class: 'input-icon-btn side-chat-close', 'aria-label': 'Close side chat', title: 'Close', text: '×' });
+  const autoOption = el('option', { value: 'auto', text: 'Auto', disabled: true });
+  const modeSelect = el('select', { class: 'side-chat-permission-mode', 'aria-label': 'Side chat permission mode',
+    title: 'Base uses current permissions. Auto approves chat tool requests; Codex Auto also removes its workspace sandbox. Admin only.' }, [
+    el('option', { value: 'base', text: 'Base' }), autoOption,
+  ]);
+  modeSelect.value = session.permission_mode === 'auto' ? 'auto' : 'base';
+  modeSelect.dataset.saved = modeSelect.value;
+  const modeControl = el('label', { class: 'chat-permission-control', 'data-mode': modeSelect.value }, [
+    el('span', { text: 'Mode' }), modeSelect,
+  ]);
+  const modeNotice = el('div', { class: 'chat-permission-notice', hidden: modeSelect.value !== 'auto',
+    text: 'Auto approvals on. Codex Auto removes its workspace sandbox.' });
+  api('/api/auth/status').then(status => { autoOption.disabled = !status.is_admin; }).catch(() => {});
   const divider = el('div', { class: 'side-chat-divider', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Resize side chat', tabindex: '0' });
   pane = el('section', { class: 'side-chat', 'aria-label': `Side chat: ${session.title}`, 'data-session-id': session.id }, [
     divider,
     el('div', { class: 'side-chat-inner' }, [
-      el('header', { class: 'side-chat-header' }, [title, el('div', { class: 'side-chat-actions' }, [makeMain, close])]),
+      el('header', { class: 'side-chat-header' }, [title, el('div', { class: 'side-chat-actions' }, [modeControl, makeMain, close])]),
       messages,
-      el('div', { class: 'side-chat-composer glass' }, [input, send]),
+      el('div', { class: 'side-chat-composer glass' }, [input, send, modeNotice]),
     ]),
   ]);
   for (const msg of session.messages) messages.append(card(msg.role, msg.content));
@@ -96,6 +109,23 @@ function build(session) {
   wireResize(divider);
 
   close.addEventListener('click', closeSideChat);
+  modeSelect.addEventListener('change', async () => {
+    const requested = modeSelect.value;
+    const previous = modeSelect.dataset.saved;
+    modeSelect.disabled = true;
+    try {
+      const result = await api(`/api/sessions/${session.id}/permission-mode`, { method: 'POST',
+        body: JSON.stringify({ mode: requested }) });
+      if (sessionId === session.id && pane?.isConnected) {
+        modeSelect.value = result.mode;
+        modeSelect.dataset.saved = result.mode;
+        modeControl.dataset.mode = result.mode;
+        modeNotice.hidden = result.mode !== 'auto';
+      }
+    } catch {
+      modeSelect.value = previous;
+    } finally { modeSelect.disabled = false; }
+  });
   makeMain.addEventListener('click', () => {
     // A swap: the main chat's conversation moves into this pane.
     const previousMain = hooks.mainSessionId?.();

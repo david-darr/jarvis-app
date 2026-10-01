@@ -55,6 +55,7 @@ class SessionManager:
             "updated_at": now,
             "messages": [],
             "model_endpoint_id": None,  # None = no model chosen yet (David's ask 2026-08-31: no default model — see services/chat_service.py's NO_MODEL_MESSAGE)
+            "permission_mode": "base",  # Auto is a per-chat, explicit admin choice.
             "workspace_dir": None,  # None = agent's tools stay scoped to the vault
             # Codex CLI's own server-side thread id (see core/codex_brain.py) —
             # None until this session's first turn through a codex_cli
@@ -110,6 +111,7 @@ class SessionManager:
             "updated_at": now,
             "messages": kept,
             "model_endpoint_id": source.get("model_endpoint_id"),
+            "permission_mode": "base",  # A fork never inherits an automatic approval choice.
             "model_override": source.get("model_override"),
             "model_effort": source.get("model_effort"),
             "workspace_dir": source.get("workspace_dir"),
@@ -277,6 +279,35 @@ class SessionManager:
         session["model_override"] = model_override
         session["model_effort"] = model_effort
         return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
+
+    def set_permission_mode(self, session_id: str, mode: str) -> dict:
+        if mode not in ("base", "auto"):
+            raise ValueError("Unknown chat permission mode")
+        session = self._require(session_id)
+        session["permission_mode"] = mode
+        # Codex resumes with the sandbox chosen at thread creation. A mode
+        # change must start a new thread so the old policy cannot survive.
+        session["codex_thread_id"] = None
+        return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
+
+    def bind_execution_admin(self, session_id: str, is_admin: bool) -> bool:
+        """Keep CLI threads from crossing an admin/non-admin boundary.
+
+        Legacy threads have no recorded principal, so their privilege level
+        cannot be proven. Replay saved text into a fresh thread once.
+        Returns whether a cached brain must be discarded.
+        """
+        session = self._require(session_id)
+        previous = session.get("execution_admin")
+        unknown_thread = previous is None and bool(session.get("claude_session_id") or session.get("codex_thread_id"))
+        changed = previous is not None and previous != is_admin
+        if unknown_thread or changed:
+            _clear_claude_session(session)
+            session["codex_thread_id"] = None
+        if previous is None or changed or unknown_thread:
+            session["execution_admin"] = is_admin
+            store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
+        return unknown_thread or changed
 
     def set_context_state(self, session_id: str, state: Optional[dict]) -> None:
         """Records this chat's CURRENT context occupancy (David's ask

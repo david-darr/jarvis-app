@@ -11,9 +11,9 @@ is never" — regardless of `approval_policy`, or the `exec_permission_
 approvals`/`guardian_approval`/`tool_call_mcp_elicitation`/`mcp_2026_07_28`
 feature flags. The only flag that bypasses it, `--dangerously-bypass-
 approvals-and-sandbox`, also removes ALL sandboxing (not just MCP
-approval) — an unacceptable trade against Phase 1's workspace-write
-confinement, and correctly refused when tried. This is a real upstream
-CLI limitation, not a config gap.
+approval). Base mode keeps the workspace-write boundary and uses this CLI
+wrapper. An admin chat explicitly switched to Auto may use that flag by
+David's later choice. This is a real upstream CLI limitation, not a config gap.
 
 Pivoted (David's explicit choice) to the mechanism that already works
 headlessly with zero approval friction: Codex's native shell tool

@@ -99,7 +99,11 @@ async def _get_brain(session_id: str, endpoint: dict, is_admin: bool = False) ->
     fresh connection with no live conversation state yet, so it's the one
     moment a Claude-CLI Brain needs its prior transcript primed back in (see
     _prime_with_history)."""
+    principal_changed = session_manager.bind_execution_admin(session_id, is_admin)
     brain = _brains.get(session_id)
+    if brain is not None and (principal_changed or brain.is_admin != is_admin):
+        await close_session_brain(session_id)
+        brain = None
     if brain is not None:
         # A signed-in MCP server's token renewed here changes the header the
         # open Claude connection was built with, so the check below

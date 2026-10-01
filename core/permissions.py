@@ -141,6 +141,13 @@ def audit() -> list[dict]:
     return _load()["audit"]
 
 
+def record_mode_change(session_id: str, mode: str, user: str) -> None:
+    data = _load()
+    _record(data, {"decision": "chat_mode_changed", "session_id": session_id,
+                   "mode": mode, "by": user})
+    _save(data)
+
+
 def revoke(rule_id: str) -> bool:
     data = _load()
     remaining = [rule for rule in data["rules"] if rule["id"] != rule_id]
@@ -264,6 +271,19 @@ async def decide(*, surface: str, tool: str, arguments: dict, title: str = "", d
                  force_prompt: bool = False) -> Decision:
     """Answer from a rule, or ask the person and wait."""
     target = target if target is not None else derive_target(tool, arguments)
+    # Auto is an explicit, per-chat admin choice. It answers broker requests
+    # for this chat only, including requests from a tainted turn; it does not
+    # add a standing grant or change the policy for other chats/tasks.
+    if is_admin and surface.startswith("chat:"):
+        from core.session_manager import session_manager
+        session_id = surface.removeprefix("chat:")
+        session = session_manager.get_session(session_id)
+        if session and session.get("permission_mode") == "auto":
+            data = _load()
+            _record(data, {"decision": "allow", "source": "chat_auto", "session_id": session_id,
+                           "tool": tool, "content": target})
+            _save(data)
+            return Decision("allow", "Allowed by this chat's Auto mode.")
     # A tainted turn can force a fresh decision without revoking the person's
     # standing grant for future clean turns.
     saved = None if force_prompt else stored_decision(surface, tool, target, is_admin)

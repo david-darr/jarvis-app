@@ -2,8 +2,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from functools import wraps
+from typing import Literal
 
-from core import attachments, chat_references, workspace, model_catalog, model_endpoints
+from core import attachments, chat_references, workspace, model_catalog, model_endpoints, permissions
 from core.auth import auth_manager
 from core.middleware import require_admin, require_user
 from core.session_manager import session_manager
@@ -41,6 +42,10 @@ class SetModelRequest(BaseModel):
     # doesn't know about efforts keeps sending. Validated against
     # core/model_catalog.py below, never passed through blind.
     effort: str | None = None
+
+
+class SetPermissionModeRequest(BaseModel):
+    mode: Literal["base", "auto"]
 
 
 class FallbackRequest(BaseModel):
@@ -101,7 +106,10 @@ async def get_session(session_id: str, user: str = Depends(require_user)) -> dic
     session = session_manager.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
-    return _for_client(session)
+    result = _for_client(session)
+    if not auth_manager.is_admin(user):
+        result = {**result, "permission_mode": "base"}
+    return result
 
 
 @router.patch("/{session_id}")
@@ -161,6 +169,22 @@ async def set_session_model(session_id: str, body: SetModelRequest, user: str = 
             session_manager.set_codex_thread_id(session_id, None)
         session_manager.set_model_endpoint(session_id, body.model_endpoint_id, override, effort)
     return {"ok": True, "model_endpoint_id": body.model_endpoint_id, "model_override": override, "effort": effort}
+
+
+@router.post("/{session_id}/permission-mode")
+@idle_session
+async def set_session_permission_mode(session_id: str, body: SetPermissionModeRequest,
+                                      user: str = Depends(require_user)) -> dict:
+    if body.mode == "auto" and not auth_manager.is_admin(user):
+        raise HTTPException(403, "Auto mode is available only to admins")
+    session = session_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(404, "session not found")
+    if session.get("permission_mode", "base") != body.mode:
+        await chat_service.close_session_brain(session_id)
+        session_manager.set_permission_mode(session_id, body.mode)
+        permissions.record_mode_change(session_id, body.mode, user)
+    return {"mode": body.mode}
 
 
 @router.post("/{session_id}/fallback")
