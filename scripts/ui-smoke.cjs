@@ -93,10 +93,15 @@ function fixture(url) {
   if (route === "/api/tasks") return list(tasks);
   if (route === "/api/tasks/builtin") return ["Daily briefing", "Review priorities", "Organize memory", "Inbox triage"].map((label, i) => ({ label, description: "Keep the important things in view with a regular review.", action_id: "routine" + i, enabled: i === 0 && !empty, task_id: "t1", uses_model: true, default_daily_time: "07:00" }));
   if (route === "/api/models") return list(models);
+  if (route === "/api/models/choices") return list(models.map((m) => ({ ...m, supports_images: m.kind !== "local" })));
   if (route === "/api/speech/status") return { engine_available: true, active_model: null, models: [
     { name: "tiny.en", label: "Tiny", size_mb: 75, description: "Fastest, roughest.", downloaded: false },
     { name: "base.en", label: "Base", size_mb: 142, description: "A good balance for dictation.", downloaded: true },
   ] };
+  if (/^\/api\/models\/[^/]+\/catalog$/.test(route)) {
+    const kind = models.find((m) => m.id === route.split("/")[3])?.kind;
+    return fixture(new URL("http://fixture/api/models/catalog"))[kind] || [];
+  }
   if (route === "/api/models/catalog") return {
     claude_cli: [{ id: "workspace-large", display_name: "Workspace Large", description: "Most capable model for complex work.", alias: null, default_effort: null, supported_efforts: ["low", "high"].map(effort => ({ effort, description: effort + " reasoning" })), context_window: 200000, effective_context_percent: null, source: "curated", estimated: true }],
     codex_cli: [{ id: "workspace-fast", display_name: "Workspace Fast", description: "Balances speed and reasoning depth.", alias: null, default_effort: "medium", supported_efforts: ["low", "medium", "high"].map(effort => ({ effort, description: effort + " reasoning" })), context_window: 272000, effective_context_percent: 95, source: "cli_cache", estimated: false }],

@@ -90,6 +90,8 @@ const server = http.createServer(async (req, res) => {
       return json(id === 'openai' ? apiCatalog : catalog[models.find(m => m.id === id)?.kind] || []);
     }
     if (url.pathname === '/api/models') return json(models);
+    if (url.pathname === '/api/auth/status') return json({ auth_enabled: false, setup_required: false, username: 'Alex', is_admin: true });
+    if (url.pathname === '/api/models/choices') return json(models.map(m => ({ ...m, supports_images: m.kind !== 'local' })));
     if (url.pathname === '/api/projects') return json([]);
     if (url.pathname === '/api/chat/files/library') return json([{ session_id: 's1', title: chats.s1.title, files: chatFileRows }]);
     if (url.pathname === '/api/chat/files') return json(url.searchParams.get('session_id') === 's1' ? chatFileRows : []);
@@ -179,7 +181,8 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname.endsWith('/answer')) { answers.push({ path: url.pathname, choice: data.choice }); return json({ status: 'answered' }); }
       return json({ rules: [], audit: [] });
     }
-    res.writeHead(404); json({ detail: 'Missing fixture: ' + url.pathname }); return;
+    console.warn('chat-smoke: missing fixture ' + url.pathname);
+    res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ detail: 'Missing fixture: ' + url.pathname })); return;
   }
   const target = path.resolve(root, '.' + url.pathname);
   if (!target.startsWith(path.join(root, 'static') + path.sep)) { res.writeHead(404); res.end(); return; }

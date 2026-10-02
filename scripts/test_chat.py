@@ -43,10 +43,10 @@ app.include_router(chat_routes.router)
 app.include_router(session_routes.router)
 client = TestClient(app)
 ENDPOINTS = {
-    "claude": {"id": "claude", "kind": "claude_cli", "model": "endpoint-model"},
-    "codex": {"id": "codex", "kind": "codex_cli", "model": "endpoint-model"},
-    "local": {"id": "local", "kind": "local", "model": "local-model"},
-    "api": {"id": "api", "kind": "api", "model": "gpt-5.5", "base_url": "https://api.openai.com/v1"},
+    "claude": {"id": "claude", "name": "Claude", "kind": "claude_cli", "model": "endpoint-model"},
+    "codex": {"id": "codex", "name": "Codex", "kind": "codex_cli", "model": "endpoint-model"},
+    "local": {"id": "local", "name": "Local", "kind": "local", "model": "local-model"},
+    "api": {"id": "api", "name": "API", "kind": "api", "model": "gpt-5.5", "base_url": "https://api.openai.com/v1"},
 }
 
 def _efforts(*names):
@@ -477,7 +477,9 @@ class ChatTests(unittest.TestCase):
         self.assertNotIn('private provider error', res.text)
         last = session_manager.get_session(self.sid)["messages"][-1]
         self.assertEqual(last["content"], "Partial **answer**")
-        self.assertEqual(last["status"], "interrupted")
+        self.assertEqual(last["status"], "failed")
+        self.assertEqual((last["failure_kind"], last["failure_model_endpoint_id"]), ("model_error", "claude"),
+                         "the fallback offer knows which model failed")
         self.assertFalse(chat_service.is_busy(self.sid))
 
     def publish(self, name, content=b"hello"):
@@ -1319,6 +1321,7 @@ class ClaudeResumeTests(unittest.TestCase):
         self.assertTrue(prompt.endswith("when is the exam?"))
 
     def test_a_refused_resume_falls_back_to_replaying_the_transcript(self):
+        session_manager.bind_execution_admin(self.sid, False)  # as after this chat's first turn
         session_manager.append_message(self.sid, "user", "my colour is teal")
         session_manager.append_message(self.sid, "assistant", "noted")
         session_manager.set_claude_session(self.sid, "pruned-session", 2)
@@ -1328,6 +1331,18 @@ class ClaudeResumeTests(unittest.TestCase):
         self.assertEqual([c.options.resume for c in _FakeClaudeClient.instances], ["pruned-session", None])
         self.assertIn("my colour is teal", self.last_client().prompts[0])
         self.assertEqual(session_manager.get_session(self.sid)["claude_session_id"], "cli-session-2")
+
+    def test_a_thread_with_no_recorded_principal_is_replayed_not_resumed(self):
+        """A thread from before admin principals were recorded cannot be
+        shown to have run at this chat's privilege level, so it is never
+        resumed: the saved transcript goes to a fresh thread instead."""
+        session_manager.append_message(self.sid, "user", "my colour is teal")
+        session_manager.append_message(self.sid, "assistant", "noted")
+        session_manager.set_claude_session(self.sid, "legacy-session", 2)
+        self.send("what colour?")
+        self.assertEqual([c.options.resume for c in _FakeClaudeClient.instances], [None])
+        self.assertIn("my colour is teal", self.last_client().prompts[0])
+        self.assertFalse(session_manager.get_session(self.sid)["execution_admin"])
 
     def test_a_stopped_turn_keeps_the_session_but_a_failed_resume_forgets_it(self):
         resumed = Brain(vault_dir=str(tempfile.gettempdir()), session_id=self.sid, resume_session_id="cli-session-1")
@@ -1983,39 +1998,57 @@ class McpClientTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, os.path.dirname(self.log), True)
         self.servers = {"echo": {"type": "stdio", "command": sys.executable, "args": [self.FIXTURE],
                                  "env": {"MCP_ECHO_LOG": self.log}}}
+        # The servers enabled for the chat, read at connect and again at each
+        # call (a server disabled mid-chat must stop working).
+        enabled = patch("core.integrations.list_mcp_servers_runtime", side_effect=lambda *a, **k: dict(self.servers))
+        enabled.start()
+        self.addCleanup(enabled.stop)
 
     def brain(self, session_id="mcp-chat"):
         from core.external_brain import ExternalBrain
         brain = ExternalBrain("http://fake", "m", None, session_id=session_id)
-        with patch("core.integrations.list_mcp_servers_runtime", return_value=self.servers):
-            asyncio.run(brain.connect())
+        asyncio.run(brain.connect())
         return brain
 
     def calls(self):
         return open(self.log, encoding="utf-8").read().split() if os.path.exists(self.log) else []
 
     def test_a_local_model_gets_the_servers_tools_and_calls_them_once_allowed(self):
-        from core import permissions
+        from core import permissions, tool_search
         brain = self.brain()
-        self.assertIn("mcp__echo__echo", [t["function"]["name"] for t in brain.tools])
+        names = [t["function"]["name"] for t in brain.tools]
+        self.assertIn(tool_search.CALL, names)
+        self.assertNotIn("mcp__echo__echo", names, "MCP schemas stay behind the search bridge")
+        found = json.loads(asyncio.run(brain._execute_tool(tool_search.SEARCH, {"query": "echo"})))
+        self.assertEqual([t["name"] for t in found], ["mcp__echo__echo"])
         allowed = AsyncMock(return_value=permissions.Decision("allow"))
         with patch.object(permissions, "decide", new=allowed):
-            self.assertEqual(asyncio.run(brain._execute_tool("mcp__echo__echo", {"text": "hi"})), "ECHO:hi")
+            self.assertEqual(asyncio.run(brain._execute_tool(tool_search.CALL, {"name": "mcp__echo__echo",
+                                                                                "arguments": {"text": "hi"}})), "ECHO:hi")
         self.assertEqual(allowed.call_args.kwargs["surface"], "chat:mcp-chat", "asked in the chat that called it")
+        self.assertEqual(self.calls(), ["hi"])
+        del self.servers["echo"]  # turned off for this chat after it connected
+        with patch.object(permissions, "decide", new=allowed):
+            text = asyncio.run(brain._execute_tool(tool_search.CALL, {"name": "mcp__echo__echo", "arguments": {"text": "late"}}))
+        self.assertIn("no longer enabled", text)
         self.assertEqual(self.calls(), ["hi"])
 
     def test_a_call_nobody_can_approve_never_reaches_the_server(self):
         brain = self.brain()
         text = asyncio.run(brain._execute_tool("mcp__echo__echo", {"text": "sneaky"}))
         self.assertTrue(text.startswith("Not run:"), text)
+        self.assertNotIn("no longer enabled", text, "refused by the permission broker, not the integration check")
         self.assertEqual(self.calls(), [])
 
     def test_an_unreachable_server_is_skipped_and_a_detached_brain_gets_none(self):
+        from core import tool_search
         self.servers["broken"] = {"type": "stdio", "command": "no-such-command-anywhere", "args": []}
-        names = [t["function"]["name"] for t in self.brain().tools]
-        self.assertIn("mcp__echo__echo", names)
-        self.assertFalse(any(n.startswith("mcp__broken") for n in names))
-        self.assertFalse(any(t["function"]["name"].startswith("mcp__") for t in self.brain(session_id=None).tools))
+        brain = self.brain()
+        self.assertIn("mcp__echo__echo", brain._mcp_tools)
+        self.assertFalse(any(n.startswith("mcp__broken") for n in brain._mcp_tools))
+        detached = self.brain(session_id=None)
+        self.assertEqual(detached._mcp_tools, {})
+        self.assertNotIn(tool_search.SEARCH, [t["function"]["name"] for t in detached.tools])
 
     def test_function_names_are_safe_and_unique(self):
         from core import mcp_client
@@ -2326,7 +2359,7 @@ class ToolRegistryTests(unittest.TestCase):
                 self.assertEqual(via_claude, asyncio.run(other._execute_tool(name, dict(args))))
         self.assertIn("registry parity check", asyncio.run(other._execute_tool("list_notes", {})))
 
-    def test_each_surface_gets_its_own_tools_and_the_shell_only_for_an_admin(self):
+    def test_each_surface_gets_its_own_tools_and_admin_tools_only_for_an_admin(self):
         from core import tool_registry as reg
         from core.external_brain import ExternalBrain
         claude = set(self.claude_tools())
@@ -2334,7 +2367,7 @@ class ToolRegistryTests(unittest.TestCase):
         admin = {t["function"]["name"] for t in ExternalBrain("http://x", "m", None, is_admin=True).tools}
         self.assertTrue({"search_vault", "read_repo_file", "run_shell"}.isdisjoint(claude), "Claude has its own file tools")
         self.assertTrue({"save_generated_image", "save_generated_file"}.isdisjoint(plain))
-        self.assertEqual(admin - plain, {"run_shell"})
+        self.assertEqual(admin - plain, {"run_shell", "google_drive", "google_sheets", "google_forms"})
         self.assertIn("Unknown tool", asyncio.run(reg.call("run_shell", {"command": "echo hi"}, reg.ToolContext(), reg.OPENAI)))
         self.assertIn("Unknown tool", asyncio.run(reg.call("save_generated_file", {}, reg.ToolContext(), reg.OPENAI)))
         self.assertIn("Unknown tool", asyncio.run(reg.call("no_such_tool", {}, reg.ToolContext(), reg.CLAUDE)))
