@@ -12,6 +12,7 @@ from core.middleware import SecurityHeadersMiddleware
 from core import custom_tabs, image_gen, remote_access, task_scheduler, vault_sync
 from core.builtin_tasks import autoenable_builtins, migrate_builtin_schedules
 from core.channels import discord_channel
+from core.connectors import hub as connector_hub
 from routes import (
     auth_routes,
     chat_routes,
@@ -39,6 +40,7 @@ from routes import (
     sandbox_routes,
     checkpoint_routes,
     agent_routes,
+    connector_routes,
 )
 from core import llamacpp_engine
 from services import chat_service, skills_service, swarm_service
@@ -117,6 +119,9 @@ async def lifespan(_app: FastAPI):
     autoenable_builtins()
     task_scheduler.start()
     await discord_channel.start()
+    # Every other messaging platform (core/connectors), each supervised so a
+    # bad token or an outage is a status in Settings, not a failed boot.
+    await connector_hub.start_all()
     # Restores the remote listener across restarts if the user turned it on
     # (core/remote_access.py). Never raises — a machine that's dropped off
     # the tailnet must still boot normally.
@@ -131,6 +136,7 @@ async def lifespan(_app: FastAPI):
             await remote_access.stop()
             task_scheduler.stop()
             await discord_channel.stop()
+            await connector_hub.stop_all()
             await chat_service.shutdown()
             # Do not leave the built-in model process orphaned at shutdown.
             llamacpp_engine.stop()
@@ -166,6 +172,7 @@ app.include_router(permission_routes.router)
 app.include_router(sandbox_routes.router)
 app.include_router(checkpoint_routes.router)
 app.include_router(agent_routes.router)
+app.include_router(connector_routes.router)
 
 # Developer Mode (David's ask 2026-09-01) — the only app.py edit a custom
 # tab ever needs. Every routes/tab_*.py found here gets mounted; adding a

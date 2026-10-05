@@ -30,6 +30,16 @@ def list_channels() -> list[dict]:
                 "label": f"Discord — #{entry['label']} ({bot['name']})",
                 "configured": True,
             })
+    # Other platforms (core/connectors): every enabled connector that has a
+    # place for notifications.
+    from core.connectors import KINDS, store as connector_store
+    for record in connector_store.list_records():
+        cls = KINDS.get(record["kind"])
+        if not cls or not record.get("enabled"):
+            continue
+        has_target = not cls.two_way or bool((record.get("settings") or {}).get(cls.target_field or ""))
+        if has_target:
+            channels.append({"id": f"conn:{record['id']}", "label": f"{cls.label} — {record['name']}", "configured": True})
     return channels
 
 
@@ -39,6 +49,9 @@ async def send_to_channel(channel_id: str, text: str) -> bool:
     delivery miss shouldn't fail whatever produced the text."""
     if channel_id == "discord":
         return await discord_channel.send_direct_message(text)
+    if channel_id.startswith("conn:"):
+        from core.connectors import hub
+        return await hub.deliver(channel_id[len("conn:"):], text)
     if channel_id.startswith("discord:"):
         parts = channel_id.split(":", 2)
         if len(parts) == 3:

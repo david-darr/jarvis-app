@@ -175,6 +175,24 @@ function fixture(url) {
   if (route === "/api/email/triage") return { generated_at: now, scanned: 12, items: empty ? [] : [{ subject: "Project check-in this afternoon", from: "team@example.test", reason: "An upcoming meeting needs your review." }] };
   if (route === "/api/email/accounts") return [];
   if (route === "/api/channels") return [];
+  // Settings > Channels (settingsConnectors.js): one two-way connector with a
+  // problem, one send-only.
+  if (route === "/api/settings/discord-bots") return [];
+  if (route === "/api/connectors/kinds") return [
+    { kind: "telegram", label: "Telegram", description: "A Telegram bot.", docs_url: "https://core.telegram.org/bots", two_way: true,
+      webhook: false, sender_help: "Your numeric Telegram user ID.", fields: [
+        { key: "bot_token", label: "Bot token", secret: true, required: true, help: "From @BotFather.", placeholder: "", kind: "text", default: "" },
+        { key: "default_chat_id", label: "Chat for notifications", secret: false, required: false, help: "", placeholder: "", kind: "text", default: "" }] },
+    { kind: "ntfy", label: "ntfy (push notifications)", description: "Push to your phone.", docs_url: "", two_way: false, webhook: false,
+      sender_help: "", fields: [{ key: "topic", label: "Topic", secret: false, required: true, help: "", placeholder: "", kind: "text", default: "" }] },
+  ];
+  if (route === "/api/connectors") return [
+    { id: "k1", kind: "telegram", name: "My phone", label: "Telegram", enabled: true, two_way: true, webhook: false,
+      settings: { default_chat_id: "42" }, secrets_set: { bot_token: true }, allowed_senders: ["12345"], open: false,
+      status: { state: "error", detail: "Checking the bot token failed (401) (retrying in 15s)" } },
+    { id: "k2", kind: "ntfy", name: "Pushes", label: "ntfy (push notifications)", enabled: true, two_way: false, webhook: false,
+      settings: { topic: "jarvis-x9" }, secrets_set: {}, allowed_senders: [], open: false, status: { state: "connected", detail: "" } },
+  ];
   if (route === "/api/cookbook/status") return { reachable: true };
   if (route === "/api/cookbook/installed") return list([{ name: "local-workspace:8b", size: 4500000000 }]);
   if (route === "/api/cookbook/running") return [];
@@ -487,6 +505,17 @@ app.whenReady().then(async () => {
       assert.equal(await js("document.querySelectorAll('.mcp-catalog-row').length"), 1, label + " catalog search filters");
       assert.deepEqual(await overflow(), [], label + " integrations overflow");
       await capture(label + "-mcp-catalog");
+      // -- Channels > Other platforms (core/connectors): status, and a form built from each platform's fields.
+      await js("document.querySelector('[data-section=channels]').click()");
+      await waitFor("document.querySelectorAll('.connector-card').length === 2");
+      assert.ok(await js("document.querySelector('.connector-error')?.textContent === 'Problem'"), label + " a failing connector says so");
+      assert.ok(await js("document.querySelector('.connector-card').textContent.includes('failed (401)')"), label + " and why");
+      assert.ok(await js("document.querySelectorAll('.connector-card')[1].textContent.includes('send only')"), label + " send-only is labelled");
+      await js("[...document.querySelectorAll('.disclosure-panel > summary')].find(s => s.textContent === '+ Add a platform').click()");
+      await waitFor("[...document.querySelectorAll('.connector-field label')].some(l => l.textContent === 'Bot token')");
+      assert.deepEqual(await overflow(), [], label + " channels overflow");
+      await js("document.querySelector('.connector-list').scrollIntoView()");
+      await capture(label + "-connectors");
       // -- Sandbox changes (Hermes phase 7): review before anything reaches the code.
       await js("document.querySelector('[data-section=\"sandbox-changes\"]').click()");
       await waitFor("document.querySelectorAll('.sandbox-change').length === 2");

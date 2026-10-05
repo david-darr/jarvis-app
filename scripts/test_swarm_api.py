@@ -794,6 +794,7 @@ class AppWiringTests(unittest.IsolatedAsyncioTestCase):
                  "vault_sync": Mock(), "skills_service": Mock(), "migrate_builtin_schedules": Mock(),
                  "autoenable_builtins": Mock(), "task_scheduler": Mock(), "llamacpp_engine": Mock(),
                  "discord_channel": Mock(start=AsyncMock(), stop=AsyncMock()),
+                 "connector_hub": Mock(start_all=AsyncMock(), stop_all=AsyncMock()),
                  "remote_access": Mock(start_if_enabled=AsyncMock(), stop=AsyncMock()),
                  "chat_service": Mock(shutdown=AsyncMock())}
         exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec"), scope)
@@ -804,6 +805,7 @@ class AppWiringTests(unittest.IsolatedAsyncioTestCase):
         swarm.startup.assert_awaited_once_with(application)
         swarm.shutdown.assert_awaited_once_with(application)
         scope["chat_service"].shutdown.assert_awaited_once()
+        scope["connector_hub"].stop_all.assert_awaited_once()
 
 
 if __name__ == "__main__":

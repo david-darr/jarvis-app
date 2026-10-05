@@ -2516,7 +2516,9 @@ websockets==17.1 \
     --hash=sha256:fb88076df585b69c5761c387c0081aa87d7b9eb1b205a6535ca4777e25650d81 \
     --hash=sha256:fd8f47dbf2e8adb15c847215f83436de3fdb120b51fdae0fbbdf69fd97a3ad80 \
     --hash=sha256:ff3e2ba7a9f0a110b0555452e9b5a03a34e11662544e01beea15f144b48ba7b7
-    # via uvicorn
+    # via
+    #   -r requirements.txt
+    #   uvicorn
 xlsxwriter==3.2.9 \
     --hash=sha256:254b1c37a368c444eac6e2f867405cc9e461b0ed97a3233b2ac1e574efb4140c \
     --hash=sha256:9a5db42bc5dff014806c58a20b9eae7322a134abb6fce3c92c181bfb275ec5b3

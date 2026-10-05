@@ -17,6 +17,10 @@ pyotp>=2.9,<3
 cryptography>=42,<51
 discord.py>=2.4,<3
 httpx>=0.27,<1
+# WebSocket clients for the Slack and Mattermost connectors (core/connectors,
+# 2026-10-05). Already in the lock through uvicorn[standard]; declared because
+# it is now imported directly.
+websockets>=17,<18
 # MCP client and OAuth sign-in for local/API models (core/mcp_client.py,
 # core/mcp_oauth.py, 2026-09-23). Imported directly, so declared directly
 # rather than left to arrive through claude-agent-sdk (found 2026-09-25).

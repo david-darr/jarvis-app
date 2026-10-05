@@ -77,7 +77,8 @@ const SECTION_GROUPS = [
       { id: "integrations", label: "Integrations", render: renderIntegrationsPanel,
         keywords: ["mcp", "connector", "tools", "caldav", "ical", "calendar feed", "google", "api service"] },
       { id: "channels", label: "Channels", render: renderChannelsPanel,
-        keywords: ["discord", "bot", "token", "telegram", "channel override", "announcements", "dm"] },
+        keywords: ["discord", "bot", "token", "telegram", "slack", "signal", "imessage", "email", "sms", "whatsapp", "matrix",
+                   "mattermost", "irc", "line", "teams", "google chat", "ntfy", "webhook", "connector", "channel override", "announcements", "dm"] },
       { id: "remote", label: "Remote Access", render: renderRemotePanel,
         keywords: ["tailscale", "remote", "phone", "https", "certificate", "tunnel", "sign in", "account login", "url"] },
     ],
@@ -1488,7 +1489,7 @@ async function renderChannelsPanel(content) {
   content.innerHTML = "";
   content.append(
     el("div", { class: "title", text: "Channels" }),
-    el("div", { class: "meta", style: "margin:4px 0 14px;", text: "Secondary ways to reach JARVIS, and where scheduled task output (Tasks tab) can be delivered. Discord is the only real channel today." }),
+    el("div", { class: "meta", style: "margin:4px 0 14px;", text: "Ways to reach JARVIS from other apps, and where task results and agent notifications can be delivered. Discord first, every other platform below." }),
   );
 
   // Real setup guide (David's ask 2026-09-01) — a bot token isn't something
@@ -1687,6 +1688,12 @@ async function renderChannelsPanel(content) {
       el("div", { class: "meta", style: "margin-top:10px;", text: "Adding/editing/removing a bot or a channel override restarts the Discord connection immediately. The plain \"Discord\" delivery target DMs the allowed user ID; a named channel below is its own separate delivery target on the Tasks tab." }),
     ]),
   );
+
+  // Every other platform (core/connectors): static/js/views/settingsConnectors.js.
+  const { renderConnectors } = await import("./settingsConnectors.js");
+  const others = el("div", {});
+  content.append(others);
+  await renderConnectors(others, models);
 }
 
 // -- Account --------------------------------------------------------------

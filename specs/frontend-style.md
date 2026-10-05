@@ -108,6 +108,10 @@ Named background workers (services/agent_service.py) in the sidebar under Intell
 
 Agents always run in Auto on every model kind (David, 2026-10-05): nothing they do waits for approval, every decision is audited, Codex agents run without their workspace sandbox, and chats with an agent start in Auto. In exchange only admins can create and direct agents. The inbox therefore holds only questions, reports and results to review. A goal reports only when its reply is not `[SILENT]`.
 
+## Settings > Channels: other platforms
+
+Below Discord, `static/js/views/settingsConnectors.js` lists every other messaging connector (core/connectors) as a card: name, platform, allowed-sender count or "send only", a status chip (Listening, Ready, Problem, Off) with the reason when there is a problem, the webhook address for webhook platforms, and Turn on/off, Send test, Remove and a Settings disclosure. "+ Add a platform" picks a platform and builds its form from the fields the connector declares, with help text and a setup link; secret fields never show saved values ("Saved; leave blank to keep"). The list refreshes every five seconds except while a connector's Settings form is open, so an edit is never wiped.
+
 ## Lifecycle and verification
 
 Each navigation owns a fresh root; delayed work must not overwrite a newer view. Resource-owning views return cleanup functions for listeners, timers, observers, and graphics. Home returns cleanup synchronously while requests are pending.
