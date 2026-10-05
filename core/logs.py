@@ -105,8 +105,47 @@ def _install_tag_factory() -> None:
 _install_tag_factory()
 
 
+# Secrets that libraries put into log lines (found live 2026-10-05: httpx
+# logs every request address at INFO, and Telegram's addresses carry the bot
+# token, so backend.log - readable in Settings > Logs - held it 60 times in
+# an hour). Masked as a line is written, whatever logged it; the rest of the
+# line stays, so the request is still visible.
+_SECRET_PATTERNS = (
+    (re.compile(r"\bbot\d{5,}:[A-Za-z0-9_-]{20,}"), "bot***"),
+    (re.compile(r"([?&](?:token|key|api_key|apikey|access_token|secret|password|sig|signature)=)[^&\s\"'#]+", re.IGNORECASE), r"\1***"),
+    (re.compile(r"(\bBearer\s+)[A-Za-z0-9._~+/=-]{8,}"), r"\1***"),
+)
+
+
+def redact(text: str) -> str:
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+class SecretFilter(logging.Filter):
+    """Masks secrets in a record's message and traceback before any handler
+    formats it. Changes the record itself, so every handler gets the masked
+    text; doing it twice is harmless."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        masked = redact(message)
+        if masked != message:
+            record.msg, record.args = masked, None
+        if record.exc_info and not record.exc_text:
+            record.exc_text = logging.Formatter().formatException(record.exc_info)
+        if record.exc_text:
+            record.exc_text = redact(record.exc_text)
+        return True
+
+
+_SECRET_FILTER = SecretFilter()
+
+
 def setup(log_dir: str) -> None:
-    """File logging for the backend. Idempotent."""
+    """File logging for the backend. Idempotent. Every root handler, the
+    console included, masks secrets (SecretFilter)."""
     os.makedirs(log_dir, exist_ok=True)
     root = logging.getLogger()
     # The root level gates every handler: at Python's default of WARNING,
@@ -124,6 +163,9 @@ def setup(log_dir: str) -> None:
         handler.setLevel(level)
         handler.setFormatter(formatter)
         root.addHandler(handler)
+    for handler in root.handlers:
+        if _SECRET_FILTER not in handler.filters:
+            handler.addFilter(_SECRET_FILTER)
 
 
 # -- reading ------------------------------------------------------------------

@@ -2909,6 +2909,35 @@ class LogBrowsingTests(unittest.TestCase):
         self.assertIn("worth a look", errors_text)
         self.assertIn("routine", backend_text)
 
+    def test_secrets_are_masked_before_a_line_is_written(self):
+        """Found live 2026-10-05: httpx logged Telegram request addresses,
+        bot token included, into backend.log. Whatever logs a secret, the
+        file gets it masked; the rest of the line stays readable."""
+        root = logging.getLogger()
+        before = list(root.handlers)
+        self.logs.setup(self.dir)
+        added = [h for h in root.handlers if h not in before]
+        self.addCleanup(lambda: [root.removeHandler(h) or h.close() for h in added])
+        token = "1234567890:AAFakeTokenForTestsOnly_abcdefghijkl"
+        logging.getLogger("httpx").info('HTTP Request: GET https://api.telegram.org/bot%s/getUpdates?timeout=50 "HTTP/1.1 200 OK"', token)
+        logging.getLogger("core.x").warning("calling https://example.com/v1?api_key=sk-live-123456&mode=fast with Bearer abcdefghijkl")
+        try:
+            raise RuntimeError(f"Client error for url https://api.telegram.org/bot{token}/sendMessage")
+        except RuntimeError:
+            logging.getLogger("core.connectors").exception("send failed")
+        for h in added:
+            h.flush()
+        for name in ("backend.log", "errors.log"):
+            text = open(os.path.join(self.dir, name), encoding="utf-8").read()
+            self.assertNotIn("AAFakeTokenForTestsOnly", text, name)
+            self.assertNotIn("sk-live-123456", text, name)
+            self.assertNotIn("abcdefghijkl", text, name)
+        backend = open(os.path.join(self.dir, "backend.log"), encoding="utf-8").read()
+        self.assertIn("https://api.telegram.org/bot***/getUpdates?timeout=50", backend, "the request itself stays visible")
+        self.assertIn("?api_key=***&mode=fast", backend)
+        self.assertIn("Bearer ***", backend)
+        self.assertIn("bot***/sendMessage", backend, "a traceback is masked too")
+
     def test_the_desktop_shell_writes_a_log_the_viewer_can_read(self):
         node = shutil.which("node")
         if not node:
