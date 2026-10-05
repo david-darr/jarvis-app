@@ -14,6 +14,7 @@ from core import events, file_checkpoints, logs as log_files
 from core.brain import Brain
 from core.builtin_tasks import BUILTIN_TASKS
 from core.channels import registry as channel_registry
+from services.agent_service import agent_service, is_silent
 from services.task_service import task_service
 
 logger = logging.getLogger(__name__)
@@ -48,16 +49,21 @@ def _task_brain(task: dict):
     """The brain a task or card runs on: the model endpoint it names, or
     Claude through the CLI when it names none (every task's behaviour before
     endpoint_id existed). Detached from any chat, and never admin, same as
-    task runs always were."""
-    endpoint_id = task.get("endpoint_id")
+    task runs always were. An agent's work runs on the agent's model, with
+    its tools and its inbox as the permission surface."""
+    agent = agent_service.get(task.get("agent_id"))
+    endpoint_id = agent["endpoint_id"] if agent else task.get("endpoint_id")
     if not endpoint_id:
+        if agent:
+            return Brain(agent_id=agent["id"], integration_ids=agent.get("integration_ids"))
         return Brain()
     from core import model_endpoints
     from services.chat_service import _build_brain
     endpoint = model_endpoints.get_endpoint(endpoint_id)
     if endpoint is None:
-        raise ValueError("the model this runs on has been removed; pick another in Tasks")
-    return _build_brain(endpoint, session_id=None, is_admin=False)
+        where = f"{agent['name']}'s page" if agent else "Tasks"
+        raise ValueError(f"the model this runs on has been removed; pick another on {where}")
+    return _build_brain(endpoint, session_id=None, is_admin=False, agent_id=agent["id"] if agent else None)
 
 
 async def _run_task(task: dict) -> None:
@@ -73,13 +79,21 @@ async def _run_card(card: dict) -> None:
     """Run a claimed card once: its result goes to Review; a failure goes
     back to Ready for a retry, or to Blocked when out of attempts."""
     brain = None
+    agent = agent_service.get(card.get("agent_id"))
+    if agent:
+        agent_service.begin_run(agent["id"], card_id=card["id"])
     try:
         brain = _task_brain(card)
         await brain.connect()
+        prompt = task_service.card_prompt(card)
+        if agent:
+            prompt = agent_service.run_prompt(agent, prompt)
         async with file_checkpoints.around_turn(f"card:{card['id']}"):
-            output = await brain.run_turn(task_service.card_prompt(card))
+            output = await brain.run_turn(prompt)
         task_service.finish_card(card["id"], output)
         events.emit("card.review", f"{card['name']} is ready for review", task_id=card["id"])
+        if agent:
+            agent_service.notify_review(agent["id"], card)
         logger.info("card '%s' (%s) finished; waiting for review", card["name"], card["id"])
     except Exception as e:
         failed = task_service.fail_card(card["id"], str(e) or type(e).__name__)
@@ -89,6 +103,8 @@ async def _run_card(card: dict) -> None:
                     level="error" if blocked else "warning", task_id=card["id"])
         logger.exception("card '%s' (%s) failed (attempt %s)", card["name"], card["id"], card["attempts"])
     finally:
+        if agent:
+            agent_service.end_run(agent["id"])
         if brain is not None:
             await brain.disconnect()
 
@@ -98,10 +114,43 @@ async def dispatch_cards() -> Optional[dict]:
     oldest Ready card whose dependencies are Done. Returns the card run."""
     for card in task_service.reclaim_stale_cards():
         logger.warning("card '%s' (%s): its run was lost; now %s", card["name"], card["id"], card["status"])
-    card = task_service.claim_next_card()
+    card = task_service.claim_next_card(eligible=agent_may_run)
     if card is not None:
         await _run_task(card)
     return card
+
+
+def agent_may_run(task: dict) -> bool:
+    """Ordinary work always may; an agent's only while it is on and under
+    its daily run cap."""
+    return not task.get("agent_id") or agent_service.can_run(task["agent_id"])[0]
+
+
+async def _run_goal(task: dict, agent: dict) -> None:
+    """One check of an agent's standing goal. The reply is its report unless
+    it is [SILENT] (nothing worth the person's attention); either way the run
+    is in the history."""
+    agent_service.begin_run(agent["id"], task_id=task["id"])
+    brain = None
+    try:
+        brain = _task_brain(task)
+        await brain.connect()
+        async with file_checkpoints.around_turn(f"task:{task['id']}"):
+            output = await brain.run_turn(agent_service.run_prompt(agent, task["prompt"], goal=task))
+        task_service.record_run(task["id"], output=output)
+        if task.get("report_when") == "always" or not is_silent(output):
+            item = agent_service.add_item(agent["id"], "report", task["name"], output)
+            agent_service.notify(item)
+        events.emit("task.run", f"{agent['name']} checked \"{task['name']}\"", task_id=task["id"])
+    except Exception as e:
+        task_service.record_run(task["id"], output="", error=str(e))
+        events.emit("task.failed", f"{agent['name']}'s goal \"{task['name']}\" failed: {e}", level="error",
+                    task_id=task["id"])
+        logger.exception("agent goal '%s' (%s) failed", task["name"], task["id"])
+    finally:
+        agent_service.end_run(agent["id"])
+        if brain is not None:
+            await brain.disconnect()
 
 
 async def _run_task_tagged(task: dict) -> None:
@@ -109,6 +158,10 @@ async def _run_task_tagged(task: dict) -> None:
         await _run_card(task)
         return
     task_service.mark_started(task["id"])
+    agent = agent_service.get(task.get("agent_id"))
+    if agent:
+        await _run_goal(task, agent)
+        return
     builtin_id = task.get("builtin_action")
     if builtin_id:
         await _run_builtin_task(task, builtin_id)
@@ -170,6 +223,11 @@ async def _poll_loop() -> None:
     while True:
         try:
             for task in task_service.due_tasks():
+                if not agent_may_run(task):
+                    # Off or out of runs today: this occurrence is skipped,
+                    # not queued, so turning it back on never floods runs.
+                    task_service.skip_occurrence(task["id"])
+                    continue
                 await _run_task(task)
             # One card per pass (see dispatch_cards): scheduled tasks never
             # wait behind a whole board of work.

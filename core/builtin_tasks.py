@@ -40,7 +40,7 @@ EMPTY_SESSION_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
 async def _run_tidy_chats() -> str:
-    sessions = session_manager.list_sessions()
+    sessions = session_manager.list_sessions(include_agents=True)
     cutoff = time.time() - EMPTY_SESSION_MAX_AGE_SECONDS
     removed = []
     for s in sessions:

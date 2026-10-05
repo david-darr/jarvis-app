@@ -56,6 +56,28 @@ const runs = {
   ],
   c1: [{ task_id: "c1", started_at: now - 725, ran_at: now - 600, duration_seconds: 125, outcome: "succeeded", output: "Three sources found.", error: null, delivered: null, model: "Local model", attempt: 1 }],
 };
+// Agents (views/agents.js): one waiting on the person, one at work.
+const agentsFixture = [
+  { id: "a1", name: "Scout", role: "Watches job postings and applications", instructions: "Be brief.", color: "#b3a7f5",
+    endpoint_id: null, enabled: true, daily_run_cap: 12, deliver_to_channel: null, status: "needs_you", status_detail: "",
+    needs_you: 2, runs_today: 3 },
+  { id: "a2", name: "Archivist", role: "Files and tidies notes", instructions: "", color: "#7dd3c0", endpoint_id: "m3",
+    enabled: true, daily_run_cap: 12, deliver_to_channel: null, status: "working", status_detail: "Sort inbox notes",
+    needs_you: 0, runs_today: 1 },
+];
+const agentInbox = [
+  { id: "i1", agent_id: "a1", kind: "question", status: "open", created_at: now - 300, title: "Remote only, or hybrid too?",
+    body: "Three hybrid roles in Ashburn also match." },
+  { id: "i2", agent_id: "a1", kind: "report", status: "open", created_at: now - 3600, title: "New postings",
+    body: "Two new remote roles match: Backend Engineer at Acme, Platform Engineer at Initech." },
+];
+function agentDetail(id) {
+  const agent = agentsFixture.find((a) => a.id === id);
+  return { agent, memory: `# ${agent.name}'s notes\n\n## About this work\n- ${agent.role}\n\n## Preferences\n- 2026-10-04: remote roles only\n\n## Corrections\n\n## Notes\n`,
+    goals: [{ id: "g1", name: "New postings", schedule_kind: "daily", run_time: "08:00", report_when: "notable", enabled: true, agent_id: id }],
+    cards: [{ id: "c9", name: "Shortlist five roles", schedule_kind: "card", status: "ready", agent_id: id, comments: [] }],
+    inbox: agentInbox.filter((i) => i.agent_id === id), answered: [], runs: runs.c1 };
+}
 const docs = ["Design principles", "Project research", "Ideas for next week"].map((title, i) => ({ id: "d" + (i + 1), title, updated_at: now - i * 3600 }));
 function graph() {
   const nodes = [{ id: "", name: "Vault", type: "folder", folder: "" }], edges = [];
@@ -89,6 +111,11 @@ function fixture(url) {
     { ts: "2026-09-22 21:41:00", logger: "services.chat_service", level: "ERROR", tag: "s1", text: "2026-09-22 21:41:00,220 - services.chat_service - ERROR [s1] - turn failed\nTraceback (most recent call last):\nRuntimeError: the model stopped responding" },
     { ts: "2026-09-22 21:42:00", logger: "core.swarm.engine", level: "WARNING", tag: null, text: "2026-09-22 21:42:00,000 - core.swarm.engine - WARNING - budget is running low" }] };
   if (route === "/api/system/events") return list([{ message: "Daily briefing completed", level: "info", ts: now - 800 }, { message: "Memory sync finished", level: "info", ts: now - 2000 }]);
+  // An agent's chats are asked for by agent and never appear in the Chats list.
+  if (route === "/api/sessions" && url.searchParams.get("agent_id")) {
+    return list([{ id: "as1", title: "Chat with Scout", starred: false, created_at: now - 600, updated_at: now - 300,
+      message_count: 2, model_endpoint_id: "m1", agent_id: url.searchParams.get("agent_id") }]);
+  }
   if (route === "/api/sessions") return list(sessions);
   // Must precede the generic /api/sessions/ match below, which would
   // otherwise swallow this and return a whole session object.
@@ -100,6 +127,9 @@ function fixture(url) {
   if (route === "/api/calendar/events") return list(events);
   if (route === "/api/calendar/events/archived") return [];
   if (route === "/api/tasks") return list(tasks);
+  if (route === "/api/agents") return list(agentsFixture);
+  if (route === "/api/agents/inbox") return empty ? { items: [], reviews: [], count: 0 } : { items: agentInbox, reviews: [], count: 2 };
+  if (/^\/api\/agents\/a\d$/.test(route)) return agentDetail(route.split("/")[3]);
   if (/^\/api\/tasks\/[^/]+\/runs$/.test(route)) return empty ? [] : runs[route.split("/")[3]] || [];
   if (route === "/api/tasks/builtin") return ["Daily briefing", "Review priorities", "Organize memory", "Inbox triage"].map((label, i) => ({ label, description: "Keep the important things in view with a regular review.", action_id: "routine" + i, enabled: i === 0 && !empty, task_id: "t1", uses_model: true, default_daily_time: "07:00" }));
   if (route === "/api/models") return list(models);
@@ -277,7 +307,7 @@ app.whenReady().then(async () => {
     for (const [label, width, height] of [["desktop", 1440, 900], ["mobile", 390, 844]]) {
       win.setContentSize(width, height);
       await delay(100);
-      for (const tab of ["home", "chat", "notes", "library", "calendar", "tasks", "email", "tool-store", "cookbook", "school"]) {
+      for (const tab of ["home", "chat", "notes", "library", "calendar", "tasks", "email", "tool-store", "agents", "cookbook", "school"]) {
         await navigate(tab);
         if (tab === "home") {
           await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
@@ -289,6 +319,39 @@ app.whenReady().then(async () => {
           // Provider logos where known (core/model_marks.py); the generic icon where not.
           const marks = await js("[...document.querySelectorAll('.dashboard-row > .model-mark')].map(n => n.getAttribute('aria-label'))");
           assert.deepEqual(marks, ["Claude", "Codex"], label + " home model logos");
+        }
+        if (tab === "agents" && !empty) {
+          // Agents: the list, the cross-agent inbox with its answers, the badge.
+          await waitFor("document.querySelectorAll('.agent-tile').length === 2");
+          assert.ok(await js("[...document.querySelectorAll('.agent-inbox-question button')].some(b => b.textContent === 'Answer')"), label + " a question can be answered");
+          assert.equal(await js("document.querySelectorAll('.agent-inbox-approval').length"), 0, label + " agents run in Auto: nothing to approve");
+          assert.ok(await js("document.querySelector('.agent-inbox-report').textContent.includes('Backend Engineer')"), label + " report body shown");
+          assert.equal(await js("document.querySelector('.agent-status-working').textContent"), "Working");
+          await waitFor("document.querySelector('#nav .nav-item[data-tab=agents] .nav-badge')?.textContent === '2'");
+          assert.deepEqual(await overflow(), [], label + " overflow in agents list");
+          await navigate("agents", { agentId: "a1" });
+          await waitFor("!!document.querySelector('.agent-memory')");
+          // The agent page opens on its Chat tab: its own chats, the open
+          // conversation and a composer; Work holds everything else.
+          await waitFor("document.querySelectorAll('.agent-chat-item').length === 1");
+          assert.equal(await js("document.querySelector('.agent-tab.active').textContent"), "Chat", label + " opens on Chat");
+          assert.equal(await js("[...document.querySelectorAll('.agent-tab')][1].textContent"), "Work (2)", label + " work tab counts what waits");
+          await waitFor("document.querySelectorAll('.agent-chat-messages .msg').length > 0");
+          assert.ok(await js("document.querySelector('.agent-chat-item.active')?.textContent.includes('Chat with Scout')"), label + " last chat open");
+          assert.ok(await js("!!document.querySelector('.agent-chat-main .side-chat-input')"), label + " composer");
+          assert.ok(await js("document.querySelector('.agent-work-host').hidden"), label + " work hidden on chat tab");
+          assert.deepEqual(await overflow(), [], label + " overflow on agent chat");
+          await capture(label + "-agent-chat");
+          await js("[...document.querySelectorAll('.agent-tab')][1].click()");
+          await waitFor("!document.querySelector('.agent-work-host').hidden");
+          const titles = await js("[...document.querySelectorAll('.agent-work-host > .glass > .title')].map(n => n.textContent)");
+          assert.deepEqual(titles, ["Inbox", "Standing goals", "Work", "Memory", "History"], label + " agent work sections");
+          assert.ok(await js("document.querySelector('.agent-memory').value.includes('remote roles only')"), label + " memory shown");
+          assert.ok(await js("document.querySelector('.agents-view').textContent.includes('Every day at 08:00')"), label + " goal cadence");
+          assert.deepEqual(await overflow(), [], label + " overflow on agent page");
+          await capture(label + "-agent-page");
+          await navigate("agents");
+          await waitFor("document.querySelectorAll('.agent-tile').length === 2");
         }
         if (tab === "tasks" && !empty) {
           // The work board (Hermes track 2026-09-23): cards sit in their
@@ -626,7 +689,7 @@ app.whenReady().then(async () => {
     await win.loadURL(base);
     await waitFor("document.querySelector('#brand .instance-badge')?.textContent === 'DEV'");
     assert.equal(await js("document.title"), "JARVIS (dev)");
-    for (const tab of ["home", "chat", "notes", "library", "calendar", "tasks", "email", "tool-store", "cookbook", "school"]) {
+    for (const tab of ["home", "chat", "notes", "library", "calendar", "tasks", "email", "tool-store", "agents", "cookbook", "school"]) {
       await navigate(tab);
       if (tab === "home") await waitFor("document.querySelector('.dashboard-stat-value')?.textContent === '0'");
       assert.deepEqual(await overflow(), [], "empty " + tab);

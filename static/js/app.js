@@ -29,6 +29,7 @@ const NAV = [
   { id: "email", label: "Email", icon: "email" },
   { id: "tasks", label: "Tasks", icon: "tasks" },
   { id: "tool-store", label: "Tool Store", icon: "store" },
+  { id: "agents", label: "Agents", icon: "agents" },
   { id: "cookbook", label: "Cookbook", icon: "cookbook" },
 ];
 
@@ -138,6 +139,24 @@ function setupMobileMenu() {
   backdrop.addEventListener("click", closeMobileMenu);
 }
 
+// How many agent inbox items and results wait on the person: a count on the
+// Agents nav item, refreshed every 30 seconds while the page is visible.
+let agentBadgeTimer = null;
+async function refreshAgentBadge() {
+  clearTimeout(agentBadgeTimer);
+  agentBadgeTimer = setTimeout(refreshAgentBadge, 30000);
+  if (document.hidden) return;
+  const inbox = await api("/api/agents/inbox").catch(() => null);
+  const item = document.querySelector('#nav .nav-item[data-tab="agents"]');
+  if (!item || !inbox) return;
+  let badge = item.querySelector(".nav-badge");
+  if (!inbox.count) { badge?.remove(); item.setAttribute("aria-label", "Agents"); return; }
+  if (!badge) item.append(badge = Object.assign(document.createElement("span"), { className: "nav-badge" }));
+  badge.textContent = inbox.count > 99 ? "99+" : String(inbox.count);
+  item.setAttribute("aria-label", `Agents, ${inbox.count} waiting on you`);
+}
+document.addEventListener("jarvis:agents-changed", refreshAgentBadge);
+
 async function buildSidebar() {
   const brand = document.getElementById("brand");
   brand.innerHTML = `<img src="/static/img/jarvis-logo.png" alt="" class="brand-logo"><span>JARVIS</span>`;
@@ -173,6 +192,7 @@ async function buildSidebar() {
     navEl.addEventListener("click", () => switchTab(item.id));
     nav.appendChild(navEl);
   }
+  refreshAgentBadge();
 
   // Custom tabs (Developer Mode, David's ask 2026-09-01) — discovered
   // server-side from routes/tab_*.py (core/custom_tabs.py), appended after

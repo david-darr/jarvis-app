@@ -35,11 +35,13 @@ class ExternalBrain:
                  session_id: str | None = None, num_ctx: int | None = None, is_admin: bool = False,
                  project_id: str | None = None, endpoint_id: str | None = None,
                  integration_ids: list[str] | None = None, allow_user_tab_source: bool = False,
-                 supports_images: bool = False):
+                 supports_images: bool = False, agent_id: str | None = None, agent_prompt: str = ""):
         self.base_url = base_url
         self.model = model
         self.api_key = api_key
         self.session_id = session_id
+        # The agent this brain works for, if any (services/agent_service.py).
+        self.agent_id = agent_id
         self.num_ctx = num_ctx
         # The shared hive-mind tools (core/tool_registry.py); run_shell only
         # for an admin, absent from a non-admin session's list entirely.
@@ -48,7 +50,7 @@ class ExternalBrain:
         self.supports_images = supports_images
         self.turn_taint = TurnTaint()
         self.pending_reference_taint = False
-        self.tools = tool_registry.openai_tools(is_admin)
+        self.tools = tool_registry.openai_tools(is_admin, agent=bool(agent_id))
         if is_admin:
             # A visible, revocable built-in grant, like Claude's Bash; see
             # the run_shell tool in core/tool_registry.py.
@@ -71,7 +73,8 @@ class ExternalBrain:
             # core/brain.py/core/codex_brain.py — see core/projects.py's
             # project_addendum().
             seeded.insert(0, {"role": "system", "content": system_prompt.for_external(is_admin, allow_user_tab_source)
-                             + projects.project_addendum(project_id)})
+                             + projects.project_addendum(project_id)
+                             + (f"\n\n{agent_prompt}" if agent_prompt else "")})
         self._messages: list[dict] = seeded
         # Set on every completed turn that reported usage (David's ask
         # 2026-09-01, per-model token usage on Home) — best-effort, since
@@ -133,9 +136,11 @@ class ExternalBrain:
             return await self._call_mcp(selected, args["arguments"])
         if name in self._mcp_tools:
             return await self._call_mcp(name, args)
-        return await tool_registry.call(name, args, tool_registry.ToolContext(
-                                            self.session_id, self.is_admin, self.allow_user_tab_source,
-                                            self.turn_taint), tool_registry.OPENAI)
+        return await tool_registry.call(name, args, self._context(), tool_registry.OPENAI)
+
+    def _context(self) -> tool_registry.ToolContext:
+        return tool_registry.ToolContext(self.session_id, self.is_admin, self.allow_user_tab_source,
+                                         self.turn_taint, self.agent_id)
 
     async def _call_mcp(self, name: str, args: dict) -> str:
         """A third-party tool: asked about first, like Claude's MCP calls,
@@ -147,7 +152,7 @@ class ExternalBrain:
         if not self._same_mcp_endpoint(spec["config"], current):
             return "Not run: this integration is no longer enabled for the chat."
         decision = await permissions.decide(
-            surface=f"chat:{self.session_id}" if self.session_id else "none",
+            surface=self._context().permission_surface,
             tool=name, arguments=args if isinstance(args, dict) else {},
             title=f"{spec['server']}: {spec['name']}", description=spec["description"][:300],
             is_admin=self.is_admin,
@@ -178,7 +183,7 @@ class ExternalBrain:
         """Find the tools of the MCP servers this chat may use. Only for a
         real chat: a detached summariser gets none. The list is fixed for the
         connection, so the tool list - part of the cached prompt - is stable."""
-        if not self.session_id:
+        if not self.session_id and not self.agent_id:
             return
         await mcp_oauth.refresh_due(self.integration_ids)
         servers = integrations.list_mcp_servers_runtime(self.integration_ids)

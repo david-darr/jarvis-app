@@ -28,6 +28,11 @@ send back with a note. A card can wait on other cards (depends_on): it is not
 claimed until they are all Done, and their results are handed to it - which
 is how chained work happens. Any task or card can name the model it runs on
 (endpoint_id); without one it runs on Claude, as tasks always have.
+
+Agents (services/agent_service.py, 2026-10-04): a task or card with
+`agent_id` is that agent's work - a card is a job it was given, a scheduled
+task is one of its standing goals. It runs on the agent's model with the
+agent's identity and memory; this module only stores and schedules it.
 """
 import time
 import uuid
@@ -96,6 +101,8 @@ class TaskService:
         depends_on: Optional[list[str]] = None,
         status: Optional[str] = None,
         endpoint_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        report_when: Optional[str] = None,
     ) -> dict:
         if schedule_kind not in ("once", "interval", "daily", "card"):
             raise ValueError("schedule_kind must be 'once', 'interval', 'daily' or 'card'")
@@ -113,6 +120,12 @@ class TaskService:
             if not run_time:
                 raise ValueError("run_time (HH:MM) is required for a daily task")
             _parse_hhmm(run_time)  # raises ValueError on anything malformed
+        if agent_id:
+            from services.agent_service import agent_service
+            if agent_service.get(agent_id) is None:
+                raise ValueError(f"agent_id must name an existing agent; {agent_id!r} is not one")
+        if report_when not in (None, "always", "notable"):
+            raise ValueError("report_when is 'always' or 'notable'")
 
         task_id = uuid.uuid4().hex[:12]
         now = time.time()
@@ -148,6 +161,10 @@ class TaskService:
             # The model endpoint this runs on (core/model_endpoints.py); None
             # keeps the original behaviour, Claude through the CLI.
             "endpoint_id": endpoint_id,
+            # The agent this is work for (services/agent_service.py); None for
+            # ordinary tasks. A goal reports only when notable unless 'always'.
+            "agent_id": agent_id,
+            "report_when": report_when or ("notable" if agent_id and schedule_kind != "card" else None),
         }
         if schedule_kind == "card":
             task.update({"status": status or "backlog", "depends_on": list(depends_on or []), "attempts": 0,
@@ -164,7 +181,9 @@ class TaskService:
             if task["schedule_kind"] != "card":
                 raise ValueError("depends_on is for cards")
             self._check_dependencies(task_id, fields["depends_on"] or [])
-        for key in ("name", "prompt", "enabled", "deliver_to_channel", "endpoint_id", "depends_on"):
+        if fields.get("report_when") not in (None, "always", "notable"):
+            raise ValueError("report_when is 'always' or 'notable'")
+        for key in ("name", "prompt", "enabled", "deliver_to_channel", "endpoint_id", "depends_on", "report_when"):
             if key in fields:
                 task[key] = list(fields[key] or []) if key == "depends_on" else fields[key]
         self._save_tasks()
@@ -211,22 +230,35 @@ class TaskService:
         if card["status"] == "running":
             raise ValueError("this card is running; wait for it to finish")
         if note:
-            self._comment(card, "feedback" if card["status"] == "review" and status == "ready" else "note", note, by)
+            kind = "feedback" if card["status"] == "review" and status == "ready" else "note"
+            self._comment(card, kind, note, by)
+            if kind == "feedback" and card.get("agent_id"):
+                # A correction is something the agent should carry from now on,
+                # not only on this card's re-run.
+                from services.agent_service import agent_service
+                if agent_service.get(card["agent_id"]):
+                    try:
+                        agent_service.remember(card["agent_id"], "Corrections", f"On \"{card['name']}\": {note}")
+                    except ValueError:
+                        pass  # memory full: the note still reaches this card's re-run
         if status == "ready" and card["status"] == "blocked":
             card["attempts"] = 0
         card["status"] = status
         self._save_tasks()
         return card
 
-    def claim_next_card(self, now: Optional[float] = None, card_id: Optional[str] = None) -> Optional[dict]:
+    def claim_next_card(self, now: Optional[float] = None, card_id: Optional[str] = None,
+                        eligible=None) -> Optional[dict]:
         """The oldest Ready card whose dependencies are all Done, marked
         Running with a lease. One at a time keeps spend predictable.
-        card_id claims that card only ("Run now"), from Backlog too."""
+        card_id claims that card only ("Run now"), from Backlog too.
+        eligible(card) can hold a card back (an agent turned off or out of
+        runs for today) without moving it."""
         now = time.time() if now is None else now
         allowed = ("ready", "backlog") if card_id else ("ready",)
         ready = [c for c in self._tasks.values()
                  if c["schedule_kind"] == "card" and c["status"] in allowed and not self.waiting_on(c)
-                 and (card_id is None or c["id"] == card_id)]
+                 and (card_id is None or c["id"] == card_id) and (eligible is None or eligible(c))]
         if not ready:
             return None
         card = min(ready, key=lambda c: c["created_at"])
@@ -335,6 +367,36 @@ class TaskService:
         if lost:
             self._save_tasks()
         return lost
+
+    def skip_occurrence(self, task_id: str) -> None:
+        """Move a due goal to its next time without running it (its agent is
+        off or out of runs today). Without this the loop would find it due
+        again every 15 seconds."""
+        task = self._tasks.get(task_id)
+        if task is None or task["schedule_kind"] == "card":
+            return
+        if task["schedule_kind"] == "once":
+            task["enabled"] = False
+            task["next_run_at"] = None
+        elif task["schedule_kind"] == "daily":
+            task["next_run_at"] = _next_daily(task["run_time"])
+        else:
+            task["next_run_at"] = _iso_in(task["interval_seconds"])
+        self._save_tasks()
+
+    def delete_agent_work(self, agent_id: str) -> int:
+        """An agent deleted: its goals and unfinished cards go; finished run
+        history stays, under the name it had."""
+        doomed = [t["id"] for t in self._tasks.values() if t.get("agent_id") == agent_id
+                  and not (t["schedule_kind"] == "card" and t.get("status") in ("done", "running"))]
+        for task_id in doomed:
+            del self._tasks[task_id]
+            for other in self._tasks.values():
+                if task_id in (other.get("depends_on") or []):
+                    other["depends_on"] = [d for d in other["depends_on"] if d != task_id]
+        if doomed:
+            self._save_tasks()
+        return len(doomed)
 
     def set_daily_schedule(self, task_id: str, run_time: str) -> dict:
         """Convert an existing task to a daily wall-clock schedule.

@@ -73,7 +73,7 @@ LEGACY_INDEX_FILE = os.path.join(DATA_DIR, "sessions_index.json")
 LEGACY_CHANNEL_FILE = os.path.join(DATA_DIR, "channel_sessions.json")
 LEGACY_BACKUP_DIR = os.path.join(DATA_DIR, "sessions.pre-sqlite-backup")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # meta key written as the import's last step; see _legacy_import_done().
 LEGACY_IMPORT_MARKER = "legacy_json_import_completed_at"
@@ -84,7 +84,7 @@ _LOCK = threading.RLock()
 # _projection() and the CREATE TABLE below cannot drift apart.
 _SESSION_COLUMNS = (
     "title", "starred", "created_at", "updated_at",
-    "message_count", "model_endpoint_id", "project_id", "open_mic",
+    "message_count", "model_endpoint_id", "project_id", "open_mic", "agent_id",
 )
 
 _SCHEMA = """
@@ -103,7 +103,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     message_count     INTEGER NOT NULL DEFAULT 0,
     model_endpoint_id TEXT,
     project_id        TEXT,
-    open_mic          INTEGER NOT NULL DEFAULT 0
+    open_mic          INTEGER NOT NULL DEFAULT 0,
+    agent_id          TEXT
 );
 
 -- list_sessions() orders starred-first then newest-updated; this is that
@@ -209,6 +210,15 @@ def _upgrade_schema(conn: sqlite3.Connection) -> None:
         logger.info("session store: upgraded %d session(s) from schema v1 to v2 "
                     "(transcripts moved out of the session document)", len(rows))
 
+    if version < 3:
+        # v3 mirrors a session's agent out of its document (agent chats live
+        # in the Agents tab, 2026-10-05).
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+        with conn:
+            if "agent_id" not in columns:
+                conn.execute("ALTER TABLE sessions ADD COLUMN agent_id TEXT")
+            conn.execute("UPDATE sessions SET agent_id = json_extract(doc, '$.agent_id')")
+
     with conn:
         conn.execute(
             "INSERT INTO meta (key, value) VALUES ('schema_version', ?) "
@@ -242,6 +252,9 @@ def _projection(doc: dict) -> tuple:
         doc.get("model_endpoint_id"),
         doc.get("project_id"),
         1 if doc.get("open_mic") else 0,
+        # A chat with an agent (services/agent_service.py) lives in the
+        # Agents tab; the column lets the Chats list leave it out cheaply.
+        doc.get("agent_id"),
     )
 
 
@@ -426,17 +439,20 @@ def session_exists(session_id: str) -> bool:
     return row is not None
 
 
-def list_sessions() -> list[dict]:
+def list_sessions(agent_id: Optional[str] = None, include_agents: bool = False) -> list[dict]:
     """Sidebar metadata only — never message bodies. Field set matches what
     the old `sessions_index.json` carried, because static/js reads these keys
-    by name."""
+    by name. Chats with agents are left out unless asked for: agent_id lists
+    one agent's chats, include_agents lists every chat."""
+    where, params = ("WHERE agent_id = ?", (agent_id,)) if agent_id else \
+        ("", ()) if include_agents else ("WHERE agent_id IS NULL", ())
     with _LOCK:
         conn = _connect()
         rows = conn.execute(
-            """SELECT id, title, starred, created_at, updated_at, message_count,
-                      model_endpoint_id, project_id, open_mic
-               FROM sessions
-               ORDER BY starred DESC, updated_at DESC"""
+            f"""SELECT id, title, starred, created_at, updated_at, message_count,
+                       model_endpoint_id, project_id, open_mic, agent_id
+                FROM sessions {where}
+                ORDER BY starred DESC, updated_at DESC""", params
         ).fetchall()
     return [
         {
@@ -449,6 +465,7 @@ def list_sessions() -> list[dict]:
             "model_endpoint_id": r["model_endpoint_id"],
             "project_id": r["project_id"],
             "open_mic": bool(r["open_mic"]),
+            "agent_id": r["agent_id"],
         }
         for r in rows
     ]

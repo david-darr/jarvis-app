@@ -264,7 +264,7 @@ def switch_off(data_dir: Path, vault_copy: str) -> dict:
         report["discord_bots_set_aside"] = []
 
     forgotten = 0
-    for header in store.list_sessions():
+    for header in store.list_sessions(include_agents=True):
         doc = store.get_session(header["id"])
         if doc and (doc.get("claude_session_id") or doc.get("codex_thread_id")):
             doc.update({"claude_session_id": None, "claude_synced_through": 0, "codex_thread_id": None})

@@ -15,7 +15,8 @@ const POLL_MS = 5000;
 // The header and the add form are built once; only the columns refresh, so a
 // card being typed is never wiped by the board updating itself.
 export async function renderBoard(host) {
-  const [cards, models] = await Promise.all([loadCards(), api("/api/models").catch(() => [])]);
+  const [cards, models, agents] = await Promise.all([loadCards(), api("/api/models").catch(() => []),
+                                                     api("/api/agents").catch(() => [])]);
   host.innerHTML = "";
   const columns = el("div", { class: "task-board" });
   host.append(
@@ -27,6 +28,7 @@ export async function renderBoard(host) {
     columns,
   );
   columns.models = models;
+  columns.agents = new Map(agents.map((a) => [a.id, a]));
   // Cards whose run history is open, kept open across the board's redraws.
   columns.openHistory = new Set();
   drawColumns(columns, cards);
@@ -117,8 +119,9 @@ async function move(columns, card, status, note) {
 function cardEl(columns, card, byId, modelName) {
   const waiting = (card.depends_on || []).filter((d) => byId.get(d)?.status !== "done");
   const last = [...(card.comments || [])].reverse().find((c) => c.kind === "result" || c.kind === "error");
+  const agent = card.agent_id ? columns.agents?.get(card.agent_id) : null;
   const meta = [
-    card.endpoint_id ? modelName.get(card.endpoint_id) || "a removed model" : "Claude",
+    agent ? agent.name : card.agent_id ? "a deleted agent" : card.endpoint_id ? modelName.get(card.endpoint_id) || "a removed model" : "Claude",
     waiting.length ? `waits for ${waiting.map((d) => byId.get(d)?.name || "a deleted card").join(", ")}` : "",
     card.attempts && card.status !== "done" ? `attempt ${card.attempts} of 3` : "",
   ].filter(Boolean).join(" · ");

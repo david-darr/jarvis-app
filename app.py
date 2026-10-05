@@ -38,6 +38,7 @@ from routes import (
     permission_routes,
     sandbox_routes,
     checkpoint_routes,
+    agent_routes,
 )
 from core import llamacpp_engine
 from services import chat_service, skills_service, swarm_service
@@ -164,6 +165,7 @@ app.include_router(swarm_routes.router)
 app.include_router(permission_routes.router)
 app.include_router(sandbox_routes.router)
 app.include_router(checkpoint_routes.router)
+app.include_router(agent_routes.router)
 
 # Developer Mode (David's ask 2026-09-01) — the only app.py edit a custom
 # tab ever needs. Every routes/tab_*.py found here gets mounted; adding a

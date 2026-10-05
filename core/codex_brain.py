@@ -141,8 +141,13 @@ class CodexBrain:
 
     def __init__(self, vault_dir: str | None = None, cwd_override: str | None = None,
                  session_id: str | None = None, model: str | None = None, is_admin: bool = False,
-                 project_id: str | None = None, effort: str | None = None):
+                 project_id: str | None = None, effort: str | None = None, agent_prompt: str = "",
+                 agent_auto: bool = False):
         self.cwd = cwd_override or vault_dir or resolve_vault_dir()
+        # A chat with an agent (services/agent_service.py): its frozen
+        # identity and notes. Codex reaches JARVIS through its CLI, which has
+        # no agent tools, so a Codex agent cannot write its own memory.
+        self.agent_prompt = agent_prompt
         self.model = model
         # Reasoning effort for this session (David's ask 2026-09-15). Codex
         # has no `--effort` flag — see _build_args() for the config-override
@@ -159,6 +164,11 @@ class CodexBrain:
         self.last_usage: dict | None = None
         session = session_manager.get_session(session_id) if session_id else None
         self.permission_mode = (session or {}).get("permission_mode", "base") if is_admin else "base"
+        # An agent's own run (services/agent_service.py): agents always run in
+        # Auto, which for Codex is approve-all without its workspace sandbox.
+        self.agent_auto = agent_auto
+        if agent_auto:
+            self.permission_mode = "auto"
         # Present only once this session has completed at least one codex_cli
         # turn before — see set_codex_thread_id's caller below.
         self.thread_id: str | None = (session or {}).get("codex_thread_id")
@@ -194,7 +204,7 @@ class CodexBrain:
         # Apply this on fresh and resumed turns: Codex resume keeps the
         # original workspace and does not accept --add-dir.
         ensure_user_tab_dirs()
-        auto = self.is_admin and self.permission_mode == "auto"
+        auto = (self.is_admin or self.agent_auto) and self.permission_mode == "auto"
         config_args = [] if auto else ["-c", f"sandbox_workspace_write.writable_roots={_writable_roots_override()}"]
         if self.effort:
             config_args += ["-c", f'model_reasoning_effort="{self.effort}"']
@@ -257,7 +267,8 @@ class CodexBrain:
         # prior instructions either).
         if is_fresh_thread:
             prompt_text = system_prompt.for_codex(sys.executable, HIVE_MIND_CLI_PATH, self.is_admin,
-                                                  full_access=self.permission_mode == "auto") + projects.project_addendum(self.project_id)
+                                                  full_access=self.permission_mode == "auto") + projects.project_addendum(self.project_id) \
+                + (f"\n\n{self.agent_prompt}" if self.agent_prompt else "")
             prior = session_manager.effective_messages(self.session_id, exclude_last=True)
             if prior:
                 transcript = "\n\n".join(f'{m["role"]}: {sent_text(m)}' for m in prior)

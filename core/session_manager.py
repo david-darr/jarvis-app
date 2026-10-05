@@ -156,15 +156,17 @@ class SessionManager:
 
         return store.save_session(fork)
 
-    def list_sessions(self) -> list[dict]:
+    def list_sessions(self, agent_id: Optional[str] = None, include_agents: bool = False) -> list[dict]:
         """Starred first, then newest-first within each group — metadata only
         (no message bodies). Right-click star/delete is David's ask, 2026-08-31.
 
         The ordering is the store's index rather than a Python sort, and the
         counts are derived from the stored messages on every write, so a
         listing can no longer describe a session differently from its body.
+        Chats with agents belong to the Agents tab and are left out unless
+        asked for (agent_id: one agent's; include_agents: all).
         """
-        return store.list_sessions()
+        return store.list_sessions(agent_id, include_agents)
 
     def set_starred(self, session_id: str, starred: bool) -> dict:
         session = self._require(session_id)
@@ -527,6 +529,29 @@ class SessionManager:
         session = self._require(session_id)
         session["project_id"] = project_id
         return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
+
+    def set_agent(self, session_id: str, agent_id: str, agent_prompt: str) -> dict:
+        """Make this a chat with one of the person's agents
+        (services/agent_service.py). The agent's identity and notes are
+        frozen into the session here, once, so the system prompt stays the
+        same for the life of the chat even as the agent's memory changes
+        (a changed prompt would throw away the provider's prompt cache)."""
+        session = self._require(session_id)
+        session["agent_id"] = agent_id
+        session["agent_prompt"] = agent_prompt
+        return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
+
+    def release_agent_chats(self, agent_id: str) -> int:
+        """An agent deleted: its chats move into the Chats list, unchanged
+        but no longer speaking as the agent on a fresh connection."""
+        moved = 0
+        for header in store.list_sessions(agent_id=agent_id):
+            session = self._require(header["id"])
+            session["agent_id"] = None
+            session["agent_prompt"] = None
+            store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
+            moved += 1
+        return moved
 
     def set_workspace(self, session_id: str, workspace_dir: Optional[str]) -> dict:
         """Pin a session's agent tools to a specific folder (see

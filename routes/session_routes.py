@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from functools import wraps
-from typing import Literal
+from typing import Literal, Optional
 
 from core import attachments, chat_references, workspace, model_catalog, model_endpoints, permissions
 from core.auth import auth_manager
@@ -92,8 +92,9 @@ def _for_client(session: dict) -> dict:
 
 
 @router.get("")
-async def list_sessions(user: str = Depends(require_user)) -> list[dict]:
-    return session_manager.list_sessions()
+async def list_sessions(agent_id: Optional[str] = None, user: str = Depends(require_user)) -> list[dict]:
+    # Chats with agents live in the Agents tab (?agent_id= lists one agent's).
+    return session_manager.list_sessions(agent_id=agent_id)
 
 
 @router.post("")

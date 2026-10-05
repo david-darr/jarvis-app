@@ -1691,6 +1691,76 @@ button.dashboard-row:hover { background: rgba(255,255,255,.035); }
 .board-card-actions .btn { padding: 3px 9px; font-size: 11px; }
 .board-feedback { flex: 1 1 100%; min-width: 0; font-size: 11.5px; }
 
+/* Agents (static/js/views/agents.js). */
+.nav-badge { margin-left: auto; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent-dim);
+  color: var(--accent); font-size: 10.5px; line-height: 18px; text-align: center; }
+.sidebar-collapsed .nav-badge { position: absolute; top: 4px; right: 6px; margin: 0; }
+.nav-item { position: relative; }
+.agent-avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; border-radius: 50%;
+  color: #101113; font-weight: 600; }
+.agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-top: 14px; }
+.agent-tile { display: flex; flex-direction: column; gap: 12px; padding: 14px; text-align: left; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--bg-panel); color: var(--text); cursor: pointer; min-width: 0; }
+.agent-tile:hover { border-color: var(--border-strong); }
+.agent-tile-head { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.agent-tile-name { min-width: 0; }
+.agent-tile-name .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-tile-foot { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.agent-status { padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-strong); font-size: 11px; color: var(--text-dim); }
+.agent-status-working { color: var(--accent); border-color: var(--accent); }
+.agent-status-needs_you { color: #d9b67d; border-color: #d9b67d; }
+.agent-status-off, .agent-status-capped { color: var(--text-faint); }
+.agents-view > .glass, .agents-view > .disclosure-panel { margin-top: 14px; }
+.agent-back { margin-bottom: 8px; }
+.agent-header { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.agent-header-text { flex: 1 1 240px; min-width: 0; }
+.agent-header-text h2 { margin: 0; }
+.agent-header-meta { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+.agent-header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.agent-inbox { display: flex; flex-direction: column; gap: 10px; }
+.agent-inbox-item { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: rgba(255, 255, 255, 0.02); min-width: 0; }
+.agent-inbox-question { border-color: #d9b67d; }
+.agent-inbox-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.agent-inbox-kind { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-faint); }
+.agent-inbox-title { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+.agent-inbox-body { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; color: var(--text-dim); }
+.agent-inbox-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.agent-reply { flex: 1 1 180px; min-width: 0; }
+.agent-row { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px 0;
+  border-top: 1px solid var(--border); flex-wrap: wrap; }
+.agent-row-actions { display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.agent-memory { width: 100%; box-sizing: border-box; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.meta.is-error { color: var(--danger); }
+.agent-swatches { display: flex; gap: 6px; padding-top: 4px; }
+.agent-swatches button { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+.agent-swatches button[aria-checked="true"] { border-color: var(--text); }
+.agent-tabs { display: flex; gap: 4px; margin-top: 16px; border-bottom: 1px solid var(--border); }
+.agent-tab { padding: 8px 14px; border: none; border-bottom: 2px solid transparent; background: none; color: var(--text-dim);
+  font-size: 13px; cursor: pointer; margin-bottom: -1px; }
+.agent-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.agent-tab-panel[hidden] { display: none; }
+.agent-work-host > .glass, .agent-work-host > .disclosure-panel { margin-top: 14px; }
+.agent-chat { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 12px; margin-top: 14px; height: min(70vh, 720px); }
+.agent-chat-side { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.agent-chat-list { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; min-height: 0; }
+.agent-chat-item { display: flex; align-items: center; border-radius: 8px; }
+.agent-chat-item.active, .agent-chat-item:hover { background: rgba(255, 255, 255, 0.05); }
+.agent-chat-open { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 7px 8px;
+  border: none; background: none; color: var(--text); text-align: left; cursor: pointer; }
+.agent-chat-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.agent-chat-delete { opacity: 0; }
+.agent-chat-item:hover .agent-chat-delete, .agent-chat-delete:focus-visible { opacity: 1; }
+.agent-chat-main { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-panel); }
+.agent-chat-empty { margin: auto; max-width: 360px; text-align: center; display: flex; flex-direction: column; gap: 6px; }
+@media (max-width: 768px) {
+  .agent-chat { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); height: auto; }
+  .agent-chat-list { max-height: 140px; }
+  .agent-chat-main { height: 64vh; }
+  .agent-chat-delete { opacity: 1; }
+}
+
 /* Run history (static/js/runHistory.js): scheduled tasks and board cards. */
 .run-history-panel { margin-top: 6px; }
 .run-history-panel > summary { font-size: 11.5px; color: var(--text-dim); cursor: pointer; }

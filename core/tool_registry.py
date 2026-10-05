@@ -35,6 +35,17 @@ class ToolContext:
     is_admin: bool = False
     allow_user_tab_source: bool = False
     turn_taint: TurnTaint | None = None
+    # Set when the run or chat belongs to an agent (services/agent_service.py):
+    # it gets the agent-only tools, and its permission requests go to that
+    # agent's inbox rather than a prompt nobody is watching.
+    agent_id: Optional[str] = None
+
+    @property
+    def permission_surface(self) -> str:
+        """Who the broker asks (core/permissions.py)."""
+        if self.agent_id and not self.session_id:
+            return f"agent:{self.agent_id}"
+        return f"chat:{self.session_id}" if self.session_id else "none"
 
 
 @dataclass(frozen=True)
@@ -45,6 +56,7 @@ class ToolSpec:
     handler: Callable[[dict, ToolContext], Awaitable[str]]
     surfaces: frozenset = BOTH
     admin_only: bool = False
+    agent_only: bool = False
 
 
 def _object(properties: Optional[dict] = None, required: tuple = ()) -> dict:
@@ -58,24 +70,28 @@ def _str(description: Optional[str] = None) -> dict:
 _REGISTRY: dict[str, ToolSpec] = {}
 
 
-def register(name: str, description: str, schema: dict, surfaces: frozenset = BOTH, admin_only: bool = False):
+def register(name: str, description: str, schema: dict, surfaces: frozenset = BOTH, admin_only: bool = False,
+             agent_only: bool = False):
     def decorate(handler):
         if name in _REGISTRY:
             raise ValueError(f"tool {name!r} registered twice")
-        _REGISTRY[name] = ToolSpec(name, description, schema, handler, surfaces, admin_only)
+        _REGISTRY[name] = ToolSpec(name, description, schema, handler, surfaces, admin_only, agent_only)
         return handler
     return decorate
 
 
-def specs(surface: str, is_admin: bool = False) -> list[ToolSpec]:
+def specs(surface: str, is_admin: bool = False, agent: bool = False) -> list[ToolSpec]:
     """The tools one surface offers, in registration order (stable, so the
-    tool list - part of the cached prompt prefix - never reorders)."""
-    return [s for s in _REGISTRY.values() if surface in s.surfaces and (is_admin or not s.admin_only)]
+    tool list - part of the cached prompt prefix - never reorders). Agent-only
+    tools appear only for an agent's runs and chats."""
+    return [s for s in _REGISTRY.values() if surface in s.surfaces and (is_admin or not s.admin_only)
+            and (agent or not s.agent_only)]
 
 
 async def call(name: str, args: dict, ctx: ToolContext, surface: str) -> str:
     spec = _REGISTRY.get(name)
-    if spec is None or surface not in spec.surfaces or (spec.admin_only and not ctx.is_admin):
+    if (spec is None or surface not in spec.surfaces or (spec.admin_only and not ctx.is_admin)
+            or (spec.agent_only and not ctx.agent_id)):
         return f"Unknown tool: {name}"
     try:
         return await spec.handler(dict(args or {}), ctx)
@@ -83,10 +99,10 @@ async def call(name: str, args: dict, ctx: ToolContext, surface: str) -> str:
         return f"Tool error: {e}"
 
 
-def openai_tools(is_admin: bool = False) -> list[dict]:
+def openai_tools(is_admin: bool = False, agent: bool = False) -> list[dict]:
     """The OpenAI function-calling list for one session."""
     return [{"type": "function", "function": {"name": s.name, "description": s.description, "parameters": s.schema}}
-            for s in specs(OPENAI, is_admin)]
+            for s in specs(OPENAI, is_admin, agent)]
 
 
 def _fields(args: dict, key: str) -> tuple[str, dict]:
@@ -291,11 +307,13 @@ async def _delete_note(args, ctx):
     }, ("name", "prompt", "schedule_kind")),
 )
 async def _create_task(args, ctx):
+    # Inside an agent's run or chat, new work is that agent's own.
     task = memory_tools.create_task(
         args["name"], args["prompt"], args["schedule_kind"],
         run_at=args.get("run_at"), interval_seconds=args.get("interval_seconds"),
         deliver_to_channel=args.get("deliver_to_channel"),
         run_time=args.get("run_time"), depends_on=args.get("depends_on"), status=args.get("status"),
+        agent_id=ctx.agent_id,
     )
     return f"Created task {task['id']}: {task['name']}"
 
@@ -485,7 +503,7 @@ async def _write_repo_file(args, ctx):
     if isinstance(path, str) and path.replace("\\", "/").lstrip("/").startswith("custom-tabs/") and ctx.turn_taint and ctx.turn_taint.tainted:
         from core import permissions
         decision = await permissions.decide(
-            surface=f"chat:{ctx.session_id}" if ctx.session_id else "none", tool="write_custom_tab_source",
+            surface=ctx.permission_surface, tool="write_custom_tab_source",
             arguments={"path": path}, title="Write custom-tab source after reading untrusted content",
             description=f"This turn read {ctx.turn_taint.reason}. Write {path}.", is_admin=ctx.is_admin,
             force_prompt=True)
@@ -509,7 +527,7 @@ async def _run_shell(args, ctx):
     from core import permissions
     command = args.get("command", "")
     decision = await permissions.decide(
-        surface=f"chat:{ctx.session_id}" if ctx.session_id else "none", tool="run_shell",
+        surface=ctx.permission_surface, tool="run_shell",
         arguments={"command": command}, title="Run a command on this computer",
         description=(f"This turn read {ctx.turn_taint.reason}. " if ctx.turn_taint and ctx.turn_taint.tainted else "")
                     + command[:300], is_admin=ctx.is_admin,
@@ -582,7 +600,7 @@ async def _run_code(args, ctx):
         # filter, so this one asks (David's call, 2026-09-24).
         from core import permissions
         decision = await permissions.decide(
-            surface=f"chat:{ctx.session_id}" if ctx.session_id else "none", tool="run_code_internet",
+            surface=ctx.permission_surface, tool="run_code_internet",
             arguments={"command": command}, title="Run code with internet access",
             description=(f"This turn read {ctx.turn_taint.reason}. " if ctx.turn_taint and ctx.turn_taint.tainted else "")
                         + f"In the sandbox, reaching public websites only: {command[:300]}",
@@ -674,3 +692,34 @@ async def _google_sheets(args, ctx):
 async def _google_forms(args, ctx):
     from core.google_chat_tools import execute
     return await execute("forms", args, ctx)
+
+
+# -- agents: only in an agent's own runs and chats (services/agent_service.py) --
+
+@register(
+    "agent_remember",
+    "Write a note to your own memory so later runs have it. section is one of 'About this work', "
+    "'Preferences', 'Corrections', 'Notes'. Keep each note to one short line.",
+    _object({"section": _str("About this work, Preferences, Corrections or Notes"),
+             "text": _str("The note, one line")}, ("section", "text")),
+    agent_only=True,
+)
+async def _agent_remember(args, ctx):
+    from services.agent_service import agent_service
+    agent_service.remember(ctx.agent_id, args["section"], args["text"])
+    return f"Noted under {args['section']}."
+
+
+@register(
+    "agent_ask",
+    "Ask the person a question that needs their decision before you can continue. It goes to "
+    "their inbox; their answer comes with your next run. After asking, finish what you can and stop.",
+    _object({"question": _str("The question, with the options if there are any"),
+             "context": _str("Optional: what you found that makes this a question")}, ("question",)),
+    agent_only=True,
+)
+async def _agent_ask(args, ctx):
+    from services.agent_service import agent_service
+    item = agent_service.add_item(ctx.agent_id, "question", args["question"], args.get("context") or "")
+    agent_service.notify(item)
+    return "Your question is in the person's inbox. Finish what you can and stop; the answer comes with your next run."

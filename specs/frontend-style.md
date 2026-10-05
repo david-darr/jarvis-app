@@ -98,6 +98,16 @@ The vault uses colored note triangles, folder circles, faint edges, and selectiv
 
 A named instance (`npm run start:dev`, electron/instance.js) labels itself everywhere a person could mistake it for the real app: a DEV badge beside the sidebar brand (`.instance-badge`, accent outline, no fill), the window and tray named "JARVIS (dev)", the page title, and the sign-in card heading. The backend reports the name as `instance` on `/api/auth/status`; the real app reports an empty string and shows none of this.
 
+## Tasks: run history
+
+Every scheduled task and board card run records its start and end, duration, outcome (Succeeded, Failed, Didn't finish), model and card attempt; history is kept per task (50 runs each). `static/js/runHistory.js` renders it: a "Run history" disclosure on each board card, loaded when opened and kept open across the board's polling, and "Run history (n)" under each scheduled task beside its last-run line. Newest first, ten until "Show all", each row opening to its output. Records from before start times existed show "duration unknown" rather than a guess. A run cut off by the app closing is shown as Didn't finish.
+
+## Agents
+
+Named background workers (services/agent_service.py) in the sidebar under Intelligence, with a count of what waits on the person. The list shows each agent's avatar (its initial on its chosen color), role, status (Idle, Working, Needs you, Off, Done for today) and runs today, with the cross-agent inbox above. An agent's page has two tabs: **Chat** (default; the agent's own chats beside one conversation, `static/js/agentChat.js`, streaming through `chatStream.js`) and **Work** (inbox, standing goals, jobs, editable memory, run history, settings; its label carries the count). Only the header and Work redraw while the agent works, so an open chat is never rebuilt. Agent chats never appear in Chats, Home, Library's files by chat or `@` references; deleting an agent moves its chats into Chats.
+
+Agents always run in Auto on every model kind (David, 2026-10-05): nothing they do waits for approval, every decision is audited, Codex agents run without their workspace sandbox, and chats with an agent start in Auto. In exchange only admins can create and direct agents. The inbox therefore holds only questions, reports and results to review. A goal reports only when its reply is not `[SILENT]`.
+
 ## Lifecycle and verification
 
 Each navigation owns a fresh root; delayed work must not overwrite a newer view. Resource-owning views return cleanup functions for listeners, timers, observers, and graphics. Home returns cleanup synchronously while requests are pending.

@@ -2070,10 +2070,10 @@ class TaskModelTests(unittest.TestCase):
         self.assertIsInstance(task_scheduler._task_brain({"endpoint_id": None}), Brain)
         built = []
         with patch("core.model_endpoints.get_endpoint", side_effect=lambda eid: ENDPOINTS.get(eid)), \
-             patch.object(cs, "_build_brain", side_effect=lambda endpoint, session_id, is_admin: built.append(
-                 (endpoint["id"], session_id, is_admin)) or "brain"):
+             patch.object(cs, "_build_brain", side_effect=lambda endpoint, session_id, is_admin, agent_id=None: built.append(
+                 (endpoint["id"], session_id, is_admin, agent_id)) or "brain"):
             self.assertEqual(task_scheduler._task_brain({"endpoint_id": "local"}), "brain")
-            self.assertEqual(built, [("local", None, False)], "detached from any chat, never admin")
+            self.assertEqual(built, [("local", None, False, None)], "detached from any chat, never admin, no agent")
             with self.assertRaises(ValueError):
                 task_scheduler._task_brain({"endpoint_id": "deleted-endpoint"})
 

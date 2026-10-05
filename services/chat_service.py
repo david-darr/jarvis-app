@@ -139,7 +139,8 @@ async def _get_brain(session_id: str, endpoint: dict, is_admin: bool = False) ->
     return brain, True
 
 
-def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = False) -> AnyBrain:
+def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = False,
+                 agent_id: Optional[str] = None) -> AnyBrain:
     """Construct (but do not connect) a brain for an endpoint.
 
     session_id=None builds one detached from any conversation: no cross-session
@@ -150,6 +151,12 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
     session = session_manager.get_session(session_id) if session_id else None
     workspace_dir = (session or {}).get("workspace_dir")
     integration_ids = (session or {}).get("enabled_integration_ids")
+    # An agent's own run (no chat) or a chat with an agent: its tools and,
+    # for a run, the integrations chosen for it (services/agent_service.py).
+    agent_id = agent_id or (session or {}).get("agent_id")
+    if agent_id and session is None:
+        from services.agent_service import agent_service
+        integration_ids = (agent_service.get(agent_id) or {}).get("integration_ids")
     # Projects (David's ask 2026-09-12) — read once here rather than in each
     # Brain subclass, so every model kind picks it up the same way. See
     # core/projects.py's project_addendum() for what actually gets injected.
@@ -165,11 +172,13 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
         return Brain(cwd_override=workspace_dir, integration_ids=integration_ids,
                      session_id=session_id, model=cli_model or None, is_admin=is_admin,
                      project_id=project_id, effort=effort,
-                     resume_session_id=(session or {}).get("claude_session_id"))
+                     resume_session_id=(session or {}).get("claude_session_id"), agent_id=agent_id,
+                     agent_prompt=(session or {}).get("agent_prompt") or "")
     if endpoint["kind"] == "codex_cli":
         return CodexBrain(cwd_override=workspace_dir, session_id=session_id,
                           model=cli_model or None, is_admin=is_admin, project_id=project_id,
-                          effort=effort)
+                          effort=effort, agent_prompt=(session or {}).get("agent_prompt") or "",
+                          agent_auto=bool(agent_id and session is None))
     base_url, model, api_key, num_ctx = model_endpoints.resolve_runtime(endpoint["id"])
     if endpoint["kind"] == "api" and override is not None:
         model = override or endpoint["model"]
@@ -181,7 +190,8 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
                          session_id=session_id, num_ctx=num_ctx, is_admin=is_admin, project_id=project_id,
                          endpoint_id=endpoint["id"], integration_ids=integration_ids,
                          allow_user_tab_source=(endpoint.get("kind") == "api" and model_marks.mark_for(endpoint) == "openai"),
-                         supports_images=bool(endpoint.get("supports_images")))
+                         supports_images=bool(endpoint.get("supports_images")), agent_id=agent_id,
+                         agent_prompt=(session or {}).get("agent_prompt") or "")
 
 
 def _prime_with_history(session_id: str, just_created: bool, endpoint: dict, full_text: str,

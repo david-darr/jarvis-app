@@ -75,6 +75,11 @@ def _untrusted_claude_read_path(path: str, cwd: str) -> bool:
     return True
 
 
+def _agent_addendum(agent_prompt: str) -> str:
+    """A chat with one of the person's agents (services/agent_service.py)."""
+    return f"\n\n{agent_prompt}" if agent_prompt else ""
+
+
 class Brain:
     """One Brain per conversation session. Create one, call connect() once, then
     run_turn(text)/run_turn_stream(text) per incoming message, and disconnect()
@@ -83,8 +88,15 @@ class Brain:
     def __init__(self, vault_dir: str | None = None, cwd_override: str | None = None,
                  integration_ids: list[str] | None = None, session_id: str | None = None,
                  model: str | None = None, is_admin: bool = False, project_id: str | None = None,
-                 effort: str | None = None, resume_session_id: str | None = None):
+                 effort: str | None = None, resume_session_id: str | None = None,
+                 agent_id: str | None = None, agent_prompt: str = ""):
         self.vault_dir = vault_dir or resolve_vault_dir()
+        # A chat with an agent: its frozen identity and notes, appended to the
+        # system prompt (core/session_manager.py set_agent).
+        self.agent_prompt = agent_prompt
+        # The agent this brain works for (services/agent_service.py), if any:
+        # agent-only tools, and permission requests to that agent's inbox.
+        self.agent_id = agent_id
         # Optional model override for a "Claude Code CLI" endpoint added in
         # Settings > Add Models (David's ask 2026-08-31 — Claude is no
         # longer a free default, it's a real addable connection with its
@@ -136,7 +148,8 @@ class Brain:
         # the natural handle: the chat that asked is the chat that answers. A
         # turn with no session (a scheduled task, say) has no one watching, so
         # the broker denies rather than hanging - see core/permissions.py.
-        self.surface = f"chat:{session_id}" if session_id else "none"
+        self.surface = (f"chat:{session_id}" if session_id
+                        else f"agent:{agent_id}" if agent_id else "none")
         # The Claude Code CLI session to reopen on connect, when this chat has
         # one (services/chat_service.py reads it from the session record).
         # Resuming keeps the real conversation - its turns, tool results and
@@ -241,6 +254,12 @@ class Brain:
             "mcp__claude_ai_Canva__list-brand-kits",
             "mcp__claude_ai_Canva__get-assets",
         ]
+        # An agent's own tools touch only its memory and inbox
+        # (services/agent_service.py), and they exist only for agents. Found
+        # live 2026-10-04: without this, agent_remember went to the inbox as
+        # an approval request instead of running.
+        if self.agent_id:
+            allowed_tools.extend(("mcp__hive_mind__agent_remember", "mcp__hive_mind__agent_ask"))
         # Escape hatch for whatever this hardcoded baseline doesn't cover —
         # see core/settings.py's extra_allowed_tools for why this exists.
         allowed_tools.extend(settings_store.get_setting("extra_allowed_tools") or [])
@@ -297,7 +316,7 @@ class Brain:
         # cwd below) — the only real gap is cross-session search, added
         # in-process (no subprocess/network hop) here.
         mcp_servers = {**mcp_servers, "hive_mind": hive_mind_server.get_hive_mind_server(
-            self.session_id, self.is_admin, self.turn_taint)}
+            self.session_id, self.is_admin, self.turn_taint, self.agent_id)}
 
         # A generated file needs somewhere to be built that isn't the vault
         # (David's ask 2026-09-12, after a live test found Claude writing a
@@ -344,7 +363,7 @@ class Brain:
             # conventions aren't lost) rather than relying purely on tool
             # *descriptions* to imply a model should proactively check
             # memory.
-            system_prompt={"type": "preset", "preset": "claude_code", "append": system_prompt.for_claude(self.is_admin) + projects.project_addendum(self.project_id)},
+            system_prompt={"type": "preset", "preset": "claude_code", "append": system_prompt.for_claude(self.is_admin) + projects.project_addendum(self.project_id) + _agent_addendum(self.agent_prompt)},
         )
 
     async def _permission(self, tool_name: str, arguments: dict, context):

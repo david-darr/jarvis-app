@@ -284,6 +284,16 @@ async def decide(*, surface: str, tool: str, arguments: dict, title: str = "", d
                            "tool": tool, "content": target})
             _save(data)
             return Decision("allow", "Allowed by this chat's Auto mode.")
+    # Agents always run in Auto (David, 2026-10-05), on every model: an
+    # agent's own runs are approved like an Auto chat's, tainted turns
+    # included, and every one is audited. Only admins can create and direct
+    # agents (routes/agent_routes.py).
+    if surface.startswith("agent:"):
+        data = _load()
+        _record(data, {"decision": "allow", "source": "agent_auto", "surface": surface,
+                       "tool": tool, "content": target})
+        _save(data)
+        return Decision("allow", "Allowed: agents run in Auto mode.")
     # A tainted turn can force a fresh decision without revoking the person's
     # standing grant for future clean turns.
     saved = None if force_prompt else stored_decision(surface, tool, target, is_admin)

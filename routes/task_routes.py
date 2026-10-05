@@ -154,6 +154,11 @@ async def run_task_now(task_id: str, user: str = Depends(require_user)) -> dict:
     task = task_service.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
+    if task.get("agent_id"):
+        from services.agent_service import agent_service
+        may_run, why_not = agent_service.can_run(task["agent_id"])
+        if not may_run:
+            raise HTTPException(status_code=409, detail=f"Not run: {why_not}.")
     if task["schedule_kind"] == "card":
         # A card runs through the board's claim, so it cannot run twice at once
         # or ahead of the cards it waits on.
