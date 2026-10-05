@@ -1,6 +1,7 @@
 import { api, el, customSelect, toast, confirmDialog, iconButton, emptyState } from "../api.js";
 import { ICONS } from "../icons.js";
 import { renderBoard } from "./taskBoard.js";
+import { renderTriggers } from "./taskTriggers.js";
 import { runHistory, outcomeLabel, formatDuration, runTime } from "../runHistory.js";
 
 // Built-in tasks gallery (David's ask 2026-08-31, matching Odysseus's
@@ -80,8 +81,11 @@ export async function render(container) {
 
   const list = el("div", { id: "tasks-list", style: "margin-top:14px;" });
   const boardCard = el("div", { class: "glass card task-board-card" });
-  container.append(el("div", { class: "view-constrained" }, [header, boardCard, form, list, builtinCard]));
+  // Webhook triggers (2026-10-05): outside events that start work.
+  const triggersCard = el("div", { class: "glass card triggers-card" });
+  container.append(el("div", { class: "view-constrained" }, [header, boardCard, form, list, triggersCard, builtinCard]));
   await renderBoard(boardCard);
+  await renderTriggers(triggersCard).catch(() => triggersCard.remove()); // admin only
 
   addBtn.addEventListener("click", async () => {
     const name = nameInput.value.trim();

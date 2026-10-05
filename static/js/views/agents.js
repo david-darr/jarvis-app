@@ -310,6 +310,7 @@ async function agentPage(root, agentId, schedule, cleanups, tab = "chat") {
       memoryPanel(agentId, detail.memory),
       el("div", { class: "glass card" }, [el("div", { class: "title", text: "History" }), runHistory(detail.runs)]),
       teamsPanel(detail.teams || []),
+      (detail.triggers || []).length ? triggersPanel(detail.triggers) : null,
       settingsPanel(agent, models, channels, redraw),
     );
   };
@@ -339,6 +340,21 @@ function teamsPanel(teams) {
     panel.append(el("div", { class: "card-row", style: "justify-content:space-between;gap:10px;" }, [
       el("span", { text: `${team.name} · ${team.is_lead ? "lead" : "teammate"} · ${TEAM_STATE[team.state] || team.state}` }),
       el("button", { class: "btn quiet", text: "Open", onclick: () => openTeam(team.id) }),
+    ]));
+  }
+  return panel;
+}
+
+// The webhook triggers that start this agent's work (Tasks > Triggers).
+function triggersPanel(triggers) {
+  const panel = el("div", { class: "glass card agent-triggers-panel" }, [
+    el("div", { class: "title", text: "Triggers" }),
+    el("div", { class: "meta", style: "margin:4px 0 10px;", text: "Outside events that start work for this agent. Manage them in Tasks." }),
+  ]);
+  for (const t of triggers) {
+    panel.append(el("div", { class: "card-row", style: "justify-content:space-between;gap:10px;" }, [
+      el("span", { text: `${t.name} · ${t.enabled ? (t.auto_run ? "runs straight away" : "asks you first") : "off"}` }),
+      el("button", { class: "btn quiet", text: "Open", onclick: () => document.dispatchEvent(new CustomEvent("jarvis:navigate", { detail: { tab: "tasks" } })) }),
     ]));
   }
   return panel;

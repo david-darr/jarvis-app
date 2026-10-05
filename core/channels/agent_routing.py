@@ -77,9 +77,24 @@ def _queue_job(agent: dict, text: str) -> str:
 
 
 def answer_reply(notification_text: str, reply: str) -> Optional[str]:
-    """When a message replies to an agent notification, answer what it
-    carried and say what happens next. None when the replied-to message
-    carries no code (so the caller handles the message as usual)."""
+    """When a message replies to an agent notification, or to a webhook
+    trigger's request for approval, answer what it carried and say what
+    happens next. None when the replied-to message carries no code (so the
+    caller handles the message as usual)."""
+    from services.trigger_service import CODE_RE as TRIGGER_CODE, trigger_service
+    if TRIGGER_CODE.search(notification_text or ""):
+        pending = trigger_service.resolve_code(notification_text)
+        if pending is None:
+            return "That has already been answered."
+        try:
+            outcome, run = trigger_service.answer_text(pending, reply)
+        except KeyError:
+            return "That has already been answered."
+        if run:
+            import asyncio
+            from core.task_scheduler import _run_task
+            asyncio.get_running_loop().create_task(_run_task(run))
+        return f"{pending['trigger_name']}: {outcome}."
     found = agent_service.resolve_code(notification_text)
     if found is None:
         return None if not CODE_RE.search(notification_text or "") else \

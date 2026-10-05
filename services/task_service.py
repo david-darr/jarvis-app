@@ -103,6 +103,7 @@ class TaskService:
         endpoint_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         report_when: Optional[str] = None,
+        trigger: Optional[dict] = None,
     ) -> dict:
         if schedule_kind not in ("once", "interval", "daily", "card"):
             raise ValueError("schedule_kind must be 'once', 'interval', 'daily' or 'card'")
@@ -165,6 +166,9 @@ class TaskService:
             # ordinary tasks. A goal reports only when notable unless 'always'.
             "agent_id": agent_id,
             "report_when": report_when or ("notable" if agent_id and schedule_kind != "card" else None),
+            # The webhook trigger that made this card ({id, name};
+            # services/trigger_service.py), so the board can say where it came from.
+            "trigger": trigger,
         }
         if schedule_kind == "card":
             task.update({"status": status or "backlog", "depends_on": list(depends_on or []), "attempts": 0,

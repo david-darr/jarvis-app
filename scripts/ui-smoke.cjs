@@ -77,7 +77,8 @@ function agentDetail(id) {
     goals: [{ id: "g1", name: "New postings", schedule_kind: "daily", run_time: "08:00", report_when: "notable", enabled: true, agent_id: id }],
     cards: [{ id: "c9", name: "Shortlist five roles", schedule_kind: "card", status: "ready", agent_id: id, comments: [] }],
     inbox: agentInbox.filter((i) => i.agent_id === id), answered: [], runs: runs.c1,
-    teams: [{ id: "s1", name: "Launch team", state: "active", member_id: "s1-m2", is_lead: 0 }] };
+    teams: [{ id: "s1", name: "Launch team", state: "active", member_id: "s1-m2", is_lead: 0 }],
+    triggers: [{ id: "tr1", name: "GitHub pushes", enabled: true, auto_run: false }] };
 }
 const docs = ["Design principles", "Project research", "Ideas for next week"].map((title, i) => ({ id: "d" + (i + 1), title, updated_at: now - i * 3600 }));
 function graph() {
@@ -139,6 +140,18 @@ function fixture(url) {
   if (route === "/api/calendar/events") return list(events);
   if (route === "/api/calendar/events/archived") return [];
   if (route === "/api/tasks") return list(tasks);
+  // Webhook triggers (2026-10-05): one waiting for approval, one runs straight away.
+  if (route === "/api/triggers") return empty ? { triggers: [], pending: [] } : {
+    triggers: [
+      { id: "tr1", name: "GitHub pushes", preset: "github", action: "card", agent_id: "a1", enabled: true, auto_run: false,
+        events: ["push"], conditions: [{ path: "ref", equals: "refs/heads/main" }], title_template: "Push: {head_commit.message}",
+        prompt_template: "Review the push.", path: "/api/triggers/tr1", last_event_at: now - 120, created_at: now - 9000,
+        log: [{ at: now - 120, outcome: "waiting", event: "push", delivery: "d1", detail: "card \"Push: Fix the thing\" waits for your OK" },
+              { at: now - 500, outcome: "rejected", event: "", delivery: "", detail: "missing or wrong signature" }] },
+      { id: "tr2", name: "Contact form", preset: "generic", action: "card", agent_id: null, enabled: true, auto_run: true,
+        events: [], conditions: [], title_template: "", prompt_template: "", path: "/api/triggers/tr2", last_event_at: null, created_at: now - 8000, log: [] }],
+    pending: [{ id: "p1abcdef0000", trigger_id: "tr1", trigger_name: "GitHub pushes", kind: "card", event_type: "push",
+      summary: "Push: Fix the thing", created_at: now - 120 }] };
   if (route === "/api/agents") return list(agentsFixture);
   if (route === "/api/agents/inbox") return empty ? { items: [], reviews: [], count: 0 } : { items: agentInbox, reviews: [], count: 2 };
   if (/^\/api\/agents\/a\d$/.test(route)) return agentDetail(route.split("/")[3]);
@@ -380,7 +393,8 @@ app.whenReady().then(async () => {
           await js("[...document.querySelectorAll('.agent-tab')][1].click()");
           await waitFor("!document.querySelector('.agent-work-host').hidden");
           const titles = await js("[...document.querySelectorAll('.agent-work-host > .glass > .title')].map(n => n.textContent)");
-          assert.deepEqual(titles, ["Inbox", "Standing goals", "Work", "Memory", "History", "Teams"], label + " agent work sections");
+          assert.deepEqual(titles, ["Inbox", "Standing goals", "Work", "Memory", "History", "Teams", "Triggers"], label + " agent work sections");
+          assert.ok(await js("document.querySelector('.agent-triggers-panel').textContent.includes('GitHub pushes · asks you first')"), label + " the triggers that start this agent's work");
           assert.ok(await js("document.querySelector('.agent-teams-panel').textContent.includes('Launch team · teammate · Working')"), label + " the agent's teams");
           assert.ok(await js("document.querySelector('.agent-memory').value.includes('remote roles only')"), label + " memory shown");
           assert.ok(await js("document.querySelector('.agents-view').textContent.includes('Every day at 08:00')"), label + " goal cadence");
@@ -408,6 +422,31 @@ app.whenReady().then(async () => {
           await js("document.querySelector('.board-card-review .board-card-output:last-of-type').open = true");
           await waitFor("!!document.querySelector('.board-card-review .run-row')");
           assert.ok(await js("document.querySelector('.board-card-review .run-row').textContent.includes('2m 05s · Local model · attempt 1')"), label + " card history row");
+          // Webhook triggers: what waits for your OK, each trigger's state, its page and the add form.
+          await waitFor("document.querySelectorAll('.trigger-row').length === 2");
+          assert.ok(await js("document.querySelector('.trigger-pending').textContent.includes('GitHub pushes: Push: Fix the thing')"), label + " a waiting event is listed");
+          assert.ok(await js("[...document.querySelectorAll('.trigger-pending button')].some(b => b.textContent === 'Approve')"), label + " and can be approved here");
+          assert.ok(await js("document.querySelector('[data-trigger=tr1]').textContent.includes('Asks first') && document.querySelector('[data-trigger=tr2]').textContent.includes('Runs straight away')"), label + " each trigger says whether it asks first");
+          await js("document.querySelector('.triggers-card').scrollIntoView()");
+          await capture(label + "-triggers");
+          await js("document.querySelector('[data-trigger=tr1] .set-row-title').click()");
+          await waitFor("document.querySelectorAll('.trigger-event').length === 2");
+          assert.ok(await js("document.querySelector('.triggers-card').textContent.includes('/api/triggers/tr1')"), label + " the trigger's address is shown");
+          assert.ok(!(await js("document.querySelector('.triggers-card').textContent.includes('Secret')")), label + " no secret on a saved trigger");
+          assert.deepEqual(await overflow(), [], label + " trigger page overflow");
+          await js("document.querySelector('.triggers-card').scrollIntoView()");
+          await capture(label + "-trigger-page");
+          await js("document.querySelector('.triggers-card .set-back').click()");
+          await waitFor("document.querySelectorAll('.trigger-row').length === 2");
+          await js("[...document.querySelectorAll('.triggers-card .btn')].find(b => b.textContent === 'Add a trigger').click()");
+          await waitFor("!!document.querySelector('.trigger-add')");
+          assert.deepEqual(await overflow(), [], label + " add trigger overflow");
+          await js("document.querySelector('.triggers-card').scrollIntoView()");
+          assert.ok(await js("[...document.querySelectorAll('.trigger-add .set-row-title')].filter(t => t.offsetParent).every(t => t.getBoundingClientRect().width > 60)"), label + " field labels keep their width");
+          assert.equal(await js("[...document.querySelectorAll('.trigger-add .set-row-title')].filter(t => t.offsetParent).map(t => t.textContent).includes('Task')"), false, label + " a card trigger hides the task picker");
+          await capture(label + "-trigger-add");
+          await js("document.querySelector('.triggers-card .set-back').click()");
+          await waitFor("document.querySelectorAll('.trigger-row').length === 2");
         }
         assert.deepEqual(await overflow(), [], label + " overflow in " + tab);
         await capture(label + "-" + tab);

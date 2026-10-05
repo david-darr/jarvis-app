@@ -124,6 +124,7 @@ function cardEl(columns, card, byId, modelName) {
     agent ? agent.name : card.agent_id ? "a deleted agent" : card.endpoint_id ? modelName.get(card.endpoint_id) || "a removed model" : "Claude",
     waiting.length ? `waits for ${waiting.map((d) => byId.get(d)?.name || "a deleted card").join(", ")}` : "",
     card.attempts && card.status !== "done" ? `attempt ${card.attempts} of 3` : "",
+    card.trigger ? `from trigger ${card.trigger.name}` : "",
   ].filter(Boolean).join(" · ");
 
   const node = el("div", { class: `board-card board-card-${card.status}`, "data-card": card.id }, [

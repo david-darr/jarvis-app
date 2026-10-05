@@ -87,6 +87,11 @@ def _teams(agent_id: str) -> list[dict]:
         return []
 
 
+def _triggers(agent_id: str) -> list[dict]:
+    from services.trigger_service import trigger_service
+    return trigger_service.for_agent(agent_id)
+
+
 def _team_change(agent: dict, deleted: bool = False) -> None:
     from services import swarm_service
     if swarm_service.current is not None:
@@ -144,6 +149,7 @@ async def get_agent(agent_id: str, user: str = Depends(require_admin)) -> dict:
         "answered": agent_service.inbox(agent_id, status=None)[:20],
         "runs": [r for r in task_service.list_runs() if r["task_id"] in owned_ids][:50],
         "teams": _teams(agent_id),
+        "triggers": _triggers(agent_id),
     }
 
 

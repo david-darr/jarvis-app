@@ -41,7 +41,9 @@
 .set-back { margin: 0 0 14px -8px; }
 
 /* -- sections and groups --------------------------------------------------- */
-.set-section { margin-bottom: 26px; }
+/* Each section measures its own width, so rows stack their controls on a
+   narrow pane wherever the kit is used (Settings, Tasks > Triggers). */
+.set-section { margin-bottom: 26px; container-type: inline-size; }
 .set-section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .set-section-title { margin: 0; font-size: 13px; font-weight: 550; color: var(--text); }
 .set-section-description { margin: 3px 0 0; font-size: 12px; line-height: 1.5; color: var(--text-faint); }
@@ -58,6 +60,9 @@
 }
 .set-row + .set-row, .set-group > * + .set-row, .set-group > .set-row + * { border-top: 1px solid var(--border); }
 .set-row:has(> .set-badge), .set-row:has(> .set-icon) { grid-template-columns: auto minmax(0, 1fr) auto; }
+/* A row's own display would otherwise beat the hidden attribute, so a row
+   hidden by a form (an MCP server's URL, a trigger's task) still showed. */
+.set-row[hidden], .set-section[hidden] { display: none; }
 .set-row-text { min-width: 0; }
 .set-row-title { font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
 .set-row-description { margin-top: 3px; font-size: 12px; line-height: 1.5; color: var(--text-faint); overflow-wrap: anywhere; }
@@ -151,6 +156,12 @@
 .set-tile span.meta { display: block; font-size: 11.5px; line-height: 1.45; margin-top: 2px; color: var(--text-faint); }
 .set-steps { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.7; color: var(--text-dim); }
 .set-steps a { color: var(--accent); }
+
+/* -- Tasks > Triggers (taskTriggers.js) uses the same rows ------------------------ */
+.triggers-card { margin-top: 14px; }
+.triggers-head { justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.triggers-card .set-section { margin-bottom: 18px; }
+.triggers-card .set-back { margin: 0 0 8px -8px; }
 
 /* -- panels that keep their own pieces ---------------------------------------- */
 .set-page .appearance-panel { max-width: none; margin: 0; }
