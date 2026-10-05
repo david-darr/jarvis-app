@@ -1,6 +1,7 @@
 import { api, el, customSelect, toast, confirmDialog, iconButton, emptyState } from "../api.js";
 import { ICONS } from "../icons.js";
 import { renderBoard } from "./taskBoard.js";
+import { runHistory, outcomeLabel, formatDuration, runTime } from "../runHistory.js";
 
 // Built-in tasks gallery (David's ask 2026-08-31, matching Odysseus's
 // premade-action preset picker — src/builtin_actions.py's tidy_sessions/
@@ -250,13 +251,19 @@ async function refresh(list) {
     ]);
     list.appendChild(card);
 
+    if (task.run_started_at) {
+      runsHost.append(el("div", { class: "meta", style: "margin-top:4px;color:var(--accent);",
+        text: `Running now, started ${new Date(task.run_started_at * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` }));
+    }
     if (task.last_run_at) {
       const runs = await api(`/api/tasks/${task.id}/runs`);
       const last = runs[0];
       if (last) {
-        const when = new Date(last.ran_at * 1000).toLocaleString();
+        const chan = channels.find((c) => c.id === task.deliver_to_channel);
+        const deliveryLabel = chan ? chan.label : task.deliver_to_channel;
         runsHost.append(
-          el("div", { class: "meta", style: "margin-top:4px;color:var(--text-faint);", text: `Last run: ${when}` }),
+          el("div", { class: "meta", style: "margin-top:4px;color:var(--text-faint);",
+            text: `Last run: ${runTime(last)} · ${outcomeLabel(last.outcome)} · ${formatDuration(last.duration_seconds)}` }),
           el("div", {
             class: "meta",
             style: `margin-top:4px;white-space:pre-wrap;color:${last.error ? "var(--danger)" : "var(--text)"};`,
@@ -267,13 +274,16 @@ async function refresh(list) {
         // log (David found this live 2026-09-02 — a Discord bot with no
         // allowed_user_id set failed delivery with no visible error at all).
         if (last.delivered === false) {
-          const chan = channels.find((c) => c.id === task.deliver_to_channel);
           runsHost.append(el("div", {
             class: "meta",
             style: "margin-top:4px;color:var(--danger);",
-            text: `Delivery to ${chan ? chan.label : task.deliver_to_channel} failed — check Settings > Channels.`,
+            text: `Delivery to ${deliveryLabel} failed — check Settings > Channels.`,
           }));
         }
+        runsHost.append(el("details", { class: "run-history-panel" }, [
+          el("summary", { text: `Run history (${runs.length})` }),
+          runHistory(runs, { deliveryLabel }),
+        ]));
       }
     }
   }

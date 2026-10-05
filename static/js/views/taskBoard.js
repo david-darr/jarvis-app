@@ -1,4 +1,5 @@
 import { api, el, customSelect, toast, confirmDialog } from "../api.js";
+import { runHistory } from "../runHistory.js";
 
 // The work board (Hermes track 2026-09-23, after Hermes's kanban): one-off
 // cards JARVIS works through by itself. The task loop claims one Ready card at
@@ -26,6 +27,8 @@ export async function renderBoard(host) {
     columns,
   );
   columns.models = models;
+  // Cards whose run history is open, kept open across the board's redraws.
+  columns.openHistory = new Set();
   drawColumns(columns, cards);
 }
 
@@ -130,6 +133,7 @@ function cardEl(columns, card, byId, modelName) {
       el("div", { class: `board-card-text${last.kind === "error" ? " is-error" : ""}`, text: last.text }),
     ]));
   }
+  if (card.last_run_at) node.append(historyEl(columns, card));
 
   const actions = el("div", { class: "board-card-actions" });
   const button = (text, onclick, cls = "btn") => el("button", { class: cls, text, onclick });
@@ -140,7 +144,11 @@ function cardEl(columns, card, byId, modelName) {
   });
   if (card.status === "backlog") actions.append(button("Ready", () => move(columns, card, "ready")), runNow);
   if (card.status === "ready") actions.append(button("Hold", () => move(columns, card, "backlog"), "btn quiet"), ...(waiting.length ? [] : [runNow]));
-  if (card.status === "running") actions.append(el("span", { class: "meta", text: "Working on it..." }));
+  if (card.status === "running") {
+    const since = card.run_started_at
+      ? ` (started ${new Date(card.run_started_at * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })})` : "";
+    actions.append(el("span", { class: "meta", text: `Working on it${since}...` }));
+  }
   if (card.status === "review") {
     const note = el("input", { class: "board-feedback", placeholder: "What should change?" });
     actions.append(
@@ -164,4 +172,28 @@ function cardEl(columns, card, byId, modelName) {
   }
   node.append(actions);
   return node;
+}
+
+// Every run of a card, fetched when opened rather than on each board poll.
+function historyEl(columns, card) {
+  const body = el("div");
+  const history = el("details", { class: "board-card-output" }, [el("summary", { text: "Run history" }), body]);
+  const load = async () => {
+    history.dataset.loaded = "1";
+    try {
+      body.replaceChildren(runHistory(await api(`/api/tasks/${card.id}/runs`)));
+    } catch (problem) {
+      body.replaceChildren(el("div", { class: "board-card-text is-error", text: `Couldn't load the history: ${problem.message}` }));
+    }
+  };
+  history.addEventListener("toggle", () => {
+    if (!history.open) { columns.openHistory.delete(card.id); return; }
+    columns.openHistory.add(card.id);
+    if (!history.dataset.loaded) load();
+  });
+  if (columns.openHistory.has(card.id)) {
+    history.open = true;
+    load();
+  }
+  return history;
 }

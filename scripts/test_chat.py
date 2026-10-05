@@ -1891,11 +1891,31 @@ class WorkBoardTests(unittest.TestCase):
         card = self.card("long job")
         claimed = self.tasks.claim_next_card()
         self.assertEqual((claimed["id"], claimed["status"]), (card["id"], "running"))
+        began = claimed["run_started_at"]
         with self.assertRaises(ValueError):
             self.tasks.set_card_status(card["id"], "done")
         self.tasks.reclaim_stale_cards(now=time.time() + 31 * 60)
         stored = self.tasks.get_task(card["id"])
         self.assertEqual((stored["status"], stored["attempts"], stored["comments"][-1]["kind"]), ("ready", 1, "error"))
+        lost = self.tasks.list_runs(card["id"])[0]
+        self.assertEqual((lost["outcome"], lost["attempt"]), ("lost", 1))
+        self.assertEqual(lost["started_at"], began, "the history keeps when the lost run began")
+
+    def test_each_card_run_is_recorded_with_its_time_outcome_model_and_attempt(self):
+        card = self.card("report")
+        self.outputs = ["first", RuntimeError("model down")]
+        self.dispatch()
+        self.tasks.set_card_status(card["id"], "ready", note="again")
+        self.dispatch()
+        failed, succeeded = self.tasks.list_runs(card["id"])
+        self.assertEqual([(r["outcome"], r["attempt"], r["model"]) for r in (failed, succeeded)],
+                         [("failed", 2, "Claude"), ("succeeded", 1, "Claude")], "newest first")
+        self.assertEqual((succeeded["output"], failed["error"]), ("first", "model down"))
+        for run in (failed, succeeded):
+            self.assertLessEqual(run["started_at"], run["ran_at"])
+            self.assertAlmostEqual(run["duration_seconds"], run["ran_at"] - run["started_at"], delta=0.1)
+        self.assertNotIn("run_started_at", self.tasks.get_task(card["id"]), "a finished run leaves no start mark behind")
+
 
     def test_dependencies_hold_a_card_and_hand_it_their_results(self):
         first = self.card("gather facts")
@@ -1936,6 +1956,78 @@ class WorkBoardTests(unittest.TestCase):
                                                       "endpoint_id": "no-such-model"}).status_code, 400)
         self.assertEqual(web.post("/api/tasks", json={"name": "d", "prompt": "p", "schedule_kind": "once",
                                                       "run_at": "2099-01-01T00:00:00", "status": "ready"}).status_code, 400)
+
+
+class TaskRunHistoryTests(unittest.TestCase):
+    """Every scheduled task and card run keeps its start, end, duration,
+    outcome and model, per task, so a busy task cannot push another's
+    history out, and a run cut off by the app closing is recorded as lost."""
+
+    def setUp(self):
+        from core import task_scheduler
+        from services import task_service as module
+        self.module, self.scheduler, self.tasks = module, task_scheduler, module.task_service
+        self.created = []
+        self.addCleanup(lambda: [self.tasks.delete_task(t) for t in self.created])
+
+        class FakeBrain:
+            async def connect(self): pass
+            async def disconnect(self): pass
+            async def run_turn(self, prompt): return "the brief"
+
+        for target, kwargs in ((task_scheduler, {"attribute": "_task_brain", "side_effect": lambda task: FakeBrain()}),
+                               (task_scheduler.events, {"attribute": "emit"})):
+            p = patch.object(target, **kwargs)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def task(self, name):
+        task = self.tasks.create_task(name, f"do {name}", "interval", interval_seconds=3600)
+        self.created.append(task["id"])
+        return task
+
+    def test_a_scheduled_run_records_its_start_duration_and_outcome(self):
+        task = self.task("brief")
+        asyncio.run(self.scheduler._run_task(task))
+        run = self.tasks.list_runs(task["id"])[0]
+        self.assertEqual((run["outcome"], run["output"], run["model"], run["attempt"], run["delivered"]),
+                         ("succeeded", "the brief", "Claude", None, None))
+        self.assertLessEqual(run["started_at"], run["ran_at"])
+        self.assertEqual(self.tasks.get_task(task["id"])["last_run_at"], run["ran_at"])
+
+    def test_a_busy_task_cannot_push_another_tasks_history_out(self):
+        quiet, busy = self.task("quiet"), self.task("busy")
+        self.tasks.record_run(quiet["id"], output="kept")
+        for i in range(self.module.MAX_RUNS_PER_TASK + 10):
+            self.tasks.record_run(busy["id"], output=f"run {i}")
+        reloaded = self.module.TaskService()  # what the next app start reads
+        self.assertEqual([r["output"] for r in reloaded.list_runs(quiet["id"])], ["kept"])
+        busy_runs = reloaded.list_runs(busy["id"])
+        self.assertEqual(len(busy_runs), self.module.MAX_RUNS_PER_TASK)
+        self.assertEqual(busy_runs[0]["output"], f"run {self.module.MAX_RUNS_PER_TASK + 9}", "the newest are the ones kept")
+
+    def test_a_run_cut_off_by_closing_the_app_is_recorded_as_lost_on_the_next_start(self):
+        task = self.task("cut off")
+        self.tasks.mark_started(task["id"])
+        reloaded = self.module.TaskService()  # the app closed mid-run and started again
+        self.assertEqual([t["id"] for t in reloaded.recover_interrupted_runs()], [task["id"]])
+        run = reloaded.list_runs(task["id"])[0]
+        self.assertEqual(run["outcome"], "lost")
+        self.assertIsNotNone(run["started_at"])
+        self.assertEqual(reloaded.recover_interrupted_runs(), [], "recorded once, not on every start")
+
+    def test_records_from_before_start_times_read_as_unknown_duration(self):
+        task = self.task("old")
+        self.tasks._runs.append({"task_id": task["id"], "task_name": "old", "ran_at": time.time(),
+                                 "output": "", "error": "boom", "delivered": None})
+        run = self.tasks.list_runs(task["id"])[0]
+        self.assertEqual((run["outcome"], run["started_at"], run["duration_seconds"]), ("failed", None, None))
+
+    def test_deleting_a_task_deletes_its_history(self):
+        task = self.task("gone")
+        self.tasks.record_run(task["id"], output="x")
+        self.tasks.delete_task(task["id"])
+        self.assertEqual(self.module.TaskService().list_runs(task["id"]), [])
 
 
 class BoardToolTests(unittest.TestCase):

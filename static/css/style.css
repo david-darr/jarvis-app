@@ -1691,6 +1691,22 @@ button.dashboard-row:hover { background: rgba(255,255,255,.035); }
 .board-card-actions .btn { padding: 3px 9px; font-size: 11px; }
 .board-feedback { flex: 1 1 100%; min-width: 0; font-size: 11.5px; }
 
+/* Run history (static/js/runHistory.js): scheduled tasks and board cards. */
+.run-history-panel { margin-top: 6px; }
+.run-history-panel > summary { font-size: 11.5px; color: var(--text-dim); cursor: pointer; }
+.run-history { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; min-width: 0; }
+.run-row > summary { font-size: 11.5px; cursor: pointer; overflow-wrap: anywhere; }
+.run-outcome { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--border-strong);
+  font-size: 10.5px; color: var(--text-dim); }
+.run-outcome.run-succeeded { color: var(--success); }
+.run-outcome.run-failed { color: var(--danger); }
+.run-outcome.run-lost { color: #d9b67d; }
+.run-meta { color: var(--text-faint); }
+.run-text { margin: 4px 0 2px; max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 11.5px; color: var(--text-dim); }
+.run-text.is-error { color: var(--danger); }
+.run-more { align-self: flex-start; padding: 2px 8px; font-size: 11px; }
+
 /* Settings > Integrations > MCP catalog (settings.js mcpCatalogSection). */
 .mcp-catalog-search { width: 100%; max-width: 100%; box-sizing: border-box; margin-bottom: 8px; }
 .mcp-catalog { min-width: 0; max-width: 100%; }

@@ -38,15 +38,24 @@ const events = [
   { id: "e3", title: "Weekly review", start: future(60), end: future(61), source: "event" },
 ];
 const tasks = [
-  { id: "t1", name: "Daily briefing", enabled: true, schedule_kind: "daily", run_time: "07:00", next_run_at: future(6), last_run_at: null },
+  { id: "t1", name: "Daily briefing", enabled: true, schedule_kind: "daily", run_time: "07:00", next_run_at: future(6), last_run_at: now - 3000 },
   // Work board cards (taskBoard.js): one in Review, one waiting on it, one Blocked.
   { id: "c1", name: "Gather sources", schedule_kind: "card", status: "review", depends_on: [], attempts: 1, endpoint_id: "m3",
-    created_at: now - 900, comments: [{ at: now - 600, kind: "result", text: "Three sources found: the design brief, the research notes and last week's review.", by: "jarvis" }] },
+    created_at: now - 900, last_run_at: now - 600, comments: [{ at: now - 600, kind: "result", text: "Three sources found: the design brief, the research notes and last week's review.", by: "jarvis" }] },
   { id: "c2", name: "Write the summary", schedule_kind: "card", status: "ready", depends_on: ["c1"], attempts: 0, endpoint_id: null,
     created_at: now - 800, comments: [] },
   { id: "c3", name: "Tidy the vault", schedule_kind: "card", status: "blocked", depends_on: [], attempts: 3, endpoint_id: null,
     created_at: now - 700, comments: [{ at: now - 60, kind: "error", text: "The model stopped responding.", by: "jarvis" }] },
 ];
+// Run history (runHistory.js): one record of each outcome, newest first.
+const runs = {
+  t1: [
+    { task_id: "t1", started_at: now - 3042, ran_at: now - 3000, duration_seconds: 42, outcome: "succeeded", output: "Two meetings today and one open priority.", error: null, delivered: null, model: "Claude", attempt: null },
+    { task_id: "t1", started_at: now - 90000, ran_at: now - 89990, duration_seconds: 10, outcome: "lost", output: "", error: "The run did not finish (JARVIS closed while it ran).", delivered: null, model: "Claude", attempt: null },
+    { task_id: "t1", started_at: null, ran_at: now - 176400, duration_seconds: null, outcome: "failed", output: "", error: "The model stopped responding.", delivered: null, model: null, attempt: null },
+  ],
+  c1: [{ task_id: "c1", started_at: now - 725, ran_at: now - 600, duration_seconds: 125, outcome: "succeeded", output: "Three sources found.", error: null, delivered: null, model: "Local model", attempt: 1 }],
+};
 const docs = ["Design principles", "Project research", "Ideas for next week"].map((title, i) => ({ id: "d" + (i + 1), title, updated_at: now - i * 3600 }));
 function graph() {
   const nodes = [{ id: "", name: "Vault", type: "folder", folder: "" }], edges = [];
@@ -91,6 +100,7 @@ function fixture(url) {
   if (route === "/api/calendar/events") return list(events);
   if (route === "/api/calendar/events/archived") return [];
   if (route === "/api/tasks") return list(tasks);
+  if (/^\/api\/tasks\/[^/]+\/runs$/.test(route)) return empty ? [] : runs[route.split("/")[3]] || [];
   if (route === "/api/tasks/builtin") return ["Daily briefing", "Review priorities", "Organize memory", "Inbox triage"].map((label, i) => ({ label, description: "Keep the important things in view with a regular review.", action_id: "routine" + i, enabled: i === 0 && !empty, task_id: "t1", uses_model: true, default_daily_time: "07:00" }));
   if (route === "/api/models") return list(models);
   if (route === "/api/models/choices") return list(models.map((m) => ({ ...m, supports_images: m.kind !== "local" })));
@@ -289,6 +299,16 @@ app.whenReady().then(async () => {
           assert.ok(await js("document.querySelector('.board-card-blocked .board-card-text').textContent.includes('model stopped')"), label + " blocked card shows its error");
           assert.ok(await js("document.querySelector('.board-card-ready').textContent.includes('waits for Gather sources')"), label + " a waiting card names what it waits for");
           assert.ok(await js("!document.getElementById('tasks-list').textContent.includes('Gather sources')"), label + " cards stay out of the scheduled list");
+          // Run history: the scheduled task's last run and its full history,
+          // and a card's history loaded when opened.
+          await waitFor("!!document.querySelector('#tasks-list .run-history-panel')");
+          assert.ok(await js("document.getElementById('tasks-list').textContent.includes('Succeeded · 42s')"), label + " last run shows outcome and duration");
+          assert.equal(await js("document.querySelector('#tasks-list .run-history-panel > summary').textContent"), "Run history (3)", label + " history count");
+          assert.deepEqual(await js("[...document.querySelectorAll('#tasks-list .run-outcome')].map(n => n.textContent)"), ["Succeeded", "Didn't finish", "Failed"], label + " each outcome labelled");
+          assert.ok(await js("document.querySelector('#tasks-list .run-history').textContent.includes('duration unknown')"), label + " an old record's duration is unknown, not guessed");
+          await js("document.querySelector('.board-card-review .board-card-output:last-of-type').open = true");
+          await waitFor("!!document.querySelector('.board-card-review .run-row')");
+          assert.ok(await js("document.querySelector('.board-card-review .run-row').textContent.includes('2m 05s · Local model · attempt 1')"), label + " card history row");
         }
         assert.deepEqual(await overflow(), [], label + " overflow in " + tab);
         await capture(label + "-" + tab);

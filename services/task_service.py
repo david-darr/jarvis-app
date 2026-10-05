@@ -41,7 +41,9 @@ import os
 TASKS_FILE = os.path.join(DATA_DIR, "tasks.json")
 TASK_RUNS_FILE = os.path.join(DATA_DIR, "task_runs.json")
 
-MAX_RUNS_KEPT = 200
+# Kept per task, so a task that runs every few minutes cannot push another
+# task's or card's history out (one shared cap of 200 did, 2026-10-02).
+MAX_RUNS_PER_TASK = 50
 
 CARD_STATUSES = ("backlog", "ready", "running", "review", "done", "blocked")
 # One run plus two retries, then Blocked.
@@ -65,7 +67,15 @@ class TaskService:
         write_json_atomic(TASKS_FILE, self._tasks)
 
     def _save_runs(self) -> None:
-        write_json_atomic(TASK_RUNS_FILE, self._runs[-MAX_RUNS_KEPT:])
+        counts: dict = {}
+        kept = []
+        for run in reversed(self._runs):
+            seen = counts.get(run["task_id"], 0)
+            if seen < MAX_RUNS_PER_TASK:
+                kept.append(run)
+                counts[run["task_id"]] = seen + 1
+        self._runs = kept[::-1]
+        write_json_atomic(TASK_RUNS_FILE, self._runs)
 
     def list_tasks(self) -> list[dict]:
         return sorted(self._tasks.values(), key=lambda t: t["created_at"], reverse=True)
@@ -223,6 +233,7 @@ class TaskService:
         card["status"] = "running"
         card["attempts"] += 1
         card["claimed_until"] = now + CARD_LEASE_SECONDS
+        card["run_started_at"] = now
         self._save_tasks()
         return card
 
@@ -231,18 +242,16 @@ class TaskService:
         self._comment(card, "result", output, "jarvis")
         card["status"] = "review"
         card["claimed_until"] = None
-        card["last_run_at"] = time.time()
-        self._append_run(card, output, None)
+        self._append_run(card, output, None, "succeeded")
         self._save_tasks()
         return card
 
-    def fail_card(self, card_id: str, error: str) -> dict:
+    def fail_card(self, card_id: str, error: str, lost: bool = False) -> dict:
         card = self._tasks[card_id]
         self._comment(card, "error", error, "jarvis")
         card["status"] = "blocked" if card["attempts"] >= CARD_MAX_ATTEMPTS else "ready"
         card["claimed_until"] = None
-        card["last_run_at"] = time.time()
-        self._append_run(card, "", error)
+        self._append_run(card, "", error, "lost" if lost else "failed")
         self._save_tasks()
         return card
 
@@ -251,7 +260,8 @@ class TaskService:
         now = time.time() if now is None else now
         stale = [c for c in self._tasks.values() if c["schedule_kind"] == "card" and c["status"] == "running"
                  and (c.get("claimed_until") or 0) < now]
-        return [self.fail_card(c["id"], "The run did not finish (JARVIS may have closed while it ran).") for c in stale]
+        return [self.fail_card(c["id"], "The run did not finish (JARVIS may have closed while it ran).", lost=True)
+                for c in stale]
 
     def card_prompt(self, card: dict) -> str:
         """What the model is asked: the card itself, the results of the
@@ -276,10 +286,55 @@ class TaskService:
     def _latest(card: dict, kind: str) -> Optional[dict]:
         return next((c for c in reversed(card.get("comments") or []) if c["kind"] == kind), None)
 
-    def _append_run(self, task: dict, output: str, error: Optional[str]) -> None:
-        self._runs.append({"task_id": task["id"], "task_name": task["name"], "ran_at": time.time(),
-                           "output": output, "error": error, "delivered": None})
+    def _append_run(self, task: dict, output: str, error: Optional[str], outcome: str,
+                    delivered: Optional[bool] = None) -> None:
+        """One run record. outcome is "succeeded", "failed" or "lost" (a run
+        that never reported back: the app closed mid-run, or a card's lease
+        ran out). The start time is the one mark_started() or a card's claim
+        left on the task; the caller saves the task."""
+        now = time.time()
+        started = task.pop("run_started_at", None)
+        self._runs.append({
+            "task_id": task["id"],
+            "task_name": task["name"],
+            "started_at": started,
+            "ran_at": now,  # when it finished; the name predates started_at
+            "duration_seconds": round(now - started, 1) if started else None,
+            "outcome": outcome,
+            "output": output,
+            "error": error,
+            # None = no delivery channel configured for this task; True/False =
+            # a channel was configured and the send did/didn't succeed (David's
+            # ask 2026-09-02 — a failed Discord delivery was previously silent
+            # everywhere but the server log).
+            "delivered": delivered,
+            # The model as named when it ran, so the history still reads
+            # right after the task moves to another model or it is removed.
+            "endpoint_id": task.get("endpoint_id"),
+            "model": _model_label(task.get("endpoint_id")),
+            "attempt": task.get("attempts") if task["schedule_kind"] == "card" else None,
+        })
+        task["last_run_at"] = now
         self._save_runs()
+
+    def mark_started(self, task_id: str) -> None:
+        """A scheduled task's run begins. Persisted, so a run cut off by the
+        app closing is still found and recorded on the next start."""
+        task = self._tasks.get(task_id)
+        if task is not None:
+            task["run_started_at"] = time.time()
+            self._save_tasks()
+
+    def recover_interrupted_runs(self) -> list[dict]:
+        """At startup nothing is running yet, so a scheduled task still marked
+        as started was cut off: record it as lost. Cards are left to their
+        lease (reclaim_stale_cards), which already covers this."""
+        lost = [t for t in self._tasks.values() if t["schedule_kind"] != "card" and t.get("run_started_at")]
+        for task in lost:
+            self._append_run(task, "", "The run did not finish (JARVIS closed while it ran).", "lost")
+        if lost:
+            self._save_tasks()
+        return lost
 
     def set_daily_schedule(self, task_id: str, run_time: str) -> dict:
         """Convert an existing task to a daily wall-clock schedule.
@@ -302,6 +357,10 @@ class TaskService:
     def delete_task(self, task_id: str) -> None:
         if task_id in self._tasks:
             del self._tasks[task_id]
+            # The Tasks tab says a deleted task's history goes with it.
+            if any(r["task_id"] == task_id for r in self._runs):
+                self._runs = [r for r in self._runs if r["task_id"] != task_id]
+                self._save_runs()
             # A card that waited on this one no longer does.
             for other in self._tasks.values():
                 if task_id in (other.get("depends_on") or []):
@@ -319,22 +378,7 @@ class TaskService:
         task = self._tasks.get(task_id)
         if task is None:
             return
-        now = time.time()
-        self._runs.append({
-            "task_id": task_id,
-            "task_name": task["name"],
-            "ran_at": now,
-            "output": output,
-            "error": error,
-            # None = no delivery channel configured for this task; True/False =
-            # a channel was configured and the send did/didn't succeed (David's
-            # ask 2026-09-02 — a failed Discord delivery was previously silent
-            # everywhere but the server log).
-            "delivered": delivered,
-        })
-        self._save_runs()
-
-        task["last_run_at"] = now
+        self._append_run(task, output, error, "failed" if error else "succeeded", delivered)
         if task["schedule_kind"] == "once":
             task["enabled"] = False
             task["next_run_at"] = None
@@ -345,8 +389,21 @@ class TaskService:
         self._save_tasks()
 
     def list_runs(self, task_id: Optional[str] = None) -> list[dict]:
+        """Newest first. Records from before 2026-10-02 have no start time or
+        outcome: the outcome is read from the error and the duration stays
+        unknown rather than guessed."""
         runs = self._runs if task_id is None else [r for r in self._runs if r["task_id"] == task_id]
-        return sorted(runs, key=lambda r: r["ran_at"], reverse=True)
+        return [{"started_at": None, "duration_seconds": None, "model": None, "attempt": None, **r,
+                 "outcome": r.get("outcome") or ("failed" if r.get("error") else "succeeded")}
+                for r in sorted(runs, key=lambda r: r["ran_at"], reverse=True)]
+
+
+def _model_label(endpoint_id: Optional[str]) -> str:
+    if not endpoint_id:
+        return "Claude"
+    from core import model_endpoints
+    endpoint = model_endpoints.get_endpoint(endpoint_id)
+    return endpoint["name"] if endpoint else "a removed model"
 
 
 def _iso_in(seconds: int) -> str:

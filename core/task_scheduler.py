@@ -108,6 +108,7 @@ async def _run_task_tagged(task: dict) -> None:
     if task.get("schedule_kind") == "card":
         await _run_card(task)
         return
+    task_service.mark_started(task["id"])
     builtin_id = task.get("builtin_action")
     if builtin_id:
         await _run_builtin_task(task, builtin_id)
@@ -181,6 +182,8 @@ async def _poll_loop() -> None:
 def start() -> None:
     global _loop_task
     if _loop_task is None:
+        for task in task_service.recover_interrupted_runs():
+            logger.warning("task '%s' (%s): its last run was cut off by the app closing", task["name"], task["id"])
         _loop_task = asyncio.create_task(_poll_loop())
         logger.info("task_scheduler started (poll every %ss)", POLL_INTERVAL_SECONDS)
 
