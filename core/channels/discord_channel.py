@@ -39,6 +39,12 @@ Office/PDF file generation, for both Discord and chat) — see
 _extract_generated_attachments(). Still scoped narrowly: only the app's own
 save_generated_image/save_generated_file tool output gets attached back;
 nothing else about outbound sending changed.
+
+Agents (2026-10-05, core/channels/agent_routing.py): the bot's own allowed
+user can address an agent by name ("Scout, ..."), give it a job ("Scout,
+job: ..."), or reply to one of its notifications to answer it. Nobody else
+can, and never in an "open" channel: agents run in Auto, so directing one
+approves what it then does. Every other message is handled as before.
 """
 import asyncio
 import logging
@@ -46,6 +52,7 @@ import os
 import re
 
 from core import attachments, discord_bots_store, events, image_gen
+from core.channels import agent_routing
 from core.session_manager import session_manager
 from services import chat_service
 
@@ -178,27 +185,27 @@ def _build_client(discord, bot: dict):
         if not message.content.strip() and not message.attachments:
             return
 
-        # Any file type, matching The Bridge's discord_bot.py convention —
-        # this bot's job is only to get the bytes staged, not to parse them.
-        # stage_file()/resolve_for_turn() is the same pipeline the web Chat
-        # composer's own attach-files button uses (see core/attachments.py),
-        # so a Discord upload and a browser upload land the model in the
-        # exact same place: copied into the session's cwd, read with its
-        # normal file tools.
-        attachment_ids: list[str] = []
-        if message.attachments:
-            for att in message.attachments:
-                if att.size > MAX_ATTACHMENT_BYTES:
-                    await message.channel.send(f"Couldn't attach {att.filename}: file too large (25MB max)")
-                    continue
+        # Agents: only this bot's own allowed user, never in an open channel.
+        trusted = _may_direct_agents(str(message.channel.id), str(message.author.id), channel_modes, allowed_user_id)
+        if trusted and message.reference and message.content.strip():
+            answered = await _answer_agent_reply(client, message)
+            if answered is not None:
+                await _send_reply(discord, message, answered, bot)
+                return
+        addressed = agent_routing.match_agent(message.content) if trusted else None
+        if addressed:
+            agent, rest = addressed
+            attachment_ids = await _stage_attachments(message, bot)
+            async with message.channel.typing():
                 try:
-                    content = await att.read()
-                    staged = attachments.stage_file(att.filename, content)
-                    attachment_ids.append(staged["id"])
-                except Exception as e:
-                    logger.exception("discord_channel: %s failed to download an attachment", bot["name"])
-                    await message.channel.send(f"Couldn't download {att.filename}: {e}")
+                    reply = await agent_routing.direct(agent, rest, channel_key, "Discord", attachment_ids)
+                except Exception:
+                    logger.exception("discord_channel: %s failed to reach agent %s", bot["name"], agent["name"])
+                    reply = f"Something went wrong reaching {agent['name']} — check the app logs."
+            await _send_reply(discord, message, reply, bot)
+            return
 
+        attachment_ids = await _stage_attachments(message, bot)
         session_id = session_manager.get_or_create_channel_session(
             channel_key, bot["name"], model_endpoint_id=model_endpoint_id,
         )
@@ -208,29 +215,7 @@ def _build_client(discord, bot: dict):
             except Exception:
                 logger.exception("discord_channel: %s failed to process message", bot["name"])
                 reply = "Something went wrong on my end handling that — check the app logs."
-
-        # Found live 2026-09-01: this send was unguarded, so a failure here
-        # (a network blip, a stale channel reference, a transient Discord
-        # API error) after a long-running turn silently dropped the reply
-        # with no trace anywhere.
-        try:
-            text, attachment_paths = _extract_generated_attachments(reply)
-            # A reply that's nothing but the generated-image/file markdown
-            # leaves text empty after stripping it - Discord rejects a
-            # genuinely empty message (no content, no embed, no attachment
-            # yet at this point), so only send if there's real text left.
-            if text:
-                for chunk in _chunk_message(text):
-                    await message.channel.send(chunk)
-            # Real attachments, not a link to a local path Discord could
-            # never fetch itself (see GENERATED_IMAGE_RE/GENERATED_FILE_RE's
-            # comment) - each sent as its own message so multiple
-            # images/files in one reply don't get silently dropped by
-            # Discord's per-message attachment cap.
-            for path in attachment_paths:
-                await message.channel.send(file=discord.File(path))
-        except Exception:
-            logger.exception("discord_channel: %s failed to send its reply", bot["name"])
+        await _send_reply(discord, message, reply, bot)
 
     return client
 
@@ -264,6 +249,75 @@ async def _start_one(discord, bot: dict) -> None:
     logger.info("discord_channel: starting %s (allowlist=%s, model=%s)",
                 bot["name"], "on" if bot.get("allowed_user_id") else "off",
                 "set" if bot.get("model_endpoint_id") else "none")
+
+
+def _may_direct_agents(channel_id: str, author_id: str, channel_modes: dict, allowed_user_id) -> bool:
+    """Pure, like _should_respond. Agents act without asking, so only the
+    bot's explicitly allowed user may address them, and never in a channel
+    set to answer anyone."""
+    return bool(allowed_user_id) and author_id == str(allowed_user_id) and channel_modes.get(channel_id) != "open"
+
+
+async def _answer_agent_reply(client, message) -> "str | None":
+    """A reply to one of this bot's agent notifications answers it. None
+    when the replied-to message is not ours or carries no reply code."""
+    reference = message.reference
+    replied = reference.resolved if getattr(reference.resolved, "content", None) is not None else None
+    if replied is None and reference.message_id:
+        try:
+            replied = await message.channel.fetch_message(reference.message_id)
+        except Exception:
+            return None
+    if replied is None or replied.author != client.user:
+        return None
+    return agent_routing.answer_reply(replied.content, message.content)
+
+
+async def _stage_attachments(message, bot: dict) -> list[str]:
+    """Any file type, matching The Bridge's discord_bot.py convention —
+    this bot's job is only to get the bytes staged, not to parse them.
+    stage_file()/resolve_for_turn() is the same pipeline the web Chat
+    composer's own attach-files button uses (see core/attachments.py), so a
+    Discord upload and a browser upload land the model in the exact same
+    place: copied into the session's cwd, read with its normal file tools."""
+    attachment_ids: list[str] = []
+    for att in message.attachments:
+        if att.size > MAX_ATTACHMENT_BYTES:
+            await message.channel.send(f"Couldn't attach {att.filename}: file too large (25MB max)")
+            continue
+        try:
+            content = await att.read()
+            staged = attachments.stage_file(att.filename, content)
+            attachment_ids.append(staged["id"])
+        except Exception as e:
+            logger.exception("discord_channel: %s failed to download an attachment", bot["name"])
+            await message.channel.send(f"Couldn't download {att.filename}: {e}")
+    return attachment_ids
+
+
+async def _send_reply(discord, message, reply: str, bot: dict) -> None:
+    # Found live 2026-09-01: this send was unguarded, so a failure here
+    # (a network blip, a stale channel reference, a transient Discord
+    # API error) after a long-running turn silently dropped the reply
+    # with no trace anywhere.
+    try:
+        text, attachment_paths = _extract_generated_attachments(reply)
+        # A reply that's nothing but the generated-image/file markdown
+        # leaves text empty after stripping it - Discord rejects a
+        # genuinely empty message (no content, no embed, no attachment
+        # yet at this point), so only send if there's real text left.
+        if text:
+            for chunk in _chunk_message(text):
+                await message.channel.send(chunk)
+        # Real attachments, not a link to a local path Discord could
+        # never fetch itself (see GENERATED_IMAGE_RE/GENERATED_FILE_RE's
+        # comment) - each sent as its own message so multiple
+        # images/files in one reply don't get silently dropped by
+        # Discord's per-message attachment cap.
+        for path in attachment_paths:
+            await message.channel.send(file=discord.File(path))
+    except Exception:
+        logger.exception("discord_channel: %s failed to send its reply", bot["name"])
 
 
 async def send_direct_message(text: str) -> bool:

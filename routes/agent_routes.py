@@ -2,7 +2,6 @@
 
 Admin only: agents always run in Auto (David, 2026-10-05), so whoever directs
 them is approving everything they do, the same rule as a chat's Auto mode."""
-import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -151,18 +150,14 @@ async def start_chat(agent_id: str, user: str = Depends(require_admin)) -> dict:
     """A chat with the agent: its model, and its identity and notes as they
     are now, frozen for this chat."""
     from core.session_manager import session_manager
-    from services.agent_service import identity_block
     agent = _require(agent_id)
-    endpoint_id = agent["endpoint_id"] or next(
-        (e["id"] for e in model_endpoints.list_endpoints() if e["kind"] == "claude_cli"), None)
+    endpoint_id = agent_service.chat_endpoint(agent)
     if endpoint_id is None:
         raise HTTPException(status_code=400, detail="add a Claude connection in Settings, or pick this agent's model")
     session = session_manager.create_session(f"Chat with {agent['name']}")
     session_manager.set_model_endpoint(session["id"], endpoint_id)
     # Agents always run in Auto, chats with them included.
-    session_manager.set_permission_mode(session["id"], "auto")
-    return session_manager.set_agent(session["id"], agent_id,
-                                     identity_block(agent, agent_service.read_memory(agent_id), chat=True))
+    return agent_service.make_agent_chat(session["id"], agent)
 
 
 @router.put("/{agent_id}/memory")
@@ -197,26 +192,6 @@ async def add_card(agent_id: str, body: CardBody, user: str = Depends(require_ad
         raise HTTPException(status_code=400, detail=str(e))
 
 
-def _continue(item: dict) -> str:
-    """After an answer, let the work pick up again: a card waiting in Review
-    goes back to Ready; a goal checks again now. Says what happened."""
-    card = task_service.get_task(item["card_id"]) if item.get("card_id") else None
-    if card is not None:
-        if card.get("status") != "review":
-            return "noted"
-        if agent_service.open_items_for_card(card["id"]):
-            return "noted; the card still waits on another answer"
-        task_service.set_card_status(card["id"], "ready")
-        return "the card will run again"
-    goal = task_service.get_task(item["task_id"]) if item.get("task_id") else None
-    if goal is not None:
-        from core.task_scheduler import _run_task, agent_may_run
-        if agent_may_run(goal):
-            asyncio.get_running_loop().create_task(_run_task(goal))
-            return "the goal is checking again now"
-    return "noted"
-
-
 @router.post("/inbox/{item_id}/answer")
 async def answer(item_id: str, body: AnswerBody, user: str = Depends(require_admin)) -> dict:
     item = agent_service.get_item(item_id)
@@ -224,15 +199,7 @@ async def answer(item_id: str, body: AnswerBody, user: str = Depends(require_adm
         raise HTTPException(status_code=404, detail="inbox item not found")
     if item["status"] != "open":
         raise HTTPException(status_code=409, detail="this has already been answered")
-    choice, text = body.choice, (body.text or "").strip()
-    if choice not in ("reply", "dismiss"):
-        raise HTTPException(status_code=400, detail="choose reply or dismiss")
-    if choice == "reply" and not text:
-        raise HTTPException(status_code=400, detail="write a reply first")
-    if choice == "dismiss":
-        agent_service.resolve(item_id, "dismissed")
-        return {"ok": True, "next": "dismissed"}
-    agent_service.resolve(item_id, "answered", text)
-    if item["kind"] == "report":
-        return {"ok": True, "next": "it will see your reply on its next run"}
-    return {"ok": True, "next": _continue(item)}
+    try:
+        return {"ok": True, "next": agent_service.answer_item(item_id, body.choice, body.text or "")}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

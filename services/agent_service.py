@@ -41,6 +41,11 @@ COLORS = ("#b3a7f5", "#7dd3c0", "#f0b37e", "#e88f8f", "#8fb8e8", "#c9d67a")
 EDITABLE = ("name", "role", "instructions", "endpoint_id", "color", "enabled", "daily_run_cap",
             "deliver_to_channel", "integration_ids")
 REPLIES_IN_PROMPT = 5
+# A reply code on a channel notification ("[S-7f3a2b]": the agent's initial
+# and the start of the item's or card's id). Replying to that message in
+# Discord answers it (core/channels/agent_routing.py).
+CODE_RE = re.compile(r"\[([A-Z0-9])-([0-9a-f]{6})\]")
+APPROVALS = {"approve", "approved", "lgtm", "ok", "okay", "yes", "looks good", "ship it", "done"}
 
 
 class AgentService:
@@ -268,12 +273,17 @@ class AgentService:
         """A new inbox item: the activity feed always, the agent's channel
         when it has one."""
         verb = {"question": "has a question", "report": "has a report"}[item["kind"]]
-        self._announce(item["agent_id"], "agent.inbox", verb, item["title"], item.get("body") or "", item_id=item["id"])
+        how = "Reply to this message to answer." if item["kind"] == "question" else "Reply to this message to answer it."
+        self._announce(item["agent_id"], "agent.inbox", verb, item["title"], item.get("body") or "",
+                       f"{how} {code_for(self.get(item['agent_id']), item['id'])}", item_id=item["id"])
 
     def notify_review(self, agent_id: str, card: dict) -> None:
-        self._announce(agent_id, "agent.review", "has a result ready for review", card["name"], "", task_id=card["id"])
+        result = next((c["text"] for c in reversed(card.get("comments") or []) if c["kind"] == "result"), "")
+        self._announce(agent_id, "agent.review", "has a result ready for review", card["name"], result,
+                       f"Reply 'approve', or say what should change. {code_for(self.get(agent_id), card['id'])}",
+                       task_id=card["id"])
 
-    def _announce(self, agent_id: str, event: str, verb: str, title: str, body: str, **extra) -> None:
+    def _announce(self, agent_id: str, event: str, verb: str, title: str, body: str, footer: str = "", **extra) -> None:
         from core import events
         agent = self.get(agent_id) or {"name": "An agent"}
         events.emit(event, f"{agent['name']} {verb}: {title}", agent_id=agent_id, **extra)
@@ -281,11 +291,116 @@ class AgentService:
         if channel:
             import asyncio
             from core.channels import registry
-            text = f"**{agent['name']}** {verb}: {title}" + (f"\n{body[:1500]}" if body else "")
+            text = (f"**{agent['name']}** {verb}: {title}" + (f"\n{body[:1500]}" if body else "")
+                    + (f"\n_{footer}_" if footer else ""))
             try:
                 asyncio.get_running_loop().create_task(registry.send_to_channel(channel, text))
             except RuntimeError:
                 pass  # no running loop (a script or test): the feed still has it
+
+
+    # -- answering (the app's inbox and channel replies share these) ----------
+
+    def answer_item(self, item_id: str, choice: str, text: str = "") -> str:
+        """Answer a question or report: reply or dismiss. Returns what
+        happens next, in words. KeyError for an unknown item, ValueError for
+        one already answered or a bad choice."""
+        item = self.get_item(item_id)
+        if item is None:
+            raise KeyError(item_id)
+        if item["status"] != "open":
+            raise ValueError("this has already been answered")
+        text = (text or "").strip()
+        if choice not in ("reply", "dismiss"):
+            raise ValueError("choose reply or dismiss")
+        if choice == "reply" and not text:
+            raise ValueError("write a reply first")
+        if choice == "dismiss":
+            self.resolve(item_id, "dismissed")
+            return "dismissed"
+        self.resolve(item_id, "answered", text)
+        if item["kind"] == "report":
+            return "it will see your reply on its next run"
+        return self._continue(item)
+
+    def _continue(self, item: dict) -> str:
+        """After an answer, let the work pick up again: a card waiting in
+        Review goes back to Ready; a goal checks again now."""
+        from services.task_service import task_service
+        card = task_service.get_task(item["card_id"]) if item.get("card_id") else None
+        if card is not None:
+            if card.get("status") != "review":
+                return "noted"
+            if self.open_items_for_card(card["id"]):
+                return "noted; the card still waits on another answer"
+            task_service.set_card_status(card["id"], "ready")
+            return "the card will run again"
+        goal = task_service.get_task(item["task_id"]) if item.get("task_id") else None
+        if goal is not None:
+            import asyncio
+            from core.task_scheduler import _run_task, agent_may_run
+            if agent_may_run(goal):
+                asyncio.get_running_loop().create_task(_run_task(goal))
+                return "the goal is checking again now"
+        return "noted"
+
+    def review(self, card_id: str, text: str) -> str:
+        """A result answered from a channel: an approval word approves it,
+        anything else sends it back with that note (which, as in the app,
+        also lands in the agent's memory as a correction)."""
+        from services.task_service import task_service
+        card = task_service.get_task(card_id)
+        if card is None or card.get("status") != "review" or not card.get("agent_id"):
+            raise ValueError("that result is no longer waiting for review")
+        words = " ".join((text or "").lower().strip(" .!").split())
+        if words in APPROVALS:
+            task_service.set_card_status(card_id, "done")
+            return "approved"
+        if not words:
+            raise ValueError("say 'approve' or what should change")
+        task_service.set_card_status(card_id, "ready", note=text.strip())
+        return "sent back with your note; it will redo it"
+
+    def resolve_code(self, text: str) -> Optional[tuple[str, dict]]:
+        """Find what a reply code in a notification refers to: an open inbox
+        item ("item") or an agent's result waiting for review ("review")."""
+        match = CODE_RE.search(text or "")
+        if not match:
+            return None
+        prefix = match.group(2)
+        item = next((i for i in self._inbox if i["id"].startswith(prefix) and i["status"] == "open"), None)
+        if item:
+            return "item", item
+        from services.task_service import task_service
+        card = next((t for t in task_service.list_tasks() if t["id"].startswith(prefix) and t.get("agent_id")
+                     and t["schedule_kind"] == "card" and t.get("status") == "review"), None)
+        return ("review", card) if card else None
+
+    # -- chats ------------------------------------------------------------------
+
+    def chat_endpoint(self, agent: dict) -> Optional[str]:
+        """The model a chat with this agent uses: its own, else the first
+        Claude connection."""
+        if agent.get("endpoint_id"):
+            return agent["endpoint_id"]
+        from core import model_endpoints
+        return next((e["id"] for e in model_endpoints.list_endpoints() if e["kind"] == "claude_cli"), None)
+
+    def make_agent_chat(self, session_id: str, agent: dict) -> dict:
+        """Turn a session into a chat with this agent, unless it already is
+        one: Auto mode, and the agent's identity and notes frozen in."""
+        from core.session_manager import session_manager
+        session = session_manager.get_session(session_id) or {}
+        if session.get("agent_id") == agent["id"]:
+            return session
+        session_manager.set_permission_mode(session_id, "auto")
+        return session_manager.set_agent(session_id, agent["id"],
+                                         identity_block(agent, self.read_memory(agent["id"]), chat=True))
+
+
+def code_for(agent: Optional[dict], ident: str) -> str:
+    initial = next((c for c in ((agent or {}).get("name") or "") if c.isalnum()), "A").upper()
+    return f"[{initial if initial.isascii() else 'A'}-{ident[:6]}]"
 
 
 def identity_block(agent: dict, memory: str, chat: bool = False) -> str:

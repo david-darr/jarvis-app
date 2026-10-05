@@ -355,6 +355,156 @@ class AgentChatListTests(AgentTestCase):
                          str(store.SCHEMA_VERSION))
 
 
+class DiscordAgentTests(AgentTestCase):
+    """Phase 1b: the bot's own allowed user can talk to an agent, give it a
+    job and answer its notifications from Discord; nobody else can, and
+    every other message is handled as before. Real discord.Client handler,
+    fake messages; nothing reaches Discord."""
+
+    OWNER, STRANGER, CHANNEL = "111", "999", "555"
+
+    def setUp(self):
+        super().setUp()
+        import discord
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from core.channels import discord_channel
+        from services import chat_service
+        self.discord, self.ns = discord, SimpleNamespace
+        self.sent = []
+        self.turn = AsyncMock(return_value="agent reply")
+        p = patch.object(chat_service, "send_message", self.turn)
+        p.start()
+        self.addCleanup(p.stop)
+        self.module = discord_channel
+
+    def client(self, allowed=OWNER, mode=None):
+        bot = {"id": "bot1", "name": "JARVIS", "allowed_user_id": allowed, "model_endpoint_id": None,
+               "channels": [{"discord_channel_id": self.CHANNEL, "mode": mode}] if mode else []}
+        return self.module._build_client(self.discord, bot)
+
+    def message(self, text, author=OWNER, replying_to=None):
+        sent = self.sent
+
+        class Typing:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+
+        async def send(content=None, file=None):
+            sent.append(content)
+
+        channel = self.ns(id=int(self.CHANNEL), send=send, typing=lambda: Typing())
+        reference = self.ns(resolved=replying_to, message_id=1) if replying_to is not None else None
+        return self.ns(author=self.ns(id=int(author)), channel=channel, content=text, attachments=[], reference=reference)
+
+    def say(self, client, *args, **kwargs):
+        asyncio.run(client.on_message(self.message(*args, **kwargs)))
+
+    def reviewed(self, name):
+        """A card whose run has finished and waits for review."""
+        card = self.card(name)
+        self.dispatch()
+        self.assertEqual(task_service.get_task(card["id"])["status"], "review")
+        return card
+
+    def test_the_owner_talks_to_an_agent_in_its_own_auto_chat(self):
+        from core.session_manager import session_manager
+        with patch.object(agent_service, "chat_endpoint", return_value="claude"):
+            self.say(self.client(), "Scout, any new postings?")
+        session_id, text, ids = self.turn.call_args.args
+        self.assertEqual((text, self.turn.call_args.kwargs["is_admin"]), ("any new postings?", True))
+        session = session_manager.get_session(session_id)
+        self.addCleanup(session_manager.delete_session, session_id)
+        self.assertEqual((session["agent_id"], session["permission_mode"], session["title"]),
+                         (self.agent["id"], "auto", "Scout on Discord"))
+        self.assertIn("You are Scout", session["agent_prompt"])
+        self.assertNotIn(session_id, [s["id"] for s in session_manager.list_sessions()], "kept out of Chats")
+        self.assertEqual(self.sent, ["agent reply"])
+
+    def test_nobody_else_reaches_an_agent(self):
+        """The agent has a model here, so reaching it would be a real turn."""
+        from core.session_manager import session_manager
+        cases = [  # (client, author, what the bot should do)
+            (self.client(), self.STRANGER, "ignore"),            # not the allowed user: bot stays silent
+            (self.client(allowed=None), self.STRANGER, "everyday"),  # no allowed user: anyone chats, never agents
+            (self.client(allowed=None), self.OWNER, "everyday"),
+            (self.client(mode="open"), self.OWNER, "everyday"),    # open channel: never agents, even the owner
+            (self.client(mode="open"), self.STRANGER, "everyday"),
+        ]
+        with patch.object(agent_service, "chat_endpoint", return_value="claude"):
+            for client, author, expected in cases:
+                with self.subTest(author=author, expected=expected):
+                    self.turn.reset_mock()
+                    self.say(client, "Scout, delete my files", author=author)
+                    if expected == "ignore":
+                        self.assertFalse(self.turn.called)
+                        continue
+                    self.assertTrue(self.turn.called)
+                    session_id, text = self.turn.call_args.args[:2]
+                    self.assertEqual(text, "Scout, delete my files", "the whole message, not addressed")
+                    self.assertFalse(self.turn.call_args.kwargs.get("is_admin", False))
+                    self.assertIsNone(session_manager.get_session(session_id).get("agent_id"))
+        self.assertEqual(session_manager.list_sessions(agent_id=self.agent["id"]), [], "no agent chat was ever made")
+        self.assertEqual([t for t in task_service.list_tasks() if t.get("agent_id") == self.agent["id"]], [])
+
+    def test_a_message_not_addressed_to_an_agent_is_unchanged(self):
+        self.say(self.client(), "Scouting trip tomorrow, remind me")
+        session_id = self.turn.call_args.args[0]
+        from core.session_manager import session_manager
+        self.assertIsNone(session_manager.get_session(session_id).get("agent_id"))
+        self.assertFalse(self.turn.call_args.kwargs.get("is_admin", False))
+
+    def test_a_job_becomes_a_ready_card(self):
+        self.say(self.client(), "@scout job: shortlist five remote backend roles\nwith salaries")
+        [card] = [t for t in task_service.list_tasks() if t.get("agent_id") == self.agent["id"]]
+        self.assertEqual((card["status"], card["name"]), ("ready", "shortlist five remote backend roles"))
+        self.assertIn("with salaries", card["prompt"])
+        self.assertTrue(self.sent[0].startswith("Queued for Scout"))
+        self.assertFalse(self.turn.called, "a job is not a chat turn")
+
+    def test_replying_to_a_question_answers_it(self):
+        from services.agent_service import code_for
+        card = self.reviewed("Pick a board")
+        agent_service.begin_run(self.agent["id"], card_id=card["id"])
+        item = agent_service.add_item(self.agent["id"], "question", "LinkedIn or Indeed?")
+        agent_service.end_run(self.agent["id"])
+        client = self.client()
+        ours = self.ns(author=client.user, content=f"**Scout** has a question: LinkedIn or Indeed?\n_Reply to this message to answer. {code_for(self.agent, item['id'])}_")
+        self.say(client, "Indeed", replying_to=ours)
+        self.assertEqual(agent_service.get_item(item["id"])["answer"], "Indeed")
+        self.assertEqual(task_service.get_task(card["id"])["status"], "ready")
+        self.assertIn("the card will run again", self.sent[0])
+        self.say(client, "LinkedIn", replying_to=ours)
+        self.assertIn("already been answered", self.sent[1])
+        self.assertFalse(self.turn.called)
+
+    def test_replying_to_a_result_approves_it_or_sends_it_back(self):
+        from services.agent_service import code_for
+        client = self.client()
+        first, second = self.reviewed("Draft A"), self.reviewed("Draft B")
+        note = lambda card: self.ns(author=client.user, content=f"result\n_Reply 'approve'. {code_for(self.agent, card['id'])}_")
+        self.say(client, "Approve!", replying_to=note(first))
+        self.say(client, "Too long, keep it to five lines", replying_to=note(second))
+        self.assertEqual(task_service.get_task(first["id"])["status"], "done")
+        self.assertEqual(task_service.get_task(second["id"])["status"], "ready")
+        self.assertIn("keep it to five lines", agent_service.read_memory(self.agent["id"]).split("## Corrections")[1])
+
+    def test_a_reply_to_someone_elses_message_is_an_ordinary_message(self):
+        stranger_message = self.ns(author=self.ns(id=42), content="[S-abcdef] not ours")
+        self.say(self.client(), "thanks", replying_to=stranger_message)
+        self.assertTrue(self.turn.called, "handled as an everyday message")
+
+    def test_names_match_whole_and_longest_first(self):
+        from core.channels.agent_routing import match_agent
+        two = agent_service.create("Scout Two")
+        self.addCleanup(self._remove, two["id"])
+        self.assertEqual(match_agent("SCOUT: hi")[0]["id"], self.agent["id"])
+        self.assertEqual(match_agent("Scout Two, hi")[0]["id"], two["id"])
+        self.assertEqual(match_agent("  @scout")[1], "")
+        self.assertIsNone(match_agent("Scouting is fun"))
+        self.assertIsNone(match_agent("hey Scout"))
+
+
 class DeleteTests(AgentTestCase):
     def test_deleting_an_agent_removes_pending_work_and_keeps_history(self):
         done = self.card("Finished job")
