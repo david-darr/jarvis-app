@@ -29,6 +29,19 @@ const sideBrowser = require("./browser");
 const { installScreenGrab } = require("./screen-grab");
 const { createDesktopLog } = require("./desktop-log");
 const { createUiSecret, uiCookie, browserHandoffUrl } = require("./ui-access");
+const { resolveInstance } = require("./instance");
+
+// Which copy this is (electron/instance.js): the real app, or a named
+// development instance with its own data folder, lock and port. Decided
+// before anything below reads the user-data folder.
+let INSTANCE;
+try {
+  INSTANCE = resolveInstance({ argv: process.argv, env: process.env, appData: app.getPath("appData") });
+} catch (err) {
+  dialog.showErrorBox("JARVIS couldn't start", err.message);
+  app.exit(1);
+}
+if (INSTANCE && INSTANCE.userData) app.setPath("userData", INSTANCE.userData);
 
 // desktop.log, beside the backend's logs in the per-user data folder, so the
 // shell's own messages are no longer lost with its console (see
@@ -41,7 +54,7 @@ desktopLog.attachConsole();
 // electron/package.json's "build.extraResources") rather than living at
 // "..\" the way it does in this dev checkout.
 const REPO_ROOT = app.isPackaged ? path.join(process.resourcesPath, "backend") : path.join(__dirname, "..");
-const BACKEND_URL = process.env.JARVIS_BACKEND_URL || "http://127.0.0.1:8420";
+const BACKEND_URL = process.env.JARVIS_BACKEND_URL || `http://127.0.0.1:${INSTANCE.port}`;
 // If JARVIS_BACKEND_URL is set, a backend is already running elsewhere (e.g.
 // scripts/run_remote.py, or a manually-started dev server) — every dev/test
 // workflow used throughout this project's build relies on that, so spawning
@@ -186,7 +199,7 @@ function startBackend() {
   console.log(`[backend] using interpreter: ${pythonExe}`);
   backendProcess = spawn(
     pythonExe,
-    ["-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", "8420"],
+    ["-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", String(INSTANCE.port)],
     {
       cwd: REPO_ROOT,
       stdio: "pipe",
@@ -198,7 +211,9 @@ function startBackend() {
       // reads JARVIS_DATA_DIR and falls back to the in-repo data/ for dev.
       // JARVIS_UI_SECRET: see ui-access.js. The backend removes it from its
       // own environment at startup, so nothing it starts inherits it.
-      env: { ...process.env, JARVIS_DATA_DIR: path.join(app.getPath("userData"), "data"), JARVIS_UI_SECRET: UI_SECRET },
+      // JARVIS_INSTANCE tells the page which copy it is (the DEV badge).
+      env: { ...process.env, JARVIS_DATA_DIR: path.join(app.getPath("userData"), "data"), JARVIS_UI_SECRET: UI_SECRET,
+             APP_PORT: String(INSTANCE.port), JARVIS_INSTANCE: INSTANCE.name },
     },
   );
   const proc = backendProcess;
@@ -307,7 +322,7 @@ function windowIcon() {
 function buildTray() {
   if (tray) return;
   tray = new Tray(trayIcon());
-  tray.setToolTip("JARVIS — running in the background");
+  tray.setToolTip(`${INSTANCE.label} — running in the background`);
   updateTrayMenu();
   // Double-click is the convention people expect from a tray icon.
   tray.on("double-click", showWindow);
@@ -328,7 +343,7 @@ async function openInBrowser() {
 function updateTrayMenu() {
   if (!tray) return;
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "Open JARVIS", click: showWindow },
+    { label: `Open ${INSTANCE.label}`, click: showWindow },
     { label: "Quick Entry", enabled: !!screenGrab, click: () => screenGrab?.showQuickEntry() },
     {
       label: "Open in browser",
@@ -341,7 +356,7 @@ function updateTrayMenu() {
     {
       // The only way to actually stop it. Spelled out because the whole
       // point of this feature is that closing the window does NOT do this.
-      label: "Quit JARVIS (stops remote access)",
+      label: `Quit ${INSTANCE.label} (stops remote access)`,
       click: () => { isQuitting = true; app.quit(); },
     },
   ]));
@@ -352,6 +367,7 @@ async function createWindow() {
     width: 1440,
     height: 900,
     backgroundColor: "#101113",
+    title: INSTANCE.label,
     titleBarStyle: "hidden",
     ...(process.platform === "win32" ? { titleBarOverlay: {
       color: "#101113", symbolColor: "#b0afb8", height: 32,
@@ -366,6 +382,8 @@ async function createWindow() {
   });
 
   mainWindow = win;
+  // A named instance keeps its name in the taskbar whatever the page calls itself.
+  if (INSTANCE.name) win.on("page-title-updated", (event) => event.preventDefault());
   sideBrowser.attach(win, { backendOrigin: new URL(BACKEND_URL).origin });
 
   // The app's own renderer must never spawn a real second window. Chat
@@ -462,7 +480,7 @@ async function createWindow() {
     say(
       "JARVIS couldn't start",
       "The local engine didn't come up in time.\n\n" +
-      "Most often this is another program already using port 8420, or the app still being " +
+      `Most often this is another program already using port ${INSTANCE.port}, or the app still being ` +
       "scanned by your system on first launch — try opening it again.\n\n" +
       `Details are logged to:\n${path.join(app.getPath("userData"), "data", "logs", "backend.log")}`,
       true,
@@ -481,6 +499,8 @@ async function createWindow() {
       python: resolveBackendPython,
       repoRoot: REPO_ROOT,
       sideBrowser,
+      // Only the real app claims the global Quick Entry shortcut.
+      globalShortcut: INSTANCE.machineWide,
     });
     updateTrayMenu();
   }
@@ -616,8 +636,9 @@ ipcMain.on("browser:visible", (event, visible) => {
 // optional "restart now" once a download has finished.
 function setupAutoUpdate() {
   // In dev there's no published release to check against, and
-  // electron-updater throws rather than no-oping.
-  if (!app.isPackaged) return;
+  // electron-updater throws rather than no-oping. A named instance never
+  // updates itself: it is a development copy, not an install.
+  if (!app.isPackaged || !INSTANCE.machineWide) return;
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
@@ -651,9 +672,10 @@ function setupAutoUpdate() {
 
 // Single-instance lock — mandatory now that closing only hides the window.
 // Without it, clicking the Start Menu shortcut while JARVIS sits in the tray
-// launches a SECOND copy, which then fails to bind port 8420 and shows the
+// launches a SECOND copy, which then fails to bind its port and shows the
 // "couldn't start" screen while the original is running fine. Instead, the
-// second launch hands off to the first, which simply reveals itself.
+// second launch hands off to the first, which simply reveals itself. The
+// lock belongs to the user-data folder, so a named instance has its own.
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();

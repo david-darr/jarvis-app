@@ -94,6 +94,10 @@ The `.border-beam` composer implements the requested Libraries.dev-style border 
 
 The vault uses colored note triangles, folder circles, faint edges, and selective labels. Search and Browse vault provide keyboard-accessible alternatives to canvas interaction. It fits while settling, yields camera control when explored, and stops its simulation when settled. Preserve drag, zoom, browse, read, and edit behavior.
 
+## Development copy
+
+A named instance (`npm run start:dev`, electron/instance.js) labels itself everywhere a person could mistake it for the real app: a DEV badge beside the sidebar brand (`.instance-badge`, accent outline, no fill), the window and tray named "JARVIS (dev)", the page title, and the sign-in card heading. The backend reports the name as `instance` on `/api/auth/status`; the real app reports an empty string and shows none of this.
+
 ## Lifecycle and verification
 
 Each navigation owns a fresh root; delayed work must not overwrite a newer view. Resource-owning views return cleanup functions for listeners, timers, observers, and graphics. Home returns cleanup synchronously while requests are pending.

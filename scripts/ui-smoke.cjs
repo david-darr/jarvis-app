@@ -67,7 +67,7 @@ const errors = [];
 function fixture(url) {
   const route = url.pathname;
   const list = (data) => empty ? [] : data;
-  if (route === "/api/auth/status") return { auth_enabled: false, setup_required: false, username: "Alex", is_admin: true };
+  if (route === "/api/auth/status") return { auth_enabled: false, setup_required: false, username: "Alex", is_admin: true, instance: empty ? "dev" : "" };
   if (route === "/api/settings") return { onboarding_complete: true, developer_mode_enabled: false };
   if (route === "/api/system/custom-tabs") return [{ id: "school", label: "School" }];
   if (route === "/api/system/status") return { scheduler_running: true, vault_ok: true, enabled_task_count: empty ? 0 : 1, model_endpoint_count: empty ? 0 : 3, discord_connected_bots: [], next_task: empty ? null : { name: "Daily briefing", next_run_at: future(6) } };
@@ -600,7 +600,12 @@ app.whenReady().then(async () => {
     sessionDelay = 0;
     await navigate("chat");
     assert.ok(await js("document.querySelector('#chat-main').classList.contains('is-empty')"));
+    assert.equal(await js("document.querySelector('#brand .instance-badge')"), null, "the real app shows no instance badge");
     empty = true;
+    // The empty pass plays a development copy: its name on every page.
+    await win.loadURL(base);
+    await waitFor("document.querySelector('#brand .instance-badge')?.textContent === 'DEV'");
+    assert.equal(await js("document.title"), "JARVIS (dev)");
     for (const tab of ["home", "chat", "notes", "library", "calendar", "tasks", "email", "tool-store", "cookbook", "school"]) {
       await navigate(tab);
       if (tab === "home") await waitFor("document.querySelector('.dashboard-stat-value')?.textContent === '0'");

@@ -11,6 +11,7 @@
   "scripts": {
     "postinstall": "install-electron",
     "start": "electron .",
+    "start:dev": "electron . --instance=dev",
     "build-runtime": "python ../scripts/build_runtime.py",
     "predist": "npm run build-runtime",
     "dist": "electron-builder"

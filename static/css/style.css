@@ -111,6 +111,11 @@ html, body {
 :root.dev-mode #brand .brand-logo {
   filter: grayscale(1) brightness(1.5);
 }
+/* A development copy of JARVIS (app.js buildSidebar). */
+#brand .instance-badge {
+  padding: 1px 6px; border-radius: 6px; border: 1px solid var(--accent); color: var(--accent);
+  font-size: 10px; font-weight: 600; letter-spacing: .06em;
+}
 
 nav#nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; overflow-x: hidden; }
 

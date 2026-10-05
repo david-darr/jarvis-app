@@ -15,8 +15,13 @@ import { api, el } from "./api.js";
 // run() resolves once a valid session exists (or immediately if
 // AUTH_ENABLED=false) - callers should await it before touching any
 // authenticated API.
+// A development copy (scripts/dev_instance.py) names itself on the sign-in
+// card too, so a password is never typed into the wrong window by mistake.
+let appName = "JARVIS";
+
 export async function run(overlay) {
   const status = await api("/api/auth/status");
+  if (status.instance) appName = `JARVIS (${status.instance})`;
   if (status.local_access_locked) {
     // Accounts are off and this page is not the JARVIS app window, so the
     // backend answers it nothing (core/auth.py's UI_SECRET). Say how to get
@@ -113,7 +118,7 @@ function renderLogin(overlay, onDone) {
 
   overlay.innerHTML = "";
   overlay.appendChild(card([
-    el("h2", { text: "JARVIS" }),
+    el("h2", { text: appName }),
     el("div", { class: "sub", text: "Sign in to continue." }),
     userInput,
     passInput,

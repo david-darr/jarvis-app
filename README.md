@@ -84,6 +84,16 @@ npm start
 
 In dev the shell uses your `.venv`; a packaged build uses its own bundled runtime.
 
+`npm start` runs as the real app: it uses the same data folder (`%APPDATA%\JARVIS` on Windows), instance lock and port 8420 as an installed JARVIS, so the two cannot run together and anything you try touches your real data.
+
+**Development copy:** `npm run start:dev` starts "JARVIS (dev)" beside the real app, with its own data folder (`%APPDATA%\JARVIS-dev`), port 8430, no auto-update and no global Quick Entry shortcut. The sidebar shows a DEV badge. Fill its data folder first:
+```
+python scripts/dev_instance.py fresh     # empty
+python scripts/dev_instance.py copy      # a copy of your real data
+python scripts/dev_instance.py status
+```
+`copy` switches off everything in the copy that would act by itself or reach back into the real app: scheduled tasks and Ready cards, Discord bots, remote access, Swarm schedules, and chats' links to Claude/Codex threads. It also copies the vault and points the copy at it. Model connections and signed-in accounts are copied as they are and are the real ones. An existing copy is moved aside with `--replace`, never deleted.
+
 **Building the installer:**
 ```
 cd electron

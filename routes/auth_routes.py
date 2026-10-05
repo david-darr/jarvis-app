@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from core import auth as auth_module
 from core.auth import auth_manager, auth_enabled, SESSION_COOKIE_NAME, SESSION_TTL_SECONDS, SINGLE_USER, UI_COOKIE_NAME
 from core.middleware import get_current_user, require_admin, require_user
+from core.constants import INSTANCE
 from services.email_service import email_service
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,8 @@ async def status(request: Request) -> dict:
         # Accounts off, and this request is not the app's own window (see
         # core/auth.py's UI_SECRET): the page says to open JARVIS from the app.
         "local_access_locked": not auth_enabled() and user is None,
+        # "" for the real app; a development copy's name otherwise (the DEV badge).
+        "instance": INSTANCE,
     }
 
 

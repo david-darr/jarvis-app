@@ -10,7 +10,10 @@ function stillImage(image) {
   return `data:image/jpeg;base64,${image.toJPEG(84).toString("base64")}`;
 }
 
-function installScreenGrab({ getMainWindow, showMainWindow, python, repoRoot, sideBrowser }) {
+// claimShortcut false (a named development instance, electron/instance.js):
+// Quick Entry still opens from the tray and capture still works, but no
+// global shortcut is registered, so the real app keeps its own.
+function installScreenGrab({ getMainWindow, showMainWindow, python, repoRoot, sideBrowser, globalShortcut: claimShortcut = true }) {
   let quickWindow = null;
   let pickerWindow = null;
   let overlayWindow = null;
@@ -33,6 +36,7 @@ function installScreenGrab({ getMainWindow, showMainWindow, python, repoRoot, si
   function isOverlay(event) { return !!overlayWindow && !overlayWindow.isDestroyed() && event.sender === overlayWindow.webContents; }
 
   function setShortcut(value) {
+    if (!claimShortcut) return { ok: false, error: "This development copy has no global shortcut. Open Quick Entry from its tray icon." };
     if (typeof value !== "string" || value.length > 80 || !/^(?=.*(?:CommandOrControl|Control|Alt|Shift|Super|Meta))[-+A-Za-z0-9]+(?:\+[-+A-Za-z0-9]+)+$/.test(value)) {
       return { ok: false, error: "Use an Electron shortcut such as CommandOrControl+Shift+6." };
     }
@@ -200,7 +204,7 @@ function installScreenGrab({ getMainWindow, showMainWindow, python, repoRoot, si
   });
   ipcMain.handle("screen-grab:shortcut", event => {
     if (!isMain(event) && !isQuick(event)) return null;
-    return shortcut;
+    return claimShortcut ? shortcut : "";
   });
   ipcMain.handle("screen-grab:set-shortcut", (event, value) => {
     if (!isMain(event) && !isQuick(event)) return { ok: false, error: "Denied." };
@@ -334,6 +338,7 @@ function installScreenGrab({ getMainWindow, showMainWindow, python, repoRoot, si
     }
   });
 
+  if (!claimShortcut) return { showQuickEntry };
   try {
     const saved = JSON.parse(fs.readFileSync(preferenceFile, "utf8"));
     if (typeof saved.shortcut === "string") shortcut = saved.shortcut;

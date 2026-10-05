@@ -141,6 +141,14 @@ function setupMobileMenu() {
 async function buildSidebar() {
   const brand = document.getElementById("brand");
   brand.innerHTML = `<img src="/static/img/jarvis-logo.png" alt="" class="brand-logo"><span>JARVIS</span>`;
+  // A development copy (scripts/dev_instance.py) says so on every page, so it
+  // is never mistaken for the real app.
+  api("/api/auth/status").then((status) => {
+    if (!status?.instance) return;
+    brand.append(Object.assign(document.createElement("span"), { className: "instance-badge", textContent: status.instance.toUpperCase(),
+      title: `Development copy "${status.instance}": its own data, separate from your real JARVIS` }));
+    document.title = `JARVIS (${status.instance})`;
+  }).catch(() => {});
 
   const nav = document.getElementById("nav");
   // Cleared before rebuilding — buildSidebar() now also runs whenever

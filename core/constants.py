@@ -4,6 +4,7 @@ Odysseus-style single source of truth for these — new modules should import fr
 here rather than recomputing paths locally.
 """
 import os
+import re
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -23,6 +24,12 @@ DATA_DIR = os.getenv("JARVIS_DATA_DIR") or os.path.join(BASE_DIR, "data")
 # port the local listener actually serves on (core/middleware.py's
 # local_api_base), since no launcher sets this.
 APP_PORT = int(os.getenv("APP_PORT", "8420"))
+
+# Which copy of JARVIS this is: "" for the real app, or the name of a
+# development instance (electron/instance.js, scripts/dev_instance.py) that
+# keeps its own data folder and port. Only used to label the page, so nobody
+# mistakes the development copy for the real one.
+INSTANCE = os.getenv("JARVIS_INSTANCE", "") if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,19}", os.getenv("JARVIS_INSTANCE", "")) else ""
 
 # Full read/write dev access for every connected AI model (David's ask
 # 2026-09-01: "I want them to have full access to the whole jarvis-app repo,
