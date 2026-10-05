@@ -131,6 +131,11 @@ def role_prompt(context: WorkerContext) -> str:
         ]
     if agent.get("instructions"):
         lines += ["", "Your standing instructions from the owner:", agent["instructions"]]
+    # A teammate standing for one of the owner's JARVIS agents brings who it
+    # is and its notes (services/swarm_service.py _identity). Text only: it
+    # never widens the tools above.
+    if agent.get("identity"):
+        lines += ["", agent["identity"]]
     return "\n".join(lines)
 
 

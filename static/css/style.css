@@ -1710,6 +1710,16 @@ button.dashboard-row:hover { background: rgba(255,255,255,.035); }
 .agent-status-working { color: var(--accent); border-color: var(--accent); }
 .agent-status-needs_you { color: #d9b67d; border-color: #d9b67d; }
 .agent-status-off, .agent-status-capped { color: var(--text-faint); }
+/* Teams (agents phase 5): Swarm companies listed in the Agents tab. */
+.agent-teams { margin-top: 26px; }
+.agent-teams-header { align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.agent-teams-header h3 { margin: 0; }
+.team-mission { white-space: normal !important; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.team-state-active { color: var(--accent); border-color: var(--accent); }
+.team-state-paused, .team-state-pausing { color: #d9b67d; border-color: #d9b67d; }
+.team-state-stopped, .team-state-archived { color: var(--text-faint); }
+.agent-teams-panel .card-row { padding: 6px 0; border-top: 1px solid var(--border); min-width: 0; }
+.agent-teams-panel .card-row span { min-width: 0; overflow-wrap: anywhere; }
 .agents-view > .glass, .agents-view > .disclosure-panel { margin-top: 14px; }
 .agent-back { margin-bottom: 8px; }
 .agent-header { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }

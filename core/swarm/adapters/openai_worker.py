@@ -14,12 +14,19 @@ takes actions:
 
 Here each of those is an explicit outcome instead. Ordinary Chats keep today's
 behaviour; nothing in this file changes that path.
+
+A local Ollama server is spoken to through its own /api/chat (found live
+2026-10-05): JARVIS saves Ollama connections without the /v1 suffix its
+OpenAI-compatible route needs, so every step got 404, and that route also
+ignores the context cap, which would load a large model uncapped.
 """
 import asyncio
 import json
 import uuid
 
 import httpx
+
+from core import ollama_client
 
 from . import MAX_TOOL_ROUNDS, role_prompt, task_prompt
 from ..models import EventKind, WorkerEvent
@@ -60,23 +67,27 @@ class OpenAIWorker:
             for round_number in range(MAX_TOOL_ROUNDS):
                 if self.cancelled:
                     break
-                body = {
-                    "model": self.context.model or endpoint.get("model"),
-                    "messages": messages,
-                    "tools": schemas,
-                    # A bounded step is a condition of admission, so the cap is
-                    # sent on every request rather than trusted to the server.
-                    "max_tokens": MAX_OUTPUT_TOKENS,
-                }
-                if endpoint.get("num_ctx"):
-                    body["num_ctx"] = endpoint["num_ctx"]
-                response = await self.client.post(f"{base_url}/chat/completions", headers=headers, json=body)
+                model = self.context.model or endpoint.get("model")
+                # A bounded step is a condition of admission, so the output cap
+                # is sent on every request rather than trusted to the server.
+                if ollama_client.is_ollama_url(base_url):
+                    response = await self.client.post(
+                        f"{ollama_client.native_root(base_url)}/api/chat", headers=headers,
+                        json=ollama_client.native_body(model, messages, num_ctx=endpoint.get("num_ctx"),
+                                                       tools=schemas, max_tokens=MAX_OUTPUT_TOKENS))
+                else:
+                    body = {"model": model, "messages": messages, "tools": schemas, "max_tokens": MAX_OUTPUT_TOKENS}
+                    if endpoint.get("num_ctx"):
+                        body["num_ctx"] = endpoint["num_ctx"]
+                    response = await self.client.post(f"{base_url}/chat/completions", headers=headers, json=body)
                 if response.status_code in (400, 422):
                     raise UnsupportedEndpoint(
                         "This connection rejected structured tool calls, so it cannot take actions. "
                         "Give this agent a connection that supports function calling.")
                 response.raise_for_status()
                 data = response.json()
+                if ollama_client.is_ollama_url(base_url):
+                    data = ollama_client.openai_shaped(data)
                 usage = data.get("usage") or {}
                 units = _total_units(usage)
                 if units:

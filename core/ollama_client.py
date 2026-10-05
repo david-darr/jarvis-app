@@ -97,6 +97,41 @@ def _native_messages(messages: list[dict]) -> list[dict]:
     return native
 
 
+def native_root(base_url: str) -> str:
+    """The server root for Ollama's own API, whether the connection was saved
+    as http://host:11434 or with the OpenAI-compatible /v1 suffix."""
+    return base_url.rstrip("/").removesuffix("/v1").rstrip("/") or DEFAULT_BASE_URL
+
+
+def native_body(model: str, messages: list[dict], *, num_ctx: int | None = None, tools: list[dict] | None = None,
+                max_tokens: int | None = None) -> dict:
+    """A non-streaming /api/chat request. Context and output caps go under
+    `options`, the only place the native endpoint reads them."""
+    options = {}
+    if num_ctx:
+        options["num_ctx"] = num_ctx
+    if max_tokens:
+        options["num_predict"] = max_tokens
+    body = {"model": model, "messages": _native_messages(messages), "stream": False}
+    if options:
+        body["options"] = options
+    if tools:
+        body["tools"] = tools
+    return body
+
+
+def openai_shaped(data: dict) -> dict:
+    """Ollama's native reply as the OpenAI shape (`choices[0].message`,
+    `usage`), so callers keep one parsing path."""
+    message = data.get("message", {})
+    usage = {
+        "prompt_tokens": data.get("prompt_eval_count", 0),
+        "completion_tokens": data.get("eval_count", 0),
+        "total_tokens": data.get("prompt_eval_count", 0) + data.get("eval_count", 0),
+    }
+    return {"choices": [{"message": message}], "usage": usage}
+
+
 async def chat_capped(model: str, messages: list[dict], num_ctx: int, tools: list[dict] | None = None,
                        base_url: str = DEFAULT_BASE_URL) -> dict:
     """Real bug found live, 2026-09-01: Ollama 0.33.1's OpenAI-*compatible*
@@ -114,21 +149,11 @@ async def chat_capped(model: str, messages: list[dict], num_ctx: int, tools: lis
     the one place that translates Ollama's native shape into that one.
     Non-streaming only: this path exists specifically for the "cap memory"
     case, where correctness matters more than token-by-token streaming."""
-    ollama_base = base_url.removesuffix("/v1").rstrip("/") or DEFAULT_BASE_URL
-    body = {"model": model, "messages": _native_messages(messages), "stream": False, "options": {"num_ctx": num_ctx}}
-    if tools:
-        body["tools"] = tools
+    body = native_body(model, messages, num_ctx=num_ctx, tools=tools)
     async with httpx.AsyncClient(timeout=None) as client:
-        resp = await client.post(f"{ollama_base}/api/chat", json=body)
+        resp = await client.post(f"{native_root(base_url)}/api/chat", json=body)
         resp.raise_for_status()
-        data = resp.json()
-    message = data.get("message", {})
-    usage = {
-        "prompt_tokens": data.get("prompt_eval_count", 0),
-        "completion_tokens": data.get("eval_count", 0),
-        "total_tokens": data.get("prompt_eval_count", 0) + data.get("eval_count", 0),
-    }
-    return {"choices": [{"message": message}], "usage": usage}
+        return openai_shaped(resp.json())
 
 
 async def pull_stream(name: str, base_url: str = DEFAULT_BASE_URL) -> AsyncIterator[dict]:

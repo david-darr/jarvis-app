@@ -10,14 +10,22 @@ const button = (text, onclick, attrs = {}) => el("button", { type: "button", cla
 const pretty = (value) => typeof value === "string" ? value : JSON.stringify(value, null, 2);
 const time = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString() : "Not recorded";
 const initialLimit = (ceiling = 25000) => ({ ceiling, pause_percent: 80, checkpoint_reserve: 0 });
+const toAgents = () => document.dispatchEvent(new CustomEvent("jarvis:navigate", { detail: { tab: "agents" } }));
+// What the team thread shows besides messages: work handed in, reviewed, and
+// how a mission or shift ended.
+const THREAD_EVENTS = new Set(["task.review", "task.accepted", "mission.concluded", "shift.finished"]);
 
+// Teams in the Agents tab (agents phase 5, 2026-10-05) are this view with
+// options.embedded: views/agents.js opens it with options.systemId (a team's
+// id, or "new" to start one). Teammates can stand for the owner's agents.
 export function render(root, _tab, options = {}) {
   root.className = "view active swarm-view";
+  const embedded = !!options.embedded;
   const abort = new AbortController();
   let disposed = false, version = 0, selected = null, current = null, unsubscribe = null, refreshTimer = null;
   let modal = null, panel = "tasks", pages = {}, ui = null;
   let workView = "chat", board = null, graph = null;
-  let connections = null, catalog = null, projects = null;
+  let connections = null, catalog = null, projects = null, jarvisAgents = null;
   const request = (path, opts = {}) => api("/api/swarm" + path, { ...opts, signal: abort.signal });
   const mutate = (path, body, method = "POST") => request(path, { method, body: JSON.stringify(body) });
   const clearStream = () => { unsubscribe?.(); unsubscribe = null; clearTimeout(refreshTimer); };
@@ -66,6 +74,15 @@ export function render(root, _tab, options = {}) {
       catalog = models && typeof models === "object" ? models : {};
     }
     return connections;
+  }
+
+  // Agents are admin-only; anyone else gets an empty list and no picker.
+  async function loadAgents() {
+    if (jarvisAgents === null) {
+      const list = await api("/api/agents", { signal: abort.signal }).catch(() => []);
+      jarvisAgents = Array.isArray(list) ? list : [];
+    }
+    return jarvisAgents;
   }
 
   async function loadProjects() {
@@ -117,6 +134,10 @@ export function render(root, _tab, options = {}) {
       node: el("fieldset", { class: "swarm-connection" }, [el("legend", { text: "Model connection" }),
         label("Connection", connection), label("Model", model), label("Effort", effort)]),
       read: () => ({ endpoint_id: connection.value || null, model: model.value || null, effort: effort.value || null }),
+      set: (endpointId) => {
+        if (!connections.some(item => item.id === endpointId)) return;
+        connection.value = endpointId; fillModel(null, null);
+      },
     };
   }
 
@@ -145,10 +166,10 @@ export function render(root, _tab, options = {}) {
     const setupVersion = version;
     const editingId = snapshot?.system.id;
     let pools, availableProjects;
-    try { [pools, , availableProjects] = await Promise.all([request("/pools"), loadConnections(), loadProjects()]); }
+    try { [pools, , availableProjects] = await Promise.all([request("/pools"), loadConnections(), loadProjects(), loadAgents()]); }
     catch (problem) { toast(problem.message, "error"); return; }
     if (disposed || setupVersion !== version) return;
-    showDialog(snapshot ? "Edit system" : "Create system", (host, close) => {
+    showDialog(snapshot ? (embedded ? "Edit team" : "Edit system") : (embedded ? "New team" : "Create system"), (host, close) => {
       const form = el("form", { class: "swarm-setup" });
       const name = el("input", { name: "name", required: true, maxlength: "120", value: snapshot?.system.name || "" });
       const mission = el("textarea", { name: "mission", required: true, maxlength: "10000", rows: "3" });
@@ -209,9 +230,10 @@ export function render(root, _tab, options = {}) {
           existingPoolLimits.push({ id: poolId, fields });
         }
       }
-      form.append(label("System name", name), label("Mission", mission), label("Intended operating mode", mode), scheduleBox, memoryBox,
+      form.append(label(embedded ? "Team name" : "System name", name), label("Mission", mission), label("Intended operating mode", mode), scheduleBox, memoryBox,
         el("p", { class: "muted", text: connections.length
-          ? "Give every teammate a connection. Workers have no shell or raw file access. Enabled JARVIS memory is read-only and bounded."
+          ? (jarvisAgents.length ? "Seat your agents, or add members for this team only. " : "")
+            + "Give every teammate a connection. Workers have no shell or raw file access. Enabled JARVIS memory is read-only and bounded."
           : "No model connections are available to you. Add one in Settings (or ask an admin) before this company can run." }));
       const members = [];
       const teamHost = el("div", { class: "swarm-form-team" });
@@ -256,6 +278,12 @@ export function render(root, _tab, options = {}) {
       function memberFields(data, isLead) {
         const agentName = el("input", { required: true, maxlength: "120", value: data?.name || (isLead ? "CEO / PM" : "") });
         const role = el("input", { required: true, maxlength: "120", value: data?.role || (isLead ? "Lead" : "") });
+        // One of the owner's agents, or a member of this team only. An agent
+        // brings its name, role, notes and model, and still works only with
+        // the team's tools here.
+        const seat = el("select", { "aria-label": "Agent" }, [el("option", { value: "", text: "None: a member of this team only" }),
+          ...jarvisAgents.map(agent => el("option", { value: agent.id, text: agent.name }))]);
+        seat.value = jarvisAgents.some(agent => agent.id === data?.jarvis_agent_id) ? data.jarvis_agent_id : "";
         const instructions = el("textarea", { rows: "2", maxlength: "10000" });
         instructions.value = data?.instructions || "";
         const memberLimit = findLimit("agent", data?.id) || initialLimit();
@@ -263,18 +291,29 @@ export function render(root, _tab, options = {}) {
         const defaultStep = memberLimit.ceiling == null ? 50000 : Math.max(500, Math.floor(memberLimit.ceiling / 4));
         const stepLimit = el("input", { type: "number", min: "500", max: "1000000000", step: "1", value: data?.step_limit || defaultStep, required: true });
         const connection = connectionFields(data);
+        const applySeat = (initial) => {
+          const agent = jarvisAgents.find(item => item.id === seat.value);
+          agentName.disabled = role.disabled = !!agent;
+          if (!agent) return;
+          agentName.value = agent.name;
+          role.value = (agent.role || (isLead ? "Lead" : "Specialist")).slice(0, 120);
+          if (!initial && agent.endpoint_id) connection.set(agent.endpoint_id);
+        };
+        seat.addEventListener("change", () => applySeat(false));
+        applySeat(true);
         const row = el("fieldset", { class: "swarm-member-form" }, [el("legend", { text: isLead ? "Lead agent" : "Specialist" }),
-          label("Name", agentName), label("Role", role), label("Responsibilities", instructions), connection.node,
+          jarvisAgents.length ? label("Agent", seat) : null, label("Name", agentName), label("Role", role),
+          label("Responsibilities", instructions), connection.node,
           label("Maximum tokens per worker step", stepLimit), limits.node]);
         const item = { node: row, isLead,
           fill: (person) => {
-            if (!person) return;
+            if (!person || seat.value) return;
             agentName.value = person.name || agentName.value;
             role.value = person.role || role.value;
             instructions.value = person.instructions || instructions.value;
           },
           read: () => ({ id: data?.id || null, name: agentName.value.trim(), role: role.value.trim(), instructions: instructions.value,
-            step_limit: Number(stepLimit.value), limit: limits.read(), ...connection.read() }) };
+            step_limit: Number(stepLimit.value), limit: limits.read(), ...connection.read(), agent_id: seat.value || null }) };
         members.push(item);
         if (!isLead) row.append(button("Remove specialist", () => { members.splice(members.indexOf(item), 1); row.remove(); }));
         teamHost.append(row);
@@ -290,7 +329,7 @@ export function render(root, _tab, options = {}) {
         el("p", { class: "muted", text: "These are local token allocations, not your provider's remaining allowance. Provider quota is unavailable until connected. Sharing a group combines its allocation across your systems." }),
         systemLimit.node, runLimit.node, ...poolControls]);
       const status = el("p", { role: "alert", class: "swarm-error" });
-      const save = el("button", { type: "submit", class: "btn primary", text: "Save system" });
+      const save = el("button", { type: "submit", class: "btn primary", text: embedded ? "Save team" : "Save system" });
       form.append(designer(), teamHost, add, limits, status, el("div", { class: "swarm-actions" }, [button("Cancel", close), save]));
       let pendingCommand = null, pendingPayload = null;
       form.addEventListener("submit", async (event) => {
@@ -324,7 +363,10 @@ export function render(root, _tab, options = {}) {
     clearStream(); dropViews(); selected = null; current = null; ui = null;
     const token = ++version;
     const list = el("div", { class: "swarm-system-grid", "aria-live": "polite" }, [el("p", { text: "Loading systems…" })]);
-    root.replaceChildren(el("header", { class: "view-header" }, [el("div", {}, [el("h1", { text: "Swarm" }), el("p", { class: "muted", text: "A team for every idea." })]), button("Create system", () => setup(), { class: "btn primary" })]), list);
+    root.replaceChildren(...(embedded ? [button("← All agents", toAgents, { class: "btn quiet agent-back" })] : []),
+      el("header", { class: "view-header" }, [el("div", {}, [el("h1", { text: embedded ? "Teams" : "Swarm" }),
+        el("p", { class: "muted", text: embedded ? "Your agents, working together on one mission." : "A team for every idea." })]),
+      button(embedded ? "New team" : "Create system", () => setup(), { class: "btn primary" })]), list);
     try {
       const [result, availability] = await Promise.all([request(`/systems?offset=${offset}`), request("/status")]);
       if (disposed || token !== version) return;
@@ -435,30 +477,31 @@ export function render(root, _tab, options = {}) {
     const controls = el("div", { class: "swarm-actions" });
     const team = el("section", { class: "swarm-team", "aria-label": "Team" });
     const messages = el("div", { class: "swarm-messages", "aria-live": "polite" });
-    const composer = el("textarea", { "aria-label": "Message your lead", placeholder: "Give your lead an idea…", rows: "3", maxlength: "20000", required: true });
+    const composer = el("textarea", { "aria-label": "Message the team", placeholder: "Give your lead an idea…", rows: "3", maxlength: "20000", required: true });
+    const recipient = el("select", { "aria-label": "Send to", class: "swarm-recipient" });
     composer.value = drafts.get(selected) || "";
     const composeStatus = el("p", { role: "status", class: "muted" });
     const send = el("button", { type: "submit", class: "btn primary", text: "Queue idea" });
-    const form = el("form", { class: "swarm-composer" }, [composer, el("div", { class: "swarm-actions" }, [composeStatus, send])]);
+    const form = el("form", { class: "swarm-composer" }, [composer, el("div", { class: "swarm-actions" }, [label("To", recipient), composeStatus, send])]);
     const companyId = selected;
     composer.addEventListener("input", () => drafts.set(companyId, composer.value));
     let retryId = null, retryText = null;
     form.addEventListener("submit", async event => {
       event.preventDefault(); if (send.disabled || ui.sending || !composer.value.trim()) return;
-      const body = composer.value.trim(), token = version;
-      if (retryText !== body) { retryId = command(); retryText = body; }
+      const body = composer.value.trim(), to = recipient.value || null, token = version;
+      if (retryText !== `${to}|${body}`) { retryId = command(); retryText = `${to}|${body}`; }
       send.disabled = true; ui.sending = true;
       try {
-        await mutate(`/systems/${companyId}/messages`, { command_id: retryId, body });
+        await mutate(`/systems/${companyId}/messages`, { command_id: retryId, body, ...(to ? { to } : {}) });
         if (disposed || token !== version) return;
         if (composer.value.trim() === body) { composer.value = ""; drafts.delete(companyId); }
         retryId = null; retryText = null;
-        composeStatus.textContent = "Saved to the lead inbox. Processing is unavailable until agent execution is connected.";
+        composeStatus.textContent = "Sent. It is read when the team next works.";
         await refresh(token);
       } catch (problem) { if (token === version) composeStatus.textContent = problem.message; }
       finally { if (token === version) { ui.sending = false; send.disabled = current?.system.state === "archived"; } }
     });
-    const conversation = el("section", { class: "swarm-conversation", "aria-label": "Lead inbox" }, [el("h2", { text: "Lead inbox" }), messages, form]);
+    const conversation = el("section", { class: "swarm-conversation", "aria-label": "Team thread" }, [el("h2", { text: "Team thread" }), messages, form]);
     const tabs = el("div", { class: "swarm-panel-tabs", "aria-label": "Work views" });
     const detail = el("div", { class: "swarm-work-content" });
     for (const key of ["tasks", "events", "budgets", "checkpoints"]) {
@@ -467,7 +510,7 @@ export function render(root, _tab, options = {}) {
     const work = el("section", { class: "swarm-work", "aria-label": "Work panel" }, [tabs, detail]);
     const mobile = el("div", { class: "swarm-mobile-tabs", "aria-label": "System panels" });
     const layout = el("div", { class: "swarm-layout", "data-mobile-panel": "inbox" }, [team, conversation, work]);
-    for (const key of ["team", "inbox", "work"]) mobile.append(button(key[0].toUpperCase() + key.slice(1), () => {
+    for (const key of ["team", "inbox", "work"]) mobile.append(button({ team: "Team", inbox: "Thread", work: "Work" }[key], () => {
       layout.dataset.mobilePanel = key;
       for (const b of mobile.children) b.setAttribute("aria-pressed", String(b.dataset.mobile === key));
     }, { "data-mobile": key, "aria-pressed": String(key === "inbox") }));
@@ -489,9 +532,9 @@ export function render(root, _tab, options = {}) {
     for (const [key, text] of [["chat", "Chat"], ["board", "Board"], ["map", "Map"]]) {
       views.append(button(text, () => { workView = key; applyWorkView(); }, { "data-view": key }));
     }
-    root.replaceChildren(el("header", { class: "swarm-header" }, [button("All systems", () => home()), heading, state, controls]), notice, views, mobile, layout,
+    root.replaceChildren(el("header", { class: "swarm-header" }, [embedded ? button("← All agents", toAgents) : button("All systems", () => home()), heading, state, controls]), notice, views, mobile, layout,
       board.node, graph.node, el("footer", { class: "swarm-footer" }, [connection, button("Refresh", () => openSystem(selected))]));
-    ui = { heading, state, controls, notice, team, messages, composer, send, tabs, detail, connection, applyWorkView, busy: false };
+    ui = { heading, state, controls, notice, team, messages, composer, recipient, send, tabs, detail, connection, applyWorkView, busy: false };
     applyWorkView();
   }
 
@@ -604,6 +647,11 @@ export function render(root, _tab, options = {}) {
     const waiting = snapshot.conclusion?.reason === "needs_owner";
     ui.composer.setAttribute("placeholder", waiting ? "Answer what the team asked for…" : "Give your lead an idea…");
     ui.send.textContent = waiting ? "Answer and resume" : "Queue idea";
+    const enabled = agents.filter(a => a.enabled);
+    const chosen = ui.recipient.value;
+    ui.recipient.replaceChildren(el("option", { value: "", text: "The lead" }), el("option", { value: "all", text: "Everyone" }),
+      ...enabled.filter(a => !a.is_lead).map(a => el("option", { value: a.id, text: a.name })));
+    ui.recipient.value = [...ui.recipient.options].some(o => o.value === chosen) ? chosen : "";
     ui.composer.disabled = system.state === "archived";
     ui.send.disabled = system.state === "archived" || !!ui.sending;
     ui.team.replaceChildren(el("h2", { text: "Team" }), el("p", { class: "muted", text: system.mission }));
@@ -615,6 +663,7 @@ export function render(root, _tab, options = {}) {
         el("span", { text: agent.is_lead ? "CEO / PM" : agent.role }),
       ]);
       if (state.task) card.append(el("small", { class: "swarm-agent-task", text: state.task }));
+      if (agent.jarvis_agent_id) card.append(el("small", { class: "swarm-agent-linked", text: "Your agent" }));
       card.append(el("small", { class: "muted", text: connectionName(agent.endpoint_id) || "No model connection" }));
       if (agent.instructions) card.append(el("small", { class: "muted", text: agent.instructions }));
       ui.team.append(card);
@@ -690,7 +739,8 @@ export function render(root, _tab, options = {}) {
     const attempts = new Map((pages.attempts?.items || []).map(item => [item.id, item]));
     const data = event.data || {};
     const clip = (value, length = 240) => {
-      const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+      if (value == null || value === "") return "";
+      const text = typeof value === "string" ? value : JSON.stringify(value);
       return text.length > length ? text.slice(0, length) + "…" : text;
     };
     const actorOf = (id) => {
@@ -714,7 +764,7 @@ export function render(root, _tab, options = {}) {
       case "mission.concluded":
         if (data.reason === "mission_complete") return `The lead ended the mission: ${clip(data.summary) || "no summary given"}`;
         if (data.reason === "needs_owner") return `The team needs something from you: ${clip(data.summary)}`;
-        return `The company stopped: ${clip(data.summary) || data.reason}`;
+        return `The company stopped: ${clip(data.summary) || data.reason || "no reason recorded"}`;
       case "message.queued": return "You sent an idea to the lead.";
       case "message.message": case "message.finding": case "message.proposal": {
         const from = agents.get(data.sender_id) || "A teammate";
@@ -780,14 +830,43 @@ export function render(root, _tab, options = {}) {
     return section.children.length > 1 ? section : null;
   }
 
+  // Messages between teammates, findings, proposals and revision notes (all
+  // stored as messages), plus work handed in, reviews and endings, in the
+  // order they happened. A message the owner sent to everyone is stored once
+  // per teammate and shown once.
+  function threadEntries() {
+    const names = new Map(current.agents.map(a => [a.id, a.name]));
+    const entries = [], owner = new Map();
+    for (const message of pages.messages.items) {
+      if (!message.sender_id) {
+        const key = `${message.created_at}|${message.body}`;
+        if (owner.has(key)) { owner.get(key).count++; continue; }
+        const entry = { id: message.id, at: message.created_at, from: "You", body: message.body, count: 1,
+          to: names.get(message.recipient_id) || "a teammate", read: !!message.read_at, kind: "owner" };
+        owner.set(key, entry); entries.push(entry); continue;
+      }
+      const kind = message.body.startsWith("Finding:") ? "finding" : message.body.startsWith("Proposed task:") ? "proposal"
+        : message.body.startsWith("Revision requested") ? "review" : "message";
+      entries.push({ id: message.id, at: message.created_at, from: names.get(message.sender_id) || "A teammate",
+        to: names.get(message.recipient_id) || "a teammate", body: message.body, read: !!message.read_at, kind });
+    }
+    for (const event of pages.events.items) {
+      if (!THREAD_EVENTS.has(event.kind)) continue;
+      const line = describeEvent(event);
+      if (line) entries.push({ id: `event-${event.id}`, at: event.created_at, from: "Team", body: line, kind: "event" });
+    }
+    return entries.sort((a, b) => a.at - b.at);
+  }
+
   function renderMessages() {
     ui.messages.replaceChildren();
-    const names = new Map(current.agents.map(a => [a.id, a.name]));
-    if (!pages.messages.items.length) ui.messages.append(el("p", { class: "swarm-empty", text: "Your ideas and the lead's replies will appear here. Saved ideas stay queued until execution is available." }));
+    const entries = threadEntries();
+    if (!entries.length) ui.messages.append(el("p", { class: "swarm-empty", text: "Messages between teammates, their findings and reviews, and your own messages appear here." }));
     moreButton("messages", ui.messages);
-    for (const message of [...pages.messages.items].reverse()) ui.messages.append(el("article", { class: "swarm-message", "data-message": message.id }, [
-      el("div", { class: "muted", text: `${message.sender_id ? names.get(message.sender_id) || "Agent" : "You"} · ${message.read_at ? "Read" : "Queued"} · ${time(message.created_at)}` }),
-      el("p", { text: message.body })]));
+    for (const entry of entries) ui.messages.append(el("article", { class: `swarm-message swarm-thread-${entry.kind}`, "data-message": entry.id }, [
+      el("div", { class: "muted", text: [entry.kind === "event" ? "Team" : `${entry.from} → ${entry.count > 1 ? "everyone" : entry.to}`,
+        entry.kind === "event" ? null : entry.read ? "Read" : "Not read yet", time(entry.at)].filter(Boolean).join(" · ") }),
+      el("p", { text: entry.body })]));
     // What came back, where the owner is already looking. Only accepted work
     // appears: a result still in review is not an answer yet.
     const results = renderResults();
@@ -850,6 +929,8 @@ export function render(root, _tab, options = {}) {
     moreButton(panel, host);
   }
 
-  home();
+  if (options.systemId === "new") home().then(() => { if (!disposed) setup(); });
+  else if (options.systemId) openSystem(options.systemId);
+  else home();
   return cleanup;
 }

@@ -773,7 +773,7 @@ class MigrationTests(unittest.TestCase):
             db.commit(); db.close()
             store = SwarmStore(path)
             try:
-                self.assertEqual(store.db.execute("PRAGMA user_version").fetchone()[0], 4)
+                self.assertEqual(store.db.execute("PRAGMA user_version").fetchone()[0], 5)
                 pools = {row["id"]: row["owner"] for row in store.db.execute("SELECT * FROM pools")}
                 self.assertEqual(pools, {"shared": None, "owned": "alice", "orphan": None})
                 self.assertEqual(store.owner_page("alice", "a", "messages")["items"][0]["body"], "Saved idea")

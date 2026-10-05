@@ -189,7 +189,17 @@ class SwarmStore:
                 self.db.execute("CREATE INDEX system_shifts ON shifts(system_id,created_at)")
                 self.db.execute("PRAGMA user_version=4")
                 version = 4
-            elif version != 4:
+            if version == 4:
+                # Teams of JARVIS agents (agents phase 5, 2026-10-05): a
+                # teammate may stand for one of the owner's agents, and the
+                # company remembers how far its events have been carried back
+                # to those agents' inboxes and memory. NULL keeps every
+                # existing teammate exactly as it was.
+                self.db.execute("ALTER TABLE agent_settings ADD COLUMN jarvis_agent_id TEXT")
+                self.db.execute("ALTER TABLE systems ADD COLUMN agent_sync INTEGER NOT NULL DEFAULT 0")
+                self.db.execute("PRAGMA user_version=5")
+                version = 5
+            if version != 5:
                 raise PersistenceFault(f"Unsupported Swarm schema version: {version}")
             self.db.commit()
         except (sqlite3.Error, PersistenceFault) as exc:
@@ -765,7 +775,13 @@ class SwarmStore:
         """
         with self.transaction() as db:
             system = self._one(db, "systems", system_id)
-            if db.execute("SELECT 1 FROM events WHERE system_id=? AND kind='mission.concluded'", (system_id,)).fetchone():
+            # Once per ending, not once ever: a mission the owner reopened by
+            # answering can stop again, and that second reason (often a
+            # second question) must be written down too.
+            latest = db.execute("""SELECT kind FROM events WHERE system_id=?
+                AND kind IN ('mission.concluded','mission.reopened') ORDER BY id DESC LIMIT 1""",
+                                (system_id,)).fetchone()
+            if latest and latest[0] == "mission.concluded":
                 return False
             self._event(db, system_id, "mission.concluded", system_id,
                         {"reason": reason, "summary": (summary or "")[:4000]})
@@ -966,6 +982,16 @@ class SwarmStore:
                 db.execute("UPDATE systems SET state='idle',reason=NULL,revision=revision+1 WHERE id=?", (system_id,))
                 self._event(db, system_id, "system.reopened", system_id, {})
 
+    def accepted_work(self, system_id, limit=10):
+        """Deliverables the lead already accepted, newest first. Only results
+        a teammate submitted count: plans, reviews and endings are the lead's
+        own coordination, not work."""
+        with self._lock:
+            return [dict(row) for row in self.db.execute(
+                """SELECT * FROM tasks WHERE system_id=? AND state='done' AND result IS NOT NULL
+                   AND json_valid(result) AND json_extract(result,'$.status')='submitted'
+                   ORDER BY created_at DESC,id LIMIT ?""", (system_id, limit))]
+
     def tasks_in_review(self, system_id):
         with self._lock:
             return [dict(row) for row in self.db.execute(
@@ -1070,14 +1096,14 @@ class SwarmStore:
         with self._lock:
             return [dict(row) for row in self.db.execute("""SELECT a.*,
                     COALESCE(s.instructions,'') AS instructions, COALESCE(s.enabled,1) AS enabled,
-                    s.endpoint_id, s.model, s.effort, s.step_limit FROM agents a
+                    s.endpoint_id, s.model, s.effort, s.step_limit, s.jarvis_agent_id FROM agents a
                     LEFT JOIN agent_settings s ON s.agent_id=a.id
                     WHERE a.system_id=? ORDER BY a.is_lead DESC,a.rowid""", (system_id,))]
 
     def agent_config(self, agent_id):
         with self._lock:
             row = self.db.execute("""SELECT a.*, COALESCE(s.instructions,'') AS instructions,
-                    COALESCE(s.enabled,1) AS enabled, s.endpoint_id, s.model, s.effort, s.step_limit
+                    COALESCE(s.enabled,1) AS enabled, s.endpoint_id, s.model, s.effort, s.step_limit, s.jarvis_agent_id
                     FROM agents a LEFT JOIN agent_settings s ON s.agent_id=a.id WHERE a.id=?""",
                                   (agent_id,)).fetchone()
             if row is None:
@@ -1308,12 +1334,13 @@ class SwarmStore:
         ceiling = data["limit"].get("ceiling")
         step_limit = data.get("step_limit") or max(500, (ceiling or 200000) // 4)
         units(step_limit, "step_limit", positive=True)
-        db.execute("""INSERT INTO agent_settings(agent_id,instructions,enabled,endpoint_id,model,effort,step_limit)
-            VALUES(?,?,1,?,?,?,?) ON CONFLICT(agent_id) DO UPDATE SET
+        db.execute("""INSERT INTO agent_settings(agent_id,instructions,enabled,endpoint_id,model,effort,step_limit,jarvis_agent_id)
+            VALUES(?,?,1,?,?,?,?,?) ON CONFLICT(agent_id) DO UPDATE SET
             instructions=excluded.instructions, enabled=1, endpoint_id=excluded.endpoint_id,
-            model=excluded.model, effort=excluded.effort, step_limit=excluded.step_limit""",
+            model=excluded.model, effort=excluded.effort, step_limit=excluded.step_limit,
+            jarvis_agent_id=excluded.jarvis_agent_id""",
                    (agent_id, data["instructions"], data.get("endpoint_id"), data.get("model"),
-                    data.get("effort"), step_limit))
+                    data.get("effort"), step_limit, data.get("agent_id")))
         self._replace_limit(db, "agent", agent_id, data["limit"])
         return agent_id
 
@@ -1408,21 +1435,39 @@ class SwarmStore:
             self._remember(db, system_id, command_id, payload, result)
             return result
 
-    def owner_message(self, owner, system_id, body, command_id):
+    def owner_message(self, owner, system_id, body, command_id, to=None):
+        """The owner's word to the lead (the default), one teammate, or the
+        whole team ("all": one copy in each enabled teammate's inbox)."""
         with self.transaction() as db:
             system = self._owned(db, owner, system_id)
-            payload = ["owner_message", body]
+            payload = ["owner_message", body] + ([to] if to else [])
             replay = self._replay(db, system_id, command_id, payload)
             if replay is not None:
                 return replay
             if system["state"] == "archived":
                 raise Conflict("Restore the system before sending a message")
             lead = db.execute("SELECT id FROM agents WHERE system_id=? AND is_lead=1", (system_id,)).fetchone()[0]
-            message_id = _id()
-            db.execute("INSERT INTO messages(id,system_id,recipient_id,body,created_at) VALUES(?,?,?,?,?)",
-                       (message_id, system_id, lead, body, self.clock()))
-            result = {"id": message_id, "status": "queued"}
-            self._event(db, system_id, "message.queued", message_id, {"recipient_id": lead})
+            if to == "all":
+                recipients = [row[0] for row in db.execute(
+                    """SELECT a.id FROM agents a LEFT JOIN agent_settings s ON s.agent_id=a.id
+                       WHERE a.system_id=? AND COALESCE(s.enabled,1)=1 ORDER BY a.is_lead DESC,a.rowid""", (system_id,))]
+            elif to:
+                row = db.execute("""SELECT a.id FROM agents a LEFT JOIN agent_settings s ON s.agent_id=a.id
+                    WHERE a.id=? AND a.system_id=? AND COALESCE(s.enabled,1)=1""", (to, system_id)).fetchone()
+                if row is None:
+                    raise NotFound("Teammate not found")
+                recipients = [row[0]]
+            else:
+                recipients = [lead]
+            now = self.clock()
+            ids = []
+            for recipient in recipients:
+                message_id = _id()
+                db.execute("INSERT INTO messages(id,system_id,recipient_id,body,created_at) VALUES(?,?,?,?,?)",
+                           (message_id, system_id, recipient, body, now))
+                self._event(db, system_id, "message.queued", message_id, {"recipient_id": recipient})
+                ids.append(message_id)
+            result = {"id": ids[0], "status": "queued", "recipients": len(ids)}
             self._remember(db, system_id, command_id, payload, result)
             return result
 
@@ -1552,6 +1597,46 @@ class SwarmStore:
             db.execute("UPDATE systems SET state='stopped',revision=revision+1 WHERE id=?", (system_id,))
             self._event(db, system_id, "system.stopped", system_id, {})
 
+    # -- JARVIS agents on teams (agents phase 5) --------------------------
+
+    def teams_for_agent(self, jarvis_agent_id):
+        """The companies this JARVIS agent sits on, and as whom."""
+        with self._lock:
+            return [dict(row) for row in self.db.execute(
+                """SELECT y.id, y.name, y.state, a.id AS member_id, a.is_lead FROM agent_settings s
+                   JOIN agents a ON a.id=s.agent_id JOIN systems y ON y.id=a.system_id
+                   WHERE s.jarvis_agent_id=? AND s.enabled=1 ORDER BY y.created_at""", (jarvis_agent_id,))]
+
+    def agent_renamed(self, jarvis_agent_id, name, role):
+        """Teammates follow their agent's name and role. Teammates message
+        each other by name, so a stale one would be unreachable."""
+        with self.transaction() as db:
+            members = [row[0] for row in db.execute(
+                "SELECT agent_id FROM agent_settings WHERE jarvis_agent_id=?", (jarvis_agent_id,))]
+            for member in members:
+                db.execute("UPDATE agents SET name=?,role=? WHERE id=?", (name, role, member))
+            return len(members)
+
+    def unlink_agent(self, jarvis_agent_id):
+        """The agent was deleted: its teammates stay, under the name they
+        had, as ordinary teammates with no agent behind them."""
+        with self.transaction() as db:
+            return db.execute("UPDATE agent_settings SET jarvis_agent_id=NULL WHERE jarvis_agent_id=?",
+                              (jarvis_agent_id,)).rowcount
+
+    def events_to_sync(self, system_id, limit=200):
+        """Events not yet carried back to the team's agents."""
+        with self._lock:
+            cursor = self.db.execute("SELECT agent_sync FROM systems WHERE id=?", (system_id,)).fetchone()
+            if cursor is None:
+                return []
+            return [{**dict(row), "data": json.loads(row["data"])} for row in self.db.execute(
+                "SELECT * FROM events WHERE system_id=? AND id>? ORDER BY id LIMIT ?", (system_id, cursor[0], limit))]
+
+    def mark_synced(self, system_id, event_id):
+        with self.transaction() as db:
+            db.execute("UPDATE systems SET agent_sync=MAX(agent_sync,?) WHERE id=?", (event_id, system_id))
+
     def owner_systems(self, owner, offset=0, limit=50):
         with self.transaction() as db:
             total = db.execute("SELECT COUNT(*) FROM systems WHERE owner=?", (owner,)).fetchone()[0]
@@ -1593,7 +1678,7 @@ class SwarmStore:
             # connection" for an agent that has one. Identifiers and public
             # model names only - no URL, no key.
             agents = [dict(row) for row in db.execute("""SELECT a.*,COALESCE(s.instructions,'') AS instructions,
-                COALESCE(s.enabled,1) AS enabled, s.endpoint_id, s.model, s.effort, s.step_limit
+                COALESCE(s.enabled,1) AS enabled, s.endpoint_id, s.model, s.effort, s.step_limit, s.jarvis_agent_id
                 FROM agents a LEFT JOIN agent_settings s ON s.agent_id=a.id
                 WHERE a.system_id=? ORDER BY a.is_lead DESC,a.rowid""", (system_id,))]
             budgets = [dict(row) for row in db.execute("""SELECT b.* FROM budgets b WHERE

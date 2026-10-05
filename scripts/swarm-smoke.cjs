@@ -29,6 +29,10 @@ const CATALOG = {
   codex_cli: [{ id: 'gpt-5.6-luna', display_name: 'Luna', supported_efforts: [{ effort: 'low' }, { effort: 'medium' }, { effort: 'high' }] },
     { id: 'gpt-5.6-sol', display_name: 'Sol', supported_efforts: [{ effort: 'low' }, { effort: 'medium' }, { effort: 'high' }] }],
 };
+// One of the owner's agents, as GET /api/agents returns it (admin only), so
+// a teammate can be seated as that agent (agents phase 5).
+const AGENTS = [{ id: 'agent-1', name: 'Scout', role: 'Researcher', endpoint_id: 'claude-1', color: '#b3a7f5', enabled: true,
+  status: 'idle', status_detail: '', runs_today: 0, daily_run_cap: 12, needs_you: 0, created_at: 1 }];
 const now = () => Date.now() / 1000;
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 function emit(company, kind = 'message.queued', duplicate = false) {
@@ -98,7 +102,9 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/swarm')) {
     if (url.pathname === '/api/auth/status') return json({ auth_enabled: false, username: 'local', is_admin: true });
     if (url.pathname === '/api/settings') return json({ onboarding_complete: true, developer_mode_enabled: false });
-    if (url.pathname === '/api/system/custom-tabs') return json([{ id: 'swarm', label: 'Custom collision', view_url: '/must-not-load.js' }]);
+    if (url.pathname === '/api/system/custom-tabs') return json([{ id: 'agents', label: 'Custom collision', view_url: '/must-not-load.js' }]);
+    if (url.pathname === '/api/agents') return json(AGENTS);
+    if (url.pathname === '/api/agents/inbox') return json({ items: [], reviews: [], count: 0 });
     if (url.pathname === '/api/system/status') return json({ vault_ok: true, scheduler_running: true, enabled_task_count: 0, discord_connected_bots: [], model_endpoint_count: 0 });
     if (url.pathname === '/api/models') return json(CONNECTIONS);
     if (url.pathname === '/api/models/catalog') return json(CATALOG);
@@ -306,6 +312,7 @@ app.whenReady().then(async () => {
     await until("document.querySelectorAll('.swarm-message').length===1");
     assert.equal(await js("document.querySelectorAll('.swarm-message img').length"), 0);
     assert.equal(company.pages.messages.total, 1);
+    assert.equal(writes.findLast(w => w.path.endsWith('/messages')).body.to, undefined, 'A message goes to the lead unless another recipient is picked');
     await js("document.querySelector('.swarm-composer textarea').value='Unsaved draft';document.querySelector('.swarm-composer textarea').dispatchEvent(new Event('input'))");
     emit(company, 'task.updated'); await wait(300);
     assert.equal(await js("document.querySelector('.swarm-composer textarea').value"), 'Unsaved draft');
@@ -488,13 +495,16 @@ app.whenReady().then(async () => {
     unavailable = false;
     win.setContentSize(1440, 900);
     await win.loadURL(base + '/full-app');
-    await until("!!document.querySelector('[data-tab=swarm]')");
-    assert.equal(await js("document.querySelectorAll('[data-tab=swarm]').length"), 1, 'Built-in tab wins custom name collision');
-    assert.ok(await js("document.querySelector('[data-tab=chat]').nextElementSibling.dataset.tab === 'swarm'"));
-    await js("document.querySelector('[data-tab=swarm]').click()");
-    await until("!!document.querySelector('.swarm-system-card')");
-    await js("document.querySelector('.swarm-system-card').click()");
+    // Teams live in the Agents tab (agents phase 5): Swarm has no tab of its own.
+    await until("!!document.querySelector('[data-tab=agents]')");
+    assert.equal(await js("document.querySelectorAll('[data-tab=agents]').length"), 1, 'Built-in tab wins custom name collision');
+    assert.equal(await js("document.querySelectorAll('[data-tab=swarm]').length"), 0, 'No separate Swarm tab');
+    await js("document.querySelector('[data-tab=agents]').click()");
+    await until("!!document.querySelector('.team-tile')");
+    await fits(); await capture('full-app-agents-teams');
+    await js("document.querySelector('.team-tile').click()");
     await until("document.querySelector('.swarm-header h1')?.textContent==='Updated studio'");
+    assert.ok(await js("[...document.querySelectorAll('.swarm-header button')].some(b => b.textContent === '← All agents')"), 'A team page leads back to Agents');
     await fits(); await capture('full-app-desktop');
     await click('Map'); await until("document.querySelectorAll('.swarm-node').length===5");
     await fits(); await capture('full-app-map');
@@ -505,9 +515,9 @@ app.whenReady().then(async () => {
     await fits(); await capture('full-app-mobile');
     await js("import('/static/js/app.js').then(m=>m.switchTab('home'))");
     await wait(150); assert.equal(streams.size, 0, 'App navigation cleans up Swarm');
-    await js("import('/static/js/app.js').then(m=>m.switchTab('swarm'))");
-    await until("!!document.querySelector('.swarm-system-card')");
-    await js("document.querySelector('.swarm-system-card').click()");
+    await js("import('/static/js/app.js').then(m=>m.switchTab('agents'))");
+    await until("!!document.querySelector('.team-tile')");
+    await js("document.querySelector('.team-tile').click()");
     await until("document.querySelector('.swarm-header h1')?.textContent==='Updated studio'");
     await click('Archive'); await until("!!document.querySelector('dialog[open]')");
     await js("document.querySelector('dialog .btn.danger').click()");
@@ -530,8 +540,21 @@ app.whenReady().then(async () => {
     assert.equal(systems.length, 0);
     assert.equal(writes.findLast(w => w.method === 'DELETE').body.confirmation, 'Updated studio');
     assert.equal(streams.size, 0, 'Deletion closes the company event stream');
+    // A new team with one of your agents in the lead seat: the agent brings
+    // its name, role and model, and the save names the agent.
+    await js("import('/static/js/app.js').then(m=>m.switchTab('agents', { team: 'new' }))");
+    const seat = "document.querySelector('dialog[open] .swarm-member-form select[aria-label=Agent]')";
+    await until(`!!${seat}`);
+    await js(`{ const s=${seat}; s.value='agent-1'; s.dispatchEvent(new Event('change')); }`);
+    assert.ok(await js("document.querySelector('dialog[open] .swarm-member-form input').disabled"), 'A seated agent brings its own name');
+    assert.equal(await js("document.querySelector('dialog[open] .swarm-member-form input').value"), 'Scout');
+    assert.equal(await js("document.querySelector('dialog[open] .swarm-member-form select[aria-label=\"Model connection\"]').value"), 'claude-1', 'and its model');
+    await fits(); await capture('mobile-new-team');
+    await js("{ const f=document.querySelector('dialog[open] .swarm-setup'); f.querySelector('[name=name]').value='Scout team'; f.querySelector('[name=mission]').value='Research the launch'; f.requestSubmit(); }");
+    await until("document.querySelector('.swarm-header h1')?.textContent==='Scout team'");
+    assert.equal(writes.findLast(w => w.method === 'POST' && w.path === '/api/swarm/systems').body.lead.agent_id, 'agent-1');
     assert.deepEqual(errors, []);
-    fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: true, checks: ['empty/setup/edit', 'existing shared allocation edit and warning', 'queued message and literal HTML', 'draft retained', 'SSE reconnect/dedup/unmount', 'usage unavailable', 'handoff links', 'spend confirmation for start/resume', 'pause/stop/archive/restore', 'typed permanent deletion', 'desktop/mobile overflow', 'Escape/focus', 'reduced motion', 'late responses', 'failure state', 'swimlane graph layering/edges/lanes', 'graph keyboard travel and detail', 'board columns from real states', 'card movement on a real event', 'reduced-motion highlight without travel', 'per-teammate connection/model/effort pickers', 'named capability blockers', 'live agent states', 'readable activity', 'accepted results', 'reconcile requires evidence'], writes }, null, 2));
+    fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: true, checks: ['teams in the Agents tab', 'seat an agent on a team', 'empty/setup/edit', 'existing shared allocation edit and warning', 'queued message and literal HTML', 'draft retained', 'SSE reconnect/dedup/unmount', 'usage unavailable', 'handoff links', 'spend confirmation for start/resume', 'pause/stop/archive/restore', 'typed permanent deletion', 'desktop/mobile overflow', 'Escape/focus', 'reduced motion', 'late responses', 'failure state', 'swimlane graph layering/edges/lanes', 'graph keyboard travel and detail', 'board columns from real states', 'card movement on a real event', 'reduced-motion highlight without travel', 'per-teammate connection/model/effort pickers', 'named capability blockers', 'live agent states', 'readable activity', 'accepted results', 'reconcile requires evidence'], writes }, null, 2));
     console.log('PASS: Swarm UI, spend confirmation, deletion, lifecycle, handoffs, SSE, graph, board, focus, reduced motion and error handling.');
     console.log('Screenshots: ' + output);
   } catch (error) {

@@ -74,6 +74,30 @@ def _summary(agent: dict) -> dict:
             "needs_you": needs_you, "runs_today": agent_service.runs_today(agent["id"])}
 
 
+def _teams(agent_id: str) -> list[dict]:
+    """The teams (Swarm companies) this agent sits on; none when Swarm is
+    unavailable."""
+    from services import swarm_service
+    team = swarm_service.current
+    if team is None or team.store is None:
+        return []
+    try:
+        return team.store.teams_for_agent(agent_id)
+    except Exception:
+        return []
+
+
+def _team_change(agent: dict, deleted: bool = False) -> None:
+    from services import swarm_service
+    if swarm_service.current is not None:
+        try:
+            swarm_service.current.agent_changed(agent, deleted=deleted)
+        except Exception:
+            # Each team cycle refreshes its links first, so this is caught up.
+            import logging
+            logging.getLogger(__name__).exception("agents: could not update this agent's teams")
+
+
 def _require(agent_id: str) -> dict:
     agent = agent_service.get(agent_id)
     if agent is None:
@@ -119,6 +143,7 @@ async def get_agent(agent_id: str, user: str = Depends(require_admin)) -> dict:
         "inbox": agent_service.inbox(agent_id),
         "answered": agent_service.inbox(agent_id, status=None)[:20],
         "runs": [r for r in task_service.list_runs() if r["task_id"] in owned_ids][:50],
+        "teams": _teams(agent_id),
     }
 
 
@@ -128,9 +153,12 @@ async def update_agent(agent_id: str, body: AgentBody, user: str = Depends(requi
     fields = body.model_dump(exclude_unset=True)
     _check_endpoint(fields.get("endpoint_id"))
     try:
-        return _summary(agent_service.update(agent_id, **fields))
+        agent = agent_service.update(agent_id, **fields)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    if "name" in fields or "role" in fields:
+        _team_change(agent)
+    return _summary(agent)
 
 
 @router.delete("/{agent_id}")
@@ -142,6 +170,8 @@ async def delete_agent(agent_id: str, user: str = Depends(require_admin)) -> dic
     removed = task_service.delete_agent_work(agent_id)
     session_manager.release_agent_chats(agent_id)
     agent_service.delete(agent_id)
+    # Its team seats stay, as ordinary teammates under the same name.
+    _team_change({"id": agent_id}, deleted=True)
     return {"ok": True, "removed_work": removed}
 
 

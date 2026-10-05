@@ -1,4 +1,14 @@
-"""Owner-facing Swarm boundary. Importing it has no startup side effects."""
+"""Owner-facing Swarm boundary. Importing it has no startup side effects.
+
+Since agents phase 5 (2026-10-05) Swarm is the engine behind teams in the
+Agents tab: a teammate may stand for one of the owner's JARVIS agents. Such a
+teammate takes its name, role and default model from the agent, carries the
+agent's identity and notes into its prompt, and what happens on the team is
+carried back to the agent (reports and questions in its inbox, revision notes
+under its Corrections). It still works only with Swarm's typed tools: the
+agent's own Auto tool set never reaches a team. Spec: the vault note
+"Agents - Phase 5 Teams (Build Spec)".
+"""
 import asyncio
 import hashlib
 import json
@@ -33,6 +43,12 @@ SCHEDULE_POLL_SECONDS = 15
 # process gets picked up promptly rather than making a restart wait out most
 # of another full TTL window on top of the one it already lost.
 RUNTIME_RETRY_SECONDS = 5
+# Role names are bounded the same way the setup form bounds them.
+ROLE_LIMIT = 120
+
+# The running service, for callers outside a request (an agent's inbox
+# answer, an agent renamed or deleted). None until startup, and in tests.
+current = None
 
 
 class SwarmService:
@@ -156,9 +172,14 @@ class SwarmService:
 
     def agent_blockers(self, system_id):
         """Why this company cannot run, per teammate, in the owner's words."""
+        from services.agent_service import agent_service
         problems = []
         for agent in self.store.team(system_id):
             if not agent["enabled"]:
+                continue
+            linked = agent_service.get(agent.get("jarvis_agent_id"))
+            if linked is not None and not linked["enabled"]:
+                problems.append(f"{agent['name']} is turned off on its agent page.")
                 continue
             endpoint = self._connection(agent.get("endpoint_id"))
             if endpoint is None:
@@ -220,6 +241,9 @@ class SwarmService:
 
         def factory(task):
             agent = self.store.agent_config(task["agent_id"])
+            identity = self._identity(agent)
+            if identity:
+                agent = {**agent, "identity": identity}
             endpoint = self._resolved(agent.get("endpoint_id"))
             if endpoint is None:
                 raise PersistenceFault(f"{agent['name']} has no usable model connection")
@@ -231,6 +255,119 @@ class SwarmService:
                 effort=agent.get("effort") or None, env={}))
 
         return factory
+
+    @staticmethod
+    def _identity(member):
+        """A linked teammate's agent identity and notes, as prompt text."""
+        from services.agent_service import agent_service, identity_block
+        agent = agent_service.get(member.get("jarvis_agent_id"))
+        if agent is None:
+            return None
+        return identity_block(agent, agent_service.read_memory(agent["id"]), team=True)
+
+    # -- carrying team work back to the agents (agents phase 5) -------------
+
+    def refresh_links(self, system_id):
+        """Linked teammates follow their agent's current name and role; a
+        deleted agent leaves an ordinary teammate behind."""
+        from services.agent_service import agent_service
+        for member in self.store.team(system_id):
+            agent_id = member.get("jarvis_agent_id")
+            if not agent_id:
+                continue
+            agent = agent_service.get(agent_id)
+            if agent is None:
+                self.store.unlink_agent(agent_id)
+            elif (member["name"], member["role"]) != (agent["name"], _role(agent, member["is_lead"])):
+                self.store.agent_renamed(agent_id, agent["name"], _role(agent, member["is_lead"]))
+
+    def agent_changed(self, agent, *, deleted=False):
+        """An agent was renamed or deleted (routes/agent_routes.py). Each
+        cycle also runs refresh_links, so a change made while Swarm was
+        unavailable is still picked up before the team works again."""
+        if self.store is None:
+            return
+        if deleted:
+            self.store.unlink_agent(agent["id"])
+            return
+        for team in self.store.teams_for_agent(agent["id"]):
+            self.store.agent_renamed(agent["id"], agent["name"], _role(agent, team["is_lead"]))
+
+    def sync_agents(self, system_id):
+        """Carry new team events back to the linked agents, once each.
+
+        Revision notes become Corrections in the reviewed agent's memory, a
+        team that needs the owner asks through its lead's agent (or its first
+        linked one), and a finished mission or shift is reported to every
+        linked agent. Only the first gets a channel notification, so one
+        ending is one message on the owner's phone.
+        """
+        done = 0
+        while True:
+            # Only ever forward: a batch that does not start past the last one
+            # means the position did not move, and looping on it would hold
+            # the event loop for good.
+            events = [event for event in self.store.events_to_sync(system_id) if event["id"] > done]
+            if not events:
+                return
+            for event in events:
+                try:
+                    self._carry(system_id, event)
+                except Exception:
+                    logger.exception("swarm: could not carry event %s back to the team's agents", event["id"])
+            done = events[-1]["id"]
+            self.store.mark_synced(system_id, done)
+
+    def _carry(self, system_id, event):
+        from services.agent_service import agent_service
+        kind, data = event["kind"], event["data"] or {}
+        if kind not in ("task.revision_requested", "mission.concluded", "shift.finished", "mission.reopened"):
+            return
+        if kind == "mission.reopened":
+            # Answered on the team page (or anywhere else): the question in
+            # the agent's inbox is answered too, not left waiting.
+            for item in agent_service.inbox():
+                if item.get("team_id") == system_id and item["kind"] == "question":
+                    agent_service.resolve(item["id"], "answered", data.get("note") or "Answered on the team page")
+            return
+        team = self.store.team(system_id)
+        linked = [m for m in team if agent_service.get(m.get("jarvis_agent_id"))]
+        if not linked:
+            return
+        system = self.store.get_system(system_id)
+        if kind == "task.revision_requested":
+            task = self.store.get_task(event["entity_id"])
+            member = next((m for m in linked if m["id"] == task["agent_id"]), None)
+            if member is None:
+                return
+            note = f"On the team {system['name']}, \"{task['objective'][:200]}\" was sent back: {data.get('note') or ''}"
+            try:
+                agent_service.remember(member["jarvis_agent_id"], "Corrections", note)
+            except ValueError as exc:
+                logger.warning("swarm: %s's memory did not take a correction: %s", member["name"], exc)
+            return
+        reason, summary = data.get("reason"), (data.get("summary") or "").strip()
+        if reason == "manual_pause":
+            return
+        contact = next((m for m in linked if m["is_lead"]), linked[0])
+        if kind == "mission.concluded" and reason == "needs_owner":
+            item = agent_service.add_item(contact["jarvis_agent_id"], "question", f"The team {system['name']} needs you",
+                                          summary, team_id=system_id)
+            agent_service.notify(item)
+            return
+        title = (f"The team {system['name']} finished a shift" if kind == "shift.finished"
+                 else f"The team {system['name']} stopped: {_ENDINGS.get(reason, 'ended')}")
+        for member in [contact] + [m for m in linked if m is not contact]:
+            item = agent_service.add_item(member["jarvis_agent_id"], "report", title, summary, team_id=system_id)
+            if member is contact:
+                agent_service.notify(item)
+
+    def answer(self, system_id, body):
+        """An owner's answer that arrived through an agent's inbox (the app,
+        Discord or a connector), delivered as an owner message."""
+        owner = self.store.get_system(system_id)["owner"]
+        return self.message(owner, system_id, body, "answer:" + hashlib.sha256(
+            f"{system_id}:{body}:{self.store.clock()}".encode()).hexdigest()[:24])
 
     FIRST_OBJECTIVE = "Read the owner's messages and the mission, then assign the work to your team."
     NEXT_OBJECTIVE = ("Review what this company has produced against its mission. If the mission is met, "
@@ -419,11 +556,19 @@ class SwarmService:
             return False, ("cycle_limit", f"Reached the {MAX_CYCLES}-cycle ceiling for one start.")
         return True, None
 
+    def _sync_quietly(self, system_id):
+        try:
+            self.sync_agents(system_id)
+        except Exception:
+            logger.exception("swarm: syncing the team's agents failed; it is retried after the next cycle")
+
     async def _cycle(self, system_id):
         try:
+            self.refresh_links(system_id)
             while True:
                 await self.runtime.run_cycle(system_id, self._worker_factory(system_id),
                                              max_units=self._step_units(system_id), advance=self._advance)
+                self._sync_quietly(system_id)
                 keep_going, ending = self._continue_reason(system_id)
                 if ending:
                     reason, summary = ending
@@ -444,6 +589,7 @@ class SwarmService:
             logger.exception("Swarm cycle ended with an error; state is preserved")
         finally:
             self.cycles.pop(system_id, None)
+            self._sync_quietly(system_id)
 
     def _dispatch(self, system_id):
         if system_id in self.cycles:
@@ -542,14 +688,37 @@ class SwarmService:
         member["account_label"] = accounts.account_label(endpoint)
         return member
 
+    @staticmethod
+    def _link(member, is_lead):
+        """A teammate standing for a JARVIS agent takes the agent's name and
+        role, and its model unless the team picks another."""
+        if not member.get("agent_id"):
+            return member
+        from services.agent_service import agent_service
+        agent = agent_service.get(member["agent_id"])
+        if agent is None:
+            raise ValueError("That agent no longer exists")
+        return {**member, "name": agent["name"], "role": _role(agent, is_lead),
+                "endpoint_id": member.get("endpoint_id") or agent_service.chat_endpoint(agent)}
+
     def _prepare(self, data):
         pool_limit = data.get("pool_limit")
         memory = data.get("memory") or {}
         if "project" in (memory.get("sources") or ()) and not projects.get_project(memory.get("project_id")):
             raise ValueError("That JARVIS Project does not exist")
+        seats = [m["agent_id"] for m in [data["lead"], *data["specialists"]] if m.get("agent_id")]
+        if len(seats) != len(set(seats)):
+            raise ValueError("An agent can hold only one seat on a team")
+        lead = self._link(data["lead"], True)
+        specialists = [self._link(member, False) for member in data["specialists"]]
+        # Teammates address each other by name, so two with one name would
+        # make one of them unreachable.
+        names = [member["name"].casefold() for member in [lead, *specialists]]
+        if len(names) != len(set(names)):
+            raise ValueError("Every teammate needs a different name")
         return {**data,
-                "lead": self._member(data["lead"], pool_limit),
-                "specialists": [self._member(member, pool_limit) for member in data["specialists"]]}
+                "lead": self._member(lead, pool_limit),
+                "specialists": [self._member(member, pool_limit) for member in specialists]}
 
     async def create(self, owner, data, command_id):
         async with self.lock:
@@ -561,7 +730,7 @@ class SwarmService:
             self.ready()
             return self.store.owner_update(owner, system_id, self._prepare(data), command_id, revision)
 
-    async def message(self, owner, system_id, body, command_id):
+    async def message(self, owner, system_id, body, command_id, to=None):
         """Send the lead an idea - or the answer a stopped team was waiting for.
 
         A company that stopped because it needed something from its owner is
@@ -571,7 +740,7 @@ class SwarmService:
         """
         async with self.lock:
             self.ready()
-            result = self.store.owner_message(owner, system_id, body, command_id)
+            result = self.store.owner_message(owner, system_id, body, command_id, to=to)
             resumed = False
             if self.store.blocked_for_owner(system_id):
                 resumed = bool(self.store.answer_blockers(system_id, body))
@@ -718,14 +887,28 @@ class SwarmService:
             self.store = None
 
 
+_ENDINGS = {"mission_complete": "mission complete", "cycle_limit": "reached its cycle limit",
+            "stalled": "stopped without a conclusion", "shift_complete": "shift complete",
+            "shift_ended": "its work window ended"}
+
+
+def _role(agent, is_lead):
+    role = " ".join((agent.get("role") or "").split())[:ROLE_LIMIT]
+    return role or ("Lead" if is_lead else "Specialist")
+
+
 async def startup(app):
+    global current
     from core.constants import DATA_DIR
     service = SwarmService(Path(DATA_DIR) / "swarm")
     app.state.swarm = service
+    current = service
     await service.start()
 
 
 async def shutdown(app):
+    global current
     service = getattr(app.state, "swarm", None)
+    current = None
     if service:
         await service.close()

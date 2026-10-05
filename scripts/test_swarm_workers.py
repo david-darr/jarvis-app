@@ -55,10 +55,12 @@ class Scripted(BaseHTTPRequestHandler):
     """A stub /chat/completions. Replies are chosen by the caller's script."""
     script = None
     requests = []
+    paths = []
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"] or 0)) or "{}")
         Scripted.requests.append(body)
+        Scripted.paths.append(self.path)
         status, payload = Scripted.script(body)
         encoded = json.dumps(payload).encode()
         self.send_response(status)
@@ -85,6 +87,7 @@ class StubServer:
     def __init__(self, script):
         Scripted.script = staticmethod(script)
         Scripted.requests = []
+        Scripted.paths = []
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Scripted)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -411,6 +414,32 @@ class OpenAIWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("No teammate", finished[0].data["result"]["text"])
         self.assertEqual(events[-1].data["result"]["status"], "blocked")
 
+    async def test_an_ollama_connection_uses_its_own_api_with_caps(self):
+        """Found live 2026-10-05: a JARVIS Ollama connection has no /v1, so
+        /chat/completions was a 404 on every step, and that route ignores the
+        context cap anyway. Ollama gets its native /api/chat, capped."""
+        def script(body):
+            if any(message["role"] == "tool" for message in body["messages"]):
+                return 200, {"message": {"role": "assistant", "content": "", "tool_calls": [{"function": {
+                    "name": "submit_result", "arguments": {"summary": "s", "output": "o"}}}]},
+                    "prompt_eval_count": 30, "eval_count": 4}
+            return 200, {"message": {"role": "assistant", "content": "", "tool_calls": [{"function": {
+                "name": "get_assigned_work", "arguments": {}}}]}, "prompt_eval_count": 20, "eval_count": 2}
+
+        worker, assignment = self.worker(script)
+        worker.context.endpoint.update({"base_url": self.server.base_url.removesuffix("/v1"), "num_ctx": 4096})
+        with patch("core.ollama_client.is_ollama_url", lambda url: True):
+            events = await self.collect(worker, assignment)
+        self.assertEqual(set(Scripted.paths), {"/api/chat"})
+        first = Scripted.requests[0]
+        self.assertEqual(first["options"], {"num_ctx": 4096, "num_predict": 2000}, "context and output both capped")
+        self.assertIs(first["stream"], False)
+        self.assertTrue(first["tools"])
+        replayed = next(m for m in Scripted.requests[1]["messages"] if m.get("tool_calls"))
+        self.assertIsInstance(replayed["tool_calls"][0]["function"]["arguments"], dict, "native wants objects")
+        self.assertEqual([e.data["units"] for e in events if e.kind == EventKind.USAGE], [22, 34])
+        self.assertEqual(events[-1].data["result"]["status"], "submitted")
+
     async def test_cancel_closes_the_transport(self):
         worker, _ = self.worker(lambda _body: reply(text="hi"))
         self.assertTrue(await worker.cancel())
@@ -457,6 +486,19 @@ class ArchitectTests(unittest.TestCase):
                             {"name": "Kit", "role": "Writer", "instructions": ""}]}))
         self.assertEqual([person["name"] for person in draft["specialists"]], ["Kit"],
                          "two teammates with one name cannot be addressed")
+
+    def test_drafting_on_ollama_uses_its_own_api(self):
+        from core.swarm import architect
+        server = StubServer(lambda body: (200, {"message": {"role": "assistant", "content": "{}"},
+                                                "prompt_eval_count": 1, "eval_count": 1}))
+        try:
+            endpoint = {"base_url": server.base_url.removesuffix("/v1"), "model": "qwen", "api_key": None, "num_ctx": 2048}
+            with patch("core.ollama_client.is_ollama_url", lambda url: True):
+                self.assertEqual(asyncio.run(architect._ask_openai(endpoint, "Launch")), "{}")
+        finally:
+            server.close()
+        self.assertEqual(Scripted.paths, ["/api/chat"])
+        self.assertEqual(Scripted.requests[0]["options"], {"num_ctx": 2048, "num_predict": architect.MAX_OUTPUT_TOKENS})
 
     def test_junk_changes_nothing(self):
         from core.swarm import architect

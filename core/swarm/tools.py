@@ -300,6 +300,15 @@ class ToolService:
                 for task in waiting:
                     lines.append(f"- {task['id']} — {task['objective']} (from {names.get(task['agent_id'], 'a teammate')}): "
                                  f"{_summarize(task.get('result'))}")
+            # Found live 2026-10-05: told to "review what this company has
+            # produced", a lead that was never shown the accepted work asked
+            # the owner for a draft it had itself accepted a step earlier.
+            accepted = self.store.accepted_work(assignment.system_id)
+            if accepted:
+                lines.append("Work already accepted (newest first):")
+                for task in accepted:
+                    lines.append(f"- {task['objective']} (from {names.get(task['agent_id'], 'a teammate')}): "
+                                 f"{_summarize(task.get('result'))}")
             last_shift = self.store.latest_shift_summary(assignment.system_id)
             if last_shift:
                 lines.append("Previous shift handoff: " + last_shift[:2000])

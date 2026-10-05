@@ -154,6 +154,12 @@
 .swarm-agent-state[data-tone="review"] { color: var(--swarm-review); border-color: var(--swarm-review); }
 .swarm-agent-state[data-tone="blocked"], .swarm-agent-state[data-tone="unknown"] { color: var(--danger); border-color: var(--danger); }
 .swarm-agent-task { color: var(--text); overflow-wrap: anywhere; }
+/* Team thread (agents phase 5): who said what to whom, and what the team did. */
+.swarm-agent-linked { color: var(--accent); }
+.swarm-thread-finding { border-left: 2px solid #d9b67d; padding-left: 8px; }
+.swarm-thread-review { border-left: 2px solid var(--accent); padding-left: 8px; }
+.swarm-thread-event p { color: var(--text-dim); font-style: italic; }
+.swarm-recipient { max-width: 180px; }
 .swarm-activity { padding: 10px 0; border-bottom: 1px solid var(--border); }
 .swarm-activity span { font-size: 10px; }
 .swarm-activity p { margin: 3px 0 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }

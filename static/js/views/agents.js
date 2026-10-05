@@ -7,6 +7,8 @@ import { mountAgentChat } from "../agentChat.js";
 // with a role, standing goals, their own memory and an inbox. Their work runs
 // as ordinary Tasks and board cards; services/agent_service.py and the vault
 // spec "Agents - Phase 1 Persistent Agents (Build Spec)" have the design.
+// Teams (phase 5, 2026-10-05) are Swarm companies, shown here through
+// views/swarm.js in its embedded mode; Swarm has no tab of its own any more.
 
 const COLORS = ["#b3a7f5", "#7dd3c0", "#f0b37e", "#e88f8f", "#8fb8e8", "#c9d67a"];
 const STATUS = { idle: "Idle", working: "Working", needs_you: "Needs you", off: "Off", capped: "Done for today" };
@@ -19,6 +21,10 @@ export async function render(container, tabId, options = {}) {
   container.innerHTML = "";
   container.append(root);
   const schedule = (fn) => { clearTimeout(timer); timer = setTimeout(() => document.body.contains(root) && fn(), POLL_MS); };
+  if (options.team) {
+    const swarm = await import("./swarm.js");
+    return swarm.render(container, tabId, { ...options, embedded: true, systemId: options.team });
+  }
   if (options.agentId) await agentPage(root, options.agentId, schedule, cleanups, options.agentTab || "chat");
   else await listPage(root, schedule);
   return () => { clearTimeout(timer); cleanups.forEach((cleanup) => cleanup()); };
@@ -32,6 +38,12 @@ export function avatar(agent, size = 28) {
 function open(agentId) {
   document.dispatchEvent(new CustomEvent("jarvis:navigate", { detail: { tab: "agents", agentId } }));
 }
+
+function openTeam(team) {
+  document.dispatchEvent(new CustomEvent("jarvis:navigate", { detail: { tab: "agents", team } }));
+}
+
+const TEAM_STATE = { idle: "Idle", active: "Working", pausing: "Pausing", paused: "Paused", stopped: "Stopped", archived: "Archived" };
 
 function modelOptions(models, selected = "") {
   return [
@@ -50,8 +62,9 @@ function channelOptions(channels, selected = "") {
 // -- the list ---------------------------------------------------------------
 
 async function listPage(root, schedule) {
-  const [agents, inbox, models, channels] = await Promise.all([
+  const [agents, inbox, models, channels, teams] = await Promise.all([
     api("/api/agents"), api("/api/agents/inbox"), api("/api/models").catch(() => []), api("/api/channels").catch(() => []),
+    api("/api/swarm/systems").catch(() => null),
   ]);
   if (!document.body.contains(root)) return;
   root.innerHTML = "";
@@ -65,6 +78,7 @@ async function listPage(root, schedule) {
   if (!agents.length) {
     root.append(emptyState({ icon: ICONS.agents, title: "No agents yet",
       hint: "Create one above: give it a name, a role, and something to watch or do." }));
+    if (teams) root.append(teamsSection(teams));
     return;
   }
   const grid = el("div", { class: "agent-grid" });
@@ -82,7 +96,34 @@ async function listPage(root, schedule) {
     ]));
   }
   root.append(grid);
+  if (teams) root.append(teamsSection(teams));
   if (agents.some((a) => a.status === "working")) schedule(() => listPage(root, schedule));
+}
+
+// Teams: a mission worked on by a lead and teammates, who can be your agents.
+// null when Swarm is unavailable, so the section is left out, not faked.
+function teamsSection(teams) {
+  const grid = el("div", { class: "agent-grid" });
+  for (const team of teams.items) {
+    grid.append(el("button", { type: "button", class: "agent-tile team-tile", onclick: () => openTeam(team.id) }, [
+      el("div", { class: "agent-tile-name" }, [
+        el("div", { class: "title", text: team.name }),
+        el("div", { class: "meta team-mission", text: team.mission }),
+      ]),
+      el("div", { class: "agent-tile-foot" }, [
+        el("span", { class: `agent-status team-state-${team.state}`, text: TEAM_STATE[team.state] || team.state }),
+        el("span", { class: "meta", text: team.active_tasks ? `${team.active_tasks} working now` : "" }),
+      ]),
+    ]));
+  }
+  return el("section", { class: "agent-teams", "aria-label": "Teams" }, [
+    el("div", { class: "view-header agent-teams-header" }, [
+      el("div", {}, [el("h3", { text: "Teams" }),
+        el("div", { class: "sub", text: "Agents working together on one mission: a lead plans and reviews, teammates do the work." })]),
+      el("button", { class: "btn", text: "+ New team", onclick: () => openTeam("new") }),
+    ]),
+    teams.items.length ? grid : el("div", { class: "meta", text: "No teams yet." }),
+  ]);
 }
 
 function newAgentForm(models, channels, root, schedule) {
@@ -268,6 +309,7 @@ async function agentPage(root, agentId, schedule, cleanups, tab = "chat") {
       workPanel(agentId, detail.cards, redraw),
       memoryPanel(agentId, detail.memory),
       el("div", { class: "glass card" }, [el("div", { class: "title", text: "History" }), runHistory(detail.runs)]),
+      teamsPanel(detail.teams || []),
       settingsPanel(agent, models, channels, redraw),
     );
   };
@@ -284,6 +326,22 @@ async function agentPage(root, agentId, schedule, cleanups, tab = "chat") {
   drawWork();
   show(tab);
   if (detail.agent.status === "working") schedule(redraw);
+}
+
+function teamsPanel(teams) {
+  const panel = el("div", { class: "glass card agent-teams-panel" }, [
+    el("div", { class: "title", text: "Teams" }),
+    el("div", { class: "meta", style: "margin:4px 0 10px;", text: teams.length
+      ? "On a team it works only with the team's tools. What it learns there comes back here as reports and corrections."
+      : "Not on a team. Add it to one from Teams on the Agents page." }),
+  ]);
+  for (const team of teams) {
+    panel.append(el("div", { class: "card-row", style: "justify-content:space-between;gap:10px;" }, [
+      el("span", { text: `${team.name} · ${team.is_lead ? "lead" : "teammate"} · ${TEAM_STATE[team.state] || team.state}` }),
+      el("button", { class: "btn quiet", text: "Open", onclick: () => openTeam(team.id) }),
+    ]));
+  }
+  return panel;
 }
 
 function cadence(goal) {

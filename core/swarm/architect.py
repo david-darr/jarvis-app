@@ -28,6 +28,8 @@ import tempfile
 
 import httpx
 
+from core import ollama_client
+
 MAX_SPECIALISTS = 5
 MAX_OUTPUT_TOKENS = 1200
 REQUEST_TIMEOUT_SECONDS = 120
@@ -129,15 +131,24 @@ async def _ask_openai(endpoint: dict, goal: str) -> str:
     headers = {"Content-Type": "application/json"}
     if endpoint.get("api_key"):
         headers["Authorization"] = f"Bearer {endpoint['api_key']}"
-    body = {"model": endpoint.get("model"), "max_tokens": MAX_OUTPUT_TOKENS,
-            "messages": [{"role": "user", "content": _prompt(goal)}]}
-    if endpoint.get("num_ctx"):
-        body["num_ctx"] = endpoint["num_ctx"]
+    messages = [{"role": "user", "content": _prompt(goal)}]
+    base_url = (endpoint.get("base_url") or "").rstrip("/")
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-        response = await client.post(f"{(endpoint.get('base_url') or '').rstrip('/')}/chat/completions",
-                                     headers=headers, json=body)
-        response.raise_for_status()
-        data = response.json()
+        # Ollama through its own API, as Swarm's workers do (openai_worker.py).
+        if ollama_client.is_ollama_url(base_url):
+            response = await client.post(f"{ollama_client.native_root(base_url)}/api/chat", headers=headers,
+                                         json=ollama_client.native_body(endpoint.get("model"), messages,
+                                                                        num_ctx=endpoint.get("num_ctx"),
+                                                                        max_tokens=MAX_OUTPUT_TOKENS))
+            response.raise_for_status()
+            data = ollama_client.openai_shaped(response.json())
+        else:
+            body = {"model": endpoint.get("model"), "max_tokens": MAX_OUTPUT_TOKENS, "messages": messages}
+            if endpoint.get("num_ctx"):
+                body["num_ctx"] = endpoint["num_ctx"]
+            response = await client.post(f"{base_url}/chat/completions", headers=headers, json=body)
+            response.raise_for_status()
+            data = response.json()
     return ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
 
 

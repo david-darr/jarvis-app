@@ -76,7 +76,8 @@ function agentDetail(id) {
   return { agent, memory: `# ${agent.name}'s notes\n\n## About this work\n- ${agent.role}\n\n## Preferences\n- 2026-10-04: remote roles only\n\n## Corrections\n\n## Notes\n`,
     goals: [{ id: "g1", name: "New postings", schedule_kind: "daily", run_time: "08:00", report_when: "notable", enabled: true, agent_id: id }],
     cards: [{ id: "c9", name: "Shortlist five roles", schedule_kind: "card", status: "ready", agent_id: id, comments: [] }],
-    inbox: agentInbox.filter((i) => i.agent_id === id), answered: [], runs: runs.c1 };
+    inbox: agentInbox.filter((i) => i.agent_id === id), answered: [], runs: runs.c1,
+    teams: [{ id: "s1", name: "Launch team", state: "active", member_id: "s1-m2", is_lead: 0 }] };
 }
 const docs = ["Design principles", "Project research", "Ideas for next week"].map((title, i) => ({ id: "d" + (i + 1), title, updated_at: now - i * 3600 }));
 function graph() {
@@ -130,6 +131,9 @@ function fixture(url) {
   if (route === "/api/agents") return list(agentsFixture);
   if (route === "/api/agents/inbox") return empty ? { items: [], reviews: [], count: 0 } : { items: agentInbox, reviews: [], count: 2 };
   if (/^\/api\/agents\/a\d$/.test(route)) return agentDetail(route.split("/")[3]);
+  // Teams (agents phase 5) are listed in the Agents tab from Swarm.
+  if (route === "/api/swarm/systems") return { items: empty ? [] : [{ id: "s1", name: "Launch team", mission: "Launch the newsletter with two agents and a fact checker.",
+    state: "active", active_tasks: 1, configuration: {} }], total: empty ? 0 : 1, offset: 0 };
   if (/^\/api\/tasks\/[^/]+\/runs$/.test(route)) return empty ? [] : runs[route.split("/")[3]] || [];
   if (route === "/api/tasks/builtin") return ["Daily briefing", "Review priorities", "Organize memory", "Inbox triage"].map((label, i) => ({ label, description: "Keep the important things in view with a regular review.", action_id: "routine" + i, enabled: i === 0 && !empty, task_id: "t1", uses_model: true, default_daily_time: "07:00" }));
   if (route === "/api/models") return list(models);
@@ -340,7 +344,9 @@ app.whenReady().then(async () => {
         }
         if (tab === "agents" && !empty) {
           // Agents: the list, the cross-agent inbox with its answers, the badge.
-          await waitFor("document.querySelectorAll('.agent-tile').length === 2");
+          await waitFor("document.querySelectorAll('.agent-tile:not(.team-tile)').length === 2");
+          assert.ok(await js("document.querySelector('.agent-teams .team-tile')?.textContent.includes('Launch team')"), label + " teams listed under agents");
+          assert.ok(await js("document.querySelector('.team-tile .agent-status').textContent === 'Working'"), label + " team state shown");
           assert.ok(await js("[...document.querySelectorAll('.agent-inbox-question button')].some(b => b.textContent === 'Answer')"), label + " a question can be answered");
           assert.equal(await js("document.querySelectorAll('.agent-inbox-approval').length"), 0, label + " agents run in Auto: nothing to approve");
           assert.ok(await js("document.querySelector('.agent-inbox-report').textContent.includes('Backend Engineer')"), label + " report body shown");
@@ -363,13 +369,14 @@ app.whenReady().then(async () => {
           await js("[...document.querySelectorAll('.agent-tab')][1].click()");
           await waitFor("!document.querySelector('.agent-work-host').hidden");
           const titles = await js("[...document.querySelectorAll('.agent-work-host > .glass > .title')].map(n => n.textContent)");
-          assert.deepEqual(titles, ["Inbox", "Standing goals", "Work", "Memory", "History"], label + " agent work sections");
+          assert.deepEqual(titles, ["Inbox", "Standing goals", "Work", "Memory", "History", "Teams"], label + " agent work sections");
+          assert.ok(await js("document.querySelector('.agent-teams-panel').textContent.includes('Launch team · teammate · Working')"), label + " the agent's teams");
           assert.ok(await js("document.querySelector('.agent-memory').value.includes('remote roles only')"), label + " memory shown");
           assert.ok(await js("document.querySelector('.agents-view').textContent.includes('Every day at 08:00')"), label + " goal cadence");
           assert.deepEqual(await overflow(), [], label + " overflow on agent page");
           await capture(label + "-agent-page");
           await navigate("agents");
-          await waitFor("document.querySelectorAll('.agent-tile').length === 2");
+          await waitFor("document.querySelectorAll('.agent-tile:not(.team-tile)').length === 2");
         }
         if (tab === "tasks" && !empty) {
           // The work board (Hermes track 2026-09-23): cards sit in their

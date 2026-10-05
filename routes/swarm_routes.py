@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from core.auth import auth_manager
 from core.middleware import require_user
 from core.swarm import architect
 from core.swarm.budget import BudgetLimit
@@ -58,6 +59,10 @@ class Member(StrictModel):
     model: Annotated[str, Field(max_length=200)] | None = None
     effort: Annotated[str, Field(max_length=40)] | None = None
     step_limit: int | None = Field(default=None, strict=True, ge=500, le=1_000_000_000)
+    # One of the owner's JARVIS agents this teammate stands for (agents phase
+    # 5). Its name, role and default model come from the agent; admin only,
+    # like everything else about agents.
+    agent_id: ID | None = None
 
 
 class ShiftSchedule(StrictModel):
@@ -161,6 +166,8 @@ class Reconcile(Command):
 
 class Message(Command):
     body: str = Field(min_length=1, max_length=20000)
+    # The lead when absent, one teammate's id, or "all".
+    to: ID | None = None
 
 
 def human(request: Request):
@@ -168,6 +175,13 @@ def human(request: Request):
     if owner == "internal-tool":
         raise HTTPException(403, "A human account is required")
     return owner
+
+
+def agents_allowed(owner, body):
+    """Agents are admin-only (routes/agent_routes.py), so only an admin may
+    seat one on a team."""
+    if any(member.agent_id for member in [body.lead, *body.specialists]) and not auth_manager.is_admin(owner):
+        raise HTTPException(403, "Only an admin can put agents on a team")
 
 
 def service(request: Request):
@@ -223,6 +237,7 @@ async def systems(offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=
 
 @router.post("/systems", status_code=201)
 async def create(body: Create, owner=Depends(human), svc=Depends(service)):
+    agents_allowed(owner, body)
     return await mutation(svc.create(owner, body.model_dump(exclude={"command_id"}), body.command_id))
 
 
@@ -236,6 +251,7 @@ async def snapshot(system_id: str, owner=Depends(human), svc=Depends(service)):
 
 @router.patch("/systems/{system_id}")
 async def update(system_id: str, body: Update, owner=Depends(human), svc=Depends(service)):
+    agents_allowed(owner, body)
     return await mutation(svc.update(owner, system_id, body.model_dump(exclude={"command_id", "expected_revision"}), body.command_id, body.expected_revision))
 
 
@@ -246,7 +262,7 @@ async def delete(system_id: str, body: DeleteSystem, owner=Depends(human), svc=D
 
 @router.post("/systems/{system_id}/messages", status_code=202)
 async def message(system_id: str, body: Message, owner=Depends(human), svc=Depends(service)):
-    return await mutation(svc.message(owner, system_id, body.body, body.command_id))
+    return await mutation(svc.message(owner, system_id, body.body, body.command_id, to=body.to))
 
 
 @router.post("/draft-team")

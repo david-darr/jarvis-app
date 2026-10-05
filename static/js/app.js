@@ -22,7 +22,6 @@ if (window.jarvis?.browser) document.documentElement.classList.add("electron-she
 const NAV = [
   { id: "home", label: "Home", icon: "home" },
   { id: "chat", label: "Chats", icon: "chats" },
-  { id: "swarm", label: "Swarm", icon: "swarm" },
   { id: "notes", label: "Notes", icon: "notes" },
   { id: "library", label: "Library", icon: "library" },
   { id: "calendar", label: "Calendar", icon: "calendar" },

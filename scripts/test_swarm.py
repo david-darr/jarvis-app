@@ -107,7 +107,7 @@ class StoreTests(Fixture, unittest.TestCase):
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             futures = [executor.submit(open_store) for _ in range(2)]
-            self.assertEqual([future.result() for future in futures], [4, 4])
+            self.assertEqual([future.result() for future in futures], [5, 5])
 
     def test_single_runtime_owner_and_expired_owner_fenced(self):
         self.own()
