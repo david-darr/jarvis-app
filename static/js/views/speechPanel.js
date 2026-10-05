@@ -1,6 +1,7 @@
 import { api, el, toast } from '../api.js';
 import { refreshSpeechStatus, listInputDevices, getInputDevice, setInputDevice, requestMicrophoneAccess, isRecordingSupported } from '../voiceInput.js';
 import { isSpeechOutputSupported, whenVoicesReady, resolveVoice, getPreferredVoice, setPreferredVoice } from '../voiceOutput.js';
+import { group, row, note, pill } from '../settingsKit.js';
 
 // Settings > Workspace > Speech (David's ask 2026-09-15).
 //
@@ -28,7 +29,6 @@ export async function renderSpeechPanel(content, status) {
   // -- devices ---------------------------------------------------------------
   async function drawDevices() {
     if (!isRecordingSupported()) return null;
-    const section = el('div', { class: 'card speech-devices' });
     const { devices, labelled } = await listInputDevices();
 
     const select = el('select', { id: 'speech-input-device', 'aria-label': 'Microphone' });
@@ -45,27 +45,17 @@ export async function renderSpeechPanel(content, status) {
       toast(select.value ? 'Microphone updated' : 'Using the system default microphone', 'success');
     });
 
-    section.append(el('div', {}, [
-      el('strong', { text: 'Microphone' }),
-      el('p', { class: 'meta', text: 'Which device dictation and Open Mic record from.' }),
-    ]), el('div', { class: 'speech-model-actions' }, [select]));
-
+    const rows = [row({ title: 'Input device', description: 'Which device dictation and Open Mic record from.', control: select })];
     if (!labelled && devices.length) {
       // Browsers withhold device names until a page has been granted access,
       // so the list is real but unreadable. Saying why beats showing blanks.
-      section.append(el('p', { class: 'meta' }, [
-        'Device names appear once microphone access is allowed. ',
-        el('button', {
-          type: 'button', class: 'btn quiet', text: 'Allow and show names',
-          onclick: async () => {
-            try { await requestMicrophoneAccess(); draw(); }
-            catch { toast('Microphone access was blocked.', 'error'); }
-          },
-        }),
-      ]));
+      rows.push(row({ title: 'Device names are hidden', description: 'They appear once microphone access is allowed.',
+        control: el('button', { type: 'button', class: 'btn', text: 'Allow and show names', onclick: async () => {
+          try { await requestMicrophoneAccess(); draw(); }
+          catch { toast('Microphone access was blocked.', 'error'); }
+        } }) }));
     }
-
-    return section;
+    return group({ title: 'Microphone', cls: 'speech-devices' }, rows);
   }
 
   // -- voice -----------------------------------------------------------------
@@ -73,10 +63,6 @@ export async function renderSpeechPanel(content, status) {
     if (!isSpeechOutputSupported()) return null;
     const voices = await whenVoicesReady();
     if (!root.isConnected) return null;
-    // Keeps speech-devices for the shared styling and adds its own hook, so a
-    // test can target this section rather than whichever matched first.
-    const section = el('div', { class: 'card speech-devices speech-voice' });
-
     const automatic = resolveVoice(voices);
     const select = el('select', { id: 'speech-voice', 'aria-label': 'Voice' });
     select.append(el('option', {
@@ -108,26 +94,22 @@ export async function renderSpeechPanel(content, status) {
       toast(select.value ? 'Voice updated' : 'Using the best available voice', 'success');
     });
 
-    section.append(el('div', {}, [
-      el('strong', { text: 'Voice' }),
-      el('p', { class: 'meta', text: 'Which voice reads replies aloud in Open Mic.' }),
-    ]), el('div', { class: 'speech-model-actions' }, [preview, select]));
-
+    const rows = [row({ title: 'Reading voice', description: 'Which voice reads replies aloud in Open Mic.', control: [preview, select] })];
     if (!voices.some(v => /^en[-_]GB/i.test(v.lang))) {
       // David asked for a British voice. None is installed, and quietly
       // offering a list of American ones would look like the request was
       // ignored. This says what is missing and exactly how to fix it.
-      section.append(el('p', { class: 'meta', text:
-        'No British English voice is installed on this computer, so only the American voices are listed. '
-        + 'Add one in Windows Settings under Time & language, Speech, Manage voices, Add voices, English (United Kingdom). '
-        + 'It appears here after a restart and is then chosen automatically.' }));
+      rows.push(row({ title: 'No British English voice installed', description:
+        'Only the American voices are listed. Add one in Windows Settings under Time & language, Speech, Manage voices, Add voices, '
+        + 'English (United Kingdom). It appears here after a restart and is then chosen automatically.' }));
     }
-
     // Stated here because this is exactly where someone looks for it, and
     // silence would read as an oversight rather than a real constraint.
-    section.append(el('p', { class: 'meta', text:
-      'Spoken replies always play through your system default output. The browser speech engine provides no way to choose a device, so this has to be changed in your operating system sound settings.' }));
-    return section;
+    rows.push(row({ title: 'Output device', description:
+      'Spoken replies always play through your system default output. The browser speech engine provides no way to choose a device, so change it in your operating system sound settings.' }));
+    // speech-voice is its own hook, so a test can target this group rather
+    // than whichever speech-devices group matched first.
+    return group({ title: 'Voice', cls: 'speech-devices speech-voice' }, rows);
   }
 
   async function draw() {
@@ -140,40 +122,24 @@ export async function renderSpeechPanel(content, status) {
     }
     if (!root.isConnected) return;
 
-    const header = el('div', { class: 'view-header' }, [
-      el('h2', { text: 'Speech' }),
-      el('p', { class: 'meta', text: 'Dictate messages by voice. Audio is transcribed on this machine and never uploaded.' }),
-    ]);
-
-    const parts = [header];
+    const parts = [];
 
     if (!state.engine_available) {
       // A missing binding is a broken build, not something a download fixes,
       // so this deliberately does not offer one.
-      parts.push(el('div', { class: 'card' }, [
-        el('strong', { text: 'Speech recognition is unavailable in this build.' }),
-        el('p', { class: 'meta', text: 'The speech engine could not be loaded, so dictation cannot run. Reinstalling the latest release usually resolves it.' }),
-      ]));
+      parts.push(group({}, [row({ title: 'Speech recognition is unavailable in this build.',
+        description: 'The speech engine could not be loaded, so dictation cannot run. Reinstalling the latest release usually resolves it.' })]));
       root.replaceChildren(...parts);
       return;
     }
 
-    parts.push(el('p', { class: 'meta', text: state.active_model
-      ? `Using the ${state.active_model} model.`
-      : 'No model downloaded yet. Dictation stays unavailable until one is.' }));
-
+    const modelRows = [];
     for (const model of state.models) {
-      const row = el('div', { class: 'card card-row speech-model' });
-      const label = el('div', {}, [
-        el('strong', { text: `${model.label} · ${model.size_mb} MB` }),
-        el('p', { class: 'meta', text: model.description || '' }),
-      ]);
-      row.append(label);
-
+      let control;
       if (model.downloaded) {
-        row.append(el('span', { class: 'meta', text: model.name === state.active_model ? 'In use' : 'Downloaded' }));
+        control = model.name === state.active_model ? pill('In use', 'ok') : pill('Downloaded', 'muted');
       } else if (!isAdmin) {
-        row.append(el('span', { class: 'meta', text: 'An admin can download this' }));
+        control = el('span', { class: 'meta', text: 'An admin can download this' });
       } else {
         const progress = el('span', { class: 'meta', role: 'status' });
         const button = el('button', { type: 'button', class: 'btn', text: 'Download' });
@@ -214,17 +180,20 @@ export async function renderSpeechPanel(content, status) {
           }, POLL_MS);
           timers.add(timer);
         });
-        row.append(el('div', { class: 'speech-model-actions' }, [progress, button]));
+        control = el('div', { class: 'speech-model-actions' }, [progress, button]);
       }
-      parts.push(row);
+      modelRows.push(row({ title: `${model.label} · ${model.size_mb} MB`, description: model.description || '', control, cls: 'speech-model' }));
     }
+    parts.push(group({ title: 'Dictation model', description: state.active_model
+      ? `Using the ${state.active_model} model.`
+      : 'No model downloaded yet. Dictation stays unavailable until one is.' }, modelRows));
 
     const deviceSection = await drawDevices();
     if (deviceSection && root.isConnected) parts.push(deviceSection);
     const voiceSection = await drawVoice();
     if (voiceSection && root.isConnected) parts.push(voiceSection);
 
-    parts.push(el('p', { class: 'meta', text: 'Larger models are more accurate and slower. Transcription runs on the processor, so a long recording on a modest machine takes a few seconds.' }));
+    parts.push(note('Larger models are more accurate and slower. Transcription runs on the processor, so a long recording on a modest machine takes a few seconds.'));
     root.replaceChildren(...parts);
   }
 

@@ -1,8 +1,9 @@
 import { el } from '../api.js';
+import { group, row, toggle } from '../settingsKit.js';
 import { getAppearance, updateAppearance, setAppearanceImage, removeAppearanceImage,
   resetAppearance, setAppearancePreview } from '../appearance.js';
 
-export function renderAppearancePanel(content) {
+export function renderAppearancePanel(content, _status, page) {
   const root = el('section', { class: 'appearance-panel' });
   const status = el('p', { class: 'appearance-status meta', role: 'status', 'aria-live': 'polite' });
   const preview = el('canvas', { width: '640', height: '280', 'aria-hidden': 'true' });
@@ -102,25 +103,27 @@ export function renderAppearancePanel(content) {
     try { await resetAppearance(); sync(); } catch { status.textContent = 'Appearance could not be reset. Try again.'; }
   } });
   const overlay = window.jarvis?.usageOverlay;
-  const overlayToggle = el('input', { type: 'checkbox', id: 'usage-overlay-toggle' });
-  const overlayNote = el('p', { class: 'meta', text: 'A notch at the screen edge showing your Claude Code and Codex account limits. Hidden by default.' });
+  const overlayToggle = toggle({ label: 'Show above other windows' });
+  overlayToggle.id = 'usage-overlay-toggle';
+  const overlayNote = el('span', { text: 'A notch at the screen edge showing your Claude Code and Codex account limits. Hidden by default.' });
   // The notch's edge and fold (design from CodeNotch; see static/css/usage-overlay.css)
   const overlayEdge = el('select', { id: 'usage-overlay-edge' }, [
     el('option', { value: 'right', text: 'Right edge' }), el('option', { value: 'left', text: 'Left edge' }),
     el('option', { value: 'top', text: 'Top edge' }), el('option', { value: 'bottom', text: 'Bottom edge' })]);
   const overlayDisplay = el('select', { id: 'usage-overlay-display' });
   // Where along the edge: 0 is the top (or left) end, 100 the bottom (or right).
-  const overlayOffset = el('input', { type: 'range', id: 'usage-overlay-offset', min: '0', max: '100', step: '1' });
+  const overlayOffset = el('input', { type: 'range', id: 'usage-overlay-offset', min: '0', max: '100', step: '1', style: 'width:200px;' });
   const offsetLabel = el('span', { text: 'Position along the edge' });
-  const overlayFold = el('input', { type: 'checkbox', id: 'usage-overlay-fold' });
-  const overlaySection = el('section', { class: 'appearance-overlay-setting' }, [
-    el('h3', { text: 'Desktop usage overlay' }),
-    el('label', { for: overlayToggle.id, class: 'appearance-motion' }, [overlayToggle, el('span', { text: 'Show above other windows' })]),
-    el('label', { for: overlayDisplay.id, class: 'appearance-motion' }, [el('span', { text: 'Monitor' }), overlayDisplay]),
-    el('label', { for: overlayEdge.id, class: 'appearance-motion' }, [el('span', { text: 'Screen edge' }), overlayEdge]),
-    el('label', { for: overlayOffset.id, class: 'appearance-motion' }, [offsetLabel, overlayOffset]),
-    el('label', { for: overlayFold.id, class: 'appearance-motion' }, [overlayFold, el('span', { text: 'Fold to a sliver until the pointer reaches it' })]),
-    overlayNote,
+  const overlayFold = toggle({ label: 'Fold to a sliver' });
+  overlayFold.id = 'usage-overlay-fold';
+  const overlaySection = el('div', { class: 'appearance-overlay-setting' }, [
+    group({ title: 'Desktop usage overlay' }, [
+      row({ title: 'Show above other windows', description: overlayNote, control: overlayToggle }),
+      row({ title: 'Monitor', control: overlayDisplay }),
+      row({ title: 'Screen edge', control: overlayEdge }),
+      row({ title: offsetLabel, control: overlayOffset }),
+      row({ title: 'Fold to a sliver', description: 'Until the pointer reaches it.', control: overlayFold }),
+    ]),
   ]);
   if (overlay) {
     const syncOverlay = state => {
@@ -144,7 +147,7 @@ export function renderAppearancePanel(content) {
       if (!root.isConnected) { unsubscribe(); observer.disconnect(); }
     });
     observer.observe(content, { childList: true });
-    overlayToggle.addEventListener('change', async () => {
+    overlayToggle.addEventListener('click', async () => {
       overlayToggle.disabled = true;
       try { syncOverlay(await overlay.setVisible(overlayToggle.checked)); }
       catch { overlayNote.textContent = 'Could not change the overlay. Try again.'; overlayToggle.disabled = false; }
@@ -157,13 +160,17 @@ export function renderAppearancePanel(content) {
     overlayDisplay.addEventListener('change', () => saveConfig({ displayId: overlayDisplay.value ? Number(overlayDisplay.value) : null }));
     // Moves live while dragging, saved as it goes: the notch follows the slider.
     overlayOffset.addEventListener('input', () => saveConfig({ offset: Number(overlayOffset.value) / 100 }));
-    overlayFold.addEventListener('change', () => saveConfig({ foldOnHover: overlayFold.checked }));
+    overlayFold.addEventListener('click', () => saveConfig({ foldOnHover: overlayFold.checked }));
   } else {
     overlayToggle.disabled = overlayEdge.disabled = overlayFold.disabled = overlayDisplay.disabled = overlayOffset.disabled = true;
     overlayNote.textContent = 'Open the Windows desktop app to use the overlay.';
   }
-  root.append(el('div', { class: 'appearance-heading' }, [el('div', {}, [el('h2', { text: 'Appearance' }),
-    el('p', { class: 'meta', text: 'A workspace that feels like yours.' })]), reset]), previewFrame, modes, palette, imageOptions, shaderOptions, chatStyleSection, overlaySection, status);
+  // Inside Settings the page header carries the title and Reset; anywhere
+  // else this keeps its own heading.
+  if (page) page.actions([reset]);
+  else root.append(el('div', { class: 'appearance-heading' }, [el('div', {}, [el('h2', { text: 'Appearance' }),
+    el('p', { class: 'meta', text: 'A workspace that feels like yours.' })]), reset]));
+  root.append(previewFrame, modes, palette, imageOptions, shaderOptions, chatStyleSection, overlaySection, status);
   content.replaceChildren(root);
   function sync() {
     const value = getAppearance();

@@ -230,11 +230,20 @@ export function customSelect(attrs = {}, optionEls = []) {
     label.textContent = match ? match.text : "";
   }
   function closeMenu() { menu.classList.add("hidden"); }
+  // Opens below the button, or above it when there is more room there, and
+  // never taller than the space on that side (found 2026-10-05: near the
+  // bottom of Settings a long list ran off the window).
+  const MENU_GAP = 6, MENU_MARGIN = 12, MENU_MAX = 260;
   function positionMenu() {
     const rect = btn.getBoundingClientRect();
+    const below = window.innerHeight - rect.bottom - MENU_GAP - MENU_MARGIN;
+    const above = rect.top - MENU_GAP - MENU_MARGIN;
+    const up = below < Math.min(MENU_MAX, menu.scrollHeight) && above > below;
+    menu.style.maxHeight = `${Math.max(120, Math.min(MENU_MAX, up ? above : below))}px`;
     menu.style.left = `${rect.left}px`;
-    menu.style.top = `${rect.bottom + 6}px`;
     menu.style.width = `${rect.width}px`;
+    menu.style.top = up ? "" : `${rect.bottom + MENU_GAP}px`;
+    menu.style.bottom = up ? `${window.innerHeight - rect.top + MENU_GAP}px` : "";
   }
   function openMenu() {
     document.querySelectorAll(".custom-select-menu").forEach((m) => m.classList.add("hidden"));
@@ -256,8 +265,9 @@ export function customSelect(attrs = {}, optionEls = []) {
       }
       menu.appendChild(item);
     }
-    positionMenu();
     menu.classList.remove("hidden");
+    positionMenu();
+    menu.querySelector(".custom-select-item.active")?.scrollIntoView({ block: "nearest" });
   }
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -265,7 +275,11 @@ export function customSelect(attrs = {}, optionEls = []) {
     if (menu.classList.contains("hidden")) openMenu(); else closeMenu();
   });
   document.addEventListener("click", closeMenu);
-  window.addEventListener("scroll", closeMenu, true);
+  // Scrolling the page moves the button out from under a fixed menu, so it
+  // closes - but not when the scroll is the menu's own list (found
+  // 2026-10-05: the 18-platform list in Settings closed the moment it was
+  // scrolled, so most platforms could not be picked).
+  window.addEventListener("scroll", (event) => { if (!menu.contains(event.target)) closeMenu(); }, true);
   window.addEventListener("resize", closeMenu);
   // The menu is a detached body child, not a DOM descendant of wrap — clean
   // it up when wrap itself is removed (e.g. a Discord bot card re-rendered

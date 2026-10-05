@@ -100,7 +100,18 @@ function fixture(url) {
   const route = url.pathname;
   const list = (data) => empty ? [] : data;
   if (route === "/api/auth/status") return { auth_enabled: false, setup_required: false, username: "Alex", is_admin: true, instance: empty ? "dev" : "" };
-  if (route === "/api/settings") return { onboarding_complete: true, developer_mode_enabled: false };
+  if (route === "/api/settings") return { onboarding_complete: true, developer_mode_enabled: false, vault_dir: "C:\\Users\\Alex\\Documents\\Vault" };
+  // The rest of Settings (redesign 2026-10-05), so every page can be opened.
+  if (route === "/api/remote/status") return { installed: true, logged_in: true, firewall_ok: false, auth_ready: false, has_any_users: false,
+    running_now: false, hostname: "workstation.tail1234.ts.net", port: 8443, url: null };
+  if (route === "/api/system/diagnostics") return { vault_exists: true, vault_dir: "C:\\Users\\Alex\\Documents\\Vault", sessions_count: 12, notes_count: 40,
+    tasks_count: 3, skills_count: 5, model_endpoints_count: 3, data_dir_bytes: 524288, discord_configured: false };
+  if (route === "/api/permissions") return { rules: [
+    { id: "r1", tool: "Bash", content: null, behavior: "allow", scope: "global", admin_only: true, source: "built-in" },
+    { id: "r2", tool: "WebFetch", content: "docs.python.org", behavior: "allow", scope: "session", granted_by: "Alex", granted_at: now - 3600 }],
+    audit: [{ at: now - 60, decision: "allow", tool: "WebFetch", content: "docs.python.org", by: "Alex" }] };
+  if (route === "/api/file-checkpoints") return [];
+  if (route === "/api/settings/agent-tools") return { available: ["Bash", "Read", "Write", "WebFetch"], disabled: ["WebFetch"], extra_allowed: [] };
   if (route === "/api/system/custom-tabs") return [{ id: "school", label: "School" }];
   if (route === "/api/system/status") return { scheduler_running: true, vault_ok: true, enabled_task_count: empty ? 0 : 1, model_endpoint_count: empty ? 0 : 3, discord_connected_bots: [], next_task: empty ? null : { name: "Daily briefing", next_run_at: future(6) } };
   if (route === "/api/system/logs/files") return [
@@ -179,7 +190,7 @@ function fixture(url) {
   if (route === "/api/email/triage") return { generated_at: now, scanned: 12, items: empty ? [] : [{ subject: "Project check-in this afternoon", from: "team@example.test", reason: "An upcoming meeting needs your review." }] };
   if (route === "/api/email/accounts") return [];
   if (route === "/api/channels") return [];
-  // Settings > Channels (settingsConnectors.js): one two-way connector with a
+  // Settings > Channels (settingsChannels.js): one two-way connector with a
   // problem, one send-only.
   if (route === "/api/settings/discord-bots") return [];
   if (route === "/api/connectors/kinds") return [
@@ -424,17 +435,35 @@ app.whenReady().then(async () => {
       assert.equal(await js("document.querySelector('.vault-panel-header span').textContent"), "Projects note 1", "Wikilink opens its vault note");
       await navigate("home");
       await js("document.querySelector('.sidebar-settings-btn').click()");
-      await waitFor("!!document.querySelector('#settings-content .card')");
+      if (label === "mobile") {
+        // Phones (2026-10-05): Settings opens on a list of sections, not a
+        // page with a sideways strip of tabs; a row opens its page.
+        await waitFor("document.querySelector('#view-content.settings-mobile-page')?.dataset.mobileView === 'list' && document.querySelectorAll('.settings-nav-block .settings-nav-item').length > 10");
+        assert.equal(await js("document.querySelector('.settings-mobile-title').textContent"), "Settings", "phone list is titled Settings");
+        assert.equal(await js("getComputedStyle(document.querySelector('#settings-content')).display"), "none", "no page behind the list");
+        assert.equal(await js("document.querySelector('.settings-nav-list').scrollWidth <= document.querySelector('.settings-nav-list').clientWidth + 1"), true, "the list does not scroll sideways");
+        assert.ok(await js("document.querySelector('.settings-search').getBoundingClientRect().width > 250"), "Settings search has room to type");
+        assert.deepEqual(await overflow(), [], label + " settings list overflow");
+        await capture("mobile-settings-list");
+        await js("document.querySelector('[data-section=\"add-models\"]').click()");
+        await waitFor("document.querySelector('#view-content.settings-mobile-page')?.dataset.mobileView === 'page'");
+        assert.equal(await js("document.querySelector('.settings-mobile-title').textContent"), "Add Models", "the bar names the open page");
+      }
+      // Every Settings page has the same frame (redesign 2026-10-05): a
+      // header with its title, then groups of rows.
+      await waitFor("!!document.querySelector('#settings-content .set-header .set-title') && !!document.querySelector('#settings-content .set-row, #settings-content .set-empty')");
+      assert.equal(await js("document.querySelector('#settings-content .set-title').textContent"),
+        await js("document.querySelector('.settings-nav-item.active').textContent"), label + " page header names the page");
+      assert.equal(await js("document.querySelectorAll('.settings-nav-item svg').length === document.querySelectorAll('.settings-nav-item').length"), true, label + " every nav item has an icon");
       assert.deepEqual(await overflow(), [], label + " settings overflow");
       if (label === "mobile") {
-        assert.ok(await js("document.querySelector('.settings-search').getBoundingClientRect().width > 250"), "Settings search has room to type");
         assert.ok(await js("[...document.querySelectorAll('#settings-content input')].filter(e=>e.offsetWidth).every(e=>e.offsetWidth>=170)"), "Mobile model fields do not collapse");
       }
 
       // -- grouped nav + keyword search (David's ask 2026-09-15).
       assert.deepEqual(
         await js("[...document.querySelectorAll('.settings-nav-group')].filter(g=>!g.hidden).map(g=>g.textContent)"),
-        ["MODELS", "CONNECTIONS", "WORKSPACE", "PERSONAL", "ADMINISTRATION"],
+        ["Models", "Connections", "Workspace", "Personal", "Administration"],
         label + " settings groups",
       );
       // Custom Tabs stays behind Developer Mode, which this fixture reports
@@ -452,7 +481,7 @@ app.whenReady().then(async () => {
       // for the device and voice rows too, and an unscoped count silently
       // turns this into an assertion about the whole panel.
       assert.equal(await js("document.querySelectorAll('.speech-model .speech-model-actions .btn').length"), 1, 'Only the missing model offers a download');
-      assert.ok(await js("document.querySelector('.speech-panel').textContent.includes('never uploaded')"), 'Panel states audio stays local');
+      assert.ok(await js("document.querySelector('#settings-content .set-description').textContent.includes('never uploaded')"), 'Page states audio stays local');
       // -- device selection. Input is selectable; output deliberately is not,
       // because speechSynthesis exposes no sink control at all (verified
       // against this Chromium). The panel says so rather than staying silent,
@@ -504,7 +533,7 @@ app.whenReady().then(async () => {
       await js("document.querySelector('.mcp-catalog').open = true");
       assert.ok(await js("[...document.querySelectorAll('[data-server=deepwiki] button')].some(b => b.textContent === 'Add')"), label + " a no-sign-in server offers Add");
       assert.ok(await js("[...document.querySelectorAll('[data-server=linear] button')].some(b => b.textContent === 'Add and sign in')"), label + " an OAuth server offers Add and sign in");
-      const rowText = (name) => js(`[...document.querySelectorAll('.connectors-table tr')].find(r => r.textContent.includes('${name}'))?.textContent || ''`);
+      const rowText = (name) => js(`document.querySelector('.integration-row[data-integration="${name}"]')?.textContent || ''`);
       assert.ok((await rowText("Notion")).includes("Signed in") && (await rowText("Notion")).includes("Sign out"), label + " a signed-in server shows it and offers Sign out");
       assert.ok((await rowText("Sentry")).includes("Needs sign-in") && !(await rowText("Sentry")).includes("Sign out"), label + " a signed-out server offers Sign in only");
       assert.ok(await js("document.querySelector('[data-server=context7]').textContent.includes('Added')"), label + " an added server is marked");
@@ -512,16 +541,31 @@ app.whenReady().then(async () => {
       assert.equal(await js("document.querySelectorAll('.mcp-catalog-row').length"), 1, label + " catalog search filters");
       assert.deepEqual(await overflow(), [], label + " integrations overflow");
       await capture(label + "-mcp-catalog");
-      // -- Channels > Other platforms (core/connectors): status, and a form built from each platform's fields.
+      // -- Channels (redesign 2026-10-05): one list of every channel with its
+      // live state; a row opens that channel's page; adding starts from a
+      // picker of platform tiles, not an 18-item dropdown.
       await js("document.querySelector('[data-section=channels]').click()");
-      await waitFor("document.querySelectorAll('.connector-card').length === 2");
-      assert.ok(await js("document.querySelector('.connector-error')?.textContent === 'Problem'"), label + " a failing connector says so");
-      assert.ok(await js("document.querySelector('.connector-card').textContent.includes('failed (401)')"), label + " and why");
-      assert.ok(await js("document.querySelectorAll('.connector-card')[1].textContent.includes('send only')"), label + " send-only is labelled");
-      await js("[...document.querySelectorAll('.disclosure-panel > summary')].find(s => s.textContent === '+ Add a platform').click()");
-      await waitFor("[...document.querySelectorAll('.connector-field label')].some(l => l.textContent === 'Bot token')");
+      await waitFor("document.querySelectorAll('.channel-row').length === 2");
+      assert.equal(await js("document.querySelector('.channel-row[data-state=error] .set-pill').textContent"), "Problem", label + " a failing connector says so");
+      assert.ok(await js("document.querySelector('.channel-row[data-state=error]').textContent.includes('failed (401)')"), label + " and why");
+      assert.ok(await js("document.querySelectorAll('.channel-row')[1].textContent.includes('send only')"), label + " send-only is labelled");
       assert.deepEqual(await overflow(), [], label + " channels overflow");
-      await js("document.querySelector('.connector-list').scrollIntoView()");
+      await capture(label + "-channels");
+      await js("document.querySelector('.channel-row[data-kind=telegram] .set-row-title').click()");
+      await waitFor("!!document.querySelector('.connector-settings [data-field=bot_token]')");
+      assert.equal(await js("document.querySelector('#settings-content .set-title').textContent"), "My phone", label + " a channel has its own page");
+      assert.equal(await js("document.querySelector('[data-field=bot_token] input').placeholder"), "Saved; leave blank to keep", label + " a saved token is never shown");
+      assert.deepEqual(await overflow(), [], label + " channel page overflow");
+      await capture(label + "-channel-page");
+      await js("document.querySelector('.set-back').click()");
+      await waitFor("document.querySelectorAll('.channel-row').length === 2");
+      await js("[...document.querySelectorAll('.set-header .btn')].find(b => b.textContent === 'Add a channel').click()");
+      await waitFor("!!document.querySelector('.set-tile[data-kind=discord]') && !!document.querySelector('.set-tile[data-kind=ntfy]')");
+      assert.deepEqual(await overflow(), [], label + " channel picker overflow");
+      await capture(label + "-channel-picker");
+      await js("document.querySelector('.set-tile[data-kind=telegram]').click()");
+      await waitFor("[...document.querySelectorAll('.connector-field .set-row-title')].some(l => l.textContent === 'Bot token')");
+      assert.deepEqual(await overflow(), [], label + " add channel overflow");
       await capture(label + "-connectors");
       // -- Sandbox changes (Hermes phase 7): review before anything reaches the code.
       await js("document.querySelector('[data-section=\"sandbox-changes\"]').click()");
@@ -537,7 +581,7 @@ app.whenReady().then(async () => {
       assert.deepEqual(await overflow(), [], label + " sandbox changes overflow");
       await capture(label + "-sandbox-changes");
       await js("document.querySelector('[data-section=vault]').click()");
-      await waitFor("!!document.querySelector('#settings-content .card')");
+      await waitFor("document.querySelector('#settings-content .set-title')?.textContent === 'Vault' && !!document.querySelector('#settings-content .set-row, #settings-content .set-empty')");
       // Search matches what someone would actually type, not just the
       // visible label — "2fa" appears nowhere in the word "Account".
       await js("{ const s=document.querySelector('.settings-search'); s.value='2fa'; s.dispatchEvent(new Event('input')); }");
@@ -545,12 +589,36 @@ app.whenReady().then(async () => {
       assert.equal(await js("document.querySelector('.settings-nav-item:not([hidden])').dataset.section"), "account");
       // An emptied group takes its heading with it rather than leaving a
       // stray label over nothing.
-      assert.deepEqual(await js("[...document.querySelectorAll('.settings-nav-group')].filter(g=>!g.hidden).map(g=>g.textContent)"), ["PERSONAL"]);
+      assert.deepEqual(await js("[...document.querySelectorAll('.settings-nav-group')].filter(g=>!g.hidden).map(g=>g.textContent)"), ["Personal"]);
       await js("{ const s=document.querySelector('.settings-search'); s.value='tailscale'; s.dispatchEvent(new Event('input')); }");
       await waitFor("document.querySelector('.settings-nav-item:not([hidden])').dataset.section==='remote'");
       await js("{ const s=document.querySelector('.settings-search'); s.value=''; s.dispatchEvent(new Event('input')); }");
       await waitFor("[...document.querySelectorAll('.settings-nav-item')].filter(i=>!i.hidden).length>5");
       await capture(label + "-settings");
+      // Every page opens in the same frame (redesign 2026-10-05): its own
+      // title in the header, real content under it, nothing wider than the
+      // pane. A page that throws leaves the header without content.
+      for (const id of await js("[...document.querySelectorAll('.settings-nav-item')].map(i => i.dataset.section)")) {
+        await js(`document.querySelector('[data-section="${id}"]').click()`);
+        await waitFor(`document.querySelector('.set-page')?.dataset.page === '${id}' && document.querySelector('#settings-content .set-title')?.textContent === document.querySelector('[data-section="${id}"]').textContent
+          && !!document.querySelector('#settings-content .set-body').querySelector('.set-row, .set-empty, .appearance-panel, .log-entry, .logs-status, .sandbox-change')`);
+        assert.deepEqual(await overflow(), [], `${label} ${id} overflow`);
+        await capture(`${label}-settings-${id}`);
+      }
+      // A long dropdown scrolls instead of closing (found 2026-10-05: the
+      // platform list closed the moment it was scrolled). Add Models' provider
+      // list is long enough to scroll.
+      await js("document.querySelector('[data-section=\"add-models\"]').click()");
+      await waitFor("document.querySelectorAll('.set-page[data-page=\"add-models\"] .custom-select').length > 0");
+      await js("document.querySelector('.set-page .custom-select .custom-select-btn').scrollIntoView({ block: 'end' })");
+      await delay(200);
+      await js("document.querySelector('.set-page .custom-select .custom-select-btn').click()");
+      await waitFor("[...document.querySelectorAll('.custom-select-menu')].some(m => !m.classList.contains('hidden') && m.scrollHeight > m.clientHeight)");
+      await js("{ const m = [...document.querySelectorAll('.custom-select-menu')].find(m => !m.classList.contains('hidden')); m.scrollTop = 120; m.dispatchEvent(new Event('scroll')); }");
+      await delay(150);
+      assert.ok(await js("[...document.querySelectorAll('.custom-select-menu')].some(m => !m.classList.contains('hidden') && m.scrollTop > 0)"), label + " a scrolled dropdown stays open");
+      assert.ok(await js("(() => { const m = [...document.querySelectorAll('.custom-select-menu')].find(m => !m.classList.contains('hidden')).getBoundingClientRect(); return m.top >= 0 && m.bottom <= innerHeight; })()"), label + " the dropdown fits on screen");
+      await js("document.body.click()");
 
       if (label === "desktop") {
         // -- titlebar drag, constrained to the viewport. Losing the titlebar
@@ -584,7 +652,36 @@ app.whenReady().then(async () => {
         await delay(150);
       }
 
-      await js(`document.querySelector(".settings-titlebar-btn[title='Close'], .settings-titlebar-btn[title='Back']").click()`);
+      // Leaving Settings keeps you on the tab you were on (David,
+      // 2026-10-05), never Home. Opened here over Tasks to prove it.
+      if (label === "mobile") {
+        // A sub-page goes back to its page, the page to the list.
+        await js("document.querySelector('[data-section=channels]').click()");
+        await waitFor("document.querySelectorAll('.channel-row').length === 2");
+        await js("document.querySelector('.channel-row[data-kind=telegram] .set-row-title').click()");
+        await waitFor("document.querySelector('.settings-mobile-title').textContent === 'My phone'");
+        await capture("mobile-channel-subpage");
+        await js("document.querySelector('.settings-mobile-back').click()");
+        await waitFor("document.querySelector('.settings-mobile-title').textContent === 'Channels' && document.querySelectorAll('.channel-row').length === 2");
+        await js("document.querySelector('.settings-mobile-back').click()");
+        await waitFor("document.querySelector('#view-content.settings-mobile-page')?.dataset.mobileView === 'list'");
+      }
+      await navigate("tasks");
+      await js("document.querySelector('.sidebar-settings-btn').click()");
+      if (label === "mobile") {
+        await waitFor("document.querySelector('#view-content.settings-mobile-page')?.dataset.mobileView === 'list'");
+        await js("document.querySelector('.settings-mobile-back').click()");
+      } else {
+        await waitFor("!!document.querySelector('.modal-backdrop:not(.hidden) .settings-window')");
+        await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
+        await waitFor("!!document.querySelector('.modal-backdrop.hidden .settings-window')");
+        await js("document.querySelector('.sidebar-settings-btn').click()");
+        await waitFor("!!document.querySelector('.modal-backdrop:not(.hidden) .settings-window')");
+        await js(`document.querySelector(".settings-titlebar-btn[title='Close']").click()`);
+      }
+      await delay(300);
+      assert.equal(await js("document.querySelector('#view-content').dataset.view"), "tasks", label + " leaving Settings stays on the tab you were on");
+      assert.ok(await js("document.querySelector('.nav-item[data-tab=tasks]').classList.contains('active')"), label + " and that tab is still highlighted");
     }
     win.setContentSize(1440, 900);
     await navigate("home");

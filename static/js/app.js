@@ -381,6 +381,9 @@ async function openSettings(options = {}) {
   // view container) since this bypasses switchTab() itself to avoid
   // settings.render()'s hardcoded desktop-modal behavior.
   if (window.matchMedia("(max-width: 768px)").matches) {
+    // Back from the Settings list returns to the tab it was opened over
+    // (David, 2026-10-05), not Home.
+    const returnTo = activeTab || "home";
     ++navigationVersion;
     if (activeUnmount) { activeUnmount(); activeUnmount = null; }
     activeTab = null;
@@ -392,7 +395,7 @@ async function openSettings(options = {}) {
     view.replaceWith(settingsView);
     view = settingsView;
     closeMobileMenu();
-    await settings.renderMobilePage(view, options.section);
+    await settings.renderMobilePage(view, options.section, () => switchTab(returnTo));
     return;
   }
   await settings.openSettingsWindow(options.section);

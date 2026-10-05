@@ -341,7 +341,7 @@ select {
      z-index. z-index 2500 clears the Settings window's .modal-backdrop
      (1500) and the onboarding overlay (2000). */
   position: fixed; z-index: 2500; min-width: 160px;
-  max-height: 260px; overflow-y: auto; overflow-x: hidden; padding: 4px;
+  max-height: 260px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 4px;
   background: var(--glass-sheen), var(--bg-panel-solid);
   backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6);
   border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-elevated);
@@ -1028,12 +1028,6 @@ input[type="checkbox"]:checked::after {
 .resize-se { bottom: -6px; right: -6px; cursor: nwse-resize; }
 .resize-sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
 
-/* -- Integrations table, Claude-Connectors-style (David's ask, 2026-08-31:
-   "UI somewhat similar to Claude's") — search + All/Connected/Not connected
-   filter tabs above a real table (icon/name · type · status), not just a
-   stacked card list. */
-.connectors-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 14px 0 10px; }
-.connectors-search { flex: 1 1 180px; min-width: 0; }
 /* Generic segmented-tab toggle (originally Integrations' filter tabs,
    generalized 2026-09-01 when Brain's Skills/Vault toggle needed the exact
    same look — reuse, don't duplicate, per specs/frontend-style.md). */
@@ -1048,22 +1042,6 @@ input[type="checkbox"]:checked::after {
 .segmented-tab.active {
   background: #303138; color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.2);
 }
-.connectors-table { width: 100%; border-collapse: collapse; }
-.connectors-table th {
-  text-align: left; font-size: 10px; letter-spacing: 0.5px; color: var(--text-faint);
-  font-weight: 400; padding: 6px 8px; border-bottom: 1px solid var(--border);
-}
-.connectors-table td { padding: 9px 8px; border-bottom: 1px solid var(--border); font-size: 12.5px; vertical-align: middle; }
-.connectors-table tr:last-child td { border-bottom: none; }
-.connectors-name-cell { display: flex; align-items: center; gap: 9px; }
-.connectors-icon {
-  width: 26px; height: 26px; border-radius: 7px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-  background: var(--accent-dim); color: var(--accent);
-}
-.connectors-icon svg { width: 14px; height: 14px; }
-.connectors-status-ok { color: var(--accent); }
-.connectors-status-off { color: var(--text-faint); }
 
 /* -- command palette (Ctrl+K, David's ask 2026-09-02) ------------------- */
 .palette-backdrop {
@@ -1348,8 +1326,6 @@ input[type="checkbox"]:checked::after { border-color: #141318; }
 .settings-nav-item { border: none; background: transparent; text-align: left; width: 100%; font-family: inherit; }
 .cal-day { border: none; text-align: left; font-family: inherit; }
 .vault-breadcrumb-crumb { color: inherit; font: inherit; border: none; padding: 2px; background: none; }
-.connectors-table td { padding: 14px 10px; }
-.connectors-table th { text-transform: none; font-size: 11px; padding: 10px; }
 .cal-grid { border-radius: 12px; }
 .cal-month-label { font-size: 17px; font-weight: 500; }
 .cal-day-panel-title { color: var(--text); font-size: 16px; }
@@ -1634,12 +1610,8 @@ button.dashboard-row:hover { background: rgba(255,255,255,.035); }
 }
 
 /* -- Settings > Speech (David's ask 2026-09-15) ------------------------- */
-.speech-panel .card-row { justify-content: space-between; align-items: center; gap: 16px; }
-.speech-model p.meta { margin: 4px 0 0; }
 .speech-model-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .speech-model-actions .meta { font-variant-numeric: tabular-nums; min-width: 38px; text-align: right; }
-.speech-devices select { min-width: 220px; max-width: 320px; }
-.speech-devices .meta { margin: 6px 0 0; }
 
 /* Settings > Admin > Logs (static/js/views/settings.js renderLogsPanel). */
 .logs-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0 6px; }
@@ -1771,16 +1743,6 @@ button.dashboard-row:hover { background: rgba(255,255,255,.035); }
   .agent-chat-delete { opacity: 1; }
 }
 
-/* Settings > Channels > Other platforms (static/js/views/settingsConnectors.js). */
-.connector-list { display: flex; flex-direction: column; gap: 10px; }
-.connector-card { display: flex; flex-direction: column; gap: 8px; }
-.connector-state { padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border-strong); font-size: 11px; color: var(--text-dim); }
-.connector-listening, .connector-connected { color: var(--success); border-color: var(--success); }
-.connector-error { color: var(--danger); border-color: var(--danger); }
-.connector-detail { overflow-wrap: anywhere; }
-.connector-field .meta { margin-top: 3px; }
-.connector-open { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-dim); flex-basis: 100%; }
-
 /* Run history (static/js/runHistory.js): scheduled tasks and board cards. */
 .run-history-panel { margin-top: 6px; }
 .run-history-panel > summary { font-size: 11.5px; color: var(--text-dim); cursor: pointer; }
@@ -1797,16 +1759,6 @@ button.dashboard-row:hover { background: rgba(255,255,255,.035); }
 .run-text.is-error { color: var(--danger); }
 .run-more { align-self: flex-start; padding: 2px 8px; font-size: 11px; }
 
-/* Settings > Integrations > MCP catalog (settings.js mcpCatalogSection). */
-.mcp-catalog-search { width: 100%; max-width: 100%; box-sizing: border-box; margin-bottom: 8px; }
-.mcp-catalog { min-width: 0; max-width: 100%; }
-.mcp-catalog-row .meta { overflow-wrap: anywhere; }
-.mcp-catalog-list { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; }
-.mcp-catalog-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 10px;
-  border: 1px solid var(--border); border-radius: 8px; }
-.mcp-catalog-row > div { min-width: 0; }
-.mcp-catalog-row > :last-child { flex-shrink: 0; }
-.mcp-catalog-name { font-size: 12.5px; color: var(--text); }
 
 /* Tool Store: one quiet catalog for installed skills and optional MCP servers. */
 .tool-store-view { width: 100%; padding-bottom: 48px; }

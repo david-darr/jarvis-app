@@ -2,6 +2,8 @@ import { api, el, customSelect, toast, confirmDialog, modelMark } from "../api.j
 import { suppressBrowser, releaseBrowser } from "../browserPane.js";
 import { renderSpeechPanel } from "./speechPanel.js";
 import { renderAppearancePanel } from './appearancePanel.js';
+import { renderChannelsPanel } from "./settingsChannels.js";
+import { pageHeader, group, row, field, toggle, pill, note, empty, badge, hueFor } from "../settingsKit.js";
 
 // The side browser's page is a NATIVE view composited above the HTML in the
 // desktop app (see static/js/browserPane.js), so it would paint straight
@@ -27,109 +29,129 @@ function modelLabel(ep) {
   return ep.kind === "claude_cli" || ep.kind === "codex_cli" ? `${ep.name} (${ep.model || "CLI default"})` : `${ep.name} (${ep.model})`;
 }
 
-// Settings as a real floating window (David's ask, 2026-08-31: "more of a
-// pop up that can be closed or minimized, with a similar UI to Odysseus") —
-// title bar + minimize/close, left nav with a real filtering search box,
-// single content panel on the right. Structure ported from Odysseus's own
-// Settings modal (the screenshot David sent + ~/odysseus's
-// static/js/settings/{registry,navigation,search}.js), our glass/cyan skin.
-//
-// Scope note: Search (SearXNG) and Integrations have no foundation in
-// JARVIS — not built as fake nav items. Model config MOVED here from
-// Cookbook (David's follow-up ask, 2026-08-31, after sending real Odysseus
-// screenshots — Odysseus itself keeps lightweight endpoint add/list in
-// Settings and reserves Cookbook for the heavy local-model download/serve
-// pipeline, matching this project's own original v1 scoping note before an
-// earlier session moved it to Cookbook instead; this corrects that back to
-// match the real reference). Cookbook is now an honest pointer back here.
-// "AI Defaults" (per-feature default model: chat/utility/vision/research)
-// isn't built — JARVIS has no utility-model split, vision routing, or
-// research feature to point defaults at, so a settings panel for it would
-// be fake UI with nothing behind it.
+const errorText = (problem) => (problem?.message || String(problem)).replace(/^\d+: /, "");
 
-// Grouped nav (David's ask 2026-09-15). A flat list of twelve items gave no
-// hint which ones relate to each other; these are the same twelve panels,
-// organised. Only the registry and buildNav() changed — every render*Panel
-// function below is untouched, which is the point of keeping the registry as
-// the single source of structure.
+// Settings is a floating window (David, 2026-08-31: "a pop up that can be
+// closed or minimized") with a grouped, searchable nav and one page on the
+// right. Redesigned 2026-10-05 after Hermes's desktop settings, Codex and
+// Claude: an icon per section, a page header with a one-line description, and
+// every page built from static/js/settingsKit.js (groups of label-left,
+// control-right rows) instead of stacked cards. No setting's behaviour or gate
+// changed in the redesign.
 //
-// `keywords` is what makes the search box useful rather than decorative. It
-// used to filter on the visible label alone, so typing the actual thing you
-// wanted — "2fa", "api key", "tailscale" — matched nothing at all. These are
-// the words someone would really type for each panel, not a restatement of
-// its title.
-//
-// `admin: true` on a group keeps the existing gate exactly as it was: the
-// group is only built for an admin, and Custom Tabs stays additionally
-// behind Developer Mode, the same condition app.js uses for its "+ New Tab"
-// nav item.
+// `keywords` is what makes the search box useful: the words someone would
+// really type for each page ("2fa", "api key", "tailscale"), not a
+// restatement of its title. `admin: true` on a group builds it for admins
+// only, and Custom Tabs stays additionally behind Developer Mode, the same
+// condition app.js uses for its "+ New Tab" nav item.
+const I = (body) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+const NAV_ICONS = {
+  "add-models": I('<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 9v6M9 12h6"/>'),
+  "added-models": I('<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/>'),
+  integrations: I('<path d="M9 2v5M15 2v5M12 17v5"/><path d="M6 7h12v4a6 6 0 01-6 6 6 6 0 01-6-6V7z"/>'),
+  channels: I('<path d="M4 5h16v11H9l-5 4V5z"/><path d="M8 10h8M8 13h5"/>'),
+  remote: I('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/>'),
+  vault: I('<path d="M4 6a2 2 0 012-2h4l2 2h6a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/>'),
+  speech: I('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/>'),
+  appearance: I('<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 000 18z" fill="currentColor" stroke="none" opacity=".35"/>'),
+  account: I('<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/>'),
+  shortcuts: I('<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>'),
+  "agent-tools": I('<path d="M14.7 6.3a4 4 0 00-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.6 2.6-2.4-.6-.6-2.4 2.6-2.6z"/>'),
+  permissions: I('<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/>'),
+  users: I('<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.7-3.5 3.3-5.5 6.5-5.5s5.8 2 6.5 5.5M16 4.5a3.5 3.5 0 010 7M18 14.5c2 .7 3.2 2.5 3.5 5.5"/>'),
+  system: I('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
+  logs: I('<path d="M6 3h9l5 5v13H6V3z"/><path d="M9 12h7M9 16h7M9 8h3"/>'),
+  "sandbox-changes": I('<path d="M8 6l-5 6 5 6M16 6l5 6-5 6"/>'),
+  "file-checkpoints": I('<path d="M3 12a9 9 0 109-9 9 9 0 00-6.4 2.6L3 8"/><path d="M3 3v5h5M12 8v4l3 2"/>'),
+  "custom-tabs": I('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v5"/>'),
+};
+
 const SECTION_GROUPS = [
   {
     id: "models", label: "Models", sections: [
       { id: "add-models", label: "Add Models", render: renderAddModelsPanel,
+        description: "JARVIS ships with no default model. Add at least one, then pick it from the model menu above the chat box.",
         keywords: ["provider", "api key", "openai", "anthropic", "claude", "codex", "ollama", "local model", "endpoint", "base url", "openrouter", "gemini"] },
       { id: "added-models", label: "Added Models", render: renderAddedModelsPanel,
+        description: "The model connections you have added. Test checks that each one answers.",
         keywords: ["manage", "remove model", "delete model", "test connection", "endpoints", "context"] },
     ],
   },
   {
     id: "connections", label: "Connections", sections: [
       { id: "integrations", label: "Integrations", render: renderIntegrationsPanel,
+        description: "Tool servers, calendars, contacts and API services JARVIS can use.",
         keywords: ["mcp", "connector", "tools", "caldav", "ical", "calendar feed", "google", "api service"] },
       { id: "channels", label: "Channels", render: renderChannelsPanel,
+        description: "Reach JARVIS and your agents from Discord, Telegram, Slack and other apps, and choose where task results and notifications go.",
         keywords: ["discord", "bot", "token", "telegram", "slack", "signal", "imessage", "email", "sms", "whatsapp", "matrix",
                    "mattermost", "irc", "line", "teams", "google chat", "ntfy", "webhook", "connector", "channel override", "announcements", "dm"] },
       { id: "remote", label: "Remote Access", render: renderRemotePanel,
+        description: "Reach this JARVIS from your phone or another computer over Tailscale, a private network between your own devices. Nothing is exposed to the public internet.",
         keywords: ["tailscale", "remote", "phone", "https", "certificate", "tunnel", "sign in", "account login", "url"] },
     ],
   },
   {
     id: "workspace", label: "Workspace", sections: [
       { id: "vault", label: "Vault", render: renderVaultPanel,
+        description: "The notes folder JARVIS reads and writes as its memory.",
         keywords: ["obsidian", "notes folder", "memory", "path", "sync", "location"] },
       { id: "speech", label: "Speech", render: renderSpeechPanel,
+        description: "Dictate messages by voice. Audio is transcribed on this machine and never uploaded.",
         keywords: ["voice", "dictation", "microphone", "mic", "transcribe", "whisper", "speech to text", "open mic"] },
     ],
   },
   {
     id: "personal", label: "Personal", sections: [
       { id: "appearance", label: "Appearance", render: renderAppearancePanel,
+        description: "A workspace that feels like yours. Saved for you on this device only.",
         keywords: ["theme", "background", "image", "color", "shader", "flow", "tint", "swirl", "grain", "motion"] },
       { id: "account", label: "Account", render: renderAccountPanel,
+        description: "Your sign-in, password and two-factor authentication.",
         keywords: ["password", "2fa", "two factor", "totp", "authenticator", "username", "sign out", "security"] },
       { id: "shortcuts", label: "Shortcuts", render: renderShortcutsPanel,
+        description: "Keys and commands that save a trip to the mouse.",
         keywords: ["keyboard", "hotkey", "command palette", "keys"] },
     ],
   },
   {
     id: "administration", label: "Administration", admin: true, sections: [
       { id: "agent-tools", label: "Agent Tools", render: renderAgentToolsPanel,
+        description: "Tools every chat may use. Open chats pick up a change on their next message.",
         keywords: ["bash", "shell", "disabled tools", "allowed tools", "capabilities"] },
       { id: "permissions", label: "Permissions", render: renderPermissionsPanel,
+        description: "What models may do without asking again. Anything not listed is asked for when it comes up.",
         keywords: ["permission", "allow", "always allow", "approval", "grant", "revoke", "prompt", "asked"] },
       { id: "users", label: "Users", render: renderUsersPanel,
+        description: "Who can sign in to this JARVIS, and who is an admin.",
         keywords: ["accounts", "add user", "roles", "admin", "people"] },
       { id: "system", label: "System", render: renderSystemPanel,
+        description: "Health, backups, and permanent resets.",
         keywords: ["backup", "export", "import", "diagnostics", "health", "reset", "wipe", "danger"] },
       { id: "logs", label: "Logs", render: renderLogsPanel,
+        description: "What JARVIS has been doing. Errors keeps only warnings and errors; Desktop is the app window itself. Pick a chat to see only its turns.",
         keywords: ["log", "logs", "errors", "debug", "troubleshoot", "crash", "backend", "desktop", "warnings"] },
       { id: "sandbox-changes", label: "Sandbox changes", render: renderSandboxChangesPanel,
+        description: "Code changes a model made in the sandbox, waiting for you. Applying writes them only if none of those files changed since; it does not commit. Unapplied changes expire after 7 days.",
         keywords: ["sandbox", "run_code", "diff", "change set", "apply", "review", "patch", "code changes"] },
       { id: "file-checkpoints", label: "File checkpoints", render: renderFileCheckpointsPanel,
+        description: "Each model turn saves the Vault and its working folder before and after. Review the files, then restore the ones you choose. A file changed again cannot be restored from an older checkpoint; large skipped files were not protected.",
         keywords: ["checkpoint", "rollback", "restore", "undo", "files", "vault", "history"] },
       { id: "custom-tabs", label: "Custom Tabs", render: renderCustomTabsPanel, devMode: true,
+        description: "Reorder, keep building, or delete tabs your AI model has built.",
         keywords: ["new tab", "developer mode", "custom tab"] },
     ],
   },
 ];
 
-// Flattened once rather than rebuilt on every lookup.
-const ALL_SECTIONS = SECTION_GROUPS.flatMap((group) => group.sections);
-
 let modalEl = null;
 let pillEl = null;
 let activeSectionId = "add-models";
 let cachedStatus = null;
+let renderVersion = 0;
+// The phone layout (renderMobilePage) while it is on screen: its top bar, the
+// way out, and the current sub-page's way back. null on desktop.
+let mobile = null;
 
 export async function render(container) {
   // Settings has no real "page" anymore — clicking its nav item opens the
@@ -140,6 +162,7 @@ export async function render(container) {
 }
 
 export async function openSettingsWindow(section) {
+  mobile = null;
   if (section === "integrations") activeSectionId = section;
   if (pillEl) { pillEl.remove(); pillEl = null; }
   cachedStatus = await api("/api/auth/status");
@@ -161,49 +184,65 @@ export async function openSettingsWindow(section) {
   await selectSection(activeSectionId);
 }
 
-// Settings as a real full-screen page on mobile, not a popup (David's ask
-// 2026-09-01) — app.js's settings-gear handler calls this instead of
-// openSettingsWindow() below the responsive breakpoint. Same
-// titlebar/nav/content building blocks (buildNav()/selectSection() below
-// look these up by id, so they work unchanged against either shell), just
-// mounted directly into the tab's own view content — no backdrop, no
-// minimize (that's a "floating window" concept a full page doesn't have),
-// "back" instead of "close".
-export async function renderMobilePage(container, section) {
-  if (section === "integrations") activeSectionId = section;
+const SETTINGS_TITLE = () => el("div", { class: "title" }, [
+  el("span", { class: "settings-title-icon" }), el("span", { text: "Settings" })]);
+
+function titleWithIcon() {
+  const title = SETTINGS_TITLE();
+  title.firstChild.innerHTML = I('<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.3-2l2-1.5-2-3.4-2.3.9a7 7 0 00-1.7-1L14 2h-4l-.7 2.6a7 7 0 00-1.7 1l-2.3-.9-2 3.4L5.3 10a7 7 0 000 4l-2 1.5 2 3.4 2.3-.9a7 7 0 001.7 1L10 22h4l.7-2.6a7 7 0 001.7-1l2.3.9 2-3.4-2-1.5c.2-.6.3-1.3.3-2z"/>');
+  return title;
+}
+
+// Settings as a full-screen page on phones, not a popup (David's ask
+// 2026-09-01); app.js calls this instead of openSettingsWindow() below the
+// responsive breakpoint. Rebuilt 2026-10-05 after the iOS Settings and Claude
+// mobile pattern: a list of sections first (search, grouped rows with icons),
+// and each page full screen under a top bar whose back button goes up one
+// level - sub-page to page, page to the list, the list to the tab you came
+// from (`onExit`). Same nav and pages as desktop (found by id).
+export async function renderMobilePage(container, section, onExit) {
   if (pillEl) { pillEl.remove(); pillEl = null; }
-  // Guards against the (unlikely but possible) case of the floating modal
-  // having been created earlier in this same page load — it and the mobile
-  // page shell both use the same #settings-nav/#settings-content ids for
-  // buildNav()/selectSection() to find, so only one can exist at a time.
+  // Only one of the floating modal and this page can exist at a time: both
+  // use the #settings-nav/#settings-content ids.
   if (modalEl) { modalEl.remove(); modalEl = null; }
   cachedStatus = await api("/api/auth/status");
   container.innerHTML = "";
 
-  const backBtn = el("button", { class: "settings-titlebar-btn", title: "Back", onclick: () => {
-    const homeNav = document.querySelector('.nav-item[data-tab="home"]');
-    if (homeNav) homeNav.click();
-  }, text: "←" });
-  const titlebar = el("div", { class: "settings-titlebar" }, [
-    el("div", { class: "title" }, [el("span", { text: "⚙" }), el("span", { text: "Settings" })]),
-    el("div", { class: "settings-titlebar-actions" }, [backBtn]),
-  ]);
+  const backBtn = el("button", { class: "settings-titlebar-btn settings-mobile-back", title: "Back", "aria-label": "Back", text: "‹" });
+  const barTitle = el("span", { class: "settings-mobile-title", text: "Settings" });
+  const titlebar = el("div", { class: "settings-titlebar" }, [el("div", { class: "title" }, [backBtn, barTitle])]);
   const nav = el("div", { class: "settings-nav", id: "settings-nav" });
   const content = el("div", { class: "settings-content", id: "settings-content" });
   const body = el("div", { class: "settings-body" }, [nav, content]);
   container.append(titlebar, body);
 
+  mobile = {
+    container, barTitle, subBack: null,
+    showList() {
+      renderVersion++; // a page still loading must not take the screen back
+      container.dataset.mobileView = "list";
+      barTitle.textContent = "Settings";
+      this.subBack = null;
+      content.replaceChildren();
+    },
+    showPage(title) { container.dataset.mobileView = "page"; barTitle.textContent = title; },
+  };
+  backBtn.addEventListener("click", () => {
+    if (container.dataset.mobileView !== "page") { mobile = null; onExit?.(); return; }
+    if (mobile.subBack) mobile.subBack();
+    else mobile.showList();
+  });
+
   buildNav();
-  await selectSection(activeSectionId);
+  if (section) await selectSection(section);
+  else mobile.showList();
 }
 
+// Closing leaves you on the tab you had open (David, 2026-10-05: it used to
+// jump to Home). The window floats over that tab, so hiding it is enough.
 function closeSettingsWindow() {
   if (modalEl) modalEl.classList.add("hidden");
   restorePageBehind();
-  // No dedicated "Settings" page to return to — go back to Home, same as
-  // closing any other floating window in the app.
-  const homeNav = document.querySelector('.nav-item[data-tab="home"]');
-  if (homeNav) homeNav.click();
 }
 
 function minimizeSettingsWindow() {
@@ -225,7 +264,7 @@ function getModal() {
   const closeBtn = el("button", { class: "settings-titlebar-btn", title: "Close", onclick: closeSettingsWindow, text: "✕" });
   const minBtn = el("button", { class: "settings-titlebar-btn", title: "Minimize", onclick: minimizeSettingsWindow, text: "–" });
   const titlebar = el("div", { class: "settings-titlebar" }, [
-    el("div", { class: "title" }, [el("span", { text: "⚙" }), el("span", { text: "Settings" })]),
+    titleWithIcon(),
     el("div", { class: "settings-titlebar-actions" }, [minBtn, closeBtn]),
   ]);
 
@@ -245,29 +284,28 @@ function getModal() {
   // the viewport. Re-clamping keeps it reachable — losing the titlebar off
   // screen would be unrecoverable, since dragging is the only way back.
   window.addEventListener("resize", () => clampToViewport(panel));
+  // Escape closes it too, unless a confirmation or an open menu inside it
+  // should get the key first.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || backdrop.classList.contains("hidden")) return;
+    if (document.querySelector(".confirm-panel, dialog[open]")) return;
+    if ([...document.querySelectorAll(".custom-select-menu, .overflow-menu")].some((m) => !m.classList.contains("hidden"))) return;
+    closeSettingsWindow();
+  });
 
   modalEl = backdrop;
   return modalEl;
 }
 
-// Resizable from any edge/corner (David's ask 2026-09-01) — the window
-// starts at its normal CSS-centered size/position (880x640, capped to
-// 94vw/88vh), then gets pinned to that exact rect via `position: fixed`
-// with explicit left/top/width/height so each handle can move just its own
-// edge independently, same as a real desktop window (dragging the left edge
-// shouldn't also move the right edge, which is what plain centered flex
-// layout would do if only width changed). Mouse-only (no touch handlers) —
-// the mobile shell doesn't use this floating window at all (renderMobilePage
-// is a separate full-page render), so there's no touch case to cover.
+// Resizable from any edge/corner (David's ask 2026-09-01). The window starts
+// at its CSS-centered size, then is pinned to that exact rect with
+// `position: fixed` so each handle moves only its own edge. Mouse-only: the
+// mobile shell is a separate full page.
 //
-// Real bug found live 2026-09-01 (David: "when i click on settings nothing
-// even shows anymore") — the initial rect used to be captured inside
-// makeResizable() itself, called from getModal() right after the backdrop
-// is built but while it still has the `hidden` class (`display: none`), so
-// getBoundingClientRect() returned an all-zero rect and pinned the window at
-// 0x0. Split in two: attachResizeHandles() (layout-independent, safe at
-// construction time) and pinInitialRect() (needs a real, visible layout —
-// called from openSettingsWindow() *after* the `hidden` class is removed).
+// The initial rect must be captured while the window is visible (found live
+// 2026-09-01: captured while hidden it pinned the window at 0x0), so
+// attachResizeHandles() runs at construction and pinInitialRect() after the
+// `hidden` class is removed.
 const MIN_WIDTH = 480;
 const MIN_HEIGHT = 360;
 function pinInitialRect(panel) {
@@ -282,13 +320,10 @@ function pinInitialRect(panel) {
   panel.style.maxWidth = "none";
   panel.style.maxHeight = "none";
 }
-// Keeps the window wholly inside the viewport (David's ask 2026-09-15:
-// dragging "constrained to the app viewport"). Used by the drag handler, by
-// the window-resize listener, and after the responsive breakpoint changes —
-// all three can otherwise strand the window, and the one that strands the
-// TITLEBAR is unrecoverable, because the titlebar is the only way to drag it
-// back. Shrinking comes before repositioning so a window larger than the
-// viewport ends up fully visible rather than pinned at a negative offset.
+// Keeps the window wholly inside the viewport (David's ask 2026-09-15). Used
+// by the drag handler, the window-resize listener and after the breakpoint
+// changes; a titlebar stranded off screen is unrecoverable. Shrinking comes
+// before repositioning so an oversized window ends up fully visible.
 function clampToViewport(panel) {
   if (!panel || !panel.dataset.pinned) return;
   const maxWidth = Math.max(MIN_WIDTH, window.innerWidth);
@@ -303,9 +338,8 @@ function clampToViewport(panel) {
 
 function attachTitlebarDrag(panel, titlebar) {
   titlebar.addEventListener("mousedown", (e) => {
-    // Only a plain left-press on the bar itself. Without the button check,
-    // pressing minimize or close would start a drag as well as firing the
-    // action, so the window jumped as it was dismissed.
+    // Only a plain left-press on the bar itself, so pressing minimize or
+    // close never starts a drag.
     if (e.button !== 0 || e.target.closest("button")) return;
     if (!panel.dataset.pinned) return;
     e.preventDefault();
@@ -372,9 +406,7 @@ function attachResizeHandles(panel) {
 }
 
 // Which sections this user can actually reach. One place, so the nav, the
-// search, and selectSection() can never disagree about it — a stale
-// activeSectionId pointing at a gated panel used to be able to render it
-// even while the nav hid its entry.
+// search, and selectSection() can never disagree about it.
 function visibleSections() {
   const devMode = document.documentElement.classList.contains("dev-mode");
   return SECTION_GROUPS
@@ -386,31 +418,32 @@ function visibleSections() {
 function buildNav() {
   const nav = document.getElementById("settings-nav");
   nav.innerHTML = "";
-  const search = el("input", { class: "settings-search", type: "search", placeholder: "Find settings...", "aria-label": "Find settings" });
+  const search = el("input", { class: "settings-search", type: "search", placeholder: "Search settings", "aria-label": "Find settings" });
   const navList = el("div", { class: "settings-nav-list" });
   nav.append(search, navList);
 
   const entries = [];
   for (const group of visibleSections()) {
-    const heading = el("div", { class: "settings-nav-group", text: group.label.toUpperCase() });
-    navList.appendChild(heading);
+    const heading = el("div", { class: "settings-nav-group", text: group.label });
+    const block = el("div", { class: "settings-nav-block" });
+    navList.append(heading, block);
     const items = [];
     for (const sec of group.sections) {
+      const icon = el("span", { class: "settings-nav-icon", "aria-hidden": "true" });
+      icon.innerHTML = NAV_ICONS[sec.id] || "";
       const item = el("button", {
         type: "button",
         class: "settings-nav-item" + (sec.id === activeSectionId ? " active" : ""),
-        text: sec.label,
         onclick: () => selectSection(sec.id),
-      });
-      // data-section rather than matching on textContent: two groups could
-      // legitimately hold panels with the same label, and comparing labels
-      // would highlight both.
+      }, [icon, el("span", { text: sec.label })]);
+      // data-section rather than matching on text: two groups could hold
+      // panels with the same label.
       item.dataset.section = sec.id;
       items.push({ item, sec });
       entries.push({ item, sec });
-      navList.appendChild(item);
+      block.appendChild(item);
     }
-    entries.push({ heading, items });
+    entries.push({ heading, block, items });
   }
 
   const matches = (sec, q) => !q
@@ -423,34 +456,52 @@ function buildNav() {
       if (entry.sec) entry.item.hidden = !matches(entry.sec, q);
       // A group heading with nothing under it is noise, so it hides with
       // its children rather than leaving a stray label behind.
-      else entry.heading.hidden = !entry.items.some(({ sec }) => matches(sec, q));
+      else entry.heading.hidden = entry.block.hidden = !entry.items.some(({ sec }) => matches(sec, q));
     }
   });
 }
 
+// Every page gets the same frame: a header (title, description, actions) and
+// a body the page renders into. `page` lets a page add header actions or show
+// a sub-page with its own title and a way back.
 async function selectSection(id) {
   const groups = visibleSections();
   const reachable = groups.flatMap((group) => group.sections);
   const section = reachable.find((s) => s.id === id) || reachable[0];
   if (!section) return;
   activeSectionId = section.id;
+  const mine = ++renderVersion;
   document.querySelectorAll(".settings-nav-item").forEach((n) => n.classList.toggle("active", n.dataset.section === section.id));
   const content = document.getElementById("settings-content");
-  content.innerHTML = "";
-  await section.render(content, cachedStatus);
+  const headerSlot = el("div", { class: "set-header-slot" });
+  const body = el("div", { class: "set-body" });
+  content.replaceChildren(el("div", { class: "set-page", "data-page": section.id }, [headerSlot, body]));
+  content.scrollTop = 0;
+  const page = {
+    actions(nodes = []) {
+      headerSlot.replaceChildren(pageHeader(section.label, section.description, nodes));
+      if (mobile && mine === renderVersion) { mobile.subBack = null; mobile.showPage(section.label); }
+    },
+    sub({ title, description, actions = [], back }) {
+      headerSlot.replaceChildren(
+        el("button", { type: "button", class: "btn quiet set-back", text: `← ${section.label}`, onclick: back }),
+        pageHeader(title, description, actions));
+      content.scrollTop = 0;
+      if (mobile && mine === renderVersion) { mobile.subBack = back; mobile.showPage(title); }
+    },
+    get current() { return mine === renderVersion; },
+  };
+  page.actions();
+  await section.render(body, cachedStatus, page);
 }
 
-function sectionLabel(id) {
-  return (ALL_SECTIONS.find((s) => s.id === id) || {}).label;
-}
+// -- Add Models (moved from Cookbook, David's ask 2026-08-31). JARVIS ships
+// with no default model, so Claude itself has to be added here like anything
+// else, not assumed. ---------------------------------------------------------
 
-// Known API providers (David's ask 2026-08-31, "reference the odysseus
-// repo" — mirrors static/index.html's #adm-epProvider option list in
-// ~/odysseus). Only providers that actually work with a plain bearer-token
-// API key over an OpenAI-compatible endpoint are included — Odysseus's
-// GitHub Copilot / ChatGPT Subscription entries use a device-auth flow
-// (core/providerDeviceFlow.js) jarvis-app doesn't have, so they're left out
-// rather than faked as a simple key field.
+// Known API providers (mirrors Odysseus's provider list). Only providers that
+// work with a plain bearer-token key over an OpenAI-compatible endpoint;
+// device-auth flows JARVIS does not have are left out, not faked.
 const KNOWN_API_PROVIDERS = [
   { label: "OpenAI", base_url: "https://api.openai.com/v1" },
   { label: "Anthropic", base_url: "https://api.anthropic.com" },
@@ -467,40 +518,28 @@ const KNOWN_API_PROVIDERS = [
   { label: "Ollama Cloud", base_url: "https://ollama.com/api" },
 ];
 
-// -- Add Models (moved from Cookbook, David's ask 2026-08-31; "claude_cli"
-// kind added 2026-08-31 follow-up — JARVIS ships with no default model, so
-// Claude itself has to be added here like anything else, not assumed) -----
-function modelCard(title, subtitle, kind, onAdded) {
+function modelForm(title, subtitle, kind, onAdded) {
   const isCliKind = kind === "claude_cli" || kind === "codex_cli";
-  const nameInput = el("input", { placeholder: "Name (e.g. \"" + (kind === "local" ? "Local Ollama" : kind === "claude_cli" ? "Claude" : kind === "codex_cli" ? "Codex" : "OpenRouter") + "\")", style: "flex:1;" });
-  const urlInput = el("input", { placeholder: kind === "local" ? "http://localhost:11434/v1" : "https://api.openrouter.ai/v1", style: "flex:1;" });
-  const modelInput = el("input", {
-    placeholder: isCliKind ? `Model override (optional, e.g. ${kind === "claude_cli" ? "claude-sonnet-4-5" : "gpt-5-codex"})` : "Model id",
-    style: "flex:1;",
-  });
-  const keyInput = el("input", { type: "password", placeholder: "API key" + (kind === "local" ? " (optional)" : ""), style: "flex:1;" });
-  // Context window cap (David's ask 2026-09-01, real incident — a local
-  // model loaded with no cap defaulted to its max context and its KV cache
-  // alone ate ~21GB of RAM). Local-only: sent as Ollama's `options.num_ctx`;
-  // other local servers that don't recognize it just ignore the field.
-  const ctxInput = el("input", { type: "number", placeholder: "Context window (default 4096)", style: "flex:1;" });
-  const imageInput = el("input", { type: "checkbox" });
-  const imageLabel = el("label", { class: "meta", style: "display:flex;align-items:center;gap:7px;margin-top:9px;" },
-    [imageInput, el("span", { text: "This model accepts image input (vision)" })]);
-  const err = el("div", { class: "meta", style: "color:var(--danger);" });
-  const addBtn = el("button", { class: "btn", text: "+ Add" });
+  const nameInput = el("input", { placeholder: kind === "local" ? "Local Ollama" : kind === "claude_cli" ? "Claude" : kind === "codex_cli" ? "Codex" : "OpenRouter" });
+  const urlInput = el("input", { placeholder: kind === "local" ? "http://localhost:11434/v1" : "https://api.openrouter.ai/v1" });
+  const modelInput = el("input", { placeholder: isCliKind ? (kind === "claude_cli" ? "claude-sonnet-4-5" : "gpt-5-codex") : "Model id" });
+  const keyInput = el("input", { type: "password", placeholder: kind === "local" ? "Optional" : "API key", autocomplete: "off" });
+  // Context window cap (David's ask 2026-09-01, real incident: a local model
+  // loaded with no cap took its max context and ~21GB of RAM). Local only:
+  // sent as Ollama's `options.num_ctx`; other servers ignore it.
+  const ctxInput = el("input", { type: "number", placeholder: "4096" });
+  const images = toggle({ label: "Accepts images" });
+  const err = el("div", { class: "set-error" });
+  const addBtn = el("button", { class: "btn primary", text: "Add" });
 
-  // Provider picker (API cards only) — picking a known provider fills in its
-  // name + base URL so the user only has to add a model id and their key,
-  // same shape as Odysseus's #adm-epProvider dropdown. "Custom URL" clears
-  // both fields back to freeform entry.
+  // Picking a known provider fills in its name and base URL, so only the
+  // model id and key are left. "Custom URL" leaves both free.
   let providerSelect = null;
   if (kind === "api") {
-    const options = [
+    providerSelect = customSelect({}, [
       el("option", { value: "" }, "Custom URL"),
       ...KNOWN_API_PROVIDERS.map((p) => el("option", { value: p.base_url }, p.label)),
-    ];
-    providerSelect = customSelect({ style: "flex:1;" }, options);
+    ]);
     providerSelect.addEventListener("change", () => {
       const chosen = KNOWN_API_PROVIDERS.find((p) => p.base_url === providerSelect.value);
       if (chosen) {
@@ -528,71 +567,51 @@ function modelCard(title, subtitle, kind, onAdded) {
           api_key: keyInput.value.trim() || null,
           kind,
           num_ctx: kind === "local" && ctxInput.value.trim() ? parseInt(ctxInput.value.trim(), 10) : null,
-          supports_images: !isCliKind && imageInput.checked,
+          supports_images: !isCliKind && images.checked,
         }),
       });
-      nameInput.value = ""; urlInput.value = ""; modelInput.value = ""; keyInput.value = ""; ctxInput.value = ""; imageInput.checked = false;
+      nameInput.value = ""; urlInput.value = ""; modelInput.value = ""; keyInput.value = ""; ctxInput.value = ""; images.checked = false;
       if (providerSelect) providerSelect.value = "";
       onAdded();
-    } catch (e) { err.textContent = e.message.replace(/^\d+: /, ""); }
+    } catch (e) { err.textContent = errorText(e); }
   });
 
-  const fields = kind === "local"
-    ? [nameInput, urlInput, modelInput, ctxInput]
+  const rows = kind === "local"
+    ? [field("Name", nameInput), field("Server URL", urlInput), field("Model id", modelInput), field("Context window", ctxInput, "Tokens the model may hold. Keeps a large model from filling your memory.")]
     : isCliKind
-      ? [nameInput, modelInput]
-      : [providerSelect, nameInput, urlInput, modelInput, keyInput];
-  return el("div", { class: "glass bracket card", style: "margin-bottom:14px;" }, [
-    el("div", { class: "title", text: title }),
-    el("div", { class: "meta", style: "margin:4px 0 10px;", text: subtitle }),
-    el("div", { class: "card-row", style: "flex-wrap:wrap;gap:8px;" }, [...fields, addBtn]),
-    ...(isCliKind ? [] : [imageLabel]),
-    err,
-  ]);
+      ? [field("Name", nameInput), field("Model", modelInput, "Optional. Leave empty for the CLI's own default.")]
+      : [field("Provider", providerSelect), field("Name", nameInput), field("Base URL", urlInput), field("Model id", modelInput), field("API key", keyInput)];
+  if (!isCliKind) rows.push(row({ title: "Accepts images", description: "The model can read pictures you attach.", control: images }));
+  rows.push(el("div", { class: "set-row-actions" }, [err, addBtn]));
+  return group({ title, description: subtitle }, rows);
 }
 
-function renderAddModelsPanel(content) {
-  content.innerHTML = "";
-  content.append(
-    el("div", { class: "title", text: "Add Models" }),
-    el("div", { class: "meta", style: "margin:6px 0 14px;", text: "JARVIS ships with no default model — add at least one below, then pick it from the model menu above the chat box." }),
-    modelCard("Add Claude Code CLI", "Uses the claude CLI already installed and logged in on this machine — no key needed here.", "claude_cli", () => selectSection("added-models")),
-    modelCard("Add Codex CLI", "Uses the codex CLI already installed and logged in on this machine — no key needed here.", "codex_cli", () => selectSection("added-models")),
-    modelCard("Add Local Models", "A local model server (Ollama, llama.cpp, vLLM).", "local", () => selectSection("added-models")),
-    modelCard("Add API Models", "Connect a cloud provider (OpenAI, Anthropic, OpenRouter, etc.).", "api", () => selectSection("added-models")),
+function renderAddModelsPanel(body) {
+  const done = () => selectSection("added-models");
+  body.replaceChildren(
+    modelForm("Claude Code CLI", "Uses the claude CLI already installed and signed in on this machine. No key needed.", "claude_cli", done),
+    modelForm("Codex CLI", "Uses the codex CLI already installed and signed in on this machine. No key needed.", "codex_cli", done),
+    modelForm("Local model server", "Ollama, llama.cpp, vLLM or any server on this machine or your network.", "local", done),
+    modelForm("API provider", "A cloud provider such as OpenAI, Anthropic or OpenRouter.", "api", done),
   );
 }
 
 // -- Added Models -------------------------------------------------------
-async function renderAddedModelsPanel(content) {
+async function renderAddedModelsPanel(body, _status, page) {
   const endpoints = await api("/api/models");
-  content.innerHTML = "";
-  const probeAllBtn = el("button", { class: "btn", text: "↻ Probe" });
-  content.append(
-    el("div", { class: "card-row", style: "justify-content:space-between;" }, [
-      el("div", { class: "title", text: "Added Models" }),
-      probeAllBtn,
-    ]),
-    el("div", { class: "meta", style: "margin:6px 0 14px;", text: "Endpoints you've connected. Probe re-tests them all." }),
-  );
-
-  const claudeEps = endpoints.filter((e) => e.kind === "claude_cli");
-  const codexEps = endpoints.filter((e) => e.kind === "codex_cli");
-  const local = endpoints.filter((e) => e.kind === "local");
-  const apiEps = endpoints.filter((e) => e.kind === "api");
-  const rowsByEndpoint = {};
+  const tests = [];
+  page.actions([el("button", { class: "btn", text: "Test all", onclick: () => tests.forEach((run) => run()) })]);
 
   function endpointRow(ep) {
-    const resultEl = el("span", { class: "meta" });
-    const testBtn = el("button", { class: "btn", text: "Test" });
-    testBtn.addEventListener("click", async () => {
-      resultEl.textContent = "Testing...";
+    const result = el("span", { class: "set-row-result" });
+    const runTest = async () => {
+      result.replaceChildren(pill("Testing…", "muted"));
       const res = await api(`/api/models/${ep.id}/test`, { method: "POST" });
-      resultEl.textContent = res.ok ? `OK · ${res.latency_ms}ms` : `Failed: ${res.detail}`;
-      resultEl.style.color = res.ok ? "var(--accent)" : "var(--danger)";
-    });
-    const delBtn = el("button", { class: "btn danger", text: "Remove" });
-    delBtn.addEventListener("click", async () => {
+      result.replaceChildren(res.ok ? pill(`OK · ${res.latency_ms}ms`, "ok") : pill("Failed", "error"));
+      result.title = res.ok ? "" : res.detail || "";
+    };
+    tests.push(runTest);
+    const remove = el("button", { class: "btn quiet danger", text: "Remove", onclick: async () => {
       const ok = await confirmDialog({
         title: "Remove this model?",
         message: `"${ep.name}" will be removed. Any chat still set to it will need a new model chosen.`,
@@ -600,179 +619,124 @@ async function renderAddedModelsPanel(content) {
       });
       if (!ok) return;
       await api(`/api/models/${ep.id}`, { method: "DELETE" });
-      await renderAddedModelsPanel(content);
       toast("Model removed", "success");
-    });
-    const metaText = ep.kind === "claude_cli" || ep.kind === "codex_cli"
+      await selectSection("added-models");
+    } });
+    const meta = ep.kind === "claude_cli" || ep.kind === "codex_cli"
       ? `Model: ${ep.model || "CLI default"}`
-      : `${ep.model} · ${ep.base_url}${ep.has_api_key ? " · key saved" : ""}${ep.kind === "local" && ep.num_ctx ? ` · ctx ${ep.num_ctx}` : ""}`;
-    const imageBtn = el("button", { class: "btn", text: ep.supports_images ? "Images: On" : "Images: Off" });
-    imageBtn.addEventListener("click", async () => {
-      const updated = await api(`/api/models/${ep.id}/image-support`, {
-        method: "PATCH", body: JSON.stringify({ enabled: !ep.supports_images }),
-      });
-      ep.supports_images = updated.supports_images;
-      imageBtn.textContent = ep.supports_images ? "Images: On" : "Images: Off";
-    });
-    const row = el("div", { class: "card-row", style: "justify-content:space-between;align-items:center;margin-top:8px;" }, [
-      el("div", {}, [
-        el("div", { class: "title model-row-title", style: "font-size:12.5px;" }, [modelMark(ep.mark, ep.name), ep.name].filter(Boolean)),
-        el("div", { class: "meta", text: metaText }),
-      ]),
-      el("div", { class: "card-row", style: "gap:6px;" },
-        [resultEl, ...(ep.kind === "local" || ep.kind === "api" ? [imageBtn] : []), testBtn, delBtn]),
-    ]);
-    rowsByEndpoint[ep.id] = testBtn;
-    return row;
+      : [ep.model, ep.base_url, ep.has_api_key ? "key saved" : null, ep.kind === "local" && ep.num_ctx ? `context ${ep.num_ctx}` : null].filter(Boolean).join(" · ");
+    const controls = [result];
+    if (ep.kind === "local" || ep.kind === "api") {
+      controls.push(el("label", { class: "set-inline-switch" }, [el("span", { class: "meta", text: "Images" }),
+        toggle({ checked: ep.supports_images, label: `${ep.name} accepts images`, onChange: async (on) => {
+          const updated = await api(`/api/models/${ep.id}/image-support`, { method: "PATCH", body: JSON.stringify({ enabled: on }) });
+          ep.supports_images = updated.supports_images;
+        } })]));
+    }
+    controls.push(el("button", { class: "btn", text: "Test", onclick: runTest }), remove);
+    return row({ title: [modelMark(ep.mark, ep.name), el("span", { text: ep.name })].filter(Boolean), description: meta, control: controls,
+      cls: "model-row", attrs: { "data-endpoint": ep.id } });
   }
 
-  content.append(el("div", { class: "meta", style: "margin-top:12px;color:var(--text-faint);letter-spacing:1px;font-size:10px;", text: "CLAUDE CODE CLI" }));
-  content.append(claudeEps.length === 0 ? el("div", { class: "meta", text: "None" }) : el("div", {}, claudeEps.map(endpointRow)));
-  content.append(el("div", { class: "meta", style: "margin-top:16px;color:var(--text-faint);letter-spacing:1px;font-size:10px;", text: "CODEX CLI" }));
-  content.append(codexEps.length === 0 ? el("div", { class: "meta", text: "None" }) : el("div", {}, codexEps.map(endpointRow)));
-  content.append(el("div", { class: "meta", style: "margin-top:16px;color:var(--text-faint);letter-spacing:1px;font-size:10px;", text: "LOCAL" }));
-  content.append(local.length === 0 ? el("div", { class: "meta", text: "None" }) : el("div", {}, local.map(endpointRow)));
-  content.append(el("div", { class: "meta", style: "margin-top:16px;color:var(--text-faint);letter-spacing:1px;font-size:10px;", text: "API" }));
-  content.append(apiEps.length === 0 ? el("div", { class: "meta", text: "None" }) : el("div", {}, apiEps.map(endpointRow)));
-
-  probeAllBtn.addEventListener("click", () => {
-    for (const btn of Object.values(rowsByEndpoint)) btn.click();
-  });
+  const kinds = [["claude_cli", "Claude Code CLI"], ["codex_cli", "Codex CLI"], ["local", "Local"], ["api", "API"]];
+  body.replaceChildren(...kinds.map(([kind, title]) => {
+    const list = endpoints.filter((e) => e.kind === kind);
+    return group({ title }, list.length ? list.map(endpointRow) : [empty("None added")]);
+  }));
+  if (!endpoints.length) body.prepend(note(["Nothing added yet. ", el("button", { type: "button", class: "btn quiet", text: "Add a model", onclick: () => selectSection("add-models") })]));
 }
 
-// -- Integrations (David's ask, 2026-08-31, matching a real Odysseus
-// screenshot of their "Add Integration" dropdown). Follow-up ask same day:
-// add Calendar/Contacts/Email too — CalDAV/CardDAV built for real
-// (core/dav_client.py, one-way read sync), Email reuses the existing Email
-// tab's account management rather than duplicating it. Claude/Codex Agent
-// still aren't offered — no foundation (see core/integrations.py docstring).
+// -- Integrations (David's ask, 2026-08-31, after Odysseus's "Add
+// Integration" menu). CalDAV/CardDAV are a real one-way read sync
+// (core/dav_client.py); Email reuses the Email tab's own account management
+// rather than duplicating it. -----------------------------------------------
 const INTEGRATION_KIND_LABELS = {
-  api_service: "API Service",
-  mcp_server: "MCP Tool Server",
-  caldav_calendar: "CalDAV Calendar",
+  api_service: "API service",
+  mcp_server: "MCP tool server",
+  caldav_calendar: "CalDAV calendar",
   carddav_contacts: "Contacts (CardDAV)",
-  ical_feed: "iCal Feed",
+  ical_feed: "iCal feed",
 };
 
-// One-line icon SVGs so the table has something to sit in the icon column,
-// same "hand-written stroke icon, no icon-font/CDN" convention as icons.js —
-// generic per-kind glyphs (Claude's own table uses real per-service logos,
-// which would mean either faking brand icons for services we don't actually
-// connect to, or fetching real ones; a generic glyph per kind is the honest
-// version of that column).
+// Generic per-kind glyphs: brand logos would mean faking icons for services
+// we don't actually connect to, or fetching them.
 const CONNECTOR_ICONS = {
-  api_service: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
-  mcp_server: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6"/><path d="M15 2v6"/><path d="M12 17v5"/><path d="M6 8h12a2 2 0 0 1 2 2v2a6 6 0 0 1-6 6h-4a6 6 0 0 1-6-6v-2a2 2 0 0 1 2-2z"/></svg>',
-  caldav_calendar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
-  ical_feed: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M8 15h.01M12 15h.01M16 15h.01"/></svg>',
-  carddav_contacts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+  api_service: I('<path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>'),
+  mcp_server: I('<path d="M9 2v6M15 2v6M12 17v5"/><path d="M6 8h12a2 2 0 012 2v2a6 6 0 01-6 6h-4a6 6 0 01-6-6v-2a2 2 0 012-2z"/>'),
+  caldav_calendar: I('<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>'),
+  ical_feed: I('<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M8 15h.01M12 15h.01M16 15h.01"/>'),
+  carddav_contacts: I('<path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/>'),
 };
 
 function connectorIsConnected(item) {
   if (item.kind === "api_service") return item.has_api_key || !!item.base_url;
   if (item.kind === "mcp_server") return item.auth === "oauth" ? item.signed_in : true; // sign-in servers count once signed in
-  return item.last_synced_count != null; // dav/ical: connected once it's synced at least once
+  return item.last_synced_count != null; // dav/ical: connected once it has synced at least once
 }
 
 let connectorsFilter = "all";
 let connectorsQuery = "";
 
-async function renderIntegrationsPanel(content) {
+async function renderIntegrationsPanel(body, status, page) {
   const items = await api("/api/integrations");
-  content.innerHTML = "";
+  const rerender = () => renderIntegrationsPanel(body, status, page);
+  const formHost = el("div", { class: "integration-form-host" });
 
-  const addBtn = el("button", { class: "btn", text: "+ Add Integration" });
-  const menu = el("div", { class: "overflow-menu below hidden", style: "min-width:200px;" });
-  const apiItem = el("button", { type: "button", class: "overflow-menu-item", text: "API Service" });
-  const caldavItem = el("button", { type: "button", class: "overflow-menu-item", text: "CalDAV Calendar" });
-  const icalItem = el("button", { type: "button", class: "overflow-menu-item", text: "iCal Feed" });
-  const carddavItem = el("button", { type: "button", class: "overflow-menu-item", text: "Contacts (CardDAV)" });
-  const emailItem = el("button", { type: "button", class: "overflow-menu-item", text: "Email (IMAP/SMTP)" });
-  const mcpItem = el("button", { type: "button", class: "overflow-menu-item", text: "MCP Tool Server" });
-  menu.append(apiItem, caldavItem, icalItem, carddavItem, emailItem, mcpItem);
-  const addWrap = el("div", { style: "position:relative;" }, [addBtn, menu]);
+  const addBtn = el("button", { class: "btn primary", text: "Add integration" });
+  const menu = el("div", { class: "overflow-menu below hidden", style: "min-width:200px;right:0;left:auto;" });
+  const menuItem = (text, onclick) => el("button", { type: "button", class: "overflow-menu-item", text,
+    onclick: () => { menu.classList.add("hidden"); onclick(); } });
+  menu.append(
+    menuItem("API service", () => renderApiServiceForm(formHost, rerender)),
+    menuItem("CalDAV calendar", () => renderDavForm(formHost, rerender, "caldav_calendar")),
+    menuItem("iCal feed", () => renderIcalForm(formHost, rerender)),
+    menuItem("Contacts (CardDAV)", () => renderDavForm(formHost, rerender, "carddav_contacts")),
+    menuItem("Email (IMAP/SMTP)", () => {
+      // Email has full account management as its own tab; jump there.
+      closeSettingsWindow();
+      document.querySelector('.nav-item[data-tab="email"]')?.click();
+    }),
+    menuItem("MCP tool server", () => renderMcpServerForm(formHost, rerender)),
+  );
   addBtn.addEventListener("click", (e) => { e.stopPropagation(); menu.classList.toggle("hidden"); });
   document.addEventListener("click", () => menu.classList.add("hidden"));
+  page.actions([el("div", { style: "position:relative;" }, [addBtn, menu])]);
 
-  const formHost = el("div", { style: "margin-top:14px;" });
-  apiItem.addEventListener("click", () => { menu.classList.add("hidden"); renderApiServiceForm(formHost, content); });
-  mcpItem.addEventListener("click", () => { menu.classList.add("hidden"); renderMcpServerForm(formHost, content); });
-  caldavItem.addEventListener("click", () => { menu.classList.add("hidden"); renderDavForm(formHost, content, "caldav_calendar"); });
-  carddavItem.addEventListener("click", () => { menu.classList.add("hidden"); renderDavForm(formHost, content, "carddav_contacts"); });
-  icalItem.addEventListener("click", () => { menu.classList.add("hidden"); renderIcalForm(formHost, content); });
-  emailItem.addEventListener("click", () => {
-    // Email already has full account management as its own tab — jump
-    // there instead of duplicating it, matching the "don't build a second
-    // Email" scoping note in core/integrations.py.
-    menu.classList.add("hidden");
-    closeSettingsWindow();
-    const emailNav = document.querySelector('.nav-item[data-tab="email"]');
-    if (emailNav) emailNav.click();
-  });
+  const parts = [formHost];
 
-  content.append(
-    el("div", { class: "card-row", style: "justify-content:space-between;align-items:flex-start;" }, [
-      el("div", { class: "title", text: "Integrations" }),
-      addWrap,
-    ]),
-  );
-
-  // -- Popular (David's ask 2026-08-31, live-tested before building): only
-  // GitHub is offered here. Its real remote MCP server's automatic OAuth
-  // (dynamic client registration) genuinely fails — confirmed live:
-  // "Incompatible auth server: does not support dynamic client
-  // registration" — but GitHub separately documents a Personal Access
-  // Token fallback that works with the exact bearer-token field our MCP
-  // Tool Server type already has. Slack/Gmail/Calendar/Drive hit the same
-  // DCR failure live-tested and have no token fallback — real OAuth app
-  // registration, not built — so they aren't offered here as fake "Connect"
-  // buttons.
-  const githubItemExists = items.some((i) => i.kind === "mcp_server" && i.url === "https://api.githubcopilot.com/mcp/");
-  if (!githubItemExists) {
-    const patInput = el("input", { type: "password", placeholder: "GitHub Personal Access Token", style: "flex:1;display:none;" });
-    const connectBtn = el("button", { class: "btn", text: "Connect" });
-    const err = el("div", { class: "meta", style: "color:var(--danger);" });
-    connectBtn.addEventListener("click", async () => {
-      if (patInput.style.display === "none") {
-        patInput.style.display = "";
-        patInput.focus();
-        connectBtn.textContent = "Save";
-        return;
-      }
-      if (!patInput.value.trim()) { err.textContent = "A token is required."; return; }
+  // Popular: only GitHub. Its remote MCP server's automatic sign-in fails
+  // (no dynamic client registration, confirmed live), but GitHub documents a
+  // personal-access-token fallback that works with the bearer-token field.
+  // Services with no such fallback are not offered as fake "Connect" buttons.
+  const githubAdded = items.some((i) => i.kind === "mcp_server" && i.url === "https://api.githubcopilot.com/mcp/");
+  if (!githubAdded) {
+    const pat = el("input", { type: "password", placeholder: "GitHub personal access token", autocomplete: "off" });
+    pat.hidden = true;
+    const err = el("div", { class: "set-error" });
+    const connect = el("button", { class: "btn", text: "Connect" });
+    connect.addEventListener("click", async () => {
+      if (pat.hidden) { pat.hidden = false; pat.focus(); connect.textContent = "Save"; return; }
+      if (!pat.value.trim()) { err.textContent = "A token is required."; return; }
       try {
-        await api("/api/integrations/mcp-server", {
-          method: "POST",
-          body: JSON.stringify({ name: "GitHub", mcp_type: "http", url: "https://api.githubcopilot.com/mcp/", api_key: patInput.value.trim() }),
-        });
-        await renderIntegrationsPanel(content);
-      } catch (e) { err.textContent = e.message.replace(/^\d+: /, ""); }
+        await api("/api/integrations/mcp-server", { method: "POST",
+          body: JSON.stringify({ name: "GitHub", mcp_type: "http", url: "https://api.githubcopilot.com/mcp/", api_key: pat.value.trim() }) });
+        await rerender();
+      } catch (e) { err.textContent = errorText(e); }
     });
-    content.append(
-      el("div", { class: "title", style: "font-size:11px;color:var(--text-faint);letter-spacing:0.5px;margin-top:16px;", text: "POPULAR" }),
-      el("div", { class: "glass bracket card", style: "margin-top:8px;" }, [
-        el("div", { class: "card-row", style: "justify-content:space-between;align-items:center;" }, [
-          el("div", {}, [
-            el("div", { class: "title", style: "font-size:12.5px;", text: "GitHub" }),
-            el("div", { class: "meta", style: "margin-top:2px;", text: "Real remote MCP server. Needs a Personal Access Token — GitHub Settings → Developer settings → Personal access tokens." }),
-          ]),
-          el("div", { class: "card-row", style: "gap:8px;" }, [patInput, connectBtn]),
-        ]),
-        err,
-      ]),
-    );
+    const icon = el("span", { class: "set-icon" }); icon.innerHTML = CONNECTOR_ICONS.mcp_server;
+    parts.push(group({ title: "Popular" }, [row({ icon, title: "GitHub",
+      description: "GitHub's remote MCP server. Needs a personal access token: GitHub Settings, Developer settings, Personal access tokens.",
+      control: [pat, connect], below: err })]));
   }
 
-  // -- Claude-Connectors-style toolbar: search + All/Connected/Not connected --
-  const searchInput = el("input", { class: "connectors-search", placeholder: "Search integrations...", value: connectorsQuery });
+  // Search plus All / Connected / Not connected, after Claude's Connectors.
+  const search = el("input", { class: "connectors-search", type: "search", placeholder: "Search integrations", value: connectorsQuery });
   const tabs = el("div", { class: "segmented-tabs" });
   for (const [id, label] of [["all", "All"], ["connected", "Connected"], ["not_connected", "Not connected"]]) {
-    const tab = el("button", { type: "button", class: "segmented-tab" + (connectorsFilter === id ? " active" : ""), text: label });
-    tab.addEventListener("click", () => { connectorsFilter = id; renderIntegrationsPanel(content); });
-    tabs.appendChild(tab);
+    tabs.append(el("button", { type: "button", class: "segmented-tab" + (connectorsFilter === id ? " active" : ""), text: label,
+      onclick: () => { connectorsFilter = id; rerender(); } }));
   }
-  searchInput.addEventListener("input", () => { connectorsQuery = searchInput.value; renderIntegrationsPanel(content); });
-  content.append(el("div", { class: "connectors-toolbar" }, [searchInput, tabs]));
+  search.addEventListener("input", () => { connectorsQuery = search.value; rerender(); });
 
   const filtered = items.filter((item) => {
     if (connectorsQuery && !item.name.toLowerCase().includes(connectorsQuery.toLowerCase())) return false;
@@ -782,368 +746,278 @@ async function renderIntegrationsPanel(content) {
     return true;
   });
 
-  if (items.length === 0) {
-    content.append(el("div", { class: "empty-state", style: "margin-top:14px;", text: "No integrations configured" }));
-  } else if (filtered.length === 0) {
-    content.append(el("div", { class: "empty-state", style: "margin-top:14px;", text: "No integrations match." }));
-  } else {
-    const table = el("table", { class: "connectors-table" });
-    table.appendChild(el("tr", {}, [
-      el("th", { text: "Connector" }),
-      el("th", { text: "Type" }),
-      el("th", { text: "Status" }),
-      el("th", { text: "" }),
-    ]));
-    for (const item of filtered) {
-      const connected = connectorIsConnected(item);
-      const icon = el("div", { class: "connectors-icon" });
-      icon.innerHTML = CONNECTOR_ICONS[item.kind] || "";
-
-      const delBtn = el("button", { class: "btn danger", text: "Remove" });
-      delBtn.addEventListener("click", async () => {
-        const ok = await confirmDialog({
-          title: "Remove this integration?",
-          message: `"${item.name}" will be disconnected and its stored credentials deleted.`,
-          confirmLabel: "Remove integration",
-        });
-        if (!ok) return;
-        await api(`/api/integrations/${item.id}`, { method: "DELETE" });
-        await renderIntegrationsPanel(content);
-        toast("Integration removed", "success");
+  const rows = filtered.map((item) => {
+    const connected = connectorIsConnected(item);
+    const icon = el("span", { class: "set-icon" }); icon.innerHTML = CONNECTOR_ICONS[item.kind] || "";
+    const actions = [];
+    if (item.kind === "mcp_server" && item.auth === "oauth") {
+      const host = el("span", { class: "set-row-control" });
+      host.append(el("button", { class: "btn", text: item.signed_in ? "Sign in again" : "Sign in",
+        onclick: () => signInToMcp(item.id, item.name, rerender, host) }));
+      if (item.signed_in) {
+        host.append(el("button", { class: "btn", text: "Sign out", onclick: async () => {
+          await api(`/api/integrations/${item.id}/oauth`, { method: "DELETE" });
+          toast(`Signed out of ${item.name}`, "success");
+          await rerender();
+        } }));
+      }
+      actions.push(host);
+    }
+    if (["caldav_calendar", "carddav_contacts", "ical_feed"].includes(item.kind)) {
+      const sync = el("button", { class: "btn", text: "Sync now" });
+      sync.addEventListener("click", async () => {
+        sync.textContent = "Syncing…";
+        try {
+          await api(`/api/integrations/${item.id}/sync`, { method: "POST" });
+          toast(`${item.name} synced`, "success");
+        } catch (e) { toast(errorText(e), "error"); }
+        await rerender();
       });
-      const actions = [delBtn];
-      if (item.kind === "mcp_server" && item.auth === "oauth") {
-        const host = el("span", { class: "card-row", style: "gap:6px;" });
-        const signIn = el("button", { class: "btn", text: item.signed_in ? "Sign in again" : "Sign in" });
-        signIn.addEventListener("click", () => signInToMcp(item.id, item.name, content, host));
-        host.append(signIn);
-        if (item.signed_in) {
-          host.append(el("button", { class: "btn", text: "Sign out", onclick: async () => {
-            await api(`/api/integrations/${item.id}/oauth`, { method: "DELETE" });
-            toast(`Signed out of ${item.name}`, "success");
-            await renderIntegrationsPanel(content);
-          } }));
-        }
-        actions.unshift(host);
-      }
-      if (item.kind === "caldav_calendar" || item.kind === "carddav_contacts" || item.kind === "ical_feed") {
-        const syncBtn = el("button", { class: "btn", text: "Sync now" });
-        syncBtn.addEventListener("click", async () => {
-          syncBtn.textContent = "Syncing...";
-          try {
-            await api(`/api/integrations/${item.id}/sync`, { method: "POST" });
-            toast(`${item.name} synced`, "success");
-          } catch (e) { toast(e.message.replace(/^\d+: /, ""), "error"); }
-          await renderIntegrationsPanel(content);
-        });
-        actions.unshift(syncBtn);
-      }
-
-      const row = el("tr", {}, [
-        el("td", {}, [el("div", { class: "connectors-name-cell" }, [icon, el("span", { text: item.name })])]),
-        el("td", { class: "meta", text: INTEGRATION_KIND_LABELS[item.kind] }),
-        el("td", {}, [
-          connected
-            ? el("span", { class: "connectors-status-ok", text: item.auth === "oauth" ? "✓ Signed in" : "✓ Connected" })
-            : el("span", { class: "connectors-status-off", text: item.auth === "oauth" ? "Needs sign-in" : "Not connected" }),
-        ]),
-        el("td", {}, [el("div", { class: "card-row", style: "gap:6px;justify-content:flex-end;" }, actions)]),
-      ]);
-      table.appendChild(row);
+      actions.push(sync);
     }
-    content.appendChild(table);
+    actions.push(el("button", { class: "btn quiet danger", text: "Remove", onclick: async () => {
+      const ok = await confirmDialog({
+        title: "Remove this integration?",
+        message: `"${item.name}" will be disconnected and its stored credentials deleted.`,
+        confirmLabel: "Remove integration",
+      });
+      if (!ok) return;
+      await api(`/api/integrations/${item.id}`, { method: "DELETE" });
+      toast("Integration removed", "success");
+      await rerender();
+    } }));
+    return row({ icon, title: item.name, description: INTEGRATION_KIND_LABELS[item.kind],
+      control: [connected ? pill(item.auth === "oauth" ? "Signed in" : "Connected", "ok")
+        : pill(item.auth === "oauth" ? "Needs sign-in" : "Not connected", "muted"), ...actions],
+      cls: "integration-row", attrs: { "data-integration": item.name } });
+  });
+  parts.push(group({ title: "Your integrations", cls: "integrations-list" }, [
+    el("div", { class: "set-toolbar set-group-toolbar" }, [search, tabs]),
+    ...(items.length === 0 ? [empty("No integrations yet. Add one, or pick a server from the catalog below.")]
+      : filtered.length === 0 ? [empty("No integrations match.")] : rows),
+  ]));
 
-    const contacts = await api("/api/integrations/contacts");
-    if (contacts.length > 0) {
-      content.append(
-        el("div", { class: "title", style: "font-size:12.5px;margin-top:18px;", text: "Synced contacts" }),
-        el("div", { class: "meta", style: "margin:4px 0 8px;", text: "No dedicated Contacts tab yet — viewable here for now." }),
-      );
-      const contactList = el("div", {});
-      for (const c of contacts) {
-        contactList.appendChild(el("div", { class: "card-row", style: "margin-top:4px;" }, [
-          el("span", { class: "meta", style: "color:var(--text);", text: c.name }),
-          el("span", { class: "meta", text: [c.email, c.phone].filter(Boolean).join(" · ") }),
-        ]));
-      }
-      content.appendChild(contactList);
-    }
+  const contacts = items.length ? await api("/api/integrations/contacts") : [];
+  if (contacts.length) {
+    parts.push(group({ title: "Synced contacts", description: "There is no Contacts tab yet, so they are listed here." },
+      contacts.map((c) => row({ title: c.name, description: [c.email, c.phone].filter(Boolean).join(" · ") }))));
   }
-
-  content.appendChild(formHost);
-  content.appendChild(await mcpCatalogSection(content));
+  parts.push(await mcpCatalogSection(rerender));
+  if (!page.current) return;
+  body.replaceChildren(...parts);
 }
 
 // OAuth sign-in to an MCP server (core/mcp_oauth.py). The provider's page
-// opens in a browser (the side browser in the desktop app, which can pop it
-// out to the real one); the provider sends that browser back to this
-// backend, and this polls until the sign-in lands, fails, or times out. The
-// link stays in the row in case no window appeared.
-async function signInToMcp(itemId, name, content, host) {
+// opens in a browser, the provider sends that browser back to this backend,
+// and this polls until the sign-in lands, fails, or times out. The link stays
+// in the row in case no window appeared.
+async function signInToMcp(itemId, name, rerender, host) {
   let started;
   try {
     started = await api(`/api/integrations/${itemId}/oauth/start`, { method: "POST" });
-  } catch (problem) { toast(problem.message.replace(/^\d+: /, ""), "error"); return; }
+  } catch (problem) { toast(errorText(problem), "error"); return; }
   if (started.signed_in) {
     toast(`Already signed in to ${name}`, "success");
-    await renderIntegrationsPanel(content);
+    await rerender();
     return;
   }
   window.open(started.url, "_blank", "noopener");
-  host.innerHTML = "";
-  host.append(el("span", { class: "meta", text: "Waiting for sign-in…" }),
+  host.replaceChildren(el("span", { class: "meta", text: "Waiting for sign-in…" }),
     el("a", { class: "meta mcp-signin-link", href: started.url, target: "_blank", rel: "noopener", text: "Open the sign-in page" }));
   const deadline = Date.now() + 5 * 60 * 1000;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    if (!host.isConnected) return; // the panel was left or redrawn
+    if (!host.isConnected) return; // the page was left or redrawn
     let state;
     try { state = await api(`/api/integrations/${itemId}/oauth`); } catch { continue; }
     if (state.signed_in) { toast(`Signed in to ${name}`, "success"); break; }
     if (!state.pending) { toast(state.error ? `Sign-in failed: ${state.error}` : "Sign-in did not finish", "error"); break; }
   }
-  await renderIntegrationsPanel(content);
+  await rerender();
 }
 
 // The MCP catalog (Hermes track 2026-09-23): known servers from
-// core/mcp_catalog.json, adapted from Hermes Agent's. The ones that need no
-// sign-in add in one step as ordinary MCP Tool Servers; the rest are added
-// as sign-in servers and go straight to signing in.
-async function mcpCatalogSection(content) {
+// core/mcp_catalog.json. Those needing no sign-in add in one step; the rest
+// are added as sign-in servers and go straight to signing in.
+async function mcpCatalogSection(rerender) {
   const catalog = await api("/api/integrations/catalog");
-  const section = el("details", { class: "disclosure-panel mcp-catalog", style: "margin-top:18px;" });
+  const details = el("details", { class: "disclosure-panel mcp-catalog" });
   const search = el("input", { type: "search", class: "mcp-catalog-search", placeholder: "Search servers" });
   const list = el("div", { class: "mcp-catalog-list" });
   const draw = () => {
     const q = search.value.trim().toLowerCase();
-    list.innerHTML = "";
     const shown = catalog
       .filter((s) => !q || `${s.name} ${s.description}`.toLowerCase().includes(q))
       .sort((a, b) => (a.auth === "none" ? 0 : 1) - (b.auth === "none" ? 0 : 1) || a.name.localeCompare(b.name));
-    for (const server of shown) {
+    list.replaceChildren(...shown.map((server) => {
       let action;
-      if (server.added) action = el("span", { class: "meta connectors-status-ok", text: "Added" });
+      if (server.added) action = pill("Added", "ok");
       else if (server.auth === "none") {
         action = el("button", { class: "btn", text: "Add", onclick: async (event) => {
-          event.currentTarget.disabled = true;
+          const button = event.currentTarget;
+          button.disabled = true;
           try {
             await api("/api/integrations/mcp-server", { method: "POST",
               body: JSON.stringify({ name: server.name, mcp_type: "http", url: server.url }) });
             toast(`${server.name} added`, "success");
-            await renderIntegrationsPanel(content);
-          } catch (problem) { toast(problem.message, "error"); event.currentTarget.disabled = false; }
+            await rerender();
+          } catch (problem) { toast(problem.message, "error"); button.disabled = false; }
         } });
       } else {
-        action = el("span", { class: "card-row", style: "gap:6px;" });
+        action = el("span", { class: "set-row-control" });
         action.append(el("button", { class: "btn", text: "Add and sign in", onclick: async (event) => {
-          event.currentTarget.disabled = true;
+          const button = event.currentTarget;
+          button.disabled = true;
           let item;
           try {
             item = await api("/api/integrations/mcp-server", { method: "POST",
               body: JSON.stringify({ name: server.name, mcp_type: "http", url: server.url, auth: "oauth" }) });
-          } catch (problem) { toast(problem.message, "error"); event.currentTarget.disabled = false; return; }
-          await signInToMcp(item.id, server.name, content, action);
+          } catch (problem) { toast(problem.message, "error"); button.disabled = false; return; }
+          await signInToMcp(item.id, server.name, rerender, action);
         } }));
       }
-      list.append(el("div", { class: "mcp-catalog-row", "data-server": server.id }, [
-        el("div", {}, [
-          el("div", { class: "mcp-catalog-name", text: server.name }),
-          el("div", { class: "meta", text: server.description }),
-          server.docs ? el("a", { class: "meta", href: server.docs, target: "_blank", rel: "noopener", text: "Documentation" }) : null,
-        ]),
-        action,
-      ]));
-    }
-    if (!shown.length) list.append(el("div", { class: "meta", text: "No server matches." }));
+      return row({ title: server.name, control: action, cls: "mcp-catalog-row", attrs: { "data-server": server.id },
+        description: [server.description, server.docs ? el("a", { class: "set-link", href: server.docs, target: "_blank", rel: "noopener", text: " Documentation" }) : null] });
+    }));
+    if (!shown.length) list.append(empty("No server matches."));
   };
   search.addEventListener("input", draw);
-  section.append(
+  details.append(
     el("summary", { text: `Browse the MCP catalog (${catalog.length} servers)` }),
-    el("div", { class: "meta", style: "margin:6px 0 8px;", text:
-      "Tools from these servers are available to every model: Claude directly, local and API models through JARVIS, "
-      + "which asks you before each call. Signing in happens in a browser on this computer." }),
-    search, list,
+    note("Tools from these servers are available to every model: Claude directly, local and API models through JARVIS, which asks you before each call. Signing in happens in a browser on this computer."),
+    el("div", { class: "set-toolbar" }, [search]), list,
   );
   draw();
-  return section;
+  return group({ title: "Catalog" }, [details]);
 }
 
-function renderDavForm(host, content, kind) {
-  host.innerHTML = "";
+function integrationForm(host, { title, description, fields, submit, label = "Add" }) {
+  const err = el("div", { class: "set-error" });
+  const save = el("button", { class: "btn primary", text: label });
+  const cancel = el("button", { class: "btn quiet", text: "Cancel", onclick: () => host.replaceChildren() });
+  save.addEventListener("click", async () => {
+    err.textContent = "";
+    const problem = fields.check?.();
+    if (problem) { err.textContent = problem; return; }
+    save.disabled = true;
+    const before = save.textContent;
+    if (label.includes("Sync")) save.textContent = "Syncing…";
+    try { await submit(); }
+    catch (e) { err.textContent = errorText(e); save.disabled = false; save.textContent = before; }
+  });
+  host.replaceChildren(group({ title, description, cls: "integration-form" },
+    [...fields.rows, el("div", { class: "set-row-actions" }, [err, cancel, save])]));
+  host.querySelector("input")?.focus();
+}
+
+function renderDavForm(host, rerender, kind) {
   const isCal = kind === "caldav_calendar";
-  const nameInput = el("input", { placeholder: "Name", style: "flex:1;" });
-  const urlInput = el("input", { placeholder: isCal ? "Calendar collection URL" : "Address book collection URL", style: "flex:1;" });
-  const userInput = el("input", { placeholder: "Username", style: "flex:1;" });
-  const passInput = el("input", { type: "password", placeholder: "Password", style: "flex:1;" });
-  const err = el("div", { class: "meta", style: "color:var(--danger);" });
-  const saveBtn = el("button", { class: "btn", text: "Add & Sync" });
-  saveBtn.addEventListener("click", async () => {
-    err.textContent = "";
-    if (!nameInput.value.trim() || !urlInput.value.trim() || !userInput.value.trim() || !passInput.value) {
-      err.textContent = "All fields are required.";
-      return;
-    }
-    saveBtn.disabled = true; saveBtn.textContent = "Syncing...";
-    try {
-      await api(`/api/integrations/${isCal ? "caldav" : "carddav"}`, {
-        method: "POST",
-        body: JSON.stringify({ name: nameInput.value.trim(), url: urlInput.value.trim(), username: userInput.value.trim(), password: passInput.value }),
-      });
-      await renderIntegrationsPanel(content);
-    } catch (e) {
-      err.textContent = e.message.replace(/^\d+: /, "");
-      saveBtn.disabled = false; saveBtn.textContent = "Add & Sync";
-    }
+  const name = el("input", { placeholder: "Name" });
+  const url = el("input", { placeholder: isCal ? "Calendar collection URL" : "Address book collection URL" });
+  const user = el("input", { placeholder: "Username", autocomplete: "off" });
+  const pass = el("input", { type: "password", placeholder: "Password", autocomplete: "off" });
+  integrationForm(host, {
+    title: isCal ? "Add a CalDAV calendar" : "Add contacts (CardDAV)",
+    description: "One-way read sync into JARVIS, nothing written back. Use a specific calendar or address-book collection URL, not the server root.",
+    label: "Add and sync",
+    fields: { rows: [field("Name", name), field("URL", url), field("Username", user), field("Password", pass)],
+      check: () => (!name.value.trim() || !url.value.trim() || !user.value.trim() || !pass.value) ? "All fields are required." : null },
+    submit: async () => {
+      await api(`/api/integrations/${isCal ? "caldav" : "carddav"}`, { method: "POST",
+        body: JSON.stringify({ name: name.value.trim(), url: url.value.trim(), username: user.value.trim(), password: pass.value }) });
+      await rerender();
+    },
   });
-  host.append(
-    el("div", { class: "glass bracket card" }, [
-      el("div", { class: "title", style: "font-size:12.5px;", text: isCal ? "Add CalDAV Calendar" : "Add Contacts (CardDAV)" }),
-      el("div", { class: "meta", style: "margin:4px 0 8px;", text: "One-way read sync (remote → JARVIS), no writeback. Point this at a specific calendar/address-book collection URL, not the server root." }),
-      el("div", { class: "card-row", style: "flex-wrap:wrap;gap:8px;" }, [nameInput, urlInput, userInput, passInput, saveBtn]),
-      err,
-    ]),
-  );
 }
 
-function renderIcalForm(host, content) {
-  host.innerHTML = "";
-  const nameInput = el("input", { placeholder: "Name", style: "flex:1;" });
-  const urlInput = el("input", { placeholder: "https://... or webcal://... .ics feed URL", style: "flex:1;" });
-  const userInput = el("input", { placeholder: "Username (only if the feed needs it)", style: "flex:1;" });
-  const passInput = el("input", { type: "password", placeholder: "Password (optional)", style: "flex:1;" });
-  const err = el("div", { class: "meta", style: "color:var(--danger);" });
-  const saveBtn = el("button", { class: "btn", text: "Add & Sync" });
-  saveBtn.addEventListener("click", async () => {
-    err.textContent = "";
-    if (!nameInput.value.trim() || !urlInput.value.trim()) {
-      err.textContent = "Name and URL are required.";
-      return;
-    }
-    saveBtn.disabled = true; saveBtn.textContent = "Syncing...";
-    try {
-      await api("/api/integrations/ical", {
-        method: "POST",
-        body: JSON.stringify({
-          name: nameInput.value.trim(),
-          url: urlInput.value.trim(),
-          username: userInput.value.trim() || null,
-          password: passInput.value || null,
-        }),
-      });
-      await renderIntegrationsPanel(content);
-    } catch (e) {
-      err.textContent = e.message.replace(/^\d+: /, "");
-      saveBtn.disabled = false; saveBtn.textContent = "Add & Sync";
-    }
+function renderIcalForm(host, rerender) {
+  const name = el("input", { placeholder: "Name" });
+  const url = el("input", { placeholder: "https://… or webcal://… .ics feed URL" });
+  const user = el("input", { placeholder: "Only if the feed needs it", autocomplete: "off" });
+  const pass = el("input", { type: "password", placeholder: "Optional", autocomplete: "off" });
+  integrationForm(host, {
+    title: "Add an iCal feed",
+    description: "A single .ics subscription URL, such as Google Calendar's secret iCal address or an Apple share link. One-way read sync.",
+    label: "Add and sync",
+    fields: { rows: [field("Name", name), field("Feed URL", url), field("Username", user), field("Password", pass)],
+      check: () => (!name.value.trim() || !url.value.trim()) ? "Name and URL are required." : null },
+    submit: async () => {
+      await api("/api/integrations/ical", { method: "POST", body: JSON.stringify({
+        name: name.value.trim(), url: url.value.trim(), username: user.value.trim() || null, password: pass.value || null }) });
+      await rerender();
+    },
   });
-  host.append(
-    el("div", { class: "glass bracket card" }, [
-      el("div", { class: "title", style: "font-size:12.5px;", text: "Add iCal Feed" }),
-      el("div", { class: "meta", style: "margin:4px 0 8px;", text: "A single .ics subscription URL (Google Calendar's \"secret address in iCal format,\" an Apple share link, etc.) — one-way read sync, no auth needed for most public feeds." }),
-      el("div", { class: "card-row", style: "flex-wrap:wrap;gap:8px;" }, [nameInput, urlInput, userInput, passInput, saveBtn]),
-      err,
-    ]),
-  );
 }
 
-function renderApiServiceForm(host, content) {
-  host.innerHTML = "";
-  const nameInput = el("input", { placeholder: "Name", style: "flex:1;" });
-  const urlInput = el("input", { placeholder: "Base URL", style: "flex:1;" });
-  const keyInput = el("input", { type: "password", placeholder: "API key (optional)", style: "flex:1;" });
-  const err = el("div", { class: "meta", style: "color:var(--danger);" });
-  const saveBtn = el("button", { class: "btn", text: "Add" });
-  saveBtn.addEventListener("click", async () => {
-    err.textContent = "";
-    if (!nameInput.value.trim() || !urlInput.value.trim()) { err.textContent = "Name and URL are required."; return; }
-    try {
-      await api("/api/integrations/api-service", { method: "POST", body: JSON.stringify({ name: nameInput.value.trim(), base_url: urlInput.value.trim(), api_key: keyInput.value.trim() || null }) });
-      await renderIntegrationsPanel(content);
-    } catch (e) { err.textContent = e.message.replace(/^\d+: /, ""); }
+function renderApiServiceForm(host, rerender) {
+  const name = el("input", { placeholder: "Name" });
+  const url = el("input", { placeholder: "Base URL" });
+  const key = el("input", { type: "password", placeholder: "Optional", autocomplete: "off" });
+  integrationForm(host, {
+    title: "Add an API service",
+    fields: { rows: [field("Name", name), field("Base URL", url), field("API key", key)],
+      check: () => (!name.value.trim() || !url.value.trim()) ? "Name and URL are required." : null },
+    submit: async () => {
+      await api("/api/integrations/api-service", { method: "POST",
+        body: JSON.stringify({ name: name.value.trim(), base_url: url.value.trim(), api_key: key.value.trim() || null }) });
+      await rerender();
+    },
   });
-  host.append(
-    el("div", { class: "glass bracket card" }, [
-      el("div", { class: "title", style: "font-size:12.5px;", text: "Add API Service" }),
-      el("div", { class: "card-row", style: "flex-wrap:wrap;gap:8px;margin-top:8px;" }, [nameInput, urlInput, keyInput, saveBtn]),
-      err,
-    ]),
-  );
 }
 
-function renderMcpServerForm(host, content) {
-  host.innerHTML = "";
-  const nameInput = el("input", { placeholder: "Name", style: "flex:1;" });
-  const typeSelect = customSelect({ style: "flex:0 0 110px;" }, [el("option", { value: "stdio", text: "stdio" }), el("option", { value: "http", text: "http" })]);
-  const cmdInput = el("input", { placeholder: "Command (e.g. npx @scope/server)", style: "flex:1;" });
-  const urlInput = el("input", { placeholder: "URL (e.g. https://example.com/mcp)", style: "flex:1;display:none;" });
-  const keyInput = el("input", { type: "password", placeholder: "Auth token (optional)", style: "flex:1;" });
-  const err = el("div", { class: "meta", style: "color:var(--danger);" });
-  const saveBtn = el("button", { class: "btn", text: "Add" });
-
-  typeSelect.addEventListener("change", () => {
-    const isStdio = typeSelect.value === "stdio";
-    cmdInput.style.display = isStdio ? "" : "none";
-    urlInput.style.display = isStdio ? "none" : "";
+function renderMcpServerForm(host, rerender) {
+  const name = el("input", { placeholder: "Name" });
+  const type = customSelect({}, [el("option", { value: "stdio", text: "Local command (stdio)" }), el("option", { value: "http", text: "Remote URL (http)" })]);
+  const cmd = el("input", { placeholder: "npx @scope/server" });
+  const url = el("input", { placeholder: "https://example.com/mcp" });
+  const key = el("input", { type: "password", placeholder: "Optional", autocomplete: "off" });
+  const cmdRow = field("Command", cmd);
+  const urlRow = field("URL", url);
+  urlRow.hidden = true;
+  type.addEventListener("change", () => { cmdRow.hidden = type.value !== "stdio"; urlRow.hidden = type.value === "stdio"; });
+  integrationForm(host, {
+    title: "Add an MCP tool server",
+    description: "A registered server widens what the models can really do. Open chats pick up a change on their next message.",
+    fields: { rows: [field("Name", name), field("Type", type), cmdRow, urlRow, field("Auth token", key)],
+      check: () => {
+        if (!name.value.trim()) return "Name is required.";
+        if (type.value === "stdio" && !cmd.value.trim()) return "A command is required for a local server.";
+        if (type.value !== "stdio" && !url.value.trim()) return "A URL is required for a remote server.";
+        return null;
+      } },
+    submit: async () => {
+      const isStdio = type.value === "stdio";
+      const parts = cmd.value.trim().split(/\s+/);
+      await api("/api/integrations/mcp-server", { method: "POST", body: JSON.stringify({
+        name: name.value.trim(), mcp_type: type.value, command: isStdio ? parts[0] : null, args: isStdio ? parts.slice(1) : null,
+        url: isStdio ? null : url.value.trim(), api_key: key.value.trim() || null }) });
+      await rerender();
+    },
   });
-
-  saveBtn.addEventListener("click", async () => {
-    err.textContent = "";
-    if (!nameInput.value.trim()) { err.textContent = "Name is required."; return; }
-    const isStdio = typeSelect.value === "stdio";
-    if (isStdio && !cmdInput.value.trim()) { err.textContent = "Command is required for a stdio server."; return; }
-    if (!isStdio && !urlInput.value.trim()) { err.textContent = "URL is required for an http server."; return; }
-    try {
-      const parts = cmdInput.value.trim().split(/\s+/);
-      await api("/api/integrations/mcp-server", {
-        method: "POST",
-        body: JSON.stringify({
-          name: nameInput.value.trim(),
-          mcp_type: typeSelect.value,
-          command: isStdio ? parts[0] : null,
-          args: isStdio ? parts.slice(1) : null,
-          url: isStdio ? null : urlInput.value.trim(),
-          api_key: keyInput.value.trim() || null,
-        }),
-      });
-      await renderIntegrationsPanel(content);
-    } catch (e) { err.textContent = e.message.replace(/^\d+: /, ""); }
-  });
-
-  host.append(
-    el("div", { class: "glass bracket card" }, [
-      el("div", { class: "title", style: "font-size:12.5px;", text: "Add MCP Tool Server" }),
-      el("div", { class: "meta", style: "margin:4px 0 8px;", text: "Registered servers widen the agent's real tool access. Open chats pick up a change on their next message." }),
-      el("div", { class: "card-row", style: "flex-wrap:wrap;gap:8px;" }, [nameInput, typeSelect, cmdInput, urlInput, keyInput, saveBtn]),
-      err,
-    ]),
-  );
 }
 
 // -- Vault --------------------------------------------------------------
-async function renderVaultPanel(content) {
+async function renderVaultPanel(body, status, page) {
   const settings = await api("/api/settings");
-  content.innerHTML = "";
-  const vaultPathEl = el("div", { class: "meta", text: settings.vault_dir });
-  const pickBtn = el("button", { class: "btn", text: "Choose Folder..." });
+  const pick = el("button", { class: "btn", text: "Choose folder…" });
   if (!window.jarvis) {
-    pickBtn.disabled = true;
-    pickBtn.title = "Folder picking is only available in the desktop app";
+    pick.disabled = true;
+    pick.title = "Folder picking is only available in the desktop app";
   }
-  pickBtn.addEventListener("click", async () => {
+  pick.addEventListener("click", async () => {
     const picked = await window.jarvis.pickVaultFolder();
     if (!picked) return;
     await api("/api/settings/vault-dir", { method: "POST", body: JSON.stringify({ path: picked }) });
-    await renderVaultPanel(content);
+    await renderVaultPanel(body, status, page);
   });
 
-  // Vault <-> Notes sync (David's ask 2026-09-03 — the app answered "no
-  // priorities" while the connected vault was full of them). Runs
-  // automatically at launch; this is the manual re-run for when the vault
-  // has been edited in Obsidian while the app is open.
-  const syncStatus = el("div", { class: "meta", style: "margin-top:8px;" });
-  const syncBtn = el("button", { class: "btn", text: "Sync now" });
-  syncBtn.addEventListener("click", async () => {
-    syncBtn.disabled = true;
+  // Vault <-> Notes sync (David's ask 2026-09-03: the app answered "no
+  // priorities" while the vault was full of them). Runs at launch; this is
+  // the manual re-run for edits made in Obsidian while the app is open.
+  const syncStatus = el("span", { class: "meta" });
+  const sync = el("button", { class: "btn", text: "Sync now" });
+  sync.addEventListener("click", async () => {
+    sync.disabled = true;
     syncStatus.textContent = "Syncing…";
     try {
       const r = await api("/api/vault/sync", { method: "POST" });
@@ -1151,793 +1025,371 @@ async function renderVaultPanel(content) {
       if (r.imported) parts.push(`${r.imported} added`);
       if (r.updated) parts.push(`${r.updated} updated`);
       if (r.removed) parts.push(`${r.removed} removed`);
-      syncStatus.textContent = parts.length ? `Synced — ${parts.join(", ")}.` : "Already up to date.";
-      toast(parts.length ? `Vault synced — ${parts.join(", ")}` : "Notes already match your vault", "success");
-    } catch (e) {
+      syncStatus.textContent = parts.length ? `Synced: ${parts.join(", ")}.` : "Already up to date.";
+      toast(parts.length ? `Vault synced: ${parts.join(", ")}` : "Notes already match your vault", "success");
+    } catch {
       syncStatus.textContent = "";
     } finally {
-      syncBtn.disabled = false;
+      sync.disabled = false;
     }
   });
 
-  content.append(
-    el("div", { class: "title", text: "Vault" }),
-    el("div", { class: "card-row", style: "justify-content:space-between;align-items:center;margin-top:10px;" }, [vaultPathEl, pickBtn]),
-    el("div", { class: "meta", style: "margin-top:10px;", text: "Point JARVIS at an existing vault on this device, or leave the default. Open chats keep using their old vault until reconnected." }),
-    el("div", { class: "glass card", style: "margin-top:16px;" }, [
-      el("div", { class: "title", style: "font-size:12.5px;", text: "Task list sync" }),
-      el("div", { class: "meta", style: "margin:4px 0 10px;line-height:1.6;", text: "Checkbox items in your vault's Active Priorities.md show up as Notes, so asking JARVIS about your priorities returns what's actually in your vault. Ticking one here ticks it there too. This runs automatically every time JARVIS starts." }),
-      el("div", { class: "card-row", style: "gap:8px;" }, [syncBtn, syncStatus]),
+  body.replaceChildren(
+    group({}, [
+      row({ title: "Vault folder", description: [el("span", { class: "set-mono", text: settings.vault_dir })], control: pick,
+        below: el("div", { class: "set-row-description", text: "Point JARVIS at an existing vault on this device, or keep the default. Open chats keep their old vault until reconnected." }) }),
+      row({ title: "Task list sync", description: "Checkbox items in your vault's Active Priorities.md show up as Notes, and ticking one here ticks it there. Runs every time JARVIS starts.",
+        control: [syncStatus, sync] }),
     ]),
   );
 }
 
-// -- Channels (David's ask 2026-08-31: renamed from a Discord-only panel to
-// a real place to add secondary comms channels — Discord is the only real
-// one today, core/channels/registry.py is built so a second channel is one
-// more list entry, not a rewrite, rather than faking options that don't work).
-// -- Remote Access (David's ask 2026-09-03: users should be able to set up
-// Tailscale remote access themselves during setup, the way we run it by
-// hand). Deliberately a checklist rather than one "Enable" button that
-// either works or doesn't: every prerequisite (Tailscale installed, signed
-// in, an account created, HTTPS certs available for the tailnet) is a
-// separate thing the user might be missing, and a single opaque failure
-// gives them nothing to act on. See core/remote_access.py.
-async function renderRemotePanel(content) {
-  content.innerHTML = "";
-  content.appendChild(el("div", { class: "title", text: "Remote Access" }));
-  content.appendChild(el("div", {
-    class: "meta", style: "margin:4px 0 16px;line-height:1.6;",
-    text: "Reach this JARVIS from your phone or another computer over Tailscale, a private network between your own devices. Nothing is exposed to the public internet — only devices signed into your Tailscale account can connect.",
-  }));
-
-  const body = el("div");
-  content.appendChild(body);
-
+// -- Remote Access (David's ask 2026-09-03). A checklist rather than one
+// "Enable" button: every prerequisite (Tailscale installed, signed in, the
+// firewall, a login) is a separate thing someone might be missing, and one
+// opaque failure gives them nothing to act on. See core/remote_access.py.
+async function renderRemotePanel(body) {
   async function refresh() {
-    body.innerHTML = "";
     let s;
     try {
       s = await api("/api/remote/status");
     } catch (e) {
-      body.appendChild(el("div", { class: "meta", style: "color:var(--danger);", text: `Couldn't read status: ${e.message}` }));
+      body.replaceChildren(note(`Couldn't read status: ${e.message}`, "set-error"));
       return;
     }
+    const parts = [];
 
-    // Live state first, when it's on. Fall back to composing the address
-    // from host+port rather than rendering a blank line, in case the URL
-    // wasn't captured (e.g. the listener was restored on startup).
-    if (s.running_now) {
-      s.url = s.url || (s.hostname ? `https://${s.hostname}:${s.port}` : null);
-    }
+    // Fall back to composing the address from host and port rather than a
+    // blank line, in case the URL wasn't captured (listener restored at start).
+    if (s.running_now) s.url = s.url || (s.hostname ? `https://${s.hostname}:${s.port}` : null);
     if (s.running_now && s.url) {
-      const urlRow = el("div", { class: "glass bracket card", style: "margin-bottom:14px;" }, [
-        el("div", { class: "card-row" }, [
-          el("div", { style: "flex:1;min-width:0;" }, [
-            el("div", { class: "title", style: "color:var(--accent);", text: "Remote access is on" }),
-            el("div", { class: "meta", style: "margin-top:4px;", text: "Open this exact address from any device signed into your Tailscale account. Include the port — the hostname on its own won't reach it." }),
-            el("div", { style: "margin-top:8px;font-size:14px;color:var(--text);word-break:break-all;", text: s.url }),
-            el("div", { class: "meta", style: "margin-top:6px;color:var(--text-faint);", text: `Host ${s.hostname || "—"} · port ${s.port}` }),
-          ]),
-          el("div", { class: "card-row", style: "gap:6px;" }, [
-            el("button", { class: "btn", text: "Copy link", onclick: async () => {
-              await navigator.clipboard.writeText(s.url);
-              toast("Link copied", "success");
-            }}),
-            el("button", { class: "btn danger", text: "Turn off", onclick: async () => {
-              await api("/api/remote/disable", { method: "POST" });
-              toast("Remote access turned off", "success");
-              await refresh();
-            }}),
-          ]),
-        ]),
-      ]);
-      body.appendChild(urlRow);
+      parts.push(group({}, [row({
+        title: [el("span", { text: "Remote access is on" }), pill("Live", "ok")],
+        description: [el("div", { class: "set-mono", text: s.url }),
+          el("div", { text: "Open this exact address from any device signed into your Tailscale account. Include the port." })],
+        control: [
+          el("button", { class: "btn", text: "Copy link", onclick: async () => { await navigator.clipboard.writeText(s.url); toast("Link copied", "success"); } }),
+          el("button", { class: "btn danger", text: "Turn off", onclick: async () => {
+            await api("/api/remote/disable", { method: "POST" });
+            toast("Remote access turned off", "success");
+            await refresh();
+          } }),
+        ],
+      })]));
+      body.replaceChildren(...parts);
       return;
     }
 
-    // Otherwise: the checklist.
     const steps = [
-      {
-        ok: s.installed,
-        label: "Tailscale installed",
+      { ok: s.installed, label: "Tailscale installed",
         hint: s.installed ? "Found on this machine." : "Tailscale is a free private network for your own devices. Install it, then come back here.",
-        action: s.installed ? null : { label: "Get Tailscale", href: "https://tailscale.com/download" },
-      },
-      {
-        ok: s.logged_in,
-        label: "Signed in to Tailscale",
-        // Deliberately does NOT print the bare hostname here. It used to,
-        // and it read like the address to visit — but without the scheme
-        // and port it doesn't work, which is exactly the confusion David
-        // hit (2026-09-03). The full address gets its own row below.
-        hint: s.logged_in
-          ? `Connected as ${s.hostname ? s.hostname.split(".")[0] : "this machine"}.`
-          : "Open the Tailscale app and sign in, then refresh below.",
-      },
-      {
-        // The step that makes a "correctly configured" setup actually
-        // reachable. Binding needs no permission, so without this everything
-        // looks right and no other device can connect.
-        ok: s.firewall_ok,
-        label: "Allowed through Windows Firewall",
-        hint: s.firewall_ok
-          ? "Incoming connections to JARVIS are allowed."
-          : "Windows is blocking incoming connections to JARVIS. Without this it starts normally but no other device can reach it. Adding the rule needs your permission — Windows will ask.",
+        action: s.installed ? null : { label: "Get Tailscale", href: "https://tailscale.com/download" } },
+      // Deliberately not the bare hostname: without scheme and port it read
+      // like the address to visit and didn't work (David, 2026-09-03).
+      { ok: s.logged_in, label: "Signed in to Tailscale",
+        hint: s.logged_in ? `Connected as ${s.hostname ? s.hostname.split(".")[0] : "this machine"}.` : "Open the Tailscale app and sign in, then refresh." },
+      // Binding needs no permission, so without this rule everything looks
+      // right and no other device can connect.
+      { ok: s.firewall_ok, label: "Allowed through Windows Firewall",
+        hint: s.firewall_ok ? "Incoming connections to JARVIS are allowed."
+          : "Windows is blocking incoming connections to JARVIS, so no other device can reach it. Adding the rule needs your permission; Windows will ask.",
         action: s.firewall_ok ? null : { label: "Allow", handler: async () => {
           await api("/api/remote/firewall", { method: "POST" });
           toast("Firewall rule added", "success");
           await refresh();
-        }},
-      },
-      {
-        ok: s.auth_ready,
-        label: "JARVIS account created",
-        hint: s.auth_ready
-          ? "A login is set up."
-          : s.has_any_users
-            ? "An account already exists, but login enforcement is off — turn it on below."
-            : "Remote access needs a real login — without one, anyone reaching this machine on your network would get straight in.",
-      },
+        } } },
+      { ok: s.auth_ready, label: "JARVIS login",
+        hint: s.auth_ready ? "A login is set up."
+          : s.has_any_users ? "An account exists, but login enforcement is off. Turn it on below."
+            : "Remote access needs a real login; without one anyone reaching this machine would get straight in." },
     ];
+    parts.push(group({ title: "Setup" }, steps.map((step) => {
+      let control = pill(step.ok ? "Done" : "Needed", step.ok ? "ok" : "warn");
+      if (step.action?.href) control = [control, el("a", { href: step.action.href, target: "_blank", rel: "noopener", class: "btn", text: step.action.label })];
+      else if (step.action) {
+        const button = el("button", { class: "btn", text: step.action.label });
+        button.addEventListener("click", async () => {
+          button.disabled = true; button.textContent = "Working…";
+          try { await step.action.handler(); } catch { button.disabled = false; button.textContent = step.action.label; }
+        });
+        control = [control, button];
+      }
+      return row({ title: step.label, description: step.hint, control });
+    })));
 
-    for (const step of steps) {
-      const row = el("div", { class: "card-row", style: "align-items:flex-start;gap:10px;padding:10px 0;border-top:1px solid var(--border);" }, [
-        el("div", { class: "card-row", style: "align-items:flex-start;gap:10px;flex:1;" }, [
-          el("span", { class: `status-dot ${step.ok ? "ok" : "warn"}`, style: "margin-top:5px;" }),
-          el("div", {}, [
-            el("div", { style: "font-size:13px;color:var(--text);", text: step.label }),
-            el("div", { class: "meta", style: "margin-top:3px;line-height:1.5;", text: step.hint }),
-          ]),
-        ]),
-        step.action
-          ? (step.action.href
-              // External link (e.g. "Get Tailscale").
-              ? el("a", { href: step.action.href, target: "_blank", rel: "noopener", class: "btn", style: "text-decoration:none;flex-shrink:0;", text: step.action.label })
-              // In-app action (e.g. "Allow" through the firewall).
-              : (() => {
-                  const b = el("button", { class: "btn", style: "flex-shrink:0;", text: step.action.label });
-                  b.addEventListener("click", async () => {
-                    b.disabled = true;
-                    b.textContent = "Working…";
-                    try { await step.action.handler(); }
-                    catch (e) { b.disabled = false; b.textContent = step.action.label; }
-                  });
-                  return b;
-                })())
-          : el("div"),
-      ]);
-      body.appendChild(row);
-    }
-
-    // Inline first-account creation, so the user doesn't have to go find
-    // two unrelated settings before the toggle will work. Two distinct
-    // cases as of 2026-09-10 — collapsing them into one form was the dead
-    // end found live: an account can already exist with auth just switched
-    // off, and that needs a one-click fix, not a second signup form that
-    // the backend was always going to reject.
+    // Two cases, deliberately separate (found live 2026-09-10): an account
+    // can already exist with login enforcement off, which needs a one-click
+    // fix, not a second sign-up form the backend would reject.
     if (!s.auth_ready && s.has_any_users) {
-      const enableAuthBtn = el("button", { class: "btn", text: "Turn on account login" });
-      enableAuthBtn.addEventListener("click", async () => {
-        enableAuthBtn.disabled = true;
-        enableAuthBtn.textContent = "Working…";
+      const enable = el("button", { class: "btn primary", text: "Turn on account login" });
+      enable.addEventListener("click", async () => {
+        enable.disabled = true; enable.textContent = "Working…";
         try {
           await api("/api/remote/create-account", { method: "POST", body: JSON.stringify({ username: "", password: "" }) });
-          toast("Login enforcement is on — sign in with your existing account", "success");
+          toast("Login enforcement is on. Sign in with your existing account.", "success");
           await refresh();
-        } finally {
-          enableAuthBtn.disabled = false;
-          enableAuthBtn.textContent = "Turn on account login";
-        }
+        } finally { enable.disabled = false; enable.textContent = "Turn on account login"; }
       });
-      body.appendChild(el("div", { class: "glass card", style: "margin-top:14px;" }, [
-        el("div", { class: "title", style: "font-size:12.5px;", text: "Turn on your existing login" }),
-        el("div", { class: "meta", style: "margin:4px 0 10px;line-height:1.5;", text: "An account already exists on this machine, but login enforcement is currently off. Remote access needs it on — this won't create a new account or change your password." }),
-        enableAuthBtn,
-      ]));
+      parts.push(group({ title: "Turn on your existing login" }, [row({
+        title: "Login enforcement", description: "An account exists on this machine, but logins are off. This turns them on; it won't create an account or change your password.",
+        control: enable })]));
     } else if (!s.auth_ready) {
-      const userInput = el("input", { placeholder: "Username", autocomplete: "off" });
-      const passInput = el("input", { type: "password", placeholder: "Password (8+ characters)", autocomplete: "new-password" });
-      const createBtn = el("button", { class: "btn", text: "Create account" });
-      createBtn.addEventListener("click", async () => {
-        if (!userInput.value.trim() || !passInput.value) {
-          toast("Enter a username and password", "error");
-          return;
-        }
-        createBtn.disabled = true;
+      const user = el("input", { placeholder: "Username", autocomplete: "off" });
+      const pass = el("input", { type: "password", placeholder: "8 or more characters", autocomplete: "new-password" });
+      const create = el("button", { class: "btn primary", text: "Create account" });
+      create.addEventListener("click", async () => {
+        if (!user.value.trim() || !pass.value) { toast("Enter a username and password", "error"); return; }
+        create.disabled = true;
         try {
-          await api("/api/remote/create-account", {
-            method: "POST",
-            body: JSON.stringify({ username: userInput.value.trim(), password: passInput.value }),
-          });
-          toast("Account created — you'll sign in with this from now on", "success");
+          await api("/api/remote/create-account", { method: "POST", body: JSON.stringify({ username: user.value.trim(), password: pass.value }) });
+          toast("Account created. You'll sign in with it from now on.", "success");
           await refresh();
-        } finally {
-          createBtn.disabled = false;
-        }
+        } finally { create.disabled = false; }
       });
-      body.appendChild(el("div", { class: "glass card", style: "margin-top:14px;" }, [
-        el("div", { class: "title", style: "font-size:12.5px;", text: "Create your login" }),
-        el("div", { class: "meta", style: "margin:4px 0 10px;line-height:1.5;", text: "This turns on accounts for JARVIS everywhere, including on this computer — so you'll sign in here too. That's deliberate: it's the same app either way." }),
-        el("div", { class: "form-grid" }, [
-          el("div", { class: "field field-grow" }, [el("label", { text: "Username" }), userInput]),
-          el("div", { class: "field field-grow" }, [el("label", { text: "Password" }), passInput]),
-          createBtn,
-        ]),
-      ]));
+      parts.push(group({ title: "Create your login",
+        description: "This turns on accounts for JARVIS everywhere, this computer included, so you'll sign in here too." },
+        [field("Username", user), field("Password", pass), el("div", { class: "set-row-actions" }, [create])]));
     }
 
-    // The address, always visible once Tailscale knows this machine's name —
-    // not only after remote access is switched on. David hit this live
-    // (2026-09-03): the panel named the machine but never the port, so the
-    // address it implied didn't actually work. Port is editable here too,
-    // since it's part of the address you have to type.
-    const portInput = el("input", { type: "number", value: String(s.port), style: "width:100px;" });
-    const addressEl = el("div", {
-      style: "margin-top:6px;font-size:13px;color:var(--text);word-break:break-all;",
-    });
+    // The address, always shown once Tailscale knows this machine's name
+    // (David, 2026-09-03: the panel named the machine but never the port).
+    // The port saves on blur or Enter, not per keystroke, so typing "8" of
+    // "8443" never tries to bind port 8.
+    const port = el("input", { type: "number", value: String(s.port), style: "width:100px;" });
     const portStatus = el("span", { class: "meta" });
-    const syncAddress = () => {
-      const port = parseInt(portInput.value, 10) || s.port;
-      addressEl.textContent = s.hostname ? `https://${s.hostname}:${port}` : "—";
-    };
+    const address = el("div", { class: "set-mono" });
+    const syncAddress = () => { address.textContent = s.hostname ? `https://${s.hostname}:${parseInt(port.value, 10) || s.port}` : "—"; };
     syncAddress();
-    portInput.addEventListener("input", () => { syncAddress(); portStatus.textContent = ""; });
-
-    // The port is a real setting, so editing it saves — it used to only take
-    // effect as a side effect of pressing Enable, so a change made on its own
-    // silently reverted on the next refresh (David hit this 2026-09-03).
-    // Saves on blur/Enter rather than per keystroke, so typing "8" of "8443"
-    // doesn't try to bind port 8.
+    port.addEventListener("input", () => { syncAddress(); portStatus.textContent = ""; });
     const savePort = async () => {
-      const port = parseInt(portInput.value, 10);
-      if (!port || port === s.port) return;
+      const value = parseInt(port.value, 10);
+      if (!value || value === s.port) return;
       portStatus.textContent = "Saving…";
       try {
-        const r = await api("/api/remote/port", { method: "POST", body: JSON.stringify({ port }) });
-        s.port = port;
-        portStatus.textContent = r.restarted ? "Saved — listener moved" : "Saved";
-        toast(r.restarted ? `Remote access moved to port ${port}` : `Port set to ${port}`, "success");
-      } catch (e) {
+        const r = await api("/api/remote/port", { method: "POST", body: JSON.stringify({ port: value }) });
+        s.port = value;
+        portStatus.textContent = r.restarted ? "Saved; listener moved" : "Saved";
+        toast(r.restarted ? `Remote access moved to port ${value}` : `Port set to ${value}`, "success");
+      } catch {
         portStatus.textContent = "";
-        portInput.value = String(s.port);  // failed to bind — show the port actually in use
+        port.value = String(s.port); // failed to bind: show the port in use
         syncAddress();
       }
     };
-    portInput.addEventListener("blur", savePort);
-    portInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); portInput.blur(); } });
-
+    port.addEventListener("blur", savePort);
+    port.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); port.blur(); } });
     if (s.hostname) {
-      // Explicitly marked as not-yet-live. Showing a real-looking address
-      // while nothing is listening is the same trap as printing a bare
-      // hostname: David set the port, saw the address, and reasonably
-      // assumed it was reachable — it wasn't, because remote access was
-      // still switched off (2026-09-03).
-      addressEl.style.opacity = "0.55";
-      body.appendChild(el("div", { class: "glass card", style: "margin-top:16px;" }, [
-        el("div", { class: "card-row", style: "align-items:flex-start;" }, [
-          el("div", { style: "flex:1;min-width:0;" }, [
-            el("div", { class: "title", style: "font-size:12.5px;", text: "Address — not live yet" }),
-            el("div", { class: "meta", style: "margin-top:4px;", text: "This is where JARVIS will be reachable once you turn remote access on below. Nothing is listening at it until then." }),
-            addressEl,
-          ]),
-          el("div", { class: "card-row", style: "gap:6px;align-items:flex-end;" }, [
-            el("div", { class: "field field-sm" }, [
-              el("label", { text: "Port" }), portInput, portStatus,
-            ]),
-            el("button", { class: "btn", text: "Copy", onclick: async () => {
-              await navigator.clipboard.writeText(addressEl.textContent);
-              toast("Address copied", "success");
-            }}),
-          ]),
-        ]),
+      // Marked as not live: a real-looking address with nothing listening
+      // was the same trap as the bare hostname (David, 2026-09-03).
+      parts.push(group({ title: "Address" }, [
+        row({ title: [el("span", { text: "Where JARVIS will be reachable" }), pill("Not live yet", "muted")],
+          description: address, control: el("button", { class: "btn", text: "Copy", onclick: async () => {
+            await navigator.clipboard.writeText(address.textContent); toast("Address copied", "success"); } }) }),
+        row({ title: "Port", description: "Part of the address you type.", control: [portStatus, port] }),
       ]));
     }
 
     const allReady = s.installed && s.logged_in && s.auth_ready;
-    const enableBtn = el("button", {
-      class: "btn",
-      text: "Turn on remote access",
-      disabled: !allReady,
-      title: allReady ? "" : "Finish the steps above first",
-    });
-    enableBtn.addEventListener("click", async () => {
-      enableBtn.disabled = true;
-      enableBtn.textContent = "Setting up…";
+    const enable = el("button", { class: "btn primary", text: "Turn on remote access", disabled: !allReady,
+      title: allReady ? "" : "Finish the setup steps first" });
+    enable.addEventListener("click", async () => {
+      enable.disabled = true; enable.textContent = "Setting up…";
       try {
-        const port = parseInt(portInput.value, 10) || undefined;
-        await api("/api/remote/enable", { method: "POST", body: JSON.stringify({ port }) });
+        await api("/api/remote/enable", { method: "POST", body: JSON.stringify({ port: parseInt(port.value, 10) || undefined }) });
         toast("Remote access is on", "success");
         await refresh();
-      } catch (e) {
-        // api() already toasted the real reason (cert not available for the
-        // tailnet, port in use, etc.) — just restore the button.
-        enableBtn.disabled = false;
-        enableBtn.textContent = "Turn on remote access";
+      } catch {
+        // api() already showed the real reason (certificate, port in use).
+        enable.disabled = false; enable.textContent = "Turn on remote access";
       }
     });
-
-    // The one action that actually starts the listener. Called out rather
-    // than sitting as a plain button in a row, because everything above it
-    // (checklist all green, address displayed) reads as "already working"
-    // and the final step is easy to skip.
-    body.appendChild(el("div", { class: "glass bracket card", style: "margin-top:16px;" }, [
-      el("div", { class: "card-row" }, [
-        el("div", { style: "flex:1;min-width:0;" }, [
-          el("div", { class: "title", style: "font-size:12.5px;", text: allReady ? "Last step — turn it on" : "Finish the steps above first" }),
-          el("div", { class: "meta", style: "margin-top:4px;", text: allReady
-            ? "Nothing is reachable until you do this. It stays on across restarts."
-            : "The button unlocks once Tailscale is signed in and you have a login." }),
-        ]),
-        el("div", { class: "card-row", style: "gap:8px;" }, [
-          el("button", { class: "btn", text: "Refresh", onclick: refresh }),
-          enableBtn,
-        ]),
-      ]),
-    ]));
-
-    body.appendChild(el("div", {
-      class: "meta", style: "margin-top:12px;line-height:1.6;",
-      text: "The first time you turn this on, JARVIS asks Tailscale for an HTTPS certificate so your browser trusts the connection. If your tailnet doesn't have HTTPS certificates enabled yet, you'll be told exactly where to switch them on.",
-    }));
+    // Called out as its own step: with the checklist green and an address
+    // shown, everything reads as already working and this is easy to skip.
+    parts.push(group({}, [row({
+      title: allReady ? "Last step: turn it on" : "Finish the setup steps first",
+      description: allReady ? "Nothing is reachable until you do. It stays on across restarts." : "This unlocks once Tailscale is signed in and you have a login.",
+      control: [el("button", { class: "btn", text: "Refresh", onclick: refresh }), enable] })]));
+    parts.push(note("The first time, JARVIS asks Tailscale for an HTTPS certificate so your browser trusts the connection. If your tailnet hasn't enabled HTTPS certificates, you'll be told where to switch them on."));
+    body.replaceChildren(...parts);
   }
-
   await refresh();
 }
 
-async function renderChannelsPanel(content) {
-  content.innerHTML = "";
-  content.append(
-    el("div", { class: "title", text: "Channels" }),
-    el("div", { class: "meta", style: "margin:4px 0 14px;", text: "Ways to reach JARVIS from other apps, and where task results and agent notifications can be delivered. Discord first, every other platform below." }),
-  );
-
-  // Real setup guide (David's ask 2026-09-01) — a bot token isn't something
-  // most people have lying around; point at the actual place to get one
-  // instead of assuming they already know.
-  content.append(
-    el("div", { class: "glass card", style: "margin-bottom:14px;" }, [
-      el("div", { class: "title", style: "font-size:12.5px;", text: "Setting up a Discord bot" }),
-      el("div", { class: "meta", style: "margin-top:6px;line-height:1.6;" }, [
-        "1. Go to the ",
-        el("a", { href: "https://discord.com/developers/applications", target: "_blank", rel: "noopener", style: "color:var(--accent);", text: "Discord Developer Portal" }),
-        " and create a New Application.",
-        el("br"),
-        "2. Open Bot in the sidebar, click Reset Token, and copy it — that's the token you paste below.",
-        el("br"),
-        "3. Under Privileged Gateway Intents, enable Message Content Intent (JARVIS needs this to read messages).",
-        el("br"),
-        "4. Under OAuth2 > URL Generator, check \"bot\", give it Send Messages + Read Message History, then open the generated URL to invite it to your server.",
-        el("br"),
-        "5. To set a channel override below, turn on Developer Mode in your own Discord client (Settings > Advanced), then right-click any channel and choose Copy Channel ID.",
-      ]),
-    ]),
-  );
-
-  const [bots, models] = await Promise.all([
-    api("/api/settings/discord-bots"),
-    api("/api/models"),
-  ]);
-
-  const modelOptions = (selectedId) => [
-    el("option", { value: "" }, "No default model"),
-    ...models.map((m) => el("option", { value: m.id, ...(m.id === selectedId ? { selected: "" } : {}) },
-      m.kind === "claude_cli" ? `${m.name} (${m.model || "CLI default"})` : `${m.name} (${m.model})`)),
-  ];
-
-  const botsSection = el("div", {});
-  content.append(botsSection);
-
-  function renderBots() {
-    botsSection.innerHTML = "";
-    if (bots.length === 0) {
-      botsSection.appendChild(el("div", { class: "empty-state", text: "No bots connected yet." }));
-    }
-    for (const bot of bots) {
-      const modelSelect = customSelect({ style: "flex:1;" }, modelOptions(bot.model_endpoint_id));
-      const saveBtn = el("button", { class: "btn", text: "Save" });
-      const delBtn = el("button", { class: "btn danger", text: "Remove" });
-      saveBtn.addEventListener("click", async () => {
-        await api(`/api/settings/discord-bots/${bot.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({ name: bot.name, allowed_user_id: bot.allowed_user_id, model_endpoint_id: modelSelect.value || null }),
-        });
-        await refresh();
-      });
-      delBtn.addEventListener("click", async () => {
-        const ok = await confirmDialog({
-          title: "Remove this bot?",
-          message: `"${bot.name}" will be disconnected from Discord and its token deleted. Any task delivering to Discord will stop reaching you.`,
-          confirmLabel: "Remove bot",
-        });
-        if (!ok) return;
-        await api(`/api/settings/discord-bots/${bot.id}`, { method: "DELETE" });
-        await refresh();
-        toast("Bot removed", "success");
-      });
-      // -- Named channels (David's ask 2026-09-10: per-channel behavior —
-      // "open" answers anyone there regardless of the allowlist above,
-      // "silent" never answers there at all, and either way it becomes a
-      // selectable delivery target on the Tasks tab, e.g. always posting
-      // the Daily Brief to one specific channel).
-      const MODE_LABEL = { normal: "Normal (allowlist applies)", open: "Open — anyone can talk", silent: "Silent — never responds" };
-      const channelsList = el("div", { style: "margin-top:10px;" });
-      for (const entry of (bot.channels || [])) {
-        const modeSelect = customSelect({ style: "flex:1;" }, Object.entries(MODE_LABEL).map(([v, t]) =>
-          el("option", { value: v, ...(v === entry.mode ? { selected: "" } : {}) }, t)));
-        const entrySaveBtn = el("button", { class: "btn", text: "Save" });
-        const entryDelBtn = el("button", { class: "btn danger", text: "Remove" });
-        entrySaveBtn.addEventListener("click", async () => {
-          await api(`/api/settings/discord-bots/${bot.id}/channels/${entry.id}`, {
-            method: "PATCH", body: JSON.stringify({ mode: modeSelect.value }),
-          });
-          toast("Channel updated", "success");
-          await refresh();
-        });
-        entryDelBtn.addEventListener("click", async () => {
-          const ok = await confirmDialog({
-            title: "Remove this channel override?",
-            message: `"#${entry.label}" goes back to normal (allowlist-gated) behavior, and stops being a task delivery target.`,
-            confirmLabel: "Remove",
-          });
-          if (!ok) return;
-          await api(`/api/settings/discord-bots/${bot.id}/channels/${entry.id}`, { method: "DELETE" });
-          await refresh();
-          toast("Channel removed", "success");
-        });
-        channelsList.appendChild(
-          el("div", { class: "card-row", style: "gap:8px;padding:6px 0;border-top:1px solid var(--border);" }, [
-            el("div", { style: "flex:1;min-width:0;" }, [
-              el("div", { style: "font-size:13px;color:var(--text);", text: `#${entry.label}` }),
-              el("div", { class: "meta", style: "font-size:11px;", text: `Channel ID ${entry.discord_channel_id}` }),
-            ]),
-            modeSelect, entrySaveBtn, entryDelBtn,
-          ]),
-        );
-      }
-
-      const newChanIdInput = el("input", { placeholder: "Discord channel ID", style: "flex:1;" });
-      const newChanLabelInput = el("input", { placeholder: "Label (e.g. announcements)", style: "flex:1;" });
-      const newChanModeSelect = customSelect({ style: "flex:1;" },
-        Object.entries(MODE_LABEL).map(([v, t]) => el("option", { value: v }, t)));
-      const newChanErr = el("div", { class: "meta", style: "color:var(--danger);" });
-      const addChanBtn = el("button", { class: "btn", text: "+ Add channel" });
-      addChanBtn.addEventListener("click", async () => {
-        newChanErr.textContent = "";
-        if (!newChanIdInput.value.trim()) { newChanErr.textContent = "Channel ID is required."; return; }
-        try {
-          await api(`/api/settings/discord-bots/${bot.id}/channels`, {
-            method: "POST",
-            body: JSON.stringify({
-              discord_channel_id: newChanIdInput.value.trim(),
-              label: newChanLabelInput.value.trim(),
-              mode: newChanModeSelect.value || "normal",
-            }),
-          });
-          newChanIdInput.value = ""; newChanLabelInput.value = "";
-          await refresh();
-          toast("Channel added", "success");
-        } catch (e) { newChanErr.textContent = e.message.replace(/^\d+: /, ""); }
-      });
-
-      botsSection.appendChild(
-        el("div", { class: "glass bracket card", style: "margin-bottom:8px;" }, [
-          el("div", { class: "card-row" }, [
-            el("div", {}, [
-              el("div", { class: "title", style: "font-size:12.5px;", text: bot.name }),
-              el("div", { class: "meta", text: bot.allowed_user_id ? `Allowlisted to user ${bot.allowed_user_id}` : "Replies to anyone in its channels" }),
-            ]),
-            el("div", { class: "card-row", style: "gap:6px;" }, [delBtn]),
-          ]),
-          el("div", { class: "card-row", style: "margin-top:8px;gap:8px;" }, [
-            el("div", { class: "meta", style: "flex-shrink:0;", text: "Default model:" }),
-            modelSelect, saveBtn,
-          ]),
-          el("div", { class: "meta", style: "margin-top:12px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;", text: "Channel overrides" }),
-          channelsList,
-          el("div", { class: "card-row", style: "flex-wrap:wrap;gap:6px;margin-top:8px;" }, [
-            newChanIdInput, newChanLabelInput, newChanModeSelect, addChanBtn,
-          ]),
-          newChanErr,
-        ]),
-      );
-    }
-  }
-  renderBots();
-
-  async function refresh() {
-    const fresh = await api("/api/settings/discord-bots");
-    bots.length = 0;
-    bots.push(...fresh);
-    renderBots();
-  }
-
-  // -- Add a bot ------------------------------------------------------
-  const nameInput = el("input", { placeholder: "Name (e.g. \"JARVIS\")", style: "flex:1;" });
-  const tokenInput = el("input", { type: "password", placeholder: "Bot token", style: "flex:1;" });
-  const allowedInput = el("input", { placeholder: "Allowed Discord user ID (optional)", style: "flex:1;" });
-  const addModelSelect = customSelect({ style: "flex:1;" }, modelOptions(null));
-  const addErr = el("div", { class: "meta", style: "color:var(--danger);" });
-  const addBtn = el("button", { class: "btn", text: "+ Add Bot" });
-  addBtn.addEventListener("click", async () => {
-    addErr.textContent = "";
-    if (!nameInput.value.trim() || !tokenInput.value.trim()) {
-      addErr.textContent = "Name and token are required.";
-      return;
-    }
-    try {
-      await api("/api/settings/discord-bots", {
-        method: "POST",
-        body: JSON.stringify({
-          name: nameInput.value.trim(),
-          token: tokenInput.value.trim(),
-          allowed_user_id: allowedInput.value.trim() || null,
-          model_endpoint_id: addModelSelect.value || null,
-        }),
-      });
-      nameInput.value = ""; tokenInput.value = ""; allowedInput.value = ""; addModelSelect.value = "";
-      await refresh();
-    } catch (e) { addErr.textContent = e.message.replace(/^\d+: /, ""); }
-  });
-
-  content.append(
-    el("div", { class: "glass bracket card", style: "margin-top:14px;" }, [
-      el("div", { class: "title", style: "font-size:12.5px;", text: "Add a Discord bot" }),
-      el("div", { class: "card-row", style: "flex-wrap:wrap;gap:8px;margin-top:10px;" }, [nameInput, tokenInput, allowedInput, addModelSelect, addBtn]),
-      addErr,
-      el("div", { class: "meta", style: "margin-top:10px;", text: "Adding/editing/removing a bot or a channel override restarts the Discord connection immediately. The plain \"Discord\" delivery target DMs the allowed user ID; a named channel below is its own separate delivery target on the Tasks tab." }),
-    ]),
-  );
-
-  // Every other platform (core/connectors): static/js/views/settingsConnectors.js.
-  const { renderConnectors } = await import("./settingsConnectors.js");
-  const others = el("div", {});
-  content.append(others);
-  await renderConnectors(others, models);
-}
-
 // -- Account --------------------------------------------------------------
-async function renderAccountPanel(content, status) {
-  content.innerHTML = "";
+async function renderAccountPanel(body, status) {
   if (!status.auth_enabled) {
-    content.append(
-      el("div", { class: "title", text: "Account" }),
-      el("div", { class: "meta", style: "margin-top:10px;", text: "Auth is off (single trusted local user) — nothing to manage here. Enable it via AUTH_ENABLED for a real login." }),
-    );
+    body.replaceChildren(group({}, [row({ title: "Sign-in is off",
+      description: "JARVIS trusts this computer's single user, so there is nothing to manage here. Turn on logins in Remote Access, or with AUTH_ENABLED." })]));
     return;
   }
-
-  const err = el("div", { class: "meta", style: "color: var(--danger); min-height: 16px;" });
-  const okMsg = el("div", { class: "meta", style: "color: var(--accent); min-height: 16px;" });
-
-  const curPass = el("input", { type: "password", placeholder: "Current password", style: "flex:1;" });
-  const newPass = el("input", { type: "password", placeholder: "New password", style: "flex:1;" });
-  const changeBtn = el("button", { class: "btn", text: "Change password" });
-  changeBtn.addEventListener("click", async () => {
-    err.textContent = ""; okMsg.textContent = "";
+  const err = el("div", { class: "set-error" });
+  const ok = el("span", { class: "meta" });
+  const current = el("input", { type: "password", autocomplete: "current-password" });
+  const next = el("input", { type: "password", autocomplete: "new-password" });
+  const change = el("button", { class: "btn primary", text: "Change password" });
+  change.addEventListener("click", async () => {
+    err.textContent = ""; ok.textContent = "";
     try {
-      await api("/api/auth/password", { method: "POST", body: JSON.stringify({ current_password: curPass.value, new_password: newPass.value }) });
-      curPass.value = ""; newPass.value = "";
-      okMsg.textContent = "Password changed.";
-    } catch (e) { err.textContent = e.message.replace(/^\d+: /, ""); }
+      await api("/api/auth/password", { method: "POST", body: JSON.stringify({ current_password: current.value, new_password: next.value }) });
+      current.value = ""; next.value = "";
+      ok.textContent = "Password changed.";
+    } catch (e) { err.textContent = errorText(e); }
   });
-
-  const totpSection = el("div", { style: "margin-top:14px;" });
-  await renderTotpSection(totpSection);
-
-  content.append(
-    el("div", { class: "title", text: "Account" }),
-    el("div", { class: "meta", style: "margin-top:4px;", text: `Signed in as ${status.username}${status.is_admin ? " (admin)" : ""}` }),
-    el("div", { class: "card-row", style: "flex-wrap:wrap;gap:8px;margin-top:10px;" }, [curPass, newPass, changeBtn]),
-    err, okMsg,
-    totpSection,
+  const totp = el("div");
+  await renderTotpSection(totp);
+  body.replaceChildren(
+    group({}, [row({ icon: badge(status.username, hueFor(status.username)), title: status.username,
+      description: status.is_admin ? "Admin" : "Member" })]),
+    group({ title: "Password" }, [field("Current password", current), field("New password", next),
+      el("div", { class: "set-row-actions" }, [err, ok, change])]),
+    totp,
   );
 }
 
 async function renderTotpSection(host) {
-  host.innerHTML = "";
-  const enrollBtn = el("button", { class: "btn", text: "Enable 2FA" });
-  const disableBtn = el("button", { class: "btn danger", text: "Disable 2FA" });
-  const uriBox = el("div", { class: "meta", style: "word-break:break-all;margin:8px 0;display:none;" });
-  const codeInput = el("input", { placeholder: "6-digit code", style: "width:140px;display:none;" });
-  const confirmBtn = el("button", { class: "btn", text: "Confirm", style: "display:none;" });
-  const msg = el("div", { class: "meta" });
-
-  enrollBtn.addEventListener("click", async () => {
+  const enroll = el("button", { class: "btn", text: "Enable" });
+  const disable = el("button", { class: "btn quiet danger", text: "Disable" });
+  const uri = el("div", { class: "set-mono", style: "word-break:break-all;" });
+  const code = el("input", { placeholder: "6-digit code", inputmode: "numeric", style: "width:140px;" });
+  const confirm = el("button", { class: "btn primary", text: "Confirm" });
+  const msg = el("div", { class: "set-row-description" });
+  const setup = el("div", { class: "set-totp-setup" }, [msg, uri, el("div", { class: "set-row-control", style: "justify-content:flex-start;margin-top:8px;" }, [code, confirm])]);
+  setup.hidden = true;
+  enroll.addEventListener("click", async () => {
     const res = await api("/api/auth/totp/enroll", { method: "POST" });
-    uriBox.textContent = res.provisioning_uri;
-    uriBox.style.display = "";
-    codeInput.style.display = "";
-    confirmBtn.style.display = "";
-    msg.textContent = "Add this to your authenticator app (or paste the URI manually), then enter the 6-digit code.";
+    uri.textContent = res.provisioning_uri;
+    msg.textContent = "Add this to your authenticator app (or paste the URI), then enter the 6-digit code.";
+    setup.hidden = false;
   });
-  confirmBtn.addEventListener("click", async () => {
+  confirm.addEventListener("click", async () => {
     try {
-      await api("/api/auth/totp/confirm", { method: "POST", body: JSON.stringify({ code: codeInput.value.trim() }) });
-      msg.textContent = "2FA enabled.";
-      uriBox.style.display = "none"; codeInput.style.display = "none"; confirmBtn.style.display = "none";
-    } catch (e) { msg.textContent = e.message.replace(/^\d+: /, ""); }
+      await api("/api/auth/totp/confirm", { method: "POST", body: JSON.stringify({ code: code.value.trim() }) });
+      setup.hidden = true;
+      toast("Two-factor authentication is on", "success");
+    } catch (e) { msg.textContent = errorText(e); }
   });
-  disableBtn.addEventListener("click", async () => {
+  disable.addEventListener("click", async () => {
     await api("/api/auth/totp/disable", { method: "POST" });
-    msg.textContent = "2FA disabled.";
+    toast("Two-factor authentication is off", "success");
   });
-
-  host.append(
-    el("div", { class: "title", style: "font-size:12.5px;", text: "Two-factor authentication" }),
-    el("div", { class: "card-row", style: "gap:8px;margin-top:6px;" }, [enrollBtn, disableBtn]),
-    uriBox, codeInput, confirmBtn, msg,
-  );
+  host.replaceChildren(group({ title: "Two-factor authentication" }, [row({ title: "Authenticator app",
+    description: "A code from your phone on every sign-in.", control: [enroll, disable], below: setup })]));
 }
 
 // -- Shortcuts --------------------------------------------------------------
-function renderShortcutsPanel(content) {
-  content.innerHTML = "";
-  content.appendChild(el("div", { class: "title", text: "Shortcuts" }));
+function renderShortcutsPanel(body) {
   const shortcuts = [
     ["Enter", "Send message"],
-    ["Shift + Enter", "New line in composer"],
-    ["Right-click a chat", "Rename / star / delete"],
-    ["/help in Chat", "List all slash commands"],
+    ["Shift + Enter", "New line in the composer"],
+    ["Right-click a chat", "Rename, star or delete it"],
+    ["/help in a chat", "List every slash command"],
   ];
-  for (const [key, desc] of shortcuts) {
-    content.appendChild(el("div", { class: "card-row", style: "margin-top:10px;" }, [
-      el("span", { class: "meta", style: "font-family:monospace;color:var(--accent);", text: key }),
-      el("span", { class: "meta", text: desc }),
-    ]));
-  }
+  body.replaceChildren(group({}, shortcuts.map(([key, desc]) => row({ title: desc, control: el("span", { class: "set-kbd", text: key }) }))));
 }
 
 // -- Admin: Agent Tools -------------------------------------------------------
-async function renderAgentToolsPanel(content) {
+async function renderAgentToolsPanel(body, _status, page) {
   const data = await api("/api/settings/agent-tools");
-  content.innerHTML = "";
-  content.append(
-    el("div", { class: "title", text: "Agent Tools" }),
-    el("div", { class: "meta", style: "margin-top:6px;", text: "Globally disable tools for every chat. Open chats pick up a change on their next message." }),
-  );
-  const list = el("div", { style: "margin-top:12px;display:flex;flex-wrap:wrap;gap:14px;" });
-  const checks = {};
-  for (const tool of data.available) {
-    const cb = el("input", { type: "checkbox" });
-    cb.checked = !data.disabled.includes(tool);
-    checks[tool] = cb;
-    list.appendChild(el("label", { style: "display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text-dim);" }, [cb, el("span", { text: tool })]));
-  }
-  const saveBtn = el("button", { class: "btn", text: "Save", style: "margin-top:14px;" });
-  saveBtn.addEventListener("click", async () => {
-    const disabled_tools = Object.entries(checks).filter(([, cb]) => !cb.checked).map(([tool]) => tool);
+  const switches = {};
+  const save = el("button", { class: "btn primary", text: "Save" });
+  save.addEventListener("click", async () => {
+    const disabled_tools = Object.entries(switches).filter(([, sw]) => !sw.checked).map(([tool]) => tool);
     await api("/api/settings/agent-tools", { method: "POST", body: JSON.stringify({ disabled_tools }) });
     toast("Saved", "success");
   });
-  content.append(list, saveBtn);
+  page.actions([save]);
+  const rows = data.available.map((tool) => {
+    switches[tool] = toggle({ checked: !data.disabled.includes(tool), label: tool });
+    return row({ title: el("span", { class: "set-mono", text: tool }), control: switches[tool] });
+  });
 
-  // Extra allowed MCP tools (David's ask 2026-09-10) — an escape hatch for
-  // whatever core/brain.py's hardcoded Canva allowlist doesn't cover. The
-  // Claude Agent SDK only matches exact tool names, no wildcards, so a
-  // real Canva design/export flow reaching for one more tool than
-  // anticipated hits a permission wall with no one able to answer it in a
-  // non-interactive session (Discord, a scheduled Task) - the turn just
-  // never resolves. This is how to add that tool without a code release.
-  content.append(
-    el("div", { class: "title", style: "font-size:13px;margin-top:24px;", text: "Extra allowed tools" }),
-    el("div", { class: "meta", style: "margin-top:6px;line-height:1.5;", text: "Exact MCP tool names to pre-approve beyond the built-in list — for example a Canva tool that got blocked mid-conversation (the error names the exact tool). One per line." }),
-  );
-  const extraTextarea = el("textarea", {
-    style: "width:100%;min-height:90px;margin-top:8px;font-family:monospace;font-size:12px;",
-    text: (data.extra_allowed || []).join("\n"),
-  });
-  const extraSaveBtn = el("button", { class: "btn", text: "Save extra tools", style: "margin-top:8px;" });
-  extraSaveBtn.addEventListener("click", async () => {
-    const extra_allowed_tools = extraTextarea.value.split("\n").map((s) => s.trim()).filter(Boolean);
+  // Extra allowed MCP tools (David's ask 2026-09-10): an escape hatch for
+  // what core/brain.py's built-in list doesn't cover. The SDK only matches
+  // exact names, so a flow reaching for one more tool hits a wall nobody can
+  // answer in a Discord or scheduled turn; this adds it without a release.
+  const extra = el("textarea", { rows: "4", class: "set-mono", text: (data.extra_allowed || []).join("\n") });
+  const saveExtra = el("button", { class: "btn", text: "Save extra tools" });
+  saveExtra.addEventListener("click", async () => {
+    const extra_allowed_tools = extra.value.split("\n").map((s) => s.trim()).filter(Boolean);
     await api("/api/settings/extra-allowed-tools", { method: "POST", body: JSON.stringify({ extra_allowed_tools }) });
-    toast("Saved — open chats pick it up on their next message", "success");
+    toast("Saved. Open chats pick it up on their next message.", "success");
   });
-  content.append(extraTextarea, extraSaveBtn);
+  body.replaceChildren(
+    group({ title: "Built-in tools", description: "Switch a tool off to keep it out of every chat." }, rows),
+    group({ title: "Extra allowed tools" }, [row({ stack: true, title: "Pre-approved MCP tools",
+      description: "Exact tool names beyond the built-in list, one per line; for example a Canva tool that got blocked mid-conversation (the error names it).",
+      control: extra }), el("div", { class: "set-row-actions" }, [saveExtra])]),
+  );
 }
 
 // -- Admin: Users -------------------------------------------------------------
-async function renderUsersPanel(content, status) {
-  const users = await api("/api/auth/users");
-  content.innerHTML = "";
-  content.append(el("div", { class: "title", text: "Users" }));
-
+async function renderUsersPanel(body, status, page) {
   if (!status.auth_enabled) {
-    content.append(el("div", { class: "meta", style: "margin-top:10px;", text: "Auth is off — user management needs AUTH_ENABLED." }));
+    body.replaceChildren(group({}, [row({ title: "Sign-in is off", description: "Managing users needs logins turned on (Remote Access, or AUTH_ENABLED)." })]));
     return;
   }
-
-  const list = el("div", { style: "margin-top:10px;" });
-  for (const u of users) {
-    const adminToggle = el("button", { class: "btn", text: u.is_admin ? "Demote" : "Promote" });
-    adminToggle.addEventListener("click", async () => {
+  const users = await api("/api/auth/users");
+  const rerender = () => renderUsersPanel(body, status, page);
+  const rows = users.map((u) => {
+    const promote = el("button", { class: "btn", text: u.is_admin ? "Make member" : "Make admin", onclick: async () => {
       try {
         await api(`/api/auth/users/${u.username}/admin`, { method: "POST", body: JSON.stringify({ is_admin: !u.is_admin }) });
-        await renderUsersPanel(content, status);
-        toast(`${u.username} ${u.is_admin ? "demoted" : "promoted"}`, "success");
-      } catch (e) { toast(e.message.replace(/^\d+: /, ""), "error"); }
-    });
-    const delBtn = el("button", { class: "btn danger", text: "Delete" });
-    delBtn.addEventListener("click", async () => {
-      const ok = await confirmDialog({
-        title: `Delete user "${u.username}"?`,
-        message: "This account will be permanently removed and can no longer sign in.",
-        confirmLabel: "Delete user",
-      });
+        toast(`${u.username} ${u.is_admin ? "is now a member" : "is now an admin"}`, "success");
+        await rerender();
+      } catch (e) { toast(errorText(e), "error"); }
+    } });
+    const remove = el("button", { class: "btn quiet danger", text: "Delete", onclick: async () => {
+      const ok = await confirmDialog({ title: `Delete user "${u.username}"?`,
+        message: "This account will be permanently removed and can no longer sign in.", confirmLabel: "Delete user" });
       if (!ok) return;
       try {
         await api(`/api/auth/users/${u.username}`, { method: "DELETE" });
-        await renderUsersPanel(content, status);
         toast(`User ${u.username} deleted`, "success");
-      } catch (e) { toast(e.message.replace(/^\d+: /, ""), "error"); }
-    });
-    if (u.username === status.username) { delBtn.disabled = true; delBtn.title = "Can't delete the account you're logged in as"; }
+        await rerender();
+      } catch (e) { toast(errorText(e), "error"); }
+    } });
+    if (u.username === status.username) { remove.disabled = true; remove.title = "You can't delete the account you're signed in as"; }
+    return row({ icon: badge(u.username, hueFor(u.username)), title: u.username,
+      description: [u.is_admin ? "Admin" : "Member", u.totp_enabled ? "two-factor on" : null, u.username === status.username ? "you" : null].filter(Boolean).join(" · "),
+      control: [promote, remove] });
+  });
 
-    list.appendChild(el("div", { class: "card-row", style: "justify-content:space-between;margin-top:8px;" }, [
-      el("span", { class: "meta", text: `${u.username}${u.is_admin ? " (admin)" : ""}${u.totp_enabled ? " · 2FA" : ""}` }),
-      el("div", { class: "card-row", style: "gap:6px;" }, [adminToggle, delBtn]),
-    ]));
-  }
-  content.appendChild(list);
-
-  const newUser = el("input", { placeholder: "Username", style: "flex:1;" });
-  const newPass = el("input", { type: "password", placeholder: "Password", style: "flex:1;" });
-  const newAdmin = el("input", { type: "checkbox" });
-  const addBtn = el("button", { class: "btn", text: "Add user" });
-  const err = el("div", { class: "meta", style: "color:var(--danger);" });
-  addBtn.addEventListener("click", async () => {
+  const name = el("input", { autocomplete: "off" });
+  const pass = el("input", { type: "password", autocomplete: "new-password" });
+  const admin = toggle({ label: "Admin" });
+  const err = el("div", { class: "set-error" });
+  const add = el("button", { class: "btn primary", text: "Add user" });
+  add.addEventListener("click", async () => {
     err.textContent = "";
     try {
-      await api("/api/auth/users", { method: "POST", body: JSON.stringify({ username: newUser.value.trim(), password: newPass.value, is_admin: newAdmin.checked }) });
-      newUser.value = ""; newPass.value = ""; newAdmin.checked = false;
-      await renderUsersPanel(content, status);
-    } catch (e) { err.textContent = e.message.replace(/^\d+: /, ""); }
+      await api("/api/auth/users", { method: "POST", body: JSON.stringify({ username: name.value.trim(), password: pass.value, is_admin: admin.checked }) });
+      await rerender();
+    } catch (e) { err.textContent = errorText(e); }
   });
-  content.append(
-    el("div", { class: "card-row", style: "flex-wrap:wrap;gap:8px;margin-top:16px;" }, [
-      newUser, newPass,
-      el("label", { style: "display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-dim);" }, [newAdmin, el("span", { text: "admin" })]),
-      addBtn,
-    ]),
-    err,
+  body.replaceChildren(
+    group({ title: "People" }, rows),
+    group({ title: "Add a user" }, [field("Username", name), field("Password", pass),
+      row({ title: "Admin", description: "Admins manage models, agents, users and these settings.", control: admin }),
+      el("div", { class: "set-row-actions" }, [err, add])]),
   );
 }
 
 // -- Admin: System (diagnostics, backup, wipe) -------------------------------
-async function renderSystemPanel(content) {
+async function renderSystemPanel(body, status, page) {
   const diag = await api("/api/system/diagnostics");
-  content.innerHTML = "";
-  content.append(el("div", { class: "title", text: "System" }));
-
-  const diagGrid = el("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;margin-top:10px;" });
-  const rows = [
+  const facts = [
     ["Vault", diag.vault_exists ? diag.vault_dir : "missing"],
     ["Chats", diag.sessions_count],
     ["Notes", diag.notes_count],
     ["Tasks", diag.tasks_count],
     ["Skills", diag.skills_count],
-    ["Model endpoints", diag.model_endpoints_count],
+    ["Model connections", diag.model_endpoints_count],
     ["Data on disk", `${(diag.data_dir_bytes / 1024).toFixed(1)} KB`],
     ["Discord", diag.discord_configured ? "configured" : "not configured"],
   ];
-  for (const [label, value] of rows) {
-    diagGrid.append(el("span", { class: "meta", text: label }), el("span", { class: "meta", style: "color:var(--text);", text: String(value) }));
-  }
-  content.appendChild(diagGrid);
 
-  const exportBtn = el("button", { class: "btn", text: "Export backup" });
-  const importInput = el("input", { type: "file", accept: "application/json", style: "display:none;" });
-  const importBtn = el("button", { class: "btn", text: "Import backup..." });
-  const backupMsg = el("div", { class: "meta" });
-  exportBtn.addEventListener("click", async () => {
-    const data = await api("/api/system/backup/export");
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = el("a", { href: url, download: `jarvis-backup-${new Date().toISOString().slice(0, 10)}.json` });
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
-  });
-  importBtn.addEventListener("click", () => importInput.click());
+  const importInput = el("input", { type: "file", accept: "application/json", hidden: true });
+  const backupMsg = el("span", { class: "meta" });
   importInput.addEventListener("change", async () => {
     const file = importInput.files[0];
     importInput.value = "";
@@ -1945,208 +1397,58 @@ async function renderSystemPanel(content) {
     try {
       const data = JSON.parse(await file.text());
       const res = await api("/api/system/backup/import", { method: "POST", body: JSON.stringify({ data }) });
-      backupMsg.textContent = `Imported: ${res.settings} settings, ${res.notes} notes, ${res.skills} skills.`;
-      await renderSystemPanel(content);
+      toast(`Imported ${res.settings} settings, ${res.notes} notes, ${res.skills} skills`, "success");
+      await renderSystemPanel(body, status, page);
     } catch (e) { backupMsg.textContent = `Import failed: ${e.message}`; }
   });
-  content.append(
-    el("div", { class: "card-row", style: "gap:8px;margin-top:16px;" }, [exportBtn, importBtn, importInput]),
-    backupMsg,
-  );
+  const exportBackup = async () => {
+    const data = await api("/api/system/backup/export");
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+    const a = el("a", { href: url, download: `jarvis-backup-${new Date().toISOString().slice(0, 10)}.json` });
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
 
-  const wipeRow = el("div", { style: "margin-top:18px;" });
-  wipeRow.append(el("div", { class: "meta", style: "color:var(--danger);margin-bottom:8px;", text: "Danger zone — permanent, no undo." }));
-  const wipeBtns = el("div", { style: "display:flex;flex-wrap:wrap;gap:8px;" });
-  for (const kind of ["chats", "notes", "tasks", "skills"]) {
-    const btn = el("button", { class: "btn danger", text: `Wipe ${kind}` });
-    btn.addEventListener("click", async () => {
-      // Kept as a genuine two-step confirmation (this wipes a whole domain
-      // globally, for every user) — just no longer native OS dialogs.
-      const first = await confirmDialog({
-        title: `Permanently delete all ${kind}?`,
-        message: `Every one of your ${kind} will be erased. This cannot be undone.`,
-        confirmLabel: `Wipe all ${kind}`,
-      });
-      if (!first) return;
-      const second = await confirmDialog({
-        title: "Are you absolutely sure?",
-        message: `This wipes ${kind} for every user of this install, globally. There is no backup and no undo.`,
-        confirmLabel: `Yes, wipe ${kind}`,
-      });
-      if (!second) return;
-      await api("/api/system/wipe", { method: "POST", body: JSON.stringify({ kind }) });
-      await renderSystemPanel(content);
-      toast(`All ${kind} wiped`, "success");
-    });
-    wipeBtns.appendChild(btn);
-  }
-  wipeRow.appendChild(wipeBtns);
-  content.appendChild(wipeRow);
+  // A genuine two-step confirmation: this wipes a whole kind of data
+  // globally, for every user.
+  const wipe = (kind) => el("button", { class: "btn danger", text: `Wipe ${kind}`, onclick: async () => {
+    const first = await confirmDialog({ title: `Permanently delete all ${kind}?`,
+      message: `Every one of your ${kind} will be erased. This cannot be undone.`, confirmLabel: `Wipe all ${kind}` });
+    if (!first) return;
+    const second = await confirmDialog({ title: "Are you absolutely sure?",
+      message: `This wipes ${kind} for every user of this install, globally. There is no backup and no undo.`, confirmLabel: `Yes, wipe ${kind}` });
+    if (!second) return;
+    await api("/api/system/wipe", { method: "POST", body: JSON.stringify({ kind }) });
+    toast(`All ${kind} wiped`, "success");
+    await renderSystemPanel(body, status, page);
+  } });
+
+  body.replaceChildren(
+    group({ title: "Diagnostics" }, facts.map(([label, value]) => row({ title: label,
+      control: el("span", { class: "set-row-value", text: String(value) }) }))),
+    group({ title: "Backup" }, [
+      row({ title: "Export a backup", description: "Settings, notes and skills as one JSON file.", control: el("button", { class: "btn", text: "Export", onclick: exportBackup }) }),
+      row({ title: "Import a backup", description: "Restores from a file made with Export.", control: [backupMsg, importInput,
+        el("button", { class: "btn", text: "Import…", onclick: () => importInput.click() })] }),
+    ]),
+    group({ title: "Danger zone", description: "Permanent, with no undo.", cls: "set-danger" },
+      ["chats", "notes", "tasks", "skills"].map((kind) => row({ title: `All ${kind}`, description: `Erase every ${kind.slice(0, -1)} for every user.`, control: wipe(kind) }))),
+  );
 }
 
 // -- Admin: Logs (Hermes track, 2026-09-22) ----------------------------------
 // Reads backend.log, errors.log and desktop.log through /api/system/logs
 // (core/logs.py). Follow polls with the byte cursor the last read returned,
-// and stops by itself once the panel is gone.
+// and stops by itself once the page is gone.
 const LOG_FOLLOW_MS = 2000;
 const LOG_MAX_SHOWN = 1000;
 
-async function renderFileCheckpointsPanel(content) {
-  const events = await api("/api/file-checkpoints");
-  content.innerHTML = "";
-  content.append(el("p", { class: "meta", text:
-    "Each model turn saves the Vault and its working folder before and after. Review the files here, then restore selected files. "
-    + "Checkpoint cards remain as history after a restore. A file changed again cannot be restored from an older checkpoint. "
-    + "Large files listed as skipped were not protected." }));
-  const changed = events.filter((event) => event.status === "changed");
-  if (!changed.length) {
-    content.append(el("div", { class: "empty-state", text: "No file changes recorded yet" }));
-    return;
-  }
-  for (const event of changed) {
-    const details = el("div", { class: "hidden" });
-    const show = el("button", { class: "btn", text: "Review" });
-    show.addEventListener("click", async () => {
-      if (!details.classList.contains("hidden")) {
-        details.classList.add("hidden");
-        show.textContent = "Review";
-        return;
-      }
-      const full = await api(`/api/file-checkpoints/${event.id}`);
-      details.innerHTML = "";
-      const choices = [];
-      for (const root of full.roots) {
-        if (!root.changes?.length && !root.before_skipped?.length && !root.after_skipped?.length) continue;
-        details.append(el("div", { class: "meta", text: root.path }));
-        for (const change of root.changes || []) {
-          const available = change.restore_state === "available";
-          const check = el("input", { type: "checkbox", ...(available ? { checked: "" } : { disabled: "" }) });
-          if (available) choices.push({ check, root: root.path, path: change.path });
-          const state = change.restore_state === "restored" ? " · Restored"
-            : change.restore_state === "at_before" ? " · Already at previous state"
-            : change.restore_state === "changed_since" ? " · Changed again; restore unavailable" : "";
-          const label = el("label", { class: "card-row" }, [check,
-            el("span", { class: "meta", text: change.path + state })]);
-          const diff = el("pre", { class: "sandbox-diff", text: change.diff || "No text diff." });
-          details.append(label, diff);
-        }
-        const skipped = [...new Set([...(root.before_skipped || []), ...(root.after_skipped || [])])];
-        if (skipped.length) details.append(el("div", { class: "meta", text: `Skipped: ${skipped.join(", ")}` }));
-      }
-      const restore = el("button", { class: "btn danger", text: choices.length ? "Restore selected files" : "Nothing left to restore",
-        disabled: !choices.length });
-      restore.addEventListener("click", async () => {
-        const files = choices.filter((c) => c.check.checked).map(({ root, path }) => ({ root, path }));
-        if (!files.length) return;
-        const ok = await confirmDialog({ title: "Restore selected files?",
-          message: `${files.length} file(s) will return to their state before this model turn.`,
-          confirmLabel: "Restore files" });
-        if (!ok) return;
-        try {
-          await api(`/api/file-checkpoints/${event.id}/restore`, { method: "POST", body: JSON.stringify({ files }) });
-          toast("Files restored", "success");
-          await renderFileCheckpointsPanel(content);
-        } catch (problem) { toast(problem.message.replace(/^\d+: /, ""), "error"); }
-      });
-      details.append(restore);
-      details.classList.remove("hidden");
-      show.textContent = "Hide";
-    });
-    const count = event.roots.reduce((sum, root) => sum + root.changes.length, 0);
-    const restored = event.roots.reduce((sum, root) => sum + root.changes.filter((change) => change.restored_at).length, 0);
-    content.append(el("div", { class: "glass bracket card sandbox-change" }, [
-      el("div", { class: "card-row" }, [
-        el("div", {}, [el("div", { class: "title", text: event.source }),
-          el("div", { class: "meta", text: `${new Date(event.created * 1000).toLocaleString()} · ${count} file(s)`
-            + (restored ? ` · ${restored} restored` : "")
-            + (event.overlap ? " · another turn overlapped; review attribution carefully" : "") })]),
-        show,
-      ]), details,
-    ]));
-  }
-}
-
-// Sandbox changes (Hermes phase 7, 2026-09-24): edits a model made to a
-// sandboxed copy of the JARVIS code wait here until an admin applies or
-// discards them (core/sandbox_changes.py). No model can apply one. Applying
-// is all or nothing and refuses if a file changed since the run; it does
-// not commit. Diffs are shown as text, never as HTML.
-async function renderSandboxChangesPanel(content) {
-  const [changes, chats] = await Promise.all([
-    api("/api/sandbox/changes"),
-    api("/api/sessions").catch(() => []),
-  ]);
-  const chatTitles = new Map(chats.map((c) => [c.id, c.title || "Untitled chat"]));
-  content.innerHTML = "";
-  content.append(el("p", { class: "meta", text:
-    "Code changes a model made in the sandbox, waiting for you. Applying writes them into the JARVIS folder only if "
-    + "none of those files has changed since; it does not commit. Unapplied changes expire after 7 days." }));
-  if (!changes.length) {
-    content.append(el("div", { class: "empty-state", text: "No sandbox changes waiting" }));
-    return;
-  }
-  for (const change of changes) {
-    const diffBox = el("pre", { class: "sandbox-diff hidden" });
-    const showBtn = el("button", { class: "btn", text: "Show diff" });
-    showBtn.addEventListener("click", async () => {
-      if (diffBox.classList.toggle("hidden")) { showBtn.textContent = "Show diff"; return; }
-      showBtn.textContent = "Hide diff";
-      if (diffBox.childElementCount) return;
-      const full = await api(`/api/sandbox/changes/${change.id}`);
-      for (const line of (full.diff || "No text diff (binary files only).").split("\n")) {
-        const kind = line.startsWith("+") && !line.startsWith("+++") ? "add"
-          : line.startsWith("-") && !line.startsWith("---") ? "del" : line.startsWith("@@") ? "hunk" : "";
-        diffBox.append(el("span", { class: `sandbox-diff-line ${kind}`, text: `${line}\n` }));
-      }
-    });
-    const applyBtn = el("button", { class: "btn", text: "Apply", disabled: !change.applicable });
-    applyBtn.addEventListener("click", async () => {
-      const ok = await confirmDialog({
-        title: "Apply these changes?",
-        message: `${change.changes.length} file(s) will be written into the JARVIS folder. Nothing is committed.`,
-        confirmLabel: "Apply changes",
-      });
-      if (!ok) return;
-      try {
-        await api(`/api/sandbox/changes/${change.id}/apply`, { method: "POST" });
-        toast("Changes applied", "success");
-      } catch (problem) { toast(problem.message.replace(/^\d+: /, ""), "error"); }
-      await renderSandboxChangesPanel(content);
-    });
-    const discardBtn = el("button", { class: "btn danger", text: "Discard" });
-    discardBtn.addEventListener("click", async () => {
-      await api(`/api/sandbox/changes/${change.id}`, { method: "DELETE" });
-      toast("Changes discarded", "success");
-      await renderSandboxChangesPanel(content);
-    });
-    content.append(el("div", { class: "glass bracket card sandbox-change", "data-change": change.id }, [
-      el("div", { class: "card-row sandbox-change-head" }, [
-        el("div", {}, [
-          el("div", { class: "title", text: `Change set ${change.id}` }),
-          el("div", { class: "meta", text: `${new Date(change.created * 1000).toLocaleString()} · `
-            + (change.session_id ? chatTitles.get(change.session_id) || "a chat" : "no chat") }),
-        ]),
-        el("div", { class: "card-row sandbox-change-actions" }, [showBtn, applyBtn, discardBtn]),
-      ]),
-      el("ul", { class: "sandbox-change-files" }, change.changes.map((c) =>
-        el("li", { class: "meta", text: `${c.status}: ${c.path}` }))),
-      change.applicable ? null : el("div", { class: "meta", text: "Too large to keep for applying; read only." }),
-      diffBox,
-    ]));
-  }
-}
-
-async function renderLogsPanel(content) {
+async function renderLogsPanel(body) {
   const [files, chats] = await Promise.all([
     api("/api/system/logs/files"),
     api("/api/sessions").catch(() => []),
   ]);
   const chatTitles = new Map(chats.map((c) => [c.id, c.title || "Untitled chat"]));
-  content.innerHTML = "";
-  content.append(el("p", { class: "meta", text:
-    "What JARVIS has been doing. Errors keeps only warnings and errors, so they are not pushed out by routine lines; "
-    + "Desktop is the app window itself. Pick a chat to see only what happened during its turns." }));
-
   const option = (value, text, selected = false) => el("option", { value, text, ...(selected ? { selected: "" } : {}) });
   const fileSelect = customSelect({ class: "logs-file" }, files.map((f) =>
     option(f.name, `${f.name[0].toUpperCase()}${f.name.slice(1)} (${f.size ? `${(f.size / 1024).toFixed(0)} KB` : "empty"})`)));
@@ -2159,13 +1461,14 @@ async function renderLogsPanel(content) {
   const chatSelect = customSelect({ class: "logs-chat" }, [
     option("", "Any chat or task"), ...chats.slice(0, 50).map((c) => option(c.id, c.title || "Untitled chat"))]);
   const searchInput = el("input", { class: "logs-search", type: "search", placeholder: "Search text", maxlength: "200" });
-  const followBox = el("input", { type: "checkbox", class: "logs-follow" });
+  const follow = toggle({ label: "Follow" });
+  follow.classList.add("logs-follow");
   const status = el("div", { class: "meta logs-status" });
   const output = el("div", { class: "logs-output" });
 
-  content.append(
-    el("div", { class: "logs-controls" }, [fileSelect, levelSelect, componentSelect, sinceSelect, chatSelect, searchInput,
-      el("label", { class: "logs-follow-label" }, [followBox, document.createTextNode(" Follow")])]),
+  body.replaceChildren(
+    el("div", { class: "logs-controls set-toolbar" }, [fileSelect, levelSelect, componentSelect, sinceSelect, chatSelect, searchInput,
+      el("label", { class: "logs-follow-label set-inline-switch" }, [el("span", { text: "Follow" }), follow])]),
     status, output);
 
   let cursor = 0;
@@ -2182,14 +1485,10 @@ async function renderLogsPanel(content) {
   };
 
   const entryEl = (entry) => {
-    const level = entry.level.toLowerCase();
-    const row = el("div", { class: `log-entry log-${level}` });
-    if (entry.tag) {
-      const label = chatTitles.get(entry.tag) || entry.tag;
-      row.append(el("span", { class: "log-tag", text: label, title: entry.tag }));
-    }
-    row.append(document.createTextNode(entry.text));
-    return row;
+    const rowEl = el("div", { class: `log-entry log-${entry.level.toLowerCase()}` });
+    if (entry.tag) rowEl.append(el("span", { class: "log-tag", text: chatTitles.get(entry.tag) || entry.tag, title: entry.tag }));
+    rowEl.append(document.createTextNode(entry.text));
+    return rowEl;
   };
 
   const append = (entries) => {
@@ -2209,13 +1508,13 @@ async function renderLogsPanel(content) {
       if (res.rotated) status.textContent = "The log rotated; following the new file.";
       cursor = res.end;
       append(res.entries);
-    } catch (problem) { status.textContent = `Following stopped: ${problem.message}`; stopFollowing(); followBox.checked = false; }
+    } catch (problem) { status.textContent = `Following stopped: ${problem.message}`; stopFollowing(); follow.checked = false; }
   };
 
   const load = async () => {
     const mine = ++generation;
     stopFollowing();
-    status.textContent = "Loading...";
+    status.textContent = "Loading…";
     try {
       const res = await api(query({ limit: "300" }));
       if (mine !== generation) return;
@@ -2226,118 +1525,207 @@ async function renderLogsPanel(content) {
       else status.textContent = `Showing the last ${res.entries.length} matching entries.`;
       append(res.entries);
       output.scrollTop = output.scrollHeight;
-      if (followBox.checked) timer = setInterval(() => poll(mine), LOG_FOLLOW_MS);
+      if (follow.checked) timer = setInterval(() => poll(mine), LOG_FOLLOW_MS);
     } catch (problem) { status.textContent = problem.message; }
   };
 
-  for (const control of [fileSelect, levelSelect, componentSelect, sinceSelect, chatSelect, followBox]) {
-    control.addEventListener("change", load);
-  }
+  for (const control of [fileSelect, levelSelect, componentSelect, sinceSelect, chatSelect]) control.addEventListener("change", load);
+  follow.addEventListener("click", load);
   let searchDelay = null;
   searchInput.addEventListener("input", () => { clearTimeout(searchDelay); searchDelay = setTimeout(load, 300); });
   await load();
 }
 
+async function renderFileCheckpointsPanel(body, status, page) {
+  const events = await api("/api/file-checkpoints");
+  const changed = events.filter((event) => event.status === "changed");
+  if (!changed.length) {
+    body.replaceChildren(group({}, [empty("No file changes recorded yet")]));
+    return;
+  }
+  body.replaceChildren(...changed.map((event) => {
+    const details = el("div", { class: "hidden" });
+    const show = el("button", { class: "btn", text: "Review" });
+    show.addEventListener("click", async () => {
+      if (!details.classList.contains("hidden")) {
+        details.classList.add("hidden");
+        show.textContent = "Review";
+        return;
+      }
+      const full = await api(`/api/file-checkpoints/${event.id}`);
+      details.innerHTML = "";
+      const choices = [];
+      for (const root of full.roots) {
+        if (!root.changes?.length && !root.before_skipped?.length && !root.after_skipped?.length) continue;
+        details.append(el("div", { class: "meta set-mono", text: root.path }));
+        for (const change of root.changes || []) {
+          const available = change.restore_state === "available";
+          const check = el("input", { type: "checkbox", ...(available ? { checked: "" } : { disabled: "" }) });
+          if (available) choices.push({ check, root: root.path, path: change.path });
+          const state = change.restore_state === "restored" ? " · Restored"
+            : change.restore_state === "at_before" ? " · Already at previous state"
+            : change.restore_state === "changed_since" ? " · Changed again; restore unavailable" : "";
+          details.append(el("label", { class: "card-row" }, [check, el("span", { class: "meta", text: change.path + state })]),
+            el("pre", { class: "sandbox-diff", text: change.diff || "No text diff." }));
+        }
+        const skipped = [...new Set([...(root.before_skipped || []), ...(root.after_skipped || [])])];
+        if (skipped.length) details.append(el("div", { class: "meta", text: `Skipped: ${skipped.join(", ")}` }));
+      }
+      const restore = el("button", { class: "btn danger", text: choices.length ? "Restore selected files" : "Nothing left to restore",
+        disabled: !choices.length });
+      restore.addEventListener("click", async () => {
+        const files = choices.filter((c) => c.check.checked).map(({ root, path }) => ({ root, path }));
+        if (!files.length) return;
+        const ok = await confirmDialog({ title: "Restore selected files?",
+          message: `${files.length} file(s) will return to their state before this model turn.`, confirmLabel: "Restore files" });
+        if (!ok) return;
+        try {
+          await api(`/api/file-checkpoints/${event.id}/restore`, { method: "POST", body: JSON.stringify({ files }) });
+          toast("Files restored", "success");
+          await renderFileCheckpointsPanel(body, status, page);
+        } catch (problem) { toast(errorText(problem), "error"); }
+      });
+      details.append(restore);
+      details.classList.remove("hidden");
+      show.textContent = "Hide";
+    });
+    const count = event.roots.reduce((sum, root) => sum + root.changes.length, 0);
+    const restored = event.roots.reduce((sum, root) => sum + root.changes.filter((change) => change.restored_at).length, 0);
+    return el("div", { class: "sandbox-change file-checkpoint" }, [
+      row({ title: event.source, control: show, description: `${new Date(event.created * 1000).toLocaleString()} · ${count} file(s)`
+        + (restored ? ` · ${restored} restored` : "")
+        + (event.overlap ? " · another turn overlapped; review attribution carefully" : "") }),
+      details,
+    ]);
+  }));
+}
+
+// Sandbox changes (Hermes phase 7, 2026-09-24): edits a model made to a
+// sandboxed copy of the JARVIS code wait here until an admin applies or
+// discards them (core/sandbox_changes.py). No model can apply one. Applying
+// is all or nothing and refuses if a file changed since the run; it does not
+// commit. Diffs are shown as text, never as HTML.
+async function renderSandboxChangesPanel(body, status, page) {
+  const [changes, chats] = await Promise.all([
+    api("/api/sandbox/changes"),
+    api("/api/sessions").catch(() => []),
+  ]);
+  const chatTitles = new Map(chats.map((c) => [c.id, c.title || "Untitled chat"]));
+  if (!changes.length) {
+    body.replaceChildren(group({}, [empty("No sandbox changes waiting")]));
+    return;
+  }
+  const rerender = () => renderSandboxChangesPanel(body, status, page);
+  body.replaceChildren(...changes.map((change) => {
+    const diffBox = el("pre", { class: "sandbox-diff hidden" });
+    const showBtn = el("button", { class: "btn", text: "Show diff" });
+    showBtn.addEventListener("click", async () => {
+      if (diffBox.classList.toggle("hidden")) { showBtn.textContent = "Show diff"; return; }
+      showBtn.textContent = "Hide diff";
+      if (diffBox.childElementCount) return;
+      const full = await api(`/api/sandbox/changes/${change.id}`);
+      for (const line of (full.diff || "No text diff (binary files only).").split("\n")) {
+        const kind = line.startsWith("+") && !line.startsWith("+++") ? "add"
+          : line.startsWith("-") && !line.startsWith("---") ? "del" : line.startsWith("@@") ? "hunk" : "";
+        diffBox.append(el("span", { class: `sandbox-diff-line ${kind}`, text: `${line}\n` }));
+      }
+    });
+    const applyBtn = el("button", { class: "btn primary", text: "Apply", disabled: !change.applicable });
+    applyBtn.addEventListener("click", async () => {
+      const ok = await confirmDialog({ title: "Apply these changes?",
+        message: `${change.changes.length} file(s) will be written into the JARVIS folder. Nothing is committed.`, confirmLabel: "Apply changes" });
+      if (!ok) return;
+      try {
+        await api(`/api/sandbox/changes/${change.id}/apply`, { method: "POST" });
+        toast("Changes applied", "success");
+      } catch (problem) { toast(errorText(problem), "error"); }
+      await rerender();
+    });
+    const discardBtn = el("button", { class: "btn quiet danger", text: "Discard", onclick: async () => {
+      await api(`/api/sandbox/changes/${change.id}`, { method: "DELETE" });
+      toast("Changes discarded", "success");
+      await rerender();
+    } });
+    return el("div", { class: "sandbox-change", "data-change": change.id }, [
+      el("div", { class: "card-row sandbox-change-head" }, [
+        el("div", {}, [
+          el("div", { class: "set-row-title", text: `Change set ${change.id}` }),
+          el("div", { class: "set-row-description", text: `${new Date(change.created * 1000).toLocaleString()} · `
+            + (change.session_id ? chatTitles.get(change.session_id) || "a chat" : "no chat") }),
+        ]),
+        el("div", { class: "card-row sandbox-change-actions" }, [showBtn, applyBtn, discardBtn]),
+      ]),
+      el("ul", { class: "sandbox-change-files" }, change.changes.map((c) => el("li", { class: "meta", text: `${c.status}: ${c.path}` }))),
+      change.applicable ? null : el("div", { class: "meta", text: "Too large to keep for applying; read only." }),
+      diffBox,
+    ]);
+  }));
+}
+
 // -- Admin: Custom Tabs (Developer Mode, David's ask 2026-09-01) ------------
-async function renderCustomTabsPanel(content) {
+async function renderCustomTabsPanel(body, status, page) {
   const tabs = await api("/api/system/custom-tabs");
   const approvals = await api("/api/system/custom-tabs/pending-approvals").catch(() => []);
-  content.innerHTML = "";
-  content.append(
-    el("div", { class: "title", text: "Custom Tabs" }),
-    el("div", { class: "meta", style: "margin-top:6px;", text: "Reorder, keep building, or delete tabs your AI model has built." }),
-  );
+  const rerender = () => renderCustomTabsPanel(body, status, page);
+  const parts = [];
 
   const pending = approvals.filter((entry) => !entry.approved);
   const waitingForRestart = approvals.filter((entry) => entry.approved && !tabs.some((tab) => tab.id === entry.id));
   if (pending.length) {
-    const section = el("div", { class: "card", style: "margin-top:12px;border-color:var(--danger);" }, [
-      el("div", { class: "title", text: "Source awaiting approval" }),
-      el("div", { class: "meta", style: "margin-top:6px;", text: "User tab code runs inside JARVIS. Review these files in your JARVIS data folder before approving. Any source change invalidates all tab approvals." }),
-    ]);
-    pending.forEach((entry) => {
-      const approveBtn = el("button", { class: "btn primary", text: "Approve this source" });
-      approveBtn.addEventListener("click", async () => {
-        const files = entry.files.join("\n");
-        const ok = await confirmDialog({
-          title: `Approve the "${entry.id}" tab source?`,
-          message: `This allows these files to run as JARVIS custom-tab code. Inspect all files before approving.\n\n${files}\n\nFingerprint: ${entry.fingerprint}`,
-          confirmLabel: "Approve source",
-          danger: false,
-        });
-        if (!ok) return;
-        try {
-          await api(`/api/system/custom-tabs/${encodeURIComponent(entry.id)}/approve`, {
-            method: "POST", body: JSON.stringify({ fingerprint: entry.fingerprint }),
+    parts.push(group({ title: "Source awaiting approval", cls: "set-danger",
+      description: "Custom-tab code runs inside JARVIS. Review these files in your JARVIS data folder before approving. Any source change invalidates every tab approval." },
+      pending.map((entry) => {
+        const approve = el("button", { class: "btn primary", text: "Approve this source", disabled: !!entry.blocked });
+        approve.addEventListener("click", async () => {
+          const ok = await confirmDialog({
+            title: `Approve the "${entry.id}" tab source?`,
+            message: `This allows these files to run as JARVIS custom-tab code. Inspect all files before approving.\n\n${entry.files.join("\n")}\n\nFingerprint: ${entry.fingerprint}`,
+            confirmLabel: "Approve source", danger: false,
           });
-          toast(`Source approved. Restart JARVIS to load the tab.`, "success");
-          await renderCustomTabsPanel(content);
-        } catch (error) {
-          toast(error.message || "Approval failed; review the current source again.", "error");
-          await renderCustomTabsPanel(content);
-        }
-      });
-      section.append(el("div", { class: "card-row", style: "justify-content:space-between;gap:8px;margin-top:12px;" }, [
-        el("div", {}, [
-          el("strong", { text: entry.id }),
-          el("div", { class: "meta", text: entry.blocked ? "Fingerprint unavailable; source is blocked." : `Files: ${entry.files.join(", ")}` }),
-          entry.fingerprint && el("div", { class: "meta", text: `SHA-256: ${entry.fingerprint}` }),
-        ]),
-        approveBtn,
-      ]));
-      if (entry.blocked) approveBtn.disabled = true;
-    });
-    content.appendChild(section);
+          if (!ok) return;
+          try {
+            await api(`/api/system/custom-tabs/${encodeURIComponent(entry.id)}/approve`, { method: "POST", body: JSON.stringify({ fingerprint: entry.fingerprint }) });
+            toast("Source approved. Restart JARVIS to load the tab.", "success");
+          } catch (error) { toast(error.message || "Approval failed; review the current source again.", "error"); }
+          await rerender();
+        });
+        return row({ title: entry.id, control: approve,
+          description: [entry.blocked ? "Fingerprint unavailable; source is blocked." : `Files: ${entry.files.join(", ")}`,
+            entry.fingerprint ? el("div", { class: "set-mono", text: `SHA-256: ${entry.fingerprint}` }) : null] });
+      })));
   }
   if (waitingForRestart.length) {
-    content.append(el("div", { class: "meta", style: "margin-top:10px;color:var(--warning);", text: `Approved source for ${waitingForRestart.map((entry) => entry.id).join(", ")}. Restart JARVIS to load it.` }));
+    parts.push(note(`Approved source for ${waitingForRestart.map((entry) => entry.id).join(", ")}. Restart JARVIS to load it.`));
   }
-
-  if (tabs.length === 0 && pending.length === 0 && waitingForRestart.length === 0) {
-    content.append(el("div", { class: "meta", style: "margin-top:10px;", text: "No custom tabs yet — use \"+ New Tab\" in the sidebar." }));
+  if (!tabs.length) {
+    if (!pending.length && !waitingForRestart.length) parts.push(group({}, [empty("No custom tabs yet. Use \"+ New Tab\" in the sidebar.")]));
+    body.replaceChildren(...parts);
     return;
   }
 
-  if (tabs.length === 0) return;
-
-  // Real bug found live 2026-09-02: "Keep Building" created a session with
-  // no model_endpoint_id, so it silently did nothing but return the canned
-  // "you haven't added a model yet" reply. One shared picker for the whole
-  // panel — every "Keep Building" click uses whichever model is selected
-  // here, same reasoning new-tab.js's own per-build picker fixes for the
-  // main "+ New Tab" flow.
+  // "Keep Building" needs a model (found live 2026-09-02: with none it
+  // silently returned the "no model yet" reply), so one picker serves every
+  // tab on this page.
   const endpoints = await api("/api/models").catch(() => []);
-  const modelOptions = endpoints.map((ep) => el("option", { value: ep.id, text: modelLabel(ep) }));
-  const modelSelect = endpoints.length ? customSelect({ style: "min-width:220px;" }, modelOptions) : null;
-  content.append(
-    el("div", { class: "card-row", style: "margin-top:12px;gap:8px;align-items:center;" }, [
-      el("span", { class: "meta", text: "Build with:" }),
-      modelSelect || el("span", { class: "meta", style: "color:var(--danger);", text: "No models added — see Settings > Add Models" }),
-    ]),
-  );
+  const modelSelect = endpoints.length ? customSelect({}, endpoints.map((ep) => el("option", { value: ep.id, text: modelLabel(ep) }))) : null;
+  parts.push(group({}, [row({ title: "Build with", description: modelSelect ? "The model Keep Building uses." : "Add a model first in Add Models.",
+    control: modelSelect || pill("No models", "warn") })]));
 
-  const list = el("div", { style: "margin-top:12px;" });
-  tabs.forEach((tab, i) => {
-    const upBtn = el("button", { class: "btn", text: "↑", title: "Move up" });
-    const downBtn = el("button", { class: "btn", text: "↓", title: "Move down" });
-    upBtn.disabled = i === 0;
-    downBtn.disabled = i === tabs.length - 1;
+  parts.push(group({ title: "Your tabs" }, tabs.map((tab, i) => {
     const reorder = async (delta) => {
       const order = tabs.map((t) => t.id);
       const j = i + delta;
       [order[i], order[j]] = [order[j], order[i]];
       await api("/api/system/custom-tabs/order", { method: "POST", body: JSON.stringify({ order }) });
-      await renderCustomTabsPanel(content);
+      await rerender();
     };
-    upBtn.addEventListener("click", () => reorder(-1));
-    downBtn.addEventListener("click", () => reorder(1));
-
-    const keepBuildingBtn = el("button", { class: "btn", text: "Keep Building" });
-    if (!modelSelect) { keepBuildingBtn.disabled = true; keepBuildingBtn.title = "Add a model first — see Settings > Add Models."; }
-    keepBuildingBtn.addEventListener("click", async () => {
-      // Real bug found live 2026-09-02: this used to send a message ending
-      // mid-sentence ("...then make this change: ") with nothing after the
-      // colon — no actual request, just an incomplete prompt. Ask first.
+    const up = el("button", { class: "btn quiet", text: "↑", title: "Move up", disabled: i === 0, onclick: () => reorder(-1) });
+    const down = el("button", { class: "btn quiet", text: "↓", title: "Move down", disabled: i === tabs.length - 1, onclick: () => reorder(1) });
+    const keepBuilding = el("button", { class: "btn", text: "Keep building", disabled: !modelSelect,
+      title: modelSelect ? "" : "Add a model first in Add Models." });
+    keepBuilding.addEventListener("click", async () => {
+      // Ask what to change first (found live 2026-09-02: it used to send a
+      // prompt ending mid-sentence with no request in it).
       const change = prompt(`What do you want to change or add to the "${tab.label}" tab?`);
       if (!change || !change.trim()) return;
       const message = [
@@ -2351,73 +1739,44 @@ async function renderCustomTabsPanel(content) {
       await api(`/api/sessions/${session.id}/model`, { method: "POST", body: JSON.stringify({ model_endpoint_id: modelSelect.value }) });
       sessionStorage.setItem("jarvis:pendingChatHandoff", JSON.stringify({ sessionId: session.id, message }));
       closeSettingsWindow();
-      const navItem = document.querySelector('.nav-item[data-tab="chat"]');
-      if (navItem) navItem.click();
+      document.querySelector('.nav-item[data-tab="chat"]')?.click();
     });
-
-    const deleteBtn = el("button", { class: "btn danger", text: "Delete" });
-    deleteBtn.addEventListener("click", async () => {
-      const ok = await confirmDialog({
-        title: `Delete the "${tab.label}" tab?`,
-        message: "This removes the tab's files from disk. A restart is needed for its API routes to fully unmount.",
-        confirmLabel: "Delete tab",
-      });
+    const remove = el("button", { class: "btn quiet danger", text: "Delete", onclick: async () => {
+      const ok = await confirmDialog({ title: `Delete the "${tab.label}" tab?`,
+        message: "This removes the tab's files from disk. A restart is needed for its API routes to fully unmount.", confirmLabel: "Delete tab" });
       if (!ok) return;
       await api(`/api/system/custom-tabs/${tab.id}`, { method: "DELETE" });
-      await renderCustomTabsPanel(content);
       toast(`Tab "${tab.label}" deleted`, "success");
-    });
-
-    list.appendChild(
-      el("div", { class: "card-row", style: "justify-content:space-between;margin-top:8px;" }, [
-        el("span", { class: "meta", style: "color:var(--text);" }, [
-          el("span", { style: "display:inline-flex;width:16px;height:16px;vertical-align:middle;margin-right:6px;" }),
-          document.createTextNode(tab.label),
-        ]),
-        el("div", { class: "card-row", style: "gap:6px;" }, [upBtn, downBtn, keepBuildingBtn, deleteBtn]),
-      ]),
-    );
-    // Inline SVG icon into the placeholder span just appended (el() only
-    // takes text/children, not a raw HTML fragment inside another element).
-    list.lastChild.querySelector("span[style*='inline-flex']").innerHTML = tab.icon_svg || "";
-  });
-  content.appendChild(list);
+      await rerender();
+    } });
+    const icon = el("span", { class: "set-icon" });
+    icon.innerHTML = tab.icon_svg || "";
+    return row({ icon, title: tab.label, control: [up, down, keepBuilding, remove] });
+  })));
+  body.replaceChildren(...parts);
 }
 
-
-// Every standing grant, and a way to take it back. An "always" that cannot be
-// found later is a trap, so this lists what was granted, how wide it is, and
-// when - including the built-in grants that used to be invisible in code.
-async function renderPermissionsPanel(content) {
+// Every standing grant, and a way to take it back. An "always" that cannot
+// be found later is a trap, so this lists what was granted, how wide it is,
+// and when - including the built-in grants that used to be invisible in code.
+async function renderPermissionsPanel(body, status, page) {
   const { rules, audit } = await api("/api/permissions");
-  content.innerHTML = "";
-  content.append(el("p", { class: "meta", text:
-    "What models may do without asking again. Anything not listed here is asked for when it comes up, "
-    + "in whichever feature is asking." }));
-
-  if (!rules.length) content.append(el("p", { class: "meta", text: "Nothing is granted yet." }));
-  for (const rule of rules) {
-    const scope = rule.admin_only ? "admins only, everywhere"
-      : rule.scope === "session" ? "this chat only" : "everywhere";
-    const row = el("div", { class: "settings-row" }, [
-      el("div", {}, [
-        el("div", { text: rule.content ? `${rule.tool} — ${rule.content}` : rule.tool }),
-        el("div", { class: "meta", text:
-          `${rule.behavior === "allow" ? "Allowed" : "Denied"} ${scope}`
-          + (rule.source === "built-in" ? " · built in" : rule.granted_by ? ` · granted by ${rule.granted_by}` : "")
-          + (rule.granted_at ? ` · ${new Date(rule.granted_at * 1000).toLocaleString()}` : "") }),
-      ]),
-      el("button", { class: "btn danger", text: "Revoke", onclick: async (event) => {
-        event.currentTarget.disabled = true;
+  const rows = rules.map((rule) => {
+    const scope = rule.admin_only ? "admins only, everywhere" : rule.scope === "session" ? "this chat only" : "everywhere";
+    return row({ title: rule.content ? `${rule.tool} — ${rule.content}` : rule.tool, cls: "settings-row",
+      description: `${rule.behavior === "allow" ? "Allowed" : "Denied"} ${scope}`
+        + (rule.source === "built-in" ? " · built in" : rule.granted_by ? ` · granted by ${rule.granted_by}` : "")
+        + (rule.granted_at ? ` · ${new Date(rule.granted_at * 1000).toLocaleString()}` : ""),
+      control: el("button", { class: "btn quiet danger", text: "Revoke", onclick: async (event) => {
+        const button = event.currentTarget;
+        button.disabled = true;
         try {
           await api(`/api/permissions/${encodeURIComponent(rule.id)}`, { method: "DELETE" });
-          renderPermissionsPanel(content);
-        } catch (problem) { toast(problem.message, "error"); event.currentTarget.disabled = false; }
-      } }),
-    ]);
-    content.append(row);
-  }
-
+          renderPermissionsPanel(body, status, page);
+        } catch (problem) { toast(problem.message, "error"); button.disabled = false; }
+      } }) });
+  });
+  const parts = [group({ title: "Standing grants" }, rows.length ? rows : [empty("Nothing is granted yet.")])];
   if (audit.length) {
     const log = el("details", { class: "disclosure-panel" }, [el("summary", { text: "Recent decisions" })]);
     for (const entry of [...audit].reverse()) {
@@ -2426,6 +1785,7 @@ async function renderPermissionsPanel(content) {
         + (entry.tool ? ` · ${entry.tool}` : "") + (entry.content ? ` (${entry.content})` : "")
         + (entry.by ? ` · ${entry.by}` : "") }));
     }
-    content.append(log);
+    parts.push(group({}, [log]));
   }
+  body.replaceChildren(...parts);
 }
