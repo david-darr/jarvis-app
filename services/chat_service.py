@@ -434,7 +434,17 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
     _record_turn_telemetry(session_id, endpoint, brain)
     session_manager.append_message(session_id, "assistant", reply, extra=_tool_rounds(brain, endpoint))
     _remember_claude_session(session_id, brain)
+    _reply_hook(session_id, endpoint, text, reply)
     return reply
+
+
+def _reply_hook(session_id: str, endpoint: dict, message: str, reply: str) -> None:
+    """chat.reply for the person's lifecycle hooks (services/hook_service.py)."""
+    from services.hook_service import hook_service
+    session = session_manager.get_session(session_id) or {}
+    hook_service.emit("chat.reply", {"source": "agent" if session.get("agent_id") else "chat", "session_id": session_id,
+                                     "title": session.get("title") or "", "agent_id": session.get("agent_id"),
+                                     "model": endpoint.get("name"), "message": message, "reply": reply})
 
 
 async def stream_message(session_id: str, text: str, attachment_ids: list[str] | None = None,
@@ -502,6 +512,7 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
     _record_turn_telemetry(session_id, endpoint, brain)
     session_manager.append_message(session_id, "assistant", "".join(reply_parts), extra=_tool_rounds(brain, endpoint))
     _remember_claude_session(session_id, brain)
+    _reply_hook(session_id, endpoint, text, "".join(reply_parts))
 
 
 async def _stream_with_permission_prompts(session_id: str, brain, full_text: str):

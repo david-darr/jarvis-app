@@ -115,7 +115,25 @@ class ExternalBrain:
         return seeded
 
     async def _execute_tool(self, name: str, args: dict) -> str:
+        """One tool call, with the person's lifecycle hooks around it
+        (services/hook_service.py): a before-tool hook can block it. The
+        tool search and describe steps are lookups, not tools, so they pass."""
         args = args if isinstance(args, dict) else {}
+        if name in (tool_search.SEARCH, tool_search.DESCRIBE):
+            return await self._run_tool(name, args)
+        from services.hook_service import hook_service
+        real = args.get("name", "") if name == tool_search.CALL else name
+        real_args = args.get("arguments") if name == tool_search.CALL else args
+        context = {"source": "agent" if self.agent_id else "chat" if self.session_id else "task",
+                   "session_id": self.session_id, "agent_id": self.agent_id, "model": self.model}
+        reason = await hook_service.before_tool(real, real_args, **context)
+        if reason:
+            return f"Not run: blocked by a hook: {reason}"
+        result = await self._run_tool(name, args)
+        hook_service.after_tool(real, real_args, result, **context)
+        return result
+
+    async def _run_tool(self, name: str, args: dict) -> str:
         if name == tool_search.SEARCH:
             result = tool_search.search(self._mcp_tools, args.get("query", ""), args.get("limit", 5))
             if result.startswith("["):

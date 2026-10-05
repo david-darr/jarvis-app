@@ -16,12 +16,14 @@ mechanism, same as how the real JARVIS (voice-line/brain.py) works today.
 import asyncio
 import hashlib
 import json
+import logging
 import os
 
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    HookMatcher,
     PermissionResultAllow,
     PermissionResultDeny,
     ResultMessage,
@@ -40,6 +42,8 @@ from core.turn_taint import TurnTaint
 # with no error. This caps the wait per received message, not per whole
 # turn, so a legitimately long tool-call chain that's still making progress
 # isn't cut off — only real silence trips it.
+logger = logging.getLogger(__name__)
+
 TURN_MESSAGE_TIMEOUT_SECONDS = 180
 
 
@@ -364,7 +368,38 @@ class Brain:
             # *descriptions* to imply a model should proactively check
             # memory.
             system_prompt={"type": "preset", "preset": "claude_code", "append": system_prompt.for_claude(self.is_admin) + projects.project_addendum(self.project_id) + _agent_addendum(self.agent_prompt)},
+            # Lifecycle hooks (services/hook_service.py). Through the SDK's
+            # own tool hooks, not can_use_tool: pre-approved tools never
+            # reach can_use_tool, and a hook must see every call.
+            hooks={"PreToolUse": [HookMatcher(hooks=[self._hook_before_tool])],
+                   "PostToolUse": [HookMatcher(hooks=[self._hook_after_tool])]},
         )
+
+    def _hook_context(self) -> dict:
+        source = "agent" if self.agent_id else "chat" if self.session_id else "task"
+        return {"source": source, "session_id": self.session_id, "agent_id": self.agent_id, "model": self.model or "claude"}
+
+    async def _hook_before_tool(self, input_data, tool_use_id, context):
+        from services.hook_service import hook_service
+        try:
+            reason = await hook_service.before_tool(input_data.get("tool_name", ""), input_data.get("tool_input") or {},
+                                                    **self._hook_context())
+        except Exception:
+            logger.exception("hooks: before-tool check failed; the tool goes ahead")
+            return {}
+        if not reason:
+            return {}
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                       "permissionDecisionReason": f"Blocked by a hook: {reason}"}}
+
+    async def _hook_after_tool(self, input_data, tool_use_id, context):
+        from services.hook_service import hook_service
+        try:
+            hook_service.after_tool(input_data.get("tool_name", ""), input_data.get("tool_input") or {},
+                                    input_data.get("tool_response", ""), **self._hook_context())
+        except Exception:
+            logger.exception("hooks: after-tool notice failed")
+        return {}
 
     async def _permission(self, tool_name: str, arguments: dict, context):
         """Ask the person, using the SDK's own idea of what a grant covers.

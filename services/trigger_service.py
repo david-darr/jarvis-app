@@ -206,6 +206,10 @@ class TriggerService:
         trigger["log"] = ([{"at": time.time(), "outcome": outcome, "event": event[:80], "delivery": delivery[:80],
                             "detail": detail[:300]}] + trigger.get("log", []))[:EVENT_LOG_LENGTH]
         self._save()
+        from services.hook_service import hook_service
+        hook_service.emit("trigger.event", {"source": "trigger", "trigger": trigger["name"], "trigger_id": trigger["id"],
+                                            "agent_id": trigger.get("agent_id"), "outcome": outcome,
+                                            "event_type": event, "detail": detail})
 
     # -- an incoming event ---------------------------------------------------------
 

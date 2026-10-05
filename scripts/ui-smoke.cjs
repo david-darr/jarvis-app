@@ -203,6 +203,20 @@ function fixture(url) {
   if (route === "/api/email/triage") return { generated_at: now, scanned: 12, items: empty ? [] : [{ subject: "Project check-in this afternoon", from: "team@example.test", reason: "An upcoming meeting needs your review." }] };
   if (route === "/api/email/accounts") return [];
   if (route === "/api/channels") return [];
+  // Settings > Hooks (2026-10-05): a command that blocked a tool, and a
+  // signed post that is switched off.
+  if (route === "/api/hooks") return { paused: false, events: {
+    "tool.before": "Before a tool runs", "tool.after": "After a tool ran", "chat.reply": "A chat reply finished",
+    "task.finished": "A task or agent goal run finished", "card.review": "A card's result is ready for review",
+    "agent.inbox": "An agent sent a report or a question", "trigger.event": "A webhook trigger received an event" },
+    hooks: empty ? [] : [
+      { id: "h1", name: "Guard deletes", enabled: true, event: "tool.before", action: "command", tool_pattern: "Bash|PowerShell|*run_shell",
+        agent_id: "a1", source: "agent", config: { command: "python \"C:\\scripts\\guard.py\"", timeout: 30, block_on_failure: true },
+        created_at: now - 9000, last_run_at: now - 60, log: [
+          { at: now - 60, event: "tool.before", outcome: "blocked", detail: "Deleting files is blocked by a hook." },
+          { at: now - 400, event: "tool.before", outcome: "ok", detail: "" }] },
+      { id: "h2", name: "Post agent reports", enabled: false, event: "agent.inbox", action: "webhook", tool_pattern: "", agent_id: null,
+        source: "any", config: { url: "https://hooks.example.test/jarvis", secret: true }, created_at: now - 8000, last_run_at: null, log: [] }] };
   // Settings > Channels (settingsChannels.js): one two-way connector with a
   // problem, one send-only.
   if (route === "/api/settings/discord-bots") return [];
@@ -619,6 +633,47 @@ app.whenReady().then(async () => {
       assert.equal(await applyDisabled("c0ffee000002"), true, label + " an oversized one is read only");
       assert.deepEqual(await overflow(), [], label + " sandbox changes overflow");
       await capture(label + "-sandbox-changes");
+      // -- Hooks (2026-10-05): each hook with its last outcome; its page shows
+      // the exact command and its runs; a new command is shown in full and
+      // confirmed before anything is saved.
+      await js("document.querySelector('[data-section=hooks]').click()");
+      await waitFor("document.querySelectorAll('.hook-row').length === 2");
+      assert.equal(await js("document.querySelector('[data-hook=h1] .set-pill').textContent"), "Blocked", label + " a hook shows its last outcome");
+      assert.equal(await js("document.querySelector('[data-hook=h2] .set-switch').getAttribute('aria-checked')"), "false", label + " a hook that is off says so");
+      assert.ok(await js("document.querySelector('.set-page[data-page=hooks] .set-note').textContent.includes('Codex')"), label + " what hooks cannot see is stated");
+      assert.deepEqual(await overflow(), [], label + " hooks overflow");
+      await capture(label + "-hooks");
+      await js("document.querySelector('[data-hook=h1] .set-row-title').click()");
+      await waitFor("document.querySelectorAll('.hook-run').length === 2");
+      assert.ok(await js("document.querySelector('#settings-content').textContent.includes('guard.py')"), label + " the exact command is shown");
+      assert.ok(await js("document.querySelector('#settings-content').textContent.includes('Only Scout · Agents only')"), label + " and whose work it watches");
+      assert.deepEqual(await overflow(), [], label + " hook page overflow");
+      await capture(label + "-hook-page");
+      await js("document.querySelector('#settings-content .set-back').click()");
+      await waitFor("document.querySelectorAll('.hook-row').length === 2");
+      await js("document.querySelector('[data-hook=h2] .set-row-title').click()");
+      await waitFor("document.querySelector('#settings-content').textContent.includes('hooks.example.test')");
+      assert.ok(await js("document.querySelector('#settings-content').textContent.includes('X-JARVIS-Signature')"), label + " a signed post says so, and never shows the secret");
+      await js("document.querySelector('#settings-content .set-back').click()");
+      await waitFor("document.querySelectorAll('.hook-row').length === 2");
+      await js("[...document.querySelectorAll('#settings-content .set-header .btn')].find(b => b.textContent === 'Add a hook').click()");
+      await waitFor("!!document.querySelector('.hook-form')");
+      const hookFields = () => js("[...document.querySelectorAll('.hook-form .set-row-title')].filter(t => t.offsetParent).map(t => t.textContent)");
+      assert.deepEqual(await hookFields(), ["Start from", "Name", "When", "Only for", "From", "Does", "Channel", "Text"], label + " a new hook starts as a channel message");
+      await js("(() => { const s = document.querySelector('.hook-form .custom-select'); s.value = '3'; s.dispatchEvent(new Event('change')); })()");
+      assert.deepEqual(await hookFields(), ["Start from", "Name", "When", "Tools", "Only for", "From", "Does", "Command", "Stops after", "Block if it fails"],
+        label + " a blocking command shows only its own fields");
+      assert.deepEqual(await overflow(), [], label + " add hook overflow");
+      await capture(label + "-hook-add");
+      await js("[...document.querySelectorAll('.hook-form .btn')].find(b => b.textContent === 'Add hook').click()");
+      await waitFor("!!document.querySelector('.confirm-panel')");
+      assert.ok(await js("document.querySelector('.confirm-panel').textContent.includes(\"$d -match 'Remove-Item\")"), label + " the exact command is shown before it is saved");
+      await capture(label + "-hook-confirm");
+      await js("[...document.querySelectorAll('.confirm-panel .btn')].find(b => b.textContent === 'Cancel').click()");
+      await waitFor("!document.querySelector('.confirm-panel')");
+      assert.equal(writes.length, 0, label + " cancelling saves nothing");
+      await js("document.querySelector('#settings-content .set-back').click()");
+      await waitFor("document.querySelectorAll('.hook-row').length === 2");
       await js("document.querySelector('[data-section=vault]').click()");
       await waitFor("document.querySelector('#settings-content .set-title')?.textContent === 'Vault' && !!document.querySelector('#settings-content .set-row, #settings-content .set-empty')");
       // Search matches what someone would actually type, not just the

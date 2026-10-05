@@ -3,6 +3,7 @@ import { suppressBrowser, releaseBrowser } from "../browserPane.js";
 import { renderSpeechPanel } from "./speechPanel.js";
 import { renderAppearancePanel } from './appearancePanel.js';
 import { renderChannelsPanel } from "./settingsChannels.js";
+import { renderHooksPanel } from "./settingsHooks.js";
 import { pageHeader, group, row, field, toggle, pill, note, empty, badge, hueFor } from "../settingsKit.js";
 
 // The side browser's page is a NATIVE view composited above the HTML in the
@@ -58,6 +59,7 @@ const NAV_ICONS = {
   shortcuts: I('<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>'),
   "agent-tools": I('<path d="M14.7 6.3a4 4 0 00-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.6 2.6-2.4-.6-.6-2.4 2.6-2.6z"/>'),
   permissions: I('<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/>'),
+  hooks: I('<path d="M7 4v7a5 5 0 0010 0V9"/><path d="M14 6l3 3 3-3"/>'),
   users: I('<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.7-3.5 3.3-5.5 6.5-5.5s5.8 2 6.5 5.5M16 4.5a3.5 3.5 0 010 7M18 14.5c2 .7 3.2 2.5 3.5 5.5"/>'),
   system: I('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
   logs: I('<path d="M6 3h9l5 5v13H6V3z"/><path d="M9 12h7M9 16h7M9 8h3"/>'),
@@ -122,6 +124,9 @@ const SECTION_GROUPS = [
       { id: "permissions", label: "Permissions", render: renderPermissionsPanel,
         description: "What models may do without asking again. Anything not listed is asked for when it comes up.",
         keywords: ["permission", "allow", "always allow", "approval", "grant", "revoke", "prompt", "asked"] },
+      { id: "hooks", label: "Hooks", render: renderHooksPanel,
+        description: "Your own steps that run when something happens: post to a web address, add to a vault note, send to a channel, or run a command that can block a tool.",
+        keywords: ["hook", "hooks", "lifecycle", "before tool", "after tool", "webhook", "block", "script", "automation", "event"] },
       { id: "users", label: "Users", render: renderUsersPanel,
         description: "Who can sign in to this JARVIS, and who is an admin.",
         keywords: ["accounts", "add user", "roles", "admin", "people"] },

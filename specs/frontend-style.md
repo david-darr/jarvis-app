@@ -120,6 +120,10 @@ Agents always run in Auto on every model kind (David, 2026-10-05): nothing they 
 
 `static/js/views/settingsChannels.js` lists Discord bots and every other connector (core/connectors) in one list, a row each: platform initial, name, platform and allowed-sender count or "send only", a status pill (Listening, Ready, Problem with its reason, Off, Not connected) and, for connectors, an on/off switch. A row opens the channel's own page (status, webhook address, settings built from the fields the connector declares, Send test, Remove; Discord adds its default model and channel overrides). "Add a channel" opens a picker of platform tiles grouped as two-way, two-way through a webhook, and send-only; empty groups are left out. Secret fields never show saved values ("Saved; leave blank to keep"). The list refreshes every five seconds only while it is on screen, so a form being edited is never wiped.
 
+## Settings > Hooks
+
+`static/js/views/settingsHooks.js` (Administration, admin only) lists lifecycle hooks (services/hook_service.py) a row each: a badge for what it does (W web address, N vault note, C channel, > command), the event, the last run, the last outcome as a pill (OK, Blocked, Failed, Timed out) and an on/off switch, with Pause all and Add a hook in the header and a plain note of what hooks cannot see (Codex's own tools). A hook's page shows When (On, event, tools, where), Does (the exact command, address or note; a signed post says so and never shows its secret) and its recent runs, with Send a test event, Edit and Delete. The add form can start from an example and shows only the fields for the chosen event and kind. Saving a new or changed command always opens a confirmation that shows the exact command and when it will run.
+
 ## Lifecycle and verification
 
 Each navigation owns a fresh root; delayed work must not overwrite a newer view. Resource-owning views return cleanup functions for listeners, timers, observers, and graphics. Home returns cleanup synchronously while requests are pending.

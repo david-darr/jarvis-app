@@ -280,6 +280,11 @@ class AgentService:
         how = "Reply to this message to answer." if item["kind"] == "question" else "Reply to this message to answer it."
         self._announce(item["agent_id"], "agent.inbox", verb, item["title"], item.get("body") or "",
                        f"{how} {code_for(self.get(item['agent_id']), item['id'])}", item_id=item["id"])
+        from services.hook_service import hook_service
+        hook_service.emit("agent.inbox", {"source": "agent", "agent_id": item["agent_id"],
+                                          "agent": (self.get(item["agent_id"]) or {}).get("name", ""),
+                                          "kind": item["kind"], "title": item["title"], "text": item.get("body") or "",
+                                          "team_id": item.get("team_id")})
 
     def notify_review(self, agent_id: str, card: dict) -> None:
         result = next((c["text"] for c in reversed(card.get("comments") or []) if c["kind"] == "result"), "")

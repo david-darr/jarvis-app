@@ -44,6 +44,12 @@ from core.constants import DATA_DIR
 import os
 
 TASKS_FILE = os.path.join(DATA_DIR, "tasks.json")
+
+
+def _hook(event: str, data: dict) -> None:
+    """The person's lifecycle hooks (services/hook_service.py); notify-only."""
+    from services.hook_service import hook_service
+    hook_service.emit(event, data)
 TASK_RUNS_FILE = os.path.join(DATA_DIR, "task_runs.json")
 
 # Kept per task, so a task that runs every few minutes cannot push another
@@ -280,6 +286,9 @@ class TaskService:
         card["claimed_until"] = None
         self._append_run(card, output, None, "succeeded")
         self._save_tasks()
+        _hook("card.review", {"source": "agent" if card.get("agent_id") else "task", "card": card["name"],
+                              "card_id": card_id, "agent_id": card.get("agent_id"), "output": output,
+                              "trigger": (card.get("trigger") or {}).get("name")})
         return card
 
     def fail_card(self, card_id: str, error: str, lost: bool = False) -> dict:
@@ -445,6 +454,8 @@ class TaskService:
         if task is None:
             return
         self._append_run(task, output, error, "failed" if error else "succeeded", delivered)
+        _hook("task.finished", {"source": "agent" if task.get("agent_id") else "task", "task": task["name"],
+                                "task_id": task_id, "agent_id": task.get("agent_id"), "output": output, "error": error})
         if task["schedule_kind"] == "once":
             task["enabled"] = False
             task["next_run_at"] = None

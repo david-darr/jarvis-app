@@ -443,7 +443,9 @@ input[type="checkbox"]:checked::after {
 /* -- confirm dialog (David's ask 2026-09-03) ---------------------------- */
 .confirm-panel { width: 400px; }
 .confirm-panel h4 { display: block; margin-bottom: 8px; }
-.confirm-panel .muted { margin-bottom: 18px; }
+/* pre-wrap: a message can carry its own line breaks (the hook command
+   confirmation shows the exact command, then what it does). */
+.confirm-panel .muted { margin-bottom: 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* -- labeled form fields (David's ask 2026-09-03) — the toolbar rows in
    Email/Tasks/Calendar/Notes were bare placeholder-only inputs crammed into
