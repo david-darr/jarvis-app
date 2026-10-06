@@ -38,7 +38,7 @@ class ExternalBrain:
                  project_id: str | None = None, endpoint_id: str | None = None,
                  integration_ids: list[str] | None = None, allow_user_tab_source: bool = False,
                  supports_images: bool = False, agent_id: str | None = None, agent_prompt: str = "",
-                 window: int | None = None):
+                 window: int | None = None, helper: bool = False):
         self.base_url = base_url
         self.model = model
         self.api_key = api_key
@@ -56,9 +56,14 @@ class ExternalBrain:
         # A known small window (local models, small API ones) gets the core
         # tools and the bridge; the rest are searched for (2026-10-06,
         # core/tool_registry.py). Decided once, so the cached prompt is stable.
-        self.small_window = bool(window and window <= tool_registry.SMALL_WINDOW)
-        self.tools = tool_registry.openai_tools(is_admin, agent=bool(agent_id), small_window=self.small_window)
-        self._deferred: dict[str, dict] = tool_registry.deferred_tools(is_admin, agent=bool(agent_id)) \
+        # A helper (core/helpers.py) gets the read tools and browse only, and
+        # its own short instructions instead of a chat's. That list is short
+        # enough to show whole on any window, so no tool is hidden from it.
+        self.helper = helper
+        self.small_window = bool(window and window <= tool_registry.SMALL_WINDOW) and not helper
+        self.tools = tool_registry.openai_tools(is_admin, agent=bool(agent_id), small_window=self.small_window,
+                                                helper=helper)
+        self._deferred: dict[str, dict] = tool_registry.deferred_tools(is_admin, agent=bool(agent_id), helper=helper) \
             if self.small_window else {}
         if self._deferred:
             self.tools = self.tools + tool_search.bridge_schemas()
@@ -79,7 +84,9 @@ class ExternalBrain:
         # an existing conversation already carries its own system message
         # from when it was first created.
         seeded = self._seed(history or [], endpoint_id, supports_images)
-        if not seeded or seeded[0].get("role") != "system":
+        if helper:
+            seeded.insert(0, {"role": "system", "content": system_prompt.HELPER_PROMPT})
+        elif not seeded or seeded[0].get("role") != "system":
             # Projects (David's ask 2026-09-12) appended the same way as
             # core/brain.py/core/codex_brain.py — see core/projects.py's
             # project_addendum().
@@ -181,7 +188,7 @@ class ExternalBrain:
 
     def _context(self) -> tool_registry.ToolContext:
         return tool_registry.ToolContext(self.session_id, self.is_admin, self.allow_user_tab_source,
-                                         self.turn_taint, self.agent_id, model=self.model)
+                                         self.turn_taint, self.agent_id, model=self.model, helper=self.helper)
 
     async def _call_mcp(self, name: str, args: dict) -> str:
         """A third-party tool: asked about first, like Claude's MCP calls,

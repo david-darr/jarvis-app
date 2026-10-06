@@ -70,7 +70,15 @@ async def get_settings(user: str = Depends(require_admin)) -> dict:
         "disabled_tools": raw["disabled_tools"],
         "developer_mode_enabled": raw["developer_mode_enabled"],
         "auto_compact": raw["auto_compact"],
+        "helper_endpoint_id": raw["helper_endpoint_id"],
+        "helper_endpoint": _helper_summary(),
     }
+
+
+def _helper_summary() -> dict | None:
+    from core import helpers
+    endpoint = helpers.helper_endpoint()
+    return {"id": endpoint["id"], "name": endpoint["name"], "kind": endpoint["kind"]} if endpoint else None
 
 
 class SetDeveloperModeRequest(BaseModel):
@@ -97,6 +105,25 @@ async def set_auto_compact(body: SetAutoCompactRequest, user: str = Depends(requ
     window (services/chat_service.py _compact_if_nearly_full)."""
     settings_store.update_settings(auto_compact=body.enabled)
     return {"ok": True, "auto_compact": body.enabled}
+
+
+class SetHelpersRequest(BaseModel):
+    endpoint_id: Optional[str] = None  # None: the first local model; "off"; or a local or API model
+
+
+@router.post("/helpers")
+async def set_helpers(body: SetHelpersRequest, user: str = Depends(require_admin)) -> dict:
+    """Settings > Added Models > Helpers: the model helpers run on
+    (core/helpers.py). Never Claude or Codex: their own tools can't be
+    limited to reading."""
+    from core import helpers, model_endpoints
+    choice = body.endpoint_id or None
+    if choice not in (None, helpers.OFF):
+        endpoint = model_endpoints.get_endpoint(choice)
+        if endpoint is None or endpoint.get("kind") not in ("local", "api"):
+            raise HTTPException(status_code=400, detail="helpers run on a local or API model")
+    settings_store.update_settings(helper_endpoint_id=choice)
+    return {"ok": True, "helper_endpoint_id": choice, "helper_endpoint": _helper_summary()}
 
 
 @router.post("/onboarding-complete")

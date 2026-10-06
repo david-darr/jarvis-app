@@ -64,6 +64,13 @@ Deliveries (schema v5, roadmap phase 4, 2026-10-06)
 one row per message, sent and retried from here, so a failed send or a
 restart neither loses it nor sends it twice.
 
+Helpers (schema v6, roadmap phase 5, 2026-10-06)
+------------------------------------------------
+`helpers` keeps each short-lived helper a chat or task handed a job to
+(core/helpers.py): its job, its connection, how it ended and what it found,
+so a result outlives the turn that asked for it and a restart. A deleted chat
+takes its helpers with it.
+
 Upgrades
 --------
 Before an older database is upgraded, it is copied whole with SQLite's backup
@@ -94,7 +101,7 @@ LEGACY_INDEX_FILE = os.path.join(DATA_DIR, "sessions_index.json")
 LEGACY_CHANNEL_FILE = os.path.join(DATA_DIR, "channel_sessions.json")
 LEGACY_BACKUP_DIR = os.path.join(DATA_DIR, "sessions.pre-sqlite-backup")
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 RUNS_KEPT = 5000
 
 # meta key written as the import's last step; see _legacy_import_done().
@@ -210,6 +217,29 @@ CREATE TABLE IF NOT EXISTS deliveries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_deliveries_due ON deliveries (status, next_try_at);
+
+-- Helpers (schema v6, core/helpers.py). `parent` is who asked: chat:<id>,
+-- task:<id>, agent:<id> or detached.
+CREATE TABLE IF NOT EXISTS helpers (
+    id            TEXT PRIMARY KEY,
+    batch_id      TEXT NOT NULL,
+    parent        TEXT NOT NULL,
+    parent_run_id TEXT,
+    goal          TEXT NOT NULL,
+    context       TEXT,
+    endpoint_id   TEXT,
+    model         TEXT,
+    status        TEXT NOT NULL,
+    result        TEXT,
+    error         TEXT,
+    tokens        INTEGER,
+    created_at    REAL NOT NULL,
+    started_at    REAL,
+    ended_at      REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_helpers_batch ON helpers (batch_id);
+CREATE INDEX IF NOT EXISTS idx_helpers_parent ON helpers (parent, created_at);
 """
 
 _conn: Optional[sqlite3.Connection] = None
@@ -317,8 +347,8 @@ def _upgrade_schema(conn: sqlite3.Connection) -> None:
                 conn.execute("ALTER TABLE sessions ADD COLUMN agent_id TEXT")
             conn.execute("UPDATE sessions SET agent_id = json_extract(doc, '$.agent_id')")
 
-    # v4 adds only the runs table and v5 only the deliveries table, both
-    # created by _SCHEMA above.
+    # v4 adds only the runs table, v5 only the deliveries table and v6 only
+    # the helpers table, all created by _SCHEMA above.
 
     with conn:
         conn.execute(
@@ -595,6 +625,7 @@ def delete_session(session_id: str) -> None:
             conn.execute("DELETE FROM messages_fts WHERE session_id = ?", (session_id,))
             conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             conn.execute("DELETE FROM runs WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM helpers WHERE parent = ?", (f"chat:{session_id}",))
             # messages goes via ON DELETE CASCADE; channel mappings are left
             # to resolve themselves the way they always did — see
             # get_channel_session_id(), which treats a mapping to a missing
@@ -611,6 +642,7 @@ def delete_all_sessions() -> None:
             conn.execute("DELETE FROM sessions")
             conn.execute("DELETE FROM channel_sessions")
             conn.execute("DELETE FROM runs WHERE session_id IS NOT NULL")
+            conn.execute("DELETE FROM helpers WHERE parent LIKE 'chat:%'")
 
 
 # -------------------------------------------------------------------- runs

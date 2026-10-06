@@ -24,7 +24,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from core import events, file_checkpoints, logs as log_files, outbox, runs, token_usage
+from core import events, file_checkpoints, helpers, logs as log_files, outbox, runs, token_usage
 from core.brain import Brain
 from core.builtin_tasks import BUILTIN_TASKS
 from services.agent_service import agent_service, is_silent
@@ -159,6 +159,7 @@ async def start_run(task: dict, source: str = "manual", wait: bool = False) -> b
         finally:
             _running.pop(task["id"], None)
         if work.cancelled():
+            helpers.stop_parent(f"task:{task['id']}")  # its helpers stop with it (core/helpers.py)
             task_service.record_stopped(task["id"])
             events.emit("task.stopped", f"{task['name']} was stopped", task_id=task["id"])
             logger.info("'%s' (%s) was stopped", task["name"], task["id"])
@@ -411,6 +412,7 @@ def start() -> None:
     global _loop_task
     if _loop_task is None:
         outbox.recover()
+        helpers.recover()
         for task in task_service.recover_interrupted_runs():
             _report_lost(task)
         _loop_task = asyncio.create_task(_poll_loop())

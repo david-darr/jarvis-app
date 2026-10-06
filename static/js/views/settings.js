@@ -661,10 +661,31 @@ async function renderAddedModelsPanel(body, _status, page) {
     control: toggle({ checked: settings.auto_compact !== false, label: "Compact local and API chats automatically",
       onChange: (on) => api("/api/settings/auto-compact", { method: "POST", body: JSON.stringify({ enabled: on }) }) }),
   })]);
+  // Helpers (roadmap phase 5, 2026-10-06; core/helpers.py): the model the
+  // delegate tool's read-only helpers run on. Never Claude or Codex, whose own
+  // tools can't be limited to reading.
+  const firstLocal = endpoints.find((e) => e.kind === "local");
+  const helperSelect = customSelect({}, [
+    el("option", { value: "", text: `Automatic: ${firstLocal ? firstLocal.name : "the first local model (none added)"}` }),
+    ...endpoints.filter((e) => e.kind === "local" || e.kind === "api").map((e) => el("option", { value: e.id, text: e.name })),
+    el("option", { value: "off", text: "Off" }),
+  ]);
+  helperSelect.value = settings.helper_endpoint_id || "";
+  helperSelect.addEventListener("change", async () => {
+    try {
+      await api("/api/settings/helpers", { method: "POST", body: JSON.stringify({ endpoint_id: helperSelect.value || null }) });
+      toast("Helpers updated", "success");
+    } catch (problem) { toast(problem.message, "error"); }
+  });
+  const helpers = group({ title: "Helpers", cls: "helpers-settings" }, [row({
+    title: "Model for helpers",
+    description: "Any chat or task can hand up to 3 research jobs to helpers that work in parallel and report back. They run on this model, can only read (notes, past chats, documents, the web) and stop after 10 minutes or 40,000 tokens each. Claude and Codex chats can use them too; their own built-in subagents are separate.",
+    control: helperSelect,
+  })]);
   body.replaceChildren(...kinds.map(([kind, title]) => {
     const list = endpoints.filter((e) => e.kind === kind);
     return group({ title }, list.length ? list.map(endpointRow) : [empty("None added")]);
-  }), longChats);
+  }), longChats, helpers);
   if (!endpoints.length) body.prepend(note(["Nothing added yet. ", el("button", { type: "button", class: "btn quiet", text: "Add a model", onclick: () => selectSection("add-models") })]));
 }
 

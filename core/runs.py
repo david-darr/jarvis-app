@@ -24,6 +24,7 @@ The usage buckets follow Hermes Agent's CanonicalUsage
 """
 import asyncio
 import contextlib
+import contextvars
 import json
 import logging
 import time
@@ -110,6 +111,32 @@ class RunContext:
     # behaviour (per-message timeouts only, no token budget for chats/tasks).
     deadline: Optional[float] = None
     budget_tokens: Optional[int] = None
+
+
+# The run in progress, for what it starts (core/helpers.py: a helper's run
+# names its parent). Set by complete() and by a chat's streamed turn. Unset
+# where a brain runs its tools in a task of its own, as Claude Code's
+# in-process tools do (found live 2026-10-06): for a chat, its run in
+# progress is also kept by chat id (enter/leave, current_for).
+CURRENT: contextvars.ContextVar[Optional[RunContext]] = contextvars.ContextVar("current_run", default=None)
+_BY_SESSION: dict[str, RunContext] = {}
+
+
+def enter(context: RunContext) -> None:
+    """A chat's run begins: it is the run in progress for that chat."""
+    CURRENT.set(context)
+    if context.session_id:
+        _BY_SESSION[context.session_id] = context
+
+
+def leave(context: RunContext) -> None:
+    if context.session_id and _BY_SESSION.get(context.session_id) is context:
+        del _BY_SESSION[context.session_id]
+
+
+def current_for(session_id: Optional[str]) -> Optional[RunContext]:
+    """The run in progress: this task's, else the chat's."""
+    return CURRENT.get() or (_BY_SESSION.get(session_id) if session_id else None)
 
 
 @dataclass(frozen=True)
@@ -337,6 +364,9 @@ async def complete(adapter: RunAdapter, prompt, context: RunContext, tally: Opti
     the caller's, which knows the endpoint. A caller that passes its own
     tally still has what a stopped or failed run used (2026-10-06)."""
     tally = Tally() if tally is None else tally
+    token = CURRENT.set(context)
+    if context.session_id and context.surface == "chat":
+        _BY_SESSION[context.session_id] = context
     try:
         async with contextlib.aclosing(adapter.events(prompt, stream=False)) as items:
             async for item in items:
@@ -349,6 +379,9 @@ async def complete(adapter: RunAdapter, prompt, context: RunContext, tally: Opti
     except Exception as e:
         record(context, tally, "failed", detail=f"{type(e).__name__}: {e}")
         raise
+    finally:
+        CURRENT.reset(token)
+        leave(context)
     record(context, tally, "finished")
     outcome = RunOutcome("".join(tally.parts).strip(), tally.usage, tally.usage_complete, tally.tool_calls)
     spent = outcome.usage.total_tokens if outcome.usage else None

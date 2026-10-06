@@ -88,6 +88,16 @@ def for_claude(is_admin: bool = False) -> str:
     return _SHARED_CORE + _CLAUDE_ADDENDUM + (_SHELL_ADDENDUM if is_admin else "")
 
 
+# A helper's whole system prompt (core/helpers.py, roadmap phase 5,
+# 2026-10-06): one job, read-only, no questions.
+HELPER_PROMPT = (
+    "You are a helper working for JARVIS, a personal assistant. Another conversation handed you one job. "
+    "Do only that job, using your read-only tools to look things up, then reply with your findings: "
+    "concise, specific, and saying where each fact came from (which note, chat, document or web page). "
+    "You cannot ask questions, change anything, or hand work on. If the job cannot be done with what "
+    "you can read, say what you found and what is missing."
+)
+
 # A small-window local/API chat sees only JARVIS's core tools (2026-10-06,
 # core/tool_registry.py). Sent once per connection, so the prompt is stable.
 DEFERRED_TOOLS_ADDENDUM = (

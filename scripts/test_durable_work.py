@@ -440,7 +440,8 @@ class StoreTests(unittest.TestCase):
             with patch.object(store, "DB_FILE", path):
                 conn = store.connection()
                 self.assertTrue(conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'deliveries'").fetchone())
-                self.assertEqual(conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0], "5")
+                self.assertEqual(conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0],
+                                 str(store.SCHEMA_VERSION))
                 self.assertTrue(os.path.exists(path + ".pre-v4"))
                 store.close()
         finally:

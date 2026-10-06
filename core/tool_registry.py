@@ -29,6 +29,10 @@ agent's own; the rest are found through core/tool_search.py's bridge, as
 Hermes Agent's Tool Search does. Every tool's definition is sent with every
 request, and the whole list was about 4,300 tokens.
 
+A helper (core/helpers.py, roadmap phase 5, 2026-10-06) gets only the read
+tools and `browse`: helper_tool() is the rule, applied both to its tool list
+and again by call(), so a helper cannot reach a write tool even by naming one.
+
 A handler takes the tool's arguments and a ToolContext and returns the text
 the model reads. Errors come back as text too: a tool failing must not end
 the turn. dispatch() is call() with the person's lifecycle hooks around it,
@@ -61,6 +65,8 @@ class ToolContext:
     # Which surface is calling (set by call()), and the model, for hooks.
     surface: str = ""
     model: Optional[str] = None
+    # A helper's own tool calls (core/helpers.py): read tools and browse only.
+    helper: bool = False
 
     @property
     def permission_surface(self) -> str:
@@ -112,18 +118,29 @@ def register(name: str, description: str, schema: dict, surfaces: frozenset = AL
     return decorate
 
 
-def specs(surface: str, is_admin: bool = False, agent: bool = False) -> list[ToolSpec]:
+# Never a helper's, though they only read: a helper hands no work on and
+# reads no other helper's results.
+HELPER_BLOCKED = frozenset({"delegate", "helper_results"})
+
+
+def helper_tool(spec: ToolSpec) -> bool:
+    """What a helper may use: the read tools and the sandboxed browser."""
+    return (spec.effect == READ or spec.name == "browse") and not spec.agent_only and spec.name not in HELPER_BLOCKED
+
+
+def specs(surface: str, is_admin: bool = False, agent: bool = False, helper: bool = False) -> list[ToolSpec]:
     """The tools one surface offers, in registration order (stable, so the
     tool list - part of the cached prompt prefix - never reorders). Agent-only
-    tools appear only for an agent's runs and chats."""
+    tools appear only for an agent's runs and chats; a helper gets only
+    helper_tool()'s."""
     return [s for s in _REGISTRY.values() if surface in s.surfaces and (is_admin or not s.admin_only)
-            and (agent or not s.agent_only)]
+            and (agent or not s.agent_only) and (not helper or helper_tool(s))]
 
 
 async def call(name: str, args: dict, ctx: ToolContext, surface: str) -> str:
     spec = _REGISTRY.get(name)
     if (spec is None or surface not in spec.surfaces or (spec.admin_only and not ctx.is_admin)
-            or (spec.agent_only and not ctx.agent_id)):
+            or (spec.agent_only and not ctx.agent_id) or (ctx.helper and not helper_tool(spec))):
         return f"Unknown tool: {name}"
     ctx = dataclasses.replace(ctx, surface=surface)
     try:
@@ -183,17 +200,18 @@ def _shown(spec: ToolSpec, small_window: bool) -> bool:
     return not small_window or spec.core or spec.agent_only
 
 
-def openai_tools(is_admin: bool = False, agent: bool = False, small_window: bool = False) -> list[dict]:
+def openai_tools(is_admin: bool = False, agent: bool = False, small_window: bool = False,
+                 helper: bool = False) -> list[dict]:
     """The OpenAI function-calling list for one session: every tool, or on a
     small window only the core ones (the rest: deferred_tools)."""
     return [{"type": "function", "function": {"name": s.name, "description": s.description, "parameters": s.schema}}
-            for s in specs(OPENAI, is_admin, agent) if _shown(s, small_window)]
+            for s in specs(OPENAI, is_admin, agent, helper) if _shown(s, small_window)]
 
 
-def deferred_tools(is_admin: bool = False, agent: bool = False) -> dict[str, dict]:
+def deferred_tools(is_admin: bool = False, agent: bool = False, helper: bool = False) -> dict[str, dict]:
     """A small window's hidden tools, as core/tool_search.py catalog entries."""
     return {s.name: {"server": "jarvis", "name": s.name, "description": s.description, "schema": s.schema}
-            for s in specs(OPENAI, is_admin, agent) if not _shown(s, True)}
+            for s in specs(OPENAI, is_admin, agent, helper) if not _shown(s, True)}
 
 
 def _fields(args: dict, key: str) -> tuple[str, dict]:
@@ -817,6 +835,38 @@ async def _google_sheets(args, ctx):
 async def _google_forms(args, ctx):
     from core.google_chat_tools import execute
     return await execute("forms", args, ctx)
+
+
+# -- helpers: short-lived read-only jobs (core/helpers.py, roadmap phase 5) ------
+
+@register(
+    "delegate",
+    "Hand 1 to 3 independent, read-only research jobs to helpers that work in parallel and report back. "
+    "Good for going through many notes, past chats, documents or web pages at once; not for a single "
+    "lookup you can do yourself. Each job needs a self-contained goal: a helper sees only the goal and "
+    "context you give it, not this conversation. Helpers can only read, and cannot ask questions. "
+    "Returns each helper's findings, or, if they are still working after a couple of minutes, a batch "
+    "id to collect them later with helper_results.",
+    _object({"jobs": {"type": "array", "minItems": 1, "maxItems": 3, "description": "1 to 3 jobs",
+                      "items": _object({"goal": _str("What to find out, self-contained"),
+                                        "context": _str("Optional: what the helper needs to know")}, ("goal",))}},
+            ("jobs",)),
+    effect=EXEC,
+)
+async def _delegate(args, ctx):
+    from core import helpers
+    return await helpers.delegate(args.get("jobs"), ctx)
+
+
+@register(
+    "helper_results",
+    "Collect what your helpers found: a batch's results by its id, or with no id the latest batch "
+    "this conversation handed out. Says which helpers are still working.",
+    _object({"batch_id": _str("Optional: the batch id delegate gave")}),
+)
+async def _helper_results(args, ctx):
+    from core import helpers
+    return helpers.results_text(args.get("batch_id"), ctx)
 
 
 # -- agents: only in an agent's own runs and chats (services/agent_service.py) --

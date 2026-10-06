@@ -23,7 +23,7 @@ from fastapi import HTTPException
 
 from claude_agent_sdk import CLIJSONDecodeError
 
-from core import attachments, chat_files, file_checkpoints, logs as log_files, mcp_oauth, model_catalog, model_endpoints, model_marks, permissions, runs, token_usage
+from core import attachments, chat_files, file_checkpoints, helpers, logs as log_files, mcp_oauth, model_catalog, model_endpoints, model_marks, permissions, runs, token_usage
 from core.brain import Brain
 from core.codex_brain import CodexBrain
 from core.external_brain import ExternalBrain
@@ -489,6 +489,7 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
     brain = None
     provider_started = False
     context = _run_context(session_id, endpoint, is_admin)
+    runs.enter(context)  # what the turn starts names it (core/helpers.py)
     try:
         full_text = _prepare_sent_text(session_id, index, text, attachment_ids, reference_context)
         provider_started = True
@@ -521,6 +522,8 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
                           "failure_model_endpoint_id": endpoint["id"],
                           "failure_model_name": endpoint["name"], "failure_had_tools": bool(extra)})
         extra["run_id"] = context.run_id
+        # Helpers this turn handed work to stop with it (core/helpers.py).
+        helpers.stop_parent(f"chat:{session_id}")
         session_manager.append_message(session_id, "assistant", "".join(reply_parts),
                                        status="failed" if failed else "interrupted", extra=extra)
         _remember_claude_session(session_id, brain, succeeded=False,
@@ -532,9 +535,11 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
                         "confirmed" if stop.confirmed else "not confirmed", stop.how)
         runs.record(context, tally, "failed" if failed else "stopped", stop=stop,
                     detail=f"{type(exc).__name__}: {exc}" if failed else "")
+        runs.leave(context)
         await close_session_brain(session_id)
         raise
 
+    runs.leave(context)
     runs.record(context, tally, "finished")
     _record_turn_telemetry(session_id, endpoint, brain, tally.usage)
     session_manager.append_message(session_id, "assistant", "".join(reply_parts),

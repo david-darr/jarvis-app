@@ -43,7 +43,9 @@ CLAUDE_APPROVED_BEFORE = {f"mcp__hive_mind__{name}" for name in (
     "search_sessions list_skills search_skills read_skill list_notes list_tasks list_upcoming_events list_specs "
     "read_spec list_documents read_document list_contacts list_task_runs create_note update_note delete_note "
     "create_task update_task delete_task create_event update_event delete_event save_generated_image run_code "
-    "browse save_generated_file google_drive google_sheets google_forms agent_remember agent_ask").split()}
+    "browse save_generated_file google_drive google_sheets google_forms agent_remember agent_ask "
+    # Helpers (roadmap phase 5, 2026-10-06): delegate and collect.
+    "delegate helper_results").split()}
 
 
 def load_cli():
@@ -338,6 +340,13 @@ class CodexTurnTests(unittest.TestCase):
         self.assertIsNone(tool_access.resolve(seen["JARVIS_TOOL_TOKEN"]), "revoked when the turn ends")
         self.assertNotIn("JARVIS_CODEX_SESSION_ID", seen)
         self.assertNotIn("JARVIS_GOOGLE_CHAT_TOKEN", seen)
+
+
+def tearDownModule():
+    # Release the session store so the temp data folder can be removed;
+    # Windows will not delete a database that is still open.
+    from core import session_manager_store
+    session_manager_store.close()
 
 
 if __name__ == "__main__":

@@ -36,6 +36,10 @@ DEFAULTS: dict[str, Any] = {
     # Compact a local/API chat near a full context window before its next
     # message (roadmap phase 3, 2026-10-05; services/chat_service.py).
     "auto_compact": True,
+    # The connection helpers run on (core/helpers.py, roadmap phase 5,
+    # 2026-10-06): None = the first local one, "off", or a local or API
+    # connection's id.
+    "helper_endpoint_id": None,
     "custom_tab_order": [],  # Settings > Admin > Custom Tabs, David's ask 2026-09-01
     "approved_custom_tab_fingerprints": {},  # Only run user tab source whose current tree hash an admin approved.
     # Remote access over Tailscale (David's ask 2026-09-03: users should be
