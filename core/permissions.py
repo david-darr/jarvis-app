@@ -141,6 +141,15 @@ def audit() -> list[dict]:
     return _load()["audit"]
 
 
+def record_tool_use(outcome: str, tool: str, effect: str, arguments: dict, by: str) -> None:
+    """A JARVIS tool that changed something, ran code or reached another
+    service (core/tool_registry.py), in the same audit as the decisions."""
+    data = _load()
+    _record(data, {"decision": outcome, "tool": tool, "effect": effect,
+                   "content": derive_target(tool, arguments), "by": by})
+    _save(data)
+
+
 def record_mode_change(session_id: str, mode: str, user: str) -> None:
     data = _load()
     _record(data, {"decision": "chat_mode_changed", "session_id": session_id,

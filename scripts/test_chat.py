@@ -2519,11 +2519,15 @@ class CompactedArchiveSearchTests(unittest.TestCase):
         brain = ExternalBrain("http://fake", "m", None, session_id=self.sid)
         text = asyncio.run(brain._execute_tool("search_sessions", {"query": "zephyr lantern", "this_chat": True}))
         self.assertIn("project codename is zephyr-lantern", text)
-        cli = Path(__file__).resolve().parents[1] / "mcp_servers" / "hive_mind_cli.py"
-        env = {**os.environ, "JARVIS_DATA_DIR": fixture.name, "JARVIS_CODEX_SESSION_ID": self.sid}
-        out = subprocess.run([sys.executable, str(cli), "search_sessions", "--query", "zephyr lantern", "--this_chat"],
-                             capture_output=True, text=True, env=env, timeout=60)
-        self.assertIn("project codename is zephyr-lantern", out.stdout, out.stderr)
+        from fastapi import FastAPI as _FastAPI
+        from core import tool_access
+        from routes import tool_routes
+        app_ = _FastAPI()
+        app_.include_router(tool_routes.router)
+        codex = TestClient(app_, client=("127.0.0.1", 50000))
+        found = codex.post("/api/tools/search_sessions", json={"arguments": {"query": "zephyr lantern", "this_chat": True}},
+                           headers={"X-JARVIS-Tool-Token": tool_access.issue(self.sid, False)}).json()["result"]
+        self.assertIn("project codename is zephyr-lantern", found)
 
 
 class CompactionRegionTests(unittest.TestCase):
@@ -2643,15 +2647,16 @@ class LocalAccessTests(unittest.TestCase):
 
     def setUp(self):
         from fastapi import FastAPI as _FastAPI
-        from routes import auth_routes, notes_routes, system_routes
-        from core import auth as auth_module, middleware as mw
+        from routes import auth_routes, notes_routes, system_routes, tool_routes
+        from core import auth as auth_module, tool_access
         self.auth = auth_module
-        self.token = {"X-JARVIS-Internal-Token": mw.INTERNAL_TOOL_TOKEN}
+        self.tool = {"X-JARVIS-Tool-Token": tool_access.issue(None, False)}
         self.ui = {"Cookie": f"jarvis_ui={self.SECRET}"}
         app_ = _FastAPI()
-        for r in (auth_routes, notes_routes, system_routes, session_routes, chat_routes):
+        for r in (auth_routes, notes_routes, system_routes, session_routes, chat_routes, tool_routes):
             app_.include_router(r.router)
         self.web = TestClient(app_)
+        self.codex = TestClient(app_, client=("127.0.0.1", 50000))
         p = patch.object(auth_module, "UI_SECRET", self.SECRET)
         p.start()
         self.addCleanup(p.stop)
@@ -2671,8 +2676,9 @@ class LocalAccessTests(unittest.TestCase):
     def test_the_app_window_and_codex_still_work(self):
         self.assertEqual(self.web.get("/api/system/diagnostics", headers=self.ui).status_code, 200)
         self.assertEqual(self.web.get("/api/sessions", headers=self.ui).status_code, 200)
-        note = self.web.post("/api/notes", json={"text": "from codex"}, headers=self.token)
-        self.assertEqual(note.status_code, 200, "Codex's CLI writes by its own token, no cookie needed")
+        note = self.codex.post("/api/tools/create_note", json={"arguments": {"text": "from codex"}}, headers=self.tool)
+        self.assertEqual(note.status_code, 200, "Codex's tools work by the turn's own token, no cookie needed")
+        self.assertTrue(note.json()["result"].startswith("Created note "))
 
     def test_the_page_can_tell_it_is_locked_out(self):
         self.assertTrue(self.web.get("/api/auth/status").json()["local_access_locked"])
@@ -2732,18 +2738,17 @@ class LocalAccessTests(unittest.TestCase):
 
 
 class InternalTokenScopeTests(unittest.TestCase):
-    """The token every Codex process holds (so hive_mind_cli.py can write
-    notes, tasks and events) resolved to "internal-tool", which counted as
-    a full admin: with accounts on, any Codex chat - a non-admin's, or one
-    steered by injected text - could export the backup or wipe data.
-    Reproduced 2026-09-22. It now works only on the routes the CLI calls,
-    none of which needs admin, and is ignored everywhere else."""
+    """The token every Codex process held resolved to "internal-tool": once a
+    full admin (with accounts on, any Codex chat could export the backup or
+    wipe data, reproduced 2026-09-22), then limited to the routes Codex's CLI
+    wrote through. Roadmap phase 2 (2026-10-05) removed it: Codex's tools now
+    carry a per-turn token to one route (scripts/test_tools.py), and the old
+    header is no credential anywhere."""
 
     def setUp(self):
         from fastapi import FastAPI as _FastAPI
         from routes import calendar_routes, chat_routes as _chat_routes, notes_routes, system_routes, task_routes
-        from core import middleware as mw
-        self.token = {"X-JARVIS-Internal-Token": mw.INTERNAL_TOOL_TOKEN}
+        self.token = {"X-JARVIS-Internal-Token": "anything-at-all"}
         app_ = _FastAPI()
         for r in (notes_routes, task_routes, calendar_routes, _chat_routes, session_routes, system_routes):
             app_.include_router(r.router)
@@ -2752,45 +2757,21 @@ class InternalTokenScopeTests(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
-    def test_the_token_is_refused_on_admin_routes_and_nothing_is_wiped(self):
+    def test_the_header_is_refused_everywhere_and_nothing_changes(self):
         from services.notes_service import notes_service
         notes_service.create_note("must survive")
         before = len(notes_service.list_notes())
         for method, path, body in [("GET", "/api/system/diagnostics", None), ("GET", "/api/system/backup/export", None),
-                                   ("GET", "/api/system/wipe-kinds", None), ("GET", "/api/system/logs", None),
-                                   ("POST", "/api/system/wipe", {"kind": "notes"})]:
-            with self.subTest(path=path):
-                res = self.web.request(method, path, json=body, headers=self.token)
-                self.assertEqual(res.status_code, 401, res.text)
-        self.assertEqual(len(notes_service.list_notes()), before)
-
-    def test_the_token_still_does_what_the_cli_needs(self):
-        note = self.web.post("/api/notes", json={"text": "from codex"}, headers=self.token)
-        self.assertEqual(note.status_code, 200, note.text)
-        note_id = note.json()["id"]
-        self.assertEqual(self.web.patch(f"/api/notes/{note_id}", json={"completed": True}, headers=self.token).status_code, 200)
-        self.assertEqual(self.web.delete(f"/api/notes/{note_id}", headers=self.token).status_code, 200)
-        task = self.web.post("/api/tasks", json={"name": "t", "prompt": "p", "schedule_kind": "once",
-                                                 "run_at": "2099-01-01T00:00:00"}, headers=self.token)
-        self.assertEqual(task.status_code, 200, task.text)
-        task_id = task.json()["id"]
-        self.assertEqual(self.web.patch(f"/api/tasks/{task_id}", json={"enabled": False}, headers=self.token).status_code, 200)
-        self.assertEqual(self.web.delete(f"/api/tasks/{task_id}", headers=self.token).status_code, 200)
-        event = self.web.post("/api/calendar/events", json={"title": "e", "start": "2099-01-01T10:00:00",
-                                                            "end": "2099-01-01T11:00:00"}, headers=self.token)
-        self.assertEqual(event.status_code, 200, event.text)
-        event_id = event.json()["id"]
-        self.assertEqual(self.web.patch(f"/api/calendar/events/{event_id}", json={"title": "e2"}, headers=self.token).status_code, 200)
-        self.assertEqual(self.web.delete(f"/api/calendar/events/{event_id}", headers=self.token).status_code, 200)
-        artifact = self.web.post("/api/chat/artifacts", json={"session_id": "none", "path": "x.md"}, headers=self.token)
-        self.assertNotIn(artifact.status_code, (401, 403), "authorised; any refusal is about the file, not the caller")
-
-    def test_the_token_is_ignored_on_other_user_routes(self):
-        for method, path, body in [("GET", "/api/sessions", None), ("GET", "/api/notes", None),
-                                   ("POST", "/api/tasks/any/run", None), ("GET", "/api/calendar/events/archived", None),
+                                   ("POST", "/api/system/wipe", {"kind": "notes"}), ("GET", "/api/sessions", None),
+                                   ("POST", "/api/notes", {"text": "x"}), ("DELETE", "/api/notes/any", None),
+                                   ("POST", "/api/tasks", {"name": "t", "prompt": "p", "schedule_kind": "once"}),
+                                   ("POST", "/api/calendar/events", {"title": "e", "start": "2099-01-01T10:00:00",
+                                                                     "end": "2099-01-01T11:00:00"}),
+                                   ("POST", "/api/chat/artifacts", {"session_id": "none", "path": "x.md"}),
                                    ("POST", "/api/chat/stream", {"session_id": "any", "message": "spend money"})]:
             with self.subTest(path=path):
                 self.assertEqual(self.web.request(method, path, json=body, headers=self.token).status_code, 401)
+        self.assertEqual(len(notes_service.list_notes()), before)
 
     def test_internal_tool_is_not_an_admin(self):
         from core.auth import auth_manager
@@ -2990,7 +2971,7 @@ class LogBrowsingTests(unittest.TestCase):
         with patch("core.middleware.auth_enabled", return_value=True):
             self.assertEqual(web.get("/api/system/logs?name=errors").status_code, 401)
             self.assertEqual(web.get("/api/system/logs?name=errors",
-                                     headers={"X-JARVIS-Internal-Token": mw.INTERNAL_TOOL_TOKEN}).status_code, 401)
+                                     headers={"X-JARVIS-Internal-Token": "anything-at-all"}).status_code, 401)
         res = web.get("/api/system/logs?name=errors")
         self.assertEqual(res.status_code, 200, res.text)
         self.assertIn("shown to an admin", res.json()["entries"][0]["text"])
@@ -3000,7 +2981,7 @@ class LogBrowsingTests(unittest.TestCase):
 
 
 class LocalCallbackTests(unittest.TestCase):
-    """Codex's write tools (mcp_servers/hive_mind_cli.py) called back to
+    """Codex's tools (mcp_servers/hive_mind_cli.py) called back to
     127.0.0.1:{APP_PORT}, a default of 8420 nothing ever set, with a token
     that is random per process. So on any backend not on 8420 (the dev one
     is 8421) they reached whatever was on 8420 and failed with 401 -
@@ -3014,15 +2995,6 @@ class LocalCallbackTests(unittest.TestCase):
         self.addCleanup(lambda: setattr(middleware, "_loopback_port", saved))
         middleware._loopback_port = None
 
-    @staticmethod
-    def load_cli():
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "hive_mind_cli_under_test", Path(__file__).resolve().parents[1] / "mcp_servers" / "hive_mind_cli.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-
     def test_the_local_listener_port_is_recorded_and_remote_ones_are_not(self):
         self.middleware.remember_loopback_port({"type": "http", "scheme": "https", "server": ("100.64.0.7", 8422)})
         self.assertEqual(self.middleware.local_api_base(), "http://127.0.0.1:8420/api", "APP_PORT stays the fallback")
@@ -3033,23 +3005,6 @@ class LocalCallbackTests(unittest.TestCase):
         with patch.object(self.middleware, "remember_loopback_port", wraps=self.middleware.remember_loopback_port) as seen:
             client.get(f"/api/sessions")
         self.assertTrue(seen.called, "every request passes the scope to the recorder")
-
-    def test_the_cli_posts_to_the_address_it_was_given(self):
-        cli = self.load_cli()
-        calls = []
-        response = httpx.Response(200, json={"id": "n1"}, request=httpx.Request("POST", "http://x"))
-        with patch.dict(os.environ, {"JARVIS_API_BASE": "http://127.0.0.1:8431/api", "JARVIS_INTERNAL_TOKEN": "t"}), \
-             patch.object(cli.httpx, "request", side_effect=lambda method, url, **kw: calls.append(url) or response):
-            cli._internal_request("POST", "/notes", {"text": "x"})
-        self.assertEqual(calls, ["http://127.0.0.1:8431/api/notes"])
-
-    def test_the_cli_refuses_to_guess_an_address(self):
-        cli = self.load_cli()
-        env = {k: v for k, v in os.environ.items() if k != "JARVIS_API_BASE"}
-        with patch.dict(os.environ, env, clear=True), patch.object(cli.httpx, "request") as request:
-            with self.assertRaises(RuntimeError):
-                cli._internal_request("POST", "/notes", {"text": "x"})
-        request.assert_not_called()
 
     def test_each_codex_process_is_told_where_to_call_back(self):
         self.middleware.remember_loopback_port({"type": "http", "scheme": "http", "server": ("127.0.0.1", 8431)})

@@ -54,7 +54,7 @@ export async function renderHooksPanel(body, _status, page) {
           description: `${data.events[h.event]} · ${label.toLowerCase()} · last run ${when(h.last_run_at)}`,
           control: [pill(outcome, tone), switchFor(h, `${h.name} on`), el("span", { class: "set-chevron", text: "›" })] }, () => showHook(h.id));
       }) : [empty("No hooks yet. Add one to run a step of your own when something happens.")]),
-      note("Before-tool hooks see every tool Claude and your local and API models use. Codex runs its tools inside its own program, out of JARVIS's sight, so they are not covered. Hooks never set off other hooks, and a failing hook never stops the work it watches unless you set it to."),
+      note("Before-tool hooks see every tool Claude and your local and API models use, and every JARVIS tool Codex uses. Codex's own shell and file tools run inside its program, out of JARVIS's sight, so they are not covered. Hooks never set off other hooks, and a failing hook never stops the work it watches unless you set it to."),
     );
   }
 

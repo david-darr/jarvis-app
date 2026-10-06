@@ -133,7 +133,7 @@ async def _codex_summary(prompt: str, model: str | None) -> str:
             args += ["-m", model]
         args.append("-")
         env = {key: value for key, value in os.environ.items()
-               if key not in ("JARVIS_INTERNAL_TOKEN", "JARVIS_API_BASE", "JARVIS_CODEX_SESSION_ID")}
+               if key not in ("JARVIS_TOOL_TOKEN", "JARVIS_API_BASE")}
         proc = await asyncio.create_subprocess_exec(*args, stdin=asyncio.subprocess.PIPE,
                                                      stdout=asyncio.subprocess.PIPE,
                                                      stderr=asyncio.subprocess.PIPE, env=env)

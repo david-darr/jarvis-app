@@ -179,7 +179,7 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
         return CodexBrain(cwd_override=workspace_dir, session_id=session_id,
                           model=cli_model or None, is_admin=is_admin, project_id=project_id,
                           effort=effort, agent_prompt=(session or {}).get("agent_prompt") or "",
-                          agent_auto=bool(agent_id and session is None))
+                          agent_auto=bool(agent_id and session is None), agent_id=agent_id)
     base_url, model, api_key, num_ctx = model_endpoints.resolve_runtime(endpoint["id"])
     if endpoint["kind"] == "api" and override is not None:
         model = override or endpoint["model"]

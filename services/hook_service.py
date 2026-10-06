@@ -63,8 +63,8 @@ OUTPUT_LIMIT = 64_000
 MAX_IN_FLIGHT = 100
 BLOCK_EXIT_CODE = 2
 # Never handed to a hook's command: they would let it call JARVIS as JARVIS.
-PRIVATE_ENV = ("JARVIS_INTERNAL_TOKEN", "JARVIS_UI_SECRET", "JARVIS_SWARM_BRIDGE_TOKEN", "JARVIS_GOOGLE_CHAT_TOKEN",
-               "JARVIS_CODEX_SESSION_ID", "JARVIS_SWARM_BRIDGE_PORT", "JARVIS_API_BASE")
+PRIVATE_ENV = ("JARVIS_TOOL_TOKEN", "JARVIS_UI_SECRET", "JARVIS_SWARM_BRIDGE_TOKEN",
+               "JARVIS_SWARM_BRIDGE_PORT", "JARVIS_API_BASE")
 
 # Set while a hook's own action runs, so nothing it causes fires hooks again.
 _in_hook: contextvars.ContextVar[bool] = contextvars.ContextVar("jarvis_in_hook", default=False)
@@ -289,6 +289,18 @@ class HookService:
             if reason:
                 return reason
         return None
+
+    async def around_tool(self, tool: str, arguments, run, **context) -> str:
+        """Run a tool (`run`, a coroutine function) with the hooks around
+        it: a before-tool hook can block it, and the model is told why. The
+        one wrapper every surface that does not have its own uses (the
+        local/API brain, Codex through core/tool_registry.py dispatch)."""
+        reason = await self.before_tool(tool, arguments, **context)
+        if reason:
+            return f"Not run: blocked by a hook: {reason}"
+        result = await run()
+        self.after_tool(tool, arguments, result, **context)
+        return result
 
     def after_tool(self, tool: str, arguments, result, **context) -> None:
         self.emit("tool.after", {"tool": tool, "input": arguments if isinstance(arguments, dict) else {"value": arguments},

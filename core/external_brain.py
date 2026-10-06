@@ -128,19 +128,15 @@ class ExternalBrain:
         from services.hook_service import hook_service
         real = args.get("name", "") if name == tool_search.CALL else name
         real_args = args.get("arguments") if name == tool_search.CALL else args
-        context = {"source": "agent" if self.agent_id else "chat" if self.session_id else "task",
-                   "session_id": self.session_id, "agent_id": self.agent_id, "model": self.model}
-        reason = await hook_service.before_tool(real, real_args, **context)
-        if reason:
-            return f"Not run: blocked by a hook: {reason}"
-        try:
-            result = await self._run_tool(name, args)
-        except asyncio.CancelledError:
-            # The turn was stopped while the tool ran; see cancel().
-            self.interrupted_tool = real or name
-            raise
-        hook_service.after_tool(real, real_args, result, **context)
-        return result
+
+        async def run():
+            try:
+                return await self._run_tool(name, args)
+            except asyncio.CancelledError:
+                # The turn was stopped while the tool ran; see cancel().
+                self.interrupted_tool = real or name
+                raise
+        return await hook_service.around_tool(real, real_args, run, **self._context().hook_context())
 
     async def _run_tool(self, name: str, args: dict) -> str:
         if name == tool_search.SEARCH:
@@ -167,7 +163,7 @@ class ExternalBrain:
 
     def _context(self) -> tool_registry.ToolContext:
         return tool_registry.ToolContext(self.session_id, self.is_admin, self.allow_user_tab_source,
-                                         self.turn_taint, self.agent_id)
+                                         self.turn_taint, self.agent_id, model=self.model)
 
     async def _call_mcp(self, name: str, args: dict) -> str:
         """A third-party tool: asked about first, like Claude's MCP calls,

@@ -11,7 +11,6 @@ from pydantic import BaseModel
 
 from core import google_workspace as google
 from core.middleware import local_api_base, require_admin
-from core.tool_registry import ToolContext
 
 
 router = APIRouter(prefix="/api/google", tags=["google-workspace"])
@@ -52,35 +51,11 @@ class FormActionRequest(BaseModel):
     published: bool | None = None
 
 
-class ChatToolRequest(BaseModel):
-    area: Literal["drive", "sheets", "forms"]
-    arguments: dict
-
-
 async def _run(coroutine):
     try:
         return await coroutine
     except google.GoogleError as problem:
         raise HTTPException(problem.status, str(problem)) from problem
-
-
-@router.post("/chat/tool")
-async def chat_tool(body: ChatToolRequest, request: Request) -> dict:
-    """Codex's per-turn capability, separate from its non-admin internal token."""
-    if not request.client or request.client.host not in ("127.0.0.1", "::1"):
-        raise HTTPException(403, "Local JARVIS process required")
-    session = google.chat_session(request.headers.get("X-JARVIS-Google-Chat-Token", ""))
-    if not session:
-        raise HTTPException(403, "Google chat access expired")
-    from core.google_chat_tools import execute
-    try:
-        return {"result": await execute(body.area, body.arguments,
-                                        ToolContext(session_id=session[0], is_admin=True,
-                                                    turn_taint=session[1]))}
-    except google.GoogleError as problem:
-        raise HTTPException(problem.status, str(problem)) from problem
-    except (ValueError, TypeError, KeyError, OSError) as problem:
-        raise HTTPException(400, str(problem)) from problem
 
 
 @router.get("/status")

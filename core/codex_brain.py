@@ -34,11 +34,10 @@ Verified live, not guessed:
 - Passing the prompt via stdin (`-` as the positional arg) avoids all
   Windows shell-quoting concerns entirely — no argument ever needs escaping.
 
-Tool-surface note: Codex has no equivalent to core/hive_mind_server.py yet
-(that's an in-process Claude Agent SDK construct; Codex's `codex mcp add`
-only accepts external stdio/HTTP servers) — this is Phase 1, chat-endpoint
-parity only. core/system_prompt.py's for_codex() is deliberately honest
-about that gap rather than promising tools that don't exist.
+Tools: Codex reaches JARVIS's tools - the same registry every model uses
+(core/tool_registry.py) - by running mcp_servers/hive_mind_cli.py through its
+own shell, with this turn's own token (core/tool_access.py); see that file
+for why a command line and not an MCP server.
 """
 import asyncio
 import contextlib
@@ -48,8 +47,7 @@ import shutil
 import sys
 import tomllib
 
-from core.auth import INTERNAL_TOOL_TOKEN
-from core import image_gen
+from core import image_gen, tool_access
 from core.constants import BASE_DIR, REPO_CODE_DIRS
 from core.custom_tabs import USER_TAB_CODE_DIRS, ensure_user_tab_dirs
 from core.middleware import local_api_base
@@ -57,9 +55,9 @@ from core.session_manager import sent_text, session_manager
 from core.vault import resolve_vault_dir
 from core import projects, runs, system_prompt
 
-# Phase 2 (2026-09-11): the CLI wrapper hive-mind tools are invoked through
-# (see core/system_prompt.py's for_codex() and mcp_servers/hive_mind_cli.py's
-# own docstring for why this replaced an MCP server). sys.executable is
+# The command line JARVIS's tools are invoked through (see
+# core/system_prompt.py's for_codex() and mcp_servers/hive_mind_cli.py's own
+# docstring for why it is not an MCP server). sys.executable is
 # exactly the venv python already running this backend process — no
 # separate path-guessing needed, unlike resolving the `codex` binary itself.
 HIVE_MIND_CLI_PATH = os.path.join(BASE_DIR, "mcp_servers", "hive_mind_cli.py")
@@ -179,12 +177,15 @@ class CodexBrain:
     def __init__(self, vault_dir: str | None = None, cwd_override: str | None = None,
                  session_id: str | None = None, model: str | None = None, is_admin: bool = False,
                  project_id: str | None = None, effort: str | None = None, agent_prompt: str = "",
-                 agent_auto: bool = False):
+                 agent_auto: bool = False, agent_id: str | None = None):
         self.cwd = cwd_override or vault_dir or resolve_vault_dir()
         # A chat with an agent (services/agent_service.py): its frozen
         # identity and notes. Codex reaches JARVIS through its CLI, which has
         # no agent tools, so a Codex agent cannot write its own memory.
         self.agent_prompt = agent_prompt
+        # The agent this brain works for, if any: its tools, and its inbox as
+        # where a permission request goes (core/tool_access.py).
+        self.agent_id = agent_id
         self.model = model
         # Reasoning effort for this session (David's ask 2026-09-15). Codex
         # has no `--effort` flag — see _build_args() for the config-override
@@ -329,7 +330,7 @@ class CodexBrain:
         # prior instructions either).
         if is_fresh_thread:
             prompt_text = system_prompt.for_codex(sys.executable, HIVE_MIND_CLI_PATH, self.is_admin,
-                                                  full_access=self.permission_mode == "auto") + projects.project_addendum(self.project_id) \
+                                                  full_access=self.permission_mode == "auto", agent=bool(self.agent_id)) + projects.project_addendum(self.project_id) \
                 + (f"\n\n{self.agent_prompt}" if self.agent_prompt else "")
             prior = session_manager.effective_messages(self.session_id, exclude_last=True)
             if prior:
@@ -345,34 +346,27 @@ class CodexBrain:
                       "remains outside your file access.")
             prompt = f"{user_text}\n\n[JARVIS file access for this turn: {access}]"
 
-        # search_sessions (hive_mind_cli.py) excludes this session's own
-        # history the same way core/hive_mind_server.py's Claude tool does —
-        # via an env var baked in here rather than trusting the model to
-        # pass its own session id as an argument (it doesn't actually know
-        # it). JARVIS_INTERNAL_TOKEN lets hive_mind_cli.py's write commands
-        # (create/update/delete note/task/event) authenticate to this same
-        # backend's own /api/* routes as "internal-tool" — see
-        # mcp_servers/hive_mind_cli.py's docstring for why writes go over
-        # HTTP rather than direct file access. JARVIS_API_BASE says where that
-        # backend is: the port its local listener actually serves on, handed
-        # over per process like the session id and token, because a global
-        # default sent the calls to whatever was on 8420 (see
-        # core/middleware.py's local_api_base). Full os.environ is preserved;
-        # only these three vars are added.
-        from core import google_workspace
-        google_token = google_workspace.issue_chat_token(self.session_id) if self.is_admin and self.session_id else ""
-        env = {**os.environ, "JARVIS_CODEX_SESSION_ID": self.session_id or "",
-               "JARVIS_INTERNAL_TOKEN": INTERNAL_TOOL_TOKEN, "JARVIS_API_BASE": local_api_base()}
-        if google_token:
-            env["JARVIS_GOOGLE_CHAT_TOKEN"] = google_token
+        # This turn's own tool token (core/tool_access.py): JARVIS's tools
+        # are reached by mcp_servers/hive_mind_cli.py posting to this backend,
+        # which decides from the token alone which chat is asking and whether
+        # it is an admin's. JARVIS_API_BASE says where the backend is: the
+        # port its local listener actually serves on (core/middleware.py's
+        # local_api_base), because a global default once sent the calls to
+        # whatever was on 8420. The token is revoked when the turn ends.
+        tool_token = tool_access.issue(self.session_id, self.is_admin, self.agent_id, self.model)
+        env = {**os.environ, "JARVIS_TOOL_TOKEN": tool_token, "JARVIS_API_BASE": local_api_base()}
 
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+        except BaseException:
+            tool_access.revoke(tool_token)
+            raise
         self._proc = proc
         proc.stdin.write(prompt.encode("utf-8"))
         proc.stdin.write_eof()
@@ -382,8 +376,7 @@ class CodexBrain:
             async for item in self._consume_process(proc, stderr_task, is_fresh_thread, user_text):
                 yield item
         finally:
-            if google_token:
-                google_workspace.revoke_chat_token(google_token)
+            tool_access.revoke(tool_token)
             stopped = await _kill_process_tree(proc)
             # A self-healing retry (see _consume_process) ran its own process
             # and recorded its own stop; this older one must not overwrite it.

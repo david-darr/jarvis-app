@@ -31,7 +31,7 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import StreamEvent
 
-from core import custom_tabs, hive_mind_server, image_gen, integrations, mcp_oauth, permissions, projects, runs, settings as settings_store, system_prompt
+from core import custom_tabs, hive_mind_server, image_gen, integrations, mcp_oauth, permissions, projects, runs, settings as settings_store, system_prompt, tool_registry
 from core.constants import DATA_DIR, REPO_CODE_DIRS
 from core.vault import resolve_vault_dir
 from core.turn_taint import TurnTaint
@@ -200,42 +200,11 @@ class Brain:
         # Shell execution is admin-only. David restored the original automatic
         # admin shell behavior after command-by-command prompts became noisy;
         # its built-in grants remain visible and revocable in Permissions.
-        allowed_tools = [
-            "mcp__hive_mind__search_sessions",
-            "mcp__hive_mind__list_skills",
-            "mcp__hive_mind__search_skills",
-            "mcp__hive_mind__read_skill",
-            "mcp__hive_mind__list_notes",
-            "mcp__hive_mind__list_tasks",
-            "mcp__hive_mind__list_upcoming_events",
-            "mcp__hive_mind__list_specs",
-            "mcp__hive_mind__read_spec",
-            "mcp__hive_mind__list_documents",
-            "mcp__hive_mind__read_document",
-            "mcp__hive_mind__list_contacts",
-            "mcp__hive_mind__list_task_runs",
-            # Write tools (David's ask 2026-09-01) — go through the same
-            # service layer the app's own routes use, see
-            # services/notes_service.py.
-            "mcp__hive_mind__create_note",
-            "mcp__hive_mind__update_note",
-            "mcp__hive_mind__delete_note",
-            "mcp__hive_mind__create_task",
-            "mcp__hive_mind__update_task",
-            "mcp__hive_mind__delete_task",
-            "mcp__hive_mind__create_event",
-            "mcp__hive_mind__update_event",
-            "mcp__hive_mind__delete_event",
-            "mcp__hive_mind__save_generated_image",
-            # Sandboxed runs (core/sandbox.py): nothing on this computer for a
-            # prompt to protect, so pre-approved like the read tools.
-            "mcp__hive_mind__run_code",
-            # The read-only sandboxed browser, public pages only (David's call).
-            "mcp__hive_mind__browse",
-            "mcp__hive_mind__save_generated_file",
-            "mcp__hive_mind__google_drive",
-            "mcp__hive_mind__google_sheets",
-            "mcp__hive_mind__google_forms",
+        # Every JARVIS tool on Claude's surface, from core/tool_registry.py
+        # (roadmap phase 2, 2026-10-05: this was a hand-kept list of names, so
+        # a new read tool silently prompted until someone added it here). Each
+        # asks the person itself where it needs to.
+        allowed_tools = tool_registry.claude_preapproved(agent=bool(self.agent_id)) + [
             # Canva image/design generation (David's ask 2026-09-10, "have
             # their claude code use Canva"). Pre-approves only the
             # generate-and-export surface actually needed for "create an
@@ -258,12 +227,6 @@ class Brain:
             "mcp__claude_ai_Canva__list-brand-kits",
             "mcp__claude_ai_Canva__get-assets",
         ]
-        # An agent's own tools touch only its memory and inbox
-        # (services/agent_service.py), and they exist only for agents. Found
-        # live 2026-10-04: without this, agent_remember went to the inbox as
-        # an approval request instead of running.
-        if self.agent_id:
-            allowed_tools.extend(("mcp__hive_mind__agent_remember", "mcp__hive_mind__agent_ask"))
         # Escape hatch for whatever this hardcoded baseline doesn't cover —
         # see core/settings.py's extra_allowed_tools for why this exists.
         allowed_tools.extend(settings_store.get_setting("extra_allowed_tools") or [])

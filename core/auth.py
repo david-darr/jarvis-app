@@ -10,9 +10,10 @@ Odysseus uses" for auth was David's explicit call, 2026-08-31).
   mode the plain-web access path ("front door #2") should run in for anyone
   exposing the backend beyond localhost.
 
-Reserved usernames ("internal-tool", "api") can never be registered — see
-INTERNAL_TOOL_TOKEN below, which impersonates "internal-tool" for the app's
-own agent/tool calls so they don't need a browser session.
+Reserved usernames ("internal-tool", "api") can never be registered. Codex's
+tool calls carry their own per-turn token instead (core/tool_access.py); the
+process-wide internal token that once impersonated "internal-tool" was
+removed in roadmap phase 2 (2026-10-05).
 """
 import os
 import secrets
@@ -44,13 +45,6 @@ RESET_MAX_ATTEMPTS = 5
 RESERVED_USERNAMES = {"internal-tool", "api"}
 
 SINGLE_USER = "local"
-
-# Generated once per process, never persisted. Codex's hive_mind_cli.py
-# presents this via a header to write notes, tasks and events without a
-# browser session (Odysseus's internal-tool loopback). It is an ordinary user,
-# not an admin, and core/middleware.py accepts it only on those routes: every
-# Codex process holds it, whoever is chatting.
-INTERNAL_TOOL_TOKEN = secrets.token_hex(32)
 
 # With accounts off, every local request used to count as the one admin user,
 # so any process on the machine - an agent's shell included, whose sandbox

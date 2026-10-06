@@ -1,62 +1,25 @@
-"""Hive-mind tool access for Codex, Phase 2 (David's ask 2026-09-11: "all
-models no matter what" get notes/tasks/calendar/skills/etc. access).
+"""JARVIS's tools for Codex, from the shared registry (roadmap phase 2,
+2026-10-05; spec: the vault note "Tool Registry - Phase 2 (Build Spec)").
 
-Originally scoped as a real stdio MCP server (core/hive_mind_server.py's
-Claude-side equivalent), matching how Claude and ExternalBrain each reach
-the same core/memory_tools.py functions. Live-tested against the real
-`codex` CLI before writing this file, and found a hard blocker: `codex
-exec` (non-interactive mode) unconditionally requires human approval for
-any MCP tool call — "MCP tool call requires approval, but approval policy
-is never" — regardless of `approval_policy`, or the `exec_permission_
-approvals`/`guardian_approval`/`tool_call_mcp_elicitation`/`mcp_2026_07_28`
-feature flags. The only flag that bypasses it, `--dangerously-bypass-
-approvals-and-sandbox`, also removes ALL sandboxing (not just MCP
-approval). Base mode keeps the workspace-write boundary and uses this CLI
-wrapper. An admin chat explicitly switched to Auto may use that flag by
-David's later choice. This is a real upstream CLI limitation, not a config gap.
+Codex reaches JARVIS by running this script through its own shell tool, as
+core/system_prompt.py's for_codex() tells it to:
 
-Pivoted (David's explicit choice) to the mechanism that already works
-headlessly with zero approval friction: Codex's native shell tool
-(verified extensively in Phase 1). This script is a plain CLI wrapper
-around the exact same core/memory_tools.py functions every other model
-uses — core/system_prompt.py's for_codex() tells Codex the literal command
-to run. Verified live: a workspace-write sandboxed session can read and
-execute a script outside its granted cwd/add_dirs without issue (the
-sandbox restricts *writes* outside those roots, not reads/execution), so
-this file doesn't need to live inside any directory Codex is specially
-granted — every Codex session, admin or not, can reach it exactly the way
-every other model's hive-mind tools are unconditionally available.
+    hive_mind_cli.py <tool> [--field VALUE ...] [--args_json '{...}']
 
-exclude_session_id for search_sessions comes from the JARVIS_CODEX_SESSION_ID
-env var (set by core/codex_brain.py when it spawns `codex`), not a CLI flag
-— same reasoning as hive_mind_server.py baking it in at server-creation
-time rather than trusting the model to supply its own session id correctly.
+Why a command line and not an MCP server: `codex exec` requires a person to
+approve every MCP tool call in its Base mode, with no setting that lifts it
+short of turning its sandbox off (verified live 2026-09-11). The shell needs
+no approval, and a sandboxed Codex may make a network call to this computer.
 
-Output is plain text (same shape as hive_mind_server.py's tool responses),
-one result per line where that makes sense — Codex reads this back as
-shell stdout, not a structured tool result.
-
-Reads vs. writes take genuinely different paths, found live not assumed:
-list_*/search_*/read_* call core/memory_tools.py directly (a plain read of
-a JSON file already works fine from inside Codex's workspace-write sandbox
-— proven live). create_*/update_*/delete_* do NOT — data/*.json lives
-outside the vault/workspace and outside REPO_CODE_DIRS on purpose (it's
-also where auth.json and encrypted API keys live), so the sandbox
-correctly refuses a direct write there — confirmed live as a clean, fast
-"Access is denied", not something to route around with a broader
-directory grant. Writes instead call the already-running backend's own
-`/api/notes` etc. routes over HTTP (127.0.0.1 only) — a network call, not
-a sandboxed filesystem write, so it isn't blocked, and it's the exact same
-code path the UI itself uses. Auth is INTERNAL_TOOL_TOKEN (core/auth.py) —
-built for exactly this ("app's own tool calls, no browser session") but
-unused until now — passed in via the JARVIS_INTERNAL_TOKEN env var (see
-core/codex_brain.py) as the X-JARVIS-Internal-Token header every
-core/middleware.py route already recognizes; no new auth code needed.
-Where that backend is comes from JARVIS_API_BASE, set the same way. It
-used to be 127.0.0.1:{APP_PORT}, a default of 8420 nothing set, so from a
-backend on any other port the writes reached whatever was on 8420 and
-failed with 401 (reproduced 2026-09-22). With no address, a write refuses
-rather than guess.
+Every tool, its flags and its help come from core/tool_registry.py, the same
+table Claude and local models use; a boolean flag takes true|false (alone it
+means true), a list of ids is comma-separated, and anything structured can be
+passed as JSON with --args_json. The call itself goes to the running JARVIS
+backend, POST /api/tools/{name} (routes/tool_routes.py), with the turn's own
+token (JARVIS_TOOL_TOKEN, core/tool_access.py) at JARVIS_API_BASE: the
+backend decides who is asking, runs the person's hooks and permission checks,
+and audits what changes. This file used to be a hand-written copy of 28
+commands, reading data directly and writing through a process-wide token.
 """
 import argparse
 import json
@@ -68,246 +31,76 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx  # noqa: E402
 
-from core import memory_tools  # noqa: E402
+from core import tool_registry  # noqa: E402
 
 
-def _internal_request(method: str, path: str, json_body: dict | None = None) -> dict:
+def _value(schema: dict, raw: str):
+    kind = schema.get("type")
+    if kind == "boolean":
+        if raw.lower() not in ("true", "false"):
+            raise ValueError(f"expected true or false, got {raw!r}")
+        return raw.lower() == "true"
+    if kind == "integer":
+        return int(raw)
+    if kind == "array" and (schema.get("items") or {}).get("type") == "string":
+        return [part.strip() for part in raw.split(",") if part.strip()]
+    if kind in ("array", "object"):
+        return json.loads(raw)
+    return raw
+
+
+def parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(prog="hive_mind_cli.py", description="JARVIS's tools.")
+    sub = root.add_subparsers(dest="tool", required=True, metavar="<tool>")
+    for spec in tool_registry.specs(tool_registry.CODEX, is_admin=True, agent=True):
+        command = sub.add_parser(spec.name, help=spec.description.split(". ")[0], description=spec.description)
+        required = set(spec.schema.get("required") or [])
+        for name, schema in (spec.schema.get("properties") or {}).items():
+            command.add_argument(f"--{name}", required=name in required, help=schema.get("description"),
+                                 **({"nargs": "?", "const": "true"} if schema.get("type") == "boolean" else {}))
+        command.add_argument("--args_json", default=None, help="Any other arguments, as a JSON object")
+    return root
+
+
+def arguments(spec: tool_registry.ToolSpec, parsed: argparse.Namespace) -> dict:
+    args = {}
+    if parsed.args_json:
+        extra = json.loads(parsed.args_json)
+        if not isinstance(extra, dict):
+            raise ValueError("--args_json must be a JSON object")
+        args.update(extra)
+    for name, schema in (spec.schema.get("properties") or {}).items():
+        raw = getattr(parsed, name, None)
+        if raw is not None:
+            args[name] = _value(schema, raw)
+    return args
+
+
+def call(name: str, args: dict) -> str:
     api_base = os.environ.get("JARVIS_API_BASE")
-    if not api_base:
-        raise RuntimeError("JARVIS_API_BASE is not set, so there is no JARVIS backend to send this to. "
-                           "Write commands only work when JARVIS itself starts Codex.")
-    token = os.environ.get("JARVIS_INTERNAL_TOKEN", "")
-    resp = httpx.request(
-        method, f"{api_base}{path}", json=json_body,
-        headers={"X-JARVIS-Internal-Token": token}, timeout=15.0,
-    )
-    resp.raise_for_status()
-    return resp.json() if resp.content else {}
-
-
-def _google_request(area: str, arguments: dict) -> str:
-    api_base = os.environ.get("JARVIS_API_BASE")
-    token = os.environ.get("JARVIS_GOOGLE_CHAT_TOKEN")
+    token = os.environ.get("JARVIS_TOOL_TOKEN")
     if not api_base or not token:
-        raise RuntimeError("Google Workspace chat access is available only in an admin JARVIS chat")
-    response = httpx.post(
-        f"{api_base}/google/chat/tool", json={"area": area, "arguments": arguments},
-        headers={"X-JARVIS-Google-Chat-Token": token}, timeout=120.0,
-    )
+        raise RuntimeError("JARVIS's tools work only when JARVIS itself starts Codex "
+                           "(JARVIS_API_BASE and JARVIS_TOOL_TOKEN are not set).")
+    response = httpx.post(f"{api_base}/tools/{name}", json={"arguments": args},
+                          headers={"X-JARVIS-Tool-Token": token}, timeout=180.0)
     response.raise_for_status()
     return response.json()["result"]
 
 
-def _fmt_notes(notes: list[dict]) -> str:
-    return "\n".join(f"- [{n['id']}] {n['text']}" + (f" (due {n['due_date']})" if n.get("due_date") else "") for n in notes) or "No open notes."
-
-
-def _fmt_tasks(tasks: list[dict]) -> str:
-    return "\n".join(memory_tools.describe_task(t) for t in tasks) or "No tasks configured."
-
-
-def _ids(value: str | None) -> list[str] | None:
-    return [part.strip() for part in value.split(",") if part.strip()] if value else None
-
-
-def _fmt_events(events: list[dict]) -> str:
-    return "\n".join(f"- [{e['id']}] {e['title']} ({e['start']})" for e in events) or "Nothing upcoming."
-
-
-def _fmt_documents(docs: list[dict]) -> str:
-    return "\n".join(f"- [{d['id']}] {d['title']}" for d in docs) or "No documents in the Library."
-
-
-def _fmt_contacts(contacts: list[dict]) -> str:
-    return "\n".join(f"- {c['name']}: {c.get('email') or ''} {c.get('phone') or ''}".strip() for c in contacts) or "No contacts synced."
-
-
-def _fmt_task_runs(runs: list[dict]) -> str:
-    return "\n\n".join(f"[{r['task_name']}]: {r['output'] or r.get('error') or '(no output)'}" for r in runs) or "No task runs recorded yet."
-
-
-def _fmt_skills(skills: list[dict]) -> str:
-    return "\n".join(f"- {s['slug']}: {s['description'] or '(no description)'}" for s in skills) or "No skills saved yet."
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="hive_mind_cli.py")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    sub.add_parser("list_notes")
-    sub.add_parser("list_tasks")
-    sub.add_parser("list_upcoming_events")
-    sub.add_parser("list_specs")
-    sub.add_parser("list_documents")
-    sub.add_parser("list_contacts")
-    sub.add_parser("list_task_runs")
-    sub.add_parser("list_skills")
-    p = sub.add_parser("search_skills"); p.add_argument("--query", required=True)
-
-    p = sub.add_parser("search_sessions"); p.add_argument("--query", required=True)
-    p.add_argument("--this_chat", action="store_true", help="search this chat's compacted earlier messages instead")
-    p = sub.add_parser("read_skill"); p.add_argument("--slug", required=True)
-    p = sub.add_parser("read_spec"); p.add_argument("--filename", required=True)
-    p = sub.add_parser("read_document"); p.add_argument("--doc_id", required=True)
-    p = sub.add_parser("save_generated_file"); p.add_argument("--path", required=True)
-
-    p = sub.add_parser("create_note")
-    p.add_argument("--text", required=True)
-    p.add_argument("--due_date")
-    p.add_argument("--project", default="personal")
-
-    p = sub.add_parser("update_note")
-    p.add_argument("--note_id", required=True)
-    p.add_argument("--text"); p.add_argument("--due_date"); p.add_argument("--project")
-    p.add_argument("--completed", choices=["true", "false"])
-
-    p = sub.add_parser("delete_note"); p.add_argument("--note_id", required=True)
-
-    p = sub.add_parser("create_task")
-    p.add_argument("--name", required=True)
-    p.add_argument("--prompt", required=True)
-    p.add_argument("--schedule_kind", required=True, choices=["once", "interval", "daily", "card"])
-    p.add_argument("--status", choices=["backlog", "ready"], help="cards only: ready runs it")
-    p.add_argument("--depends_on", help="cards only: comma-separated ids of cards it waits for")
-    p.add_argument("--run_at")
-    p.add_argument("--interval_seconds", type=int)
-    p.add_argument("--run_time")
-    p.add_argument("--deliver_to_channel")
-
-    p = sub.add_parser("update_task")
-    p.add_argument("--task_id", required=True)
-    p.add_argument("--name"); p.add_argument("--prompt")
-    p.add_argument("--enabled", choices=["true", "false"])
-    p.add_argument("--deliver_to_channel")
-    p.add_argument("--depends_on", help="cards only: comma-separated ids of cards it waits for")
-
-    p = sub.add_parser("delete_task"); p.add_argument("--task_id", required=True)
-
-    p = sub.add_parser("create_event")
-    p.add_argument("--title", required=True)
-    p.add_argument("--start", required=True)
-    p.add_argument("--end", required=True)
-    p.add_argument("--all_day", action="store_true")
-    p.add_argument("--location", default="")
-    p.add_argument("--description", default="")
-
-    p = sub.add_parser("update_event")
-    p.add_argument("--event_id", required=True)
-    p.add_argument("--title"); p.add_argument("--start"); p.add_argument("--end")
-    p.add_argument("--location"); p.add_argument("--description")
-    p.add_argument("--all_day", choices=["true", "false"])
-    p.add_argument("--completed", choices=["true", "false"])
-
-    p = sub.add_parser("delete_event"); p.add_argument("--event_id", required=True)
-
-    for name in ("google_drive", "google_sheets", "google_forms"):
-        p = sub.add_parser(name)
-        p.add_argument("--action", required=True)
-        p.add_argument("--args_json", default="{}", help="Other action arguments as a JSON object")
-
-    args = parser.parse_args()
-
+    parsed = parser().parse_args()
+    spec = next(s for s in tool_registry.specs(tool_registry.CODEX, is_admin=True, agent=True) if s.name == parsed.tool)
     try:
-        if args.command in ("google_drive", "google_sheets", "google_forms"):
-            arguments = json.loads(args.args_json)
-            if not isinstance(arguments, dict):
-                raise ValueError("--args_json must be a JSON object")
-            print(_google_request(args.command.removeprefix("google_"),
-                                  {**arguments, "action": args.action}))
-        elif args.command == "list_notes":
-            print(_fmt_notes(memory_tools.list_notes()))
-        elif args.command == "list_tasks":
-            print(_fmt_tasks(memory_tools.list_tasks()))
-        elif args.command == "list_upcoming_events":
-            print(_fmt_events(memory_tools.list_upcoming_events()))
-        elif args.command == "list_specs":
-            print("\n".join(f"- {s}" for s in memory_tools.list_specs()) or "No spec docs found.")
-        elif args.command == "list_documents":
-            print(_fmt_documents(memory_tools.list_documents()))
-        elif args.command == "list_contacts":
-            print(_fmt_contacts(memory_tools.list_contacts()))
-        elif args.command == "list_task_runs":
-            print(_fmt_task_runs(memory_tools.list_task_runs()))
-        elif args.command == "list_skills":
-            print(_fmt_skills(memory_tools.list_skills()))
-        elif args.command == "search_skills":
-            print(_fmt_skills(memory_tools.search_skills(args.query)))
-        elif args.command == "search_sessions" and args.this_chat:
-            this_chat = os.environ.get("JARVIS_CODEX_SESSION_ID") or None
-            print(memory_tools.format_archive_hits(memory_tools.search_this_chat_archive(this_chat, args.query)))
-        elif args.command == "search_sessions":
-            exclude = os.environ.get("JARVIS_CODEX_SESSION_ID") or None
-            results = memory_tools.search_sessions(args.query, exclude_session_id=exclude)
-            print("\n\n".join(f"[{r['session_title']}] ({r['role']}): {r['snippet']}" for r in results) or "No matches in other sessions.")
-        elif args.command == "read_skill":
-            print(memory_tools.read_skill(args.slug))
-        elif args.command == "read_spec":
-            print(memory_tools.read_spec(args.filename))
-        elif args.command == "read_document":
-            print(memory_tools.read_document(args.doc_id))
-        elif args.command == "save_generated_file":
-            session_id = os.environ.get("JARVIS_CODEX_SESSION_ID")
-            if not session_id:
-                raise ValueError("File delivery requires a JARVIS chat session")
-            result = _internal_request("POST", "/chat/artifacts", {"session_id": session_id, "path": args.path})
-            label = result['filename'].replace('[', '').replace(']', '')
-            print(f"File saved. Include this exact link on its own line in your reply: [{label}]({result['url']})")
-        elif args.command == "create_note":
-            note = _internal_request("POST", "/notes", {"text": args.text, "due_date": args.due_date, "project": args.project})
-            print(f"Created note {note['id']}: {note['text']}")
-        elif args.command == "update_note":
-            fields = {"text": args.text, "due_date": args.due_date, "project": args.project}
-            if args.completed is not None:
-                fields["completed"] = args.completed == "true"
-            note = _internal_request("PATCH", f"/notes/{args.note_id}", fields)
-            print(f"Updated note {note['id']}")
-        elif args.command == "delete_note":
-            _internal_request("DELETE", f"/notes/{args.note_id}")
-            print(f"Deleted note {args.note_id}")
-        elif args.command == "create_task":
-            task = _internal_request("POST", "/tasks", {
-                "name": args.name, "prompt": args.prompt, "schedule_kind": args.schedule_kind,
-                "run_at": args.run_at, "interval_seconds": args.interval_seconds,
-                "run_time": args.run_time, "deliver_to_channel": args.deliver_to_channel,
-                "status": args.status, "depends_on": _ids(args.depends_on),
-            })
-            print(f"Created task {task['id']}: {task['name']}")
-        elif args.command == "update_task":
-            fields = {"name": args.name, "prompt": args.prompt, "deliver_to_channel": args.deliver_to_channel,
-                      "depends_on": _ids(args.depends_on)}
-            if args.enabled is not None:
-                fields["enabled"] = args.enabled == "true"
-            task = _internal_request("PATCH", f"/tasks/{args.task_id}", fields)
-            print(f"Updated task {task['id']}")
-        elif args.command == "delete_task":
-            _internal_request("DELETE", f"/tasks/{args.task_id}")
-            print(f"Deleted task {args.task_id}")
-        elif args.command == "create_event":
-            event = _internal_request("POST", "/calendar/events", {
-                "title": args.title, "start": args.start, "end": args.end,
-                "all_day": args.all_day, "location": args.location, "description": args.description,
-            })
-            print(f"Created event {event['id']}: {event['title']}")
-        elif args.command == "update_event":
-            fields = {"title": args.title, "start": args.start, "end": args.end,
-                      "location": args.location, "description": args.description}
-            if args.all_day is not None:
-                fields["all_day"] = args.all_day == "true"
-            if args.completed is not None:
-                fields["completed"] = args.completed == "true"
-            event = _internal_request("PATCH", f"/calendar/events/{args.event_id}", fields)
-            print(f"Updated event {event['id']}")
-        elif args.command == "delete_event":
-            _internal_request("DELETE", f"/calendar/events/{args.event_id}")
-            print(f"Deleted event {args.event_id}")
-    except (KeyError, ValueError, RuntimeError) as e:
+        print(call(spec.name, arguments(spec, parsed)))
+    except (ValueError, RuntimeError) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     except httpx.HTTPStatusError as e:
-        print(f"Error: request to {e.request.url} failed — {e.response.status_code} {e.response.text[:300]}", file=sys.stderr)
+        print(f"Error: {e.response.status_code} {e.response.text[:300]}", file=sys.stderr)
         sys.exit(1)
     except httpx.HTTPError as e:
-        print(f"Error: couldn't reach the jarvis-app backend — {e}", file=sys.stderr)
+        print(f"Error: couldn't reach JARVIS - {e}", file=sys.stderr)
         sys.exit(1)
 
 

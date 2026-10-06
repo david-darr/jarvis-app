@@ -17,7 +17,6 @@ import time
 from urllib.parse import quote, urlencode
 
 import httpx
-from core.turn_taint import TurnTaint
 
 from core.atomic_io import read_json, write_json_atomic
 from core.constants import DATA_DIR
@@ -43,7 +42,6 @@ SCOPES = (
 FILE_FIELDS = "nextPageToken,incompleteSearch,files(id,name,mimeType,size,parents,modifiedTime,webViewLink,description,starred,trashed,driveId,capabilities,owners,shared)"
 MAX_DOWNLOAD = 25 * 1024 * 1024
 _pending: dict[str, tuple[str, float]] = {}
-_chat_tokens: dict[str, tuple[str, float, TurnTaint]] = {}
 _refresh_lock = asyncio.Lock()
 
 
@@ -98,25 +96,6 @@ def disconnect() -> dict:
         data.pop(key, None)
     _save(data)
     return status()
-
-
-def issue_chat_token(session_id: str) -> str:
-    """A short-lived admin Codex capability for the Google chat route only."""
-    token = secrets.token_urlsafe(32)
-    _chat_tokens[token] = (session_id, time.time() + 3600, TurnTaint())
-    for old, (_, expiry, _) in list(_chat_tokens.items()):
-        if expiry < time.time():
-            _chat_tokens.pop(old, None)
-    return token
-
-
-def chat_session(token: str) -> tuple[str, TurnTaint] | None:
-    record = _chat_tokens.get(token)
-    return (record[0], record[2]) if record and record[1] > time.time() else None
-
-
-def revoke_chat_token(token: str) -> None:
-    _chat_tokens.pop(token, None)
 
 
 def start_sign_in(redirect_uri: str) -> str:

@@ -59,7 +59,7 @@ def script(name: str, body: str) -> str:
 RECORD = SCRIPTS / "record.json"
 RECORDER = script("recorder", f"""
 data = json.load(sys.stdin)
-json.dump({{"stdin": data, "argv": sys.argv, "token": os.environ.get("JARVIS_INTERNAL_TOKEN"),
+json.dump({{"stdin": data, "argv": sys.argv, "token": os.environ.get("JARVIS_TOOL_TOKEN"),
            "event_env": os.environ.get("JARVIS_HOOK_EVENT")}}, open(r"{RECORD}", "w"))
 """)
 BLOCK_EXIT = script("block_exit", 'json.load(sys.stdin)\nsys.stderr.write("no notes today")\nsys.exit(2)\n')
@@ -177,7 +177,7 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
     async def test_event_data_reaches_a_command_only_on_stdin(self):
         self.hook(event="tool.before", action="command", config={"command": RECORDER})
         hostile = {"command": '"; rm -rf ~ & echo pwned $(whoami)'}
-        with patch.dict(os.environ, {"JARVIS_INTERNAL_TOKEN": "internal-secret"}):
+        with patch.dict(os.environ, {"JARVIS_TOOL_TOKEN": "internal-secret"}):
             self.assertIsNone(await hook_service.before_tool("Bash", hostile, source="agent", agent_id="a1"))
         seen = json.loads(RECORD.read_text())
         self.assertEqual(seen["argv"][1:], [], "nothing but the script itself on the command line")

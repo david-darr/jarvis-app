@@ -12,21 +12,33 @@ lists and dispatch from this table.
 
 Surfaces: "claude" is the Claude Code CLI, which has its own file tools, so
 the vault/repo file tools and the shell are not offered there; "openai" is
-every OpenAI-compatible endpoint, which has no file access of its own. Codex
-reaches the same memory_tools functions through mcp_servers/hive_mind_cli.py.
+every OpenAI-compatible endpoint, which has no file access of its own;
+"codex" is the Codex CLI, which reaches this table through
+mcp_servers/hive_mind_cli.py and POST /api/tools/{name} (roadmap phase 2,
+2026-10-05; it used to keep a hand-written copy of its own). Codex, like
+Claude, has its own shell and files, and its own sandbox, so it is offered
+neither the file tools nor run_code/browse.
+
+Each tool says what it does (`effect`): read, write (changes JARVIS data),
+exec (runs code) or external (reaches another service). Every call that is
+not a read is written to the permission audit (Settings > Permissions).
 
 A handler takes the tool's arguments and a ToolContext and returns the text
 the model reads. Errors come back as text too: a tool failing must not end
-the turn.
+the turn. dispatch() is call() with the person's lifecycle hooks around it,
+for a surface whose brain does not hook its tools itself.
 """
+import dataclasses
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 from core.turn_taint import TurnTaint
 
 from core import image_gen, memory_tools
 
-CLAUDE, OPENAI = "claude", "openai"
+CLAUDE, OPENAI, CODEX = "claude", "openai", "codex"
 BOTH = frozenset({CLAUDE, OPENAI})
+ALL = frozenset({CLAUDE, OPENAI, CODEX})
+READ, WRITE, EXEC, EXTERNAL = "read", "write", "exec", "external"
 
 
 @dataclass(frozen=True)
@@ -39,6 +51,9 @@ class ToolContext:
     # it gets the agent-only tools, and its permission requests go to that
     # agent's inbox rather than a prompt nobody is watching.
     agent_id: Optional[str] = None
+    # Which surface is calling (set by call()), and the model, for hooks.
+    surface: str = ""
+    model: Optional[str] = None
 
     @property
     def permission_surface(self) -> str:
@@ -47,6 +62,11 @@ class ToolContext:
             return f"agent:{self.agent_id}"
         return f"chat:{self.session_id}" if self.session_id else "none"
 
+    def hook_context(self) -> dict:
+        """What a lifecycle hook is told about where a tool call came from."""
+        return {"source": "agent" if self.agent_id else "chat" if self.session_id else "task",
+                "session_id": self.session_id, "agent_id": self.agent_id, "model": self.model}
+
 
 @dataclass(frozen=True)
 class ToolSpec:
@@ -54,9 +74,10 @@ class ToolSpec:
     description: str
     schema: dict
     handler: Callable[[dict, ToolContext], Awaitable[str]]
-    surfaces: frozenset = BOTH
+    surfaces: frozenset = ALL
     admin_only: bool = False
     agent_only: bool = False
+    effect: str = READ
 
 
 def _object(properties: Optional[dict] = None, required: tuple = ()) -> dict:
@@ -70,12 +91,14 @@ def _str(description: Optional[str] = None) -> dict:
 _REGISTRY: dict[str, ToolSpec] = {}
 
 
-def register(name: str, description: str, schema: dict, surfaces: frozenset = BOTH, admin_only: bool = False,
-             agent_only: bool = False):
+def register(name: str, description: str, schema: dict, surfaces: frozenset = ALL, admin_only: bool = False,
+             agent_only: bool = False, effect: str = READ):
     def decorate(handler):
         if name in _REGISTRY:
             raise ValueError(f"tool {name!r} registered twice")
-        _REGISTRY[name] = ToolSpec(name, description, schema, handler, surfaces, admin_only, agent_only)
+        if effect not in (READ, WRITE, EXEC, EXTERNAL):
+            raise ValueError(f"tool {name!r}: unknown effect {effect!r}")
+        _REGISTRY[name] = ToolSpec(name, description, schema, handler, surfaces, admin_only, agent_only, effect)
         return handler
     return decorate
 
@@ -93,10 +116,58 @@ async def call(name: str, args: dict, ctx: ToolContext, surface: str) -> str:
     if (spec is None or surface not in spec.surfaces or (spec.admin_only and not ctx.is_admin)
             or (spec.agent_only and not ctx.agent_id)):
         return f"Unknown tool: {name}"
+    ctx = dataclasses.replace(ctx, surface=surface)
     try:
-        return await spec.handler(dict(args or {}), ctx)
+        result = await spec.handler(dict(args or {}), ctx)
     except Exception as e:
-        return f"Tool error: {e}"
+        result = f"Tool error: {e}"
+    if spec.effect != READ:
+        _audit(spec, args, ctx, result)
+    return result
+
+
+def _audit(spec: ToolSpec, args: dict, ctx: ToolContext, result: str) -> None:
+    """Every call that changes something, runs code or reaches another
+    service, in the permission audit. Never fails the call."""
+    from core import permissions
+    outcome = ("tool refused" if str(result).startswith(("Not run:", "Not opened:")) else
+               "tool failed" if str(result).startswith("Tool error:") else "tool used")
+    try:
+        permissions.record_tool_use(outcome, spec.name, spec.effect, args if isinstance(args, dict) else {},
+                                    by=f"{ctx.surface} {ctx.permission_surface}".strip())
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("tool audit failed for %s", spec.name)
+
+
+async def dispatch(name: str, args: dict, ctx: ToolContext, surface: str) -> str:
+    """call() with the person's lifecycle hooks around it
+    (services/hook_service.py): a before-tool hook can block it."""
+    from services.hook_service import hook_service
+    return await hook_service.around_tool(name, args, lambda: call(name, args, ctx, surface), **ctx.hook_context())
+
+
+def claude_preapproved(agent: bool = False) -> list[str]:
+    """Claude's pre-approved JARVIS tools: every registry tool on its surface.
+    Each asks the person itself where it needs to (Google changes, run_code
+    with the internet), so none needs Claude Code's own prompt."""
+    return [f"mcp__hive_mind__{s.name}" for s in specs(CLAUDE, is_admin=True, agent=agent)]
+
+
+def _flag(name: str, schema: dict) -> str:
+    kind = schema.get("type")
+    value = "true|false" if kind == "boolean" else "N" if kind == "integer" else \
+        "ID,ID" if kind == "array" and (schema.get("items") or {}).get("type") == "string" else \
+        "JSON" if kind in ("array", "object") else "|".join(schema["enum"]) if schema.get("enum") else "TEXT"
+    return f"--{name} {value}"
+
+
+def cli_usage(spec: ToolSpec) -> str:
+    """How Codex calls a tool on the command line (mcp_servers/hive_mind_cli.py)."""
+    required = set(spec.schema.get("required") or [])
+    flags = [_flag(n, s) if n in required else f"[{_flag(n, s)}]"
+             for n, s in (spec.schema.get("properties") or {}).items()]
+    return " ".join([spec.name, *flags])
 
 
 def openai_tools(is_admin: bool = False, agent: bool = False) -> list[dict]:
@@ -178,8 +249,8 @@ async def _search_skills(args, ctx):
 )
 async def _list_notes(args, ctx):
     notes = memory_tools.list_notes()
-    return "\n".join(f"- {n['text']}" + (f" (due {n['due_date']})" if n.get("due_date") else "") for n in notes) \
-        or "No open notes."
+    return "\n".join(f"- [{n['id']}] {n['text']}" + (f" (due {n['due_date']})" if n.get("due_date") else "")
+                     for n in notes) or "No open notes."
 
 
 @register(
@@ -200,7 +271,7 @@ async def _list_tasks(args, ctx):
 )
 async def _list_upcoming_events(args, ctx):
     events = memory_tools.list_upcoming_events()
-    return "\n".join(f"- {e['title']} ({e['start']})" for e in events) or "Nothing upcoming in the next 14 days."
+    return "\n".join(f"- [{e['id']}] {e['title']} ({e['start']})" for e in events) or "Nothing upcoming in the next 14 days."
 
 
 @register(
@@ -262,6 +333,7 @@ async def _list_task_runs(args, ctx):
     "Create a new Note (a todo/reminder/priority item). Returns the created note.",
     _object({"text": _str(), "due_date": _str("Optional ISO 8601 datetime, e.g. 2026-09-01T15:00:00"),
              "project": _str("Defaults to 'personal' if omitted")}, ("text",)),
+    effect=WRITE,
 )
 async def _create_note(args, ctx):
     note = memory_tools.create_note(args["text"], due_date=args.get("due_date"), project=args.get("project", "personal"))
@@ -274,6 +346,7 @@ async def _create_note(args, ctx):
     "Use completed=true to mark it done.",
     _object({"note_id": _str(), "text": _str(), "due_date": _str(), "project": _str(),
              "completed": {"type": "boolean"}}, ("note_id",)),
+    effect=WRITE,
 )
 async def _update_note(args, ctx):
     note_id, fields = _fields(args, "note_id")
@@ -281,7 +354,7 @@ async def _update_note(args, ctx):
 
 
 @register("delete_note", "Delete a Note by id (from list_notes). Irreversible.",
-          _object({"note_id": _str()}, ("note_id",)))
+          _object({"note_id": _str()}, ("note_id",)), effect=WRITE)
 async def _delete_note(args, ctx):
     memory_tools.delete_note(args["note_id"])
     return f"Deleted note {args['note_id']}"
@@ -305,6 +378,7 @@ async def _delete_note(args, ctx):
         "run_time": _str("Local time of day as 'HH:MM' (24-hour), required for schedule_kind='daily'"),
         "deliver_to_channel": _str("Optional comms channel key to post the result to"),
     }, ("name", "prompt", "schedule_kind")),
+    effect=WRITE,
 )
 async def _create_task(args, ctx):
     # Inside an agent's run or chat, new work is that agent's own.
@@ -326,6 +400,7 @@ async def _create_task(args, ctx):
              "deliver_to_channel": _str(),
              "depends_on": {"type": "array", "items": {"type": "string"}, "description": "Cards only: ids of cards it waits for"}},
             ("task_id",)),
+    effect=WRITE,
 )
 async def _update_task(args, ctx):
     task_id, fields = _fields(args, "task_id")
@@ -333,7 +408,7 @@ async def _update_task(args, ctx):
 
 
 @register("delete_task", "Delete a Task by id (from list_tasks). Irreversible.",
-          _object({"task_id": _str()}, ("task_id",)))
+          _object({"task_id": _str()}, ("task_id",)), effect=WRITE)
 async def _delete_task(args, ctx):
     memory_tools.delete_task(args["task_id"])
     return f"Deleted task {args['task_id']}"
@@ -344,6 +419,7 @@ async def _delete_task(args, ctx):
     "Create a new Calendar event.",
     _object({"title": _str(), "start": _str("ISO 8601 datetime"), "end": _str("ISO 8601 datetime"),
              "all_day": {"type": "boolean"}, "location": _str(), "description": _str()}, ("title", "start", "end")),
+    effect=WRITE,
 )
 async def _create_event(args, ctx):
     event = memory_tools.create_event(args["title"], args["start"], args["end"], all_day=args.get("all_day", False),
@@ -357,6 +433,7 @@ async def _create_event(args, ctx):
     "you want to change. Use completed=true to check it off.",
     _object({"event_id": _str(), "title": _str(), "start": _str(), "end": _str(), "all_day": {"type": "boolean"},
              "location": _str(), "description": _str(), "completed": {"type": "boolean"}}, ("event_id",)),
+    effect=WRITE,
 )
 async def _update_event(args, ctx):
     event_id, fields = _fields(args, "event_id")
@@ -364,7 +441,7 @@ async def _update_event(args, ctx):
 
 
 @register("delete_event", "Delete a Calendar event by id (from list_upcoming_events). Irreversible.",
-          _object({"event_id": _str()}, ("event_id",)))
+          _object({"event_id": _str()}, ("event_id",)), effect=WRITE)
 async def _delete_event(args, ctx):
     memory_tools.delete_event(args["event_id"])
     return f"Deleted event {args['event_id']}"
@@ -386,7 +463,7 @@ async def _delete_event(args, ctx):
     "in words instead, and do not invent a URL.",
     _object({"url": _str("The real download URL returned by Canva's export-design tool"),
              "description": _str("Short description of the image, used as the alt text")}, ("url", "description")),
-    surfaces=frozenset({CLAUDE}),
+    surfaces=frozenset({CLAUDE}), effect=EXTERNAL,
 )
 async def _save_generated_image(args, ctx):
     try:
@@ -410,14 +487,22 @@ async def _save_generated_image(args, ctx):
     "a real file attachment automatically).",
     _object({"path": _str("Local filesystem path to the file that was just created"),
              "description": _str("Short description of the file, used as the link text")}, ("path", "description")),
-    surfaces=frozenset({CLAUDE}),
+    surfaces=frozenset({CLAUDE, CODEX}), effect=WRITE,
 )
 async def _save_generated_file(args, ctx):
     try:
-        result = image_gen.register_generated_file(args["path"])
-        _register_artifact(ctx, result["url"])
+        if ctx.surface == CODEX:
+            # Codex: only a file inside this chat's own workspace, as its
+            # old CLI route allowed (core/chat_artifacts.py publish).
+            if not ctx.session_id:
+                return "Not run: a file can only be brought into a chat."
+            from core import chat_artifacts
+            result = chat_artifacts.publish(ctx.session_id, args["path"])
+        else:
+            result = image_gen.register_generated_file(args["path"])
+            _register_artifact(ctx, result["url"])
     except Exception as e:
-        return f"Couldn't save that file: {e}"
+        return f"Couldn't save that file: {getattr(e, 'detail', None) or e}"
     desc = args["description"][:80].replace("[", "").replace("]", "")
     return f"File saved. Include this exact markdown link in your reply so it renders as a download: [{desc}]({result['url']})"
 
@@ -494,7 +579,7 @@ async def _read_repo_file(args, ctx):
     "write_repo_file",
     "Create or overwrite one file in jarvis-app source with the given full content (full-file replacement, not a patch/diff). Supported OpenAI models can also write user tabs under custom-tabs/routes/, custom-tabs/services/, and custom-tabs/views/. Creates parent directories if needed.",
     _object({"path": _str(), "content": _str()}, ("path", "content")),
-    surfaces=frozenset({OPENAI}),
+    surfaces=frozenset({OPENAI}), effect=WRITE,
 )
 async def _write_repo_file(args, ctx):
     path = args["path"]
@@ -519,7 +604,7 @@ async def _write_repo_file(args, ctx):
     "Run a shell command in jarvis-app's own repo root (or a given cwd). Use this to verify/run code you just wrote, e.g. a compile check or a test.",
     _object({"command": _str(), "cwd": _str("Optional, defaults to the jarvis-app repo root")}, ("command",)),
     surfaces=frozenset({OPENAI}),
-    admin_only=True,
+    admin_only=True, effect=EXEC,
 )
 async def _run_shell(args, ctx):
     # Automatic through the seeded built-in grant (core/permissions.py); once
@@ -562,6 +647,7 @@ async def _run_shell(args, ctx):
         "internet": {"type": "boolean", "description": "Optional: reach public websites (e.g. to install a package). "
                                                        "The person is asked first each time."},
     }, ("command",)),
+    surfaces=BOTH, effect=EXEC,
 )
 async def _run_code(args, ctx):
     import json
@@ -640,6 +726,7 @@ async def _run_code(args, ctx):
     "(first 12,000 characters) and its links. Public websites only; no logins or cookies. Use it to read a page "
     "you have the address of, e.g. documentation or an article.",
     _object({"url": _str("The full http:// or https:// address")}, ("url",)),
+    surfaces=BOTH, effect=EXTERNAL,
 )
 async def _browse(args, ctx):
     from core import sandbox, sandbox_browser
@@ -658,7 +745,7 @@ async def _browse(args, ctx):
 
 
 # Google Workspace uses one permission decision per mutation, inside the
-# shared handler. The CLI wrapper calls that same handler through the backend.
+# shared handler, for every surface alike.
 _google_fields = {
     "action": _str("Operation to perform"), "file_id": _str("Google file ID"),
     "query": _str("Drive name search"), "parent": _str("Drive folder ID"),
@@ -674,21 +761,21 @@ _google_fields = {
 
 
 @register("google_drive", "Manage connected Google Drive. Actions: list, info, upload, create_folder, rename, move, copy, trash, restore, star, unstar, delete, permissions, share, update_permission, revoke, revisions. Use Library to connect an account first.",
-          _object(_google_fields, ("action",)), admin_only=True)
+          _object(_google_fields, ("action",)), admin_only=True, effect=EXTERNAL)
 async def _google_drive(args, ctx):
     from core.google_chat_tools import execute
     return await execute("drive", args, ctx)
 
 
 @register("google_sheets", "Read and edit Google Sheets. Actions: get (metadata), values (provide cell_range), create, update, append, clear, batch. Use Google Drive list to find spreadsheet IDs.",
-          _object(_google_fields, ("action",)), admin_only=True)
+          _object(_google_fields, ("action",)), admin_only=True, effect=EXTERNAL)
 async def _google_sheets(args, ctx):
     from core.google_chat_tools import execute
     return await execute("sheets", args, ctx)
 
 
 @register("google_forms", "Create and manage Google Forms. Actions: get, responses, create, batch, publish. Use Google Drive list to find form IDs.",
-          _object(_google_fields, ("action",)), admin_only=True)
+          _object(_google_fields, ("action",)), admin_only=True, effect=EXTERNAL)
 async def _google_forms(args, ctx):
     from core.google_chat_tools import execute
     return await execute("forms", args, ctx)
@@ -702,7 +789,7 @@ async def _google_forms(args, ctx):
     "'Preferences', 'Corrections', 'Notes'. Keep each note to one short line.",
     _object({"section": _str("About this work, Preferences, Corrections or Notes"),
              "text": _str("The note, one line")}, ("section", "text")),
-    agent_only=True,
+    agent_only=True, effect=WRITE,
 )
 async def _agent_remember(args, ctx):
     from services.agent_service import agent_service
@@ -716,7 +803,7 @@ async def _agent_remember(args, ctx):
     "their inbox; their answer comes with your next run. After asking, finish what you can and stop.",
     _object({"question": _str("The question, with the options if there are any"),
              "context": _str("Optional: what you found that makes this a question")}, ("question",)),
-    agent_only=True,
+    agent_only=True, effect=WRITE,
 )
 async def _agent_ask(args, ctx):
     from services.agent_service import agent_service

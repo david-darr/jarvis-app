@@ -13,7 +13,7 @@ from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from core import auth as auth_module
-from core.auth import auth_manager, auth_enabled, SESSION_COOKIE_NAME, SINGLE_USER, INTERNAL_TOOL_TOKEN, UI_COOKIE_NAME
+from core.auth import auth_manager, auth_enabled, SESSION_COOKIE_NAME, SINGLE_USER, UI_COOKIE_NAME
 from core.constants import APP_PORT
 
 
@@ -99,32 +99,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-# What the internal tool token may do: exactly the writes Codex's
-# mcp_servers/hive_mind_cli.py makes, none of which needs admin. It used to be
-# accepted everywhere as a full admin, and every Codex process holds it, so
-# with accounts on any Codex chat - a non-admin's, or one steered by injected
-# text - could export the backup or wipe data (reproduced 2026-09-22).
-# Anywhere else the header is ignored and the request is judged on its own
-# credentials.
-_INTERNAL_TOOL_ROUTES = (
-    ("POST", re.compile(r"^/api/notes$")),
-    ("PATCH", re.compile(r"^/api/notes/[^/]+$")),
-    ("DELETE", re.compile(r"^/api/notes/[^/]+$")),
-    ("POST", re.compile(r"^/api/tasks$")),
-    ("PATCH", re.compile(r"^/api/tasks/[^/]+$")),
-    ("DELETE", re.compile(r"^/api/tasks/[^/]+$")),
-    ("POST", re.compile(r"^/api/calendar/events$")),
-    ("PATCH", re.compile(r"^/api/calendar/events/[^/]+$")),
-    ("DELETE", re.compile(r"^/api/calendar/events/[^/]+$")),
-    ("POST", re.compile(r"^/api/chat/artifacts$")),
-)
-
-
-def _internal_tool_may(request: Request) -> bool:
-    path = request.url.path
-    return any(request.method == method and pattern.match(path) for method, pattern in _INTERNAL_TOOL_ROUTES)
-
-
 def local_access_open(request: Request) -> bool:
     """With accounts off: is this the app's own window (or a browser it
     handed the cookie to)? Always true for a backend started without a UI
@@ -139,10 +113,6 @@ def local_access_open(request: Request) -> bool:
 def get_current_user(request: Request) -> Optional[str]:
     """Returns the authenticated username, or None if unauthenticated.
     Does not raise — routes that require auth should use require_user()/require_admin()."""
-    internal_token = request.headers.get("X-JARVIS-Internal-Token")
-    if internal_token and secrets.compare_digest(internal_token, INTERNAL_TOOL_TOKEN) and _internal_tool_may(request):
-        return "internal-tool"
-
     if not auth_enabled():
         return SINGLE_USER if local_access_open(request) else None
 

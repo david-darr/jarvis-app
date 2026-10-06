@@ -190,7 +190,7 @@ async def _ask_codex(endpoint: dict, goal: str) -> str:
         args += ["-m", endpoint["model"]]
     args.append("-")
     environment = {**os.environ}
-    environment.pop("JARVIS_INTERNAL_TOKEN", None)
+    environment.pop("JARVIS_TOOL_TOKEN", None)
     process = await asyncio.create_subprocess_exec(
         *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL, env=environment)
