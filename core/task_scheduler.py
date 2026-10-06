@@ -10,7 +10,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from core import events, file_checkpoints, logs as log_files
+from core import events, file_checkpoints, logs as log_files, runs, token_usage
 from core.brain import Brain
 from core.builtin_tasks import BUILTIN_TASKS
 from core.channels import registry as channel_registry
@@ -66,6 +66,36 @@ def _task_brain(task: dict):
     return _build_brain(endpoint, session_id=None, is_admin=False, agent_id=agent["id"] if agent else None)
 
 
+def task_endpoint_id(task: dict) -> Optional[str]:
+    """The model connection a task's usage counts toward on Home: the
+    agent's or the task's own. A task that names none runs on Claude through
+    the CLI (_task_brain), which is the one Claude Code connection when there
+    is exactly one; with none or several, which one it was is unknown, and
+    nothing is counted rather than guessed."""
+    agent = agent_service.get(task.get("agent_id"))
+    endpoint_id = agent["endpoint_id"] if agent else task.get("endpoint_id")
+    if endpoint_id:
+        return endpoint_id
+    from core import model_endpoints
+    claude = [e for e in model_endpoints.list_endpoints() if e.get("kind") == "claude_cli"]
+    return claude[0]["id"] if len(claude) == 1 else None
+
+
+async def complete(brain, prompt: str, task: dict, surface: str) -> str:
+    """One task, card or goal run through the run contract (core/runs.py):
+    the reply as run_turn gave it, and the run's usage - every provider call
+    - counted on Home, which task runs never were before 2026-10-05."""
+    endpoint_id = task_endpoint_id(task)
+    outcome = await runs.complete(brain, prompt, runs.RunContext(surface, endpoint_id=endpoint_id,
+                                                                 agent_id=task.get("agent_id")))
+    if endpoint_id:
+        try:
+            token_usage.record_usage(endpoint_id, outcome.usage)
+        except Exception:
+            logger.exception("record_usage failed for endpoint %s", endpoint_id)
+    return outcome.text
+
+
 async def _run_task(task: dict) -> None:
     # Lines logged while the task runs name it (core/logs.py).
     tag = log_files.set_log_tag(f"task:{task['id']}")
@@ -89,7 +119,7 @@ async def _run_card(card: dict) -> None:
         if agent:
             prompt = agent_service.run_prompt(agent, prompt)
         async with file_checkpoints.around_turn(f"card:{card['id']}"):
-            output = await brain.run_turn(prompt)
+            output = await complete(brain, prompt, card, "card")
         task_service.finish_card(card["id"], output)
         events.emit("card.review", f"{card['name']} is ready for review", task_id=card["id"])
         if agent:
@@ -136,7 +166,7 @@ async def _run_goal(task: dict, agent: dict) -> None:
         brain = _task_brain(task)
         await brain.connect()
         async with file_checkpoints.around_turn(f"task:{task['id']}"):
-            output = await brain.run_turn(agent_service.run_prompt(agent, task["prompt"], goal=task))
+            output = await complete(brain, agent_service.run_prompt(agent, task["prompt"], goal=task), task, "goal")
         task_service.record_run(task["id"], output=output)
         if task.get("report_when") == "always" or not is_silent(output):
             item = agent_service.add_item(agent["id"], "report", task["name"], output)
@@ -172,7 +202,7 @@ async def _run_task_tagged(task: dict) -> None:
         brain = _task_brain(task)
         await brain.connect()
         async with file_checkpoints.around_turn(f"task:{task['id']}"):
-            output = await brain.run_turn(task["prompt"])
+            output = await complete(brain, task["prompt"], task, "task")
         delivered = await _deliver(task, output)
         task_service.record_run(task["id"], output=output, delivered=delivered)
         events.emit("task.run", f"{task['name']} ran successfully", task_id=task["id"])
@@ -206,7 +236,7 @@ async def _run_builtin_task(task: dict, builtin_id: str) -> None:
             try:
                 await brain.connect()
                 async with file_checkpoints.around_turn(f"task:{task['id']}"):
-                    output = await brain.run_turn(prompt)
+                    output = await complete(brain, prompt, task, "task")
             finally:
                 await brain.disconnect()
         delivered = await _deliver(task, output)

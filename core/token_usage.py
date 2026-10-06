@@ -14,23 +14,18 @@ import time
 
 from core.atomic_io import read_json, write_json_atomic
 from core.constants import DATA_DIR
+from core.runs import Usage, normalize_usage
 
 USAGE_FILE = os.path.join(DATA_DIR, "token_usage.json")
 
 
 def _extract_total_tokens(usage: dict) -> int:
-    """Handles both usage shapes this app ever sees: OpenAI-compatible
-    (`{"prompt_tokens", "completion_tokens", "total_tokens"}` — prefer the
-    explicit total so prompt+completion aren't double-counted against it)
-    and the Claude Agent SDK's (`{"input_tokens", "output_tokens",
-    "cache_creation_input_tokens", "cache_read_input_tokens"}` — no single
-    total field, so sum every *_tokens integer present)."""
-    if not usage:
-        return 0
-    total = usage.get("total_tokens")
-    if isinstance(total, (int, float)):
-        return int(total)
-    return sum(int(v) for k, v in usage.items() if k.endswith("tokens") and isinstance(v, (int, float)))
+    """A turn's total: the provider's own `total_tokens` when it gives one
+    (so prompt and completion are not counted twice against it), else every
+    *_tokens figure summed (the Claude Agent SDK reports no total). See
+    core/runs.py normalize_usage, the one place usage shapes are read."""
+    normalized = normalize_usage(usage)
+    return normalized.total_tokens if normalized else 0
 
 
 def extract_context_tokens(usage: dict | None) -> int | None:
@@ -46,76 +41,25 @@ def extract_context_tokens(usage: dict | None) -> int | None:
     worse than showing nothing.
 
     Returns None when the provider reported nothing usable, so the caller
-    can say "unavailable" rather than render a fabricated figure.
-
-    Distinguished by key shape, since each provider names these differently
-    and the distinction genuinely changes the arithmetic:
-
-    - OpenAI-compatible (`prompt_tokens`): already the whole prompt.
-    - Claude Agent SDK (`cache_read_input_tokens` /
-      `cache_creation_input_tokens`): `input_tokens` counts ONLY the
-      uncached remainder, so the cached portions must be added back or a
-      cache-warm turn reads as a near-empty context.
-    - Codex (`cached_input_tokens`): `input_tokens` is already the full
-      input and the cached figure is a subset of it (see
-      core/codex_brain.py's turn.completed handler) — adding them would
-      double-count.
+    can say "unavailable" rather than render a fabricated figure. Each
+    provider's arithmetic (Claude's input excluding its cache, Codex's
+    including it) is in core/runs.py normalize_usage.
     """
-    if not usage:
-        return None
-    prompt = usage.get("prompt_tokens")
-    if isinstance(prompt, (int, float)) and prompt > 0:
-        return int(prompt)
-    inp = usage.get("input_tokens")
-    if not isinstance(inp, (int, float)):
-        return None
-    total = int(inp)
-    if "cache_read_input_tokens" in usage or "cache_creation_input_tokens" in usage:
-        for key in ("cache_read_input_tokens", "cache_creation_input_tokens"):
-            value = usage.get(key)
-            if isinstance(value, (int, float)):
-                total += int(value)
-    return total or None
-
-
-def _int(value) -> int | None:
-    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+    normalized = normalize_usage(usage)
+    return (normalized.prompt_tokens or None) if normalized else None
 
 
 def extract_cache_tokens(usage: dict | None) -> dict:
     """How the last turn's prompt split between the prompt cache and fresh
     input (the prompt-cache audit, 2026-09-22: JARVIS kept no record of
     cache reads at all, so a miss was invisible). Each value is None when the
-    provider did not report it, never a guess.
-
-    - Claude Agent SDK: `input_tokens` is already the uncached remainder;
-      reads and writes are reported separately.
-    - Codex: `input_tokens` is the whole input and `cached_input_tokens` a
-      subset of it; writes are not reported.
-    - OpenAI-style: `prompt_tokens_details.cached_tokens` is a subset of
-      `prompt_tokens`. DeepSeek reports `prompt_cache_hit_tokens` and
-      `prompt_cache_miss_tokens` instead.
-    """
-    empty = {"cache_read_tokens": None, "cache_write_tokens": None, "uncached_input_tokens": None}
-    if not usage:
-        return empty
-    if "cache_read_input_tokens" in usage or "cache_creation_input_tokens" in usage:
-        return {"cache_read_tokens": _int(usage.get("cache_read_input_tokens")),
-                "cache_write_tokens": _int(usage.get("cache_creation_input_tokens")),
-                "uncached_input_tokens": _int(usage.get("input_tokens"))}
-    if "cached_input_tokens" in usage:
-        read, total = _int(usage.get("cached_input_tokens")), _int(usage.get("input_tokens"))
-        return {"cache_read_tokens": read, "cache_write_tokens": None,
-                "uncached_input_tokens": None if read is None or total is None else max(total - read, 0)}
-    if "prompt_cache_hit_tokens" in usage or "prompt_cache_miss_tokens" in usage:
-        return {"cache_read_tokens": _int(usage.get("prompt_cache_hit_tokens")), "cache_write_tokens": None,
-                "uncached_input_tokens": _int(usage.get("prompt_cache_miss_tokens"))}
-    details = usage.get("prompt_tokens_details")
-    if isinstance(details, dict) and "cached_tokens" in details:
-        read, total = _int(details.get("cached_tokens")), _int(usage.get("prompt_tokens"))
-        return {"cache_read_tokens": read, "cache_write_tokens": None,
-                "uncached_input_tokens": None if read is None or total is None else max(total - read, 0)}
-    return empty
+    provider did not report it, never a guess; see core/runs.py
+    normalize_usage for each provider's shape."""
+    normalized = normalize_usage(usage)
+    if normalized is None:
+        return {"cache_read_tokens": None, "cache_write_tokens": None, "uncached_input_tokens": None}
+    return {"cache_read_tokens": normalized.cache_read_tokens, "cache_write_tokens": normalized.cache_write_tokens,
+            "uncached_input_tokens": normalized.uncached_input_tokens}
 
 
 def build_context_state(usage: dict | None, capacity: dict | None, model_id: str | None) -> dict | None:
@@ -159,16 +103,20 @@ def _entry(value) -> dict:
     return {"fresh_tokens": 0, "cache_read_tokens": 0, "unsplit_tokens": int(value or 0)}
 
 
-def record_usage(endpoint_id: str, usage: dict | None) -> None:
+def record_usage(endpoint_id: str, usage: "Usage | dict | None") -> None:
     """Add one turn to an endpoint's lifetime totals, keeping cache reads
     apart from fresh tokens (new input, cache writes, output). A cache read
     is the provider reusing a prompt it already has, at a fraction of the
     price, so summing it in made a long, cache-warm Claude chat look like
-    ten times the spend it was."""
-    total = _extract_total_tokens(usage or {})
-    if total <= 0:
+    ten times the spend it was.
+
+    `usage` is a whole turn's Usage (every provider call summed, core/runs.py)
+    or one provider's raw usage dict."""
+    normalized = usage if isinstance(usage, Usage) else normalize_usage(usage)
+    if normalized is None or normalized.total_tokens <= 0:
         return
-    cache_read = extract_cache_tokens(usage).get("cache_read_tokens") or 0
+    total = normalized.total_tokens
+    cache_read = normalized.cache_read_tokens or 0
     data = read_json(USAGE_FILE, {})
     entry = _entry(data.get(endpoint_id))
     entry["cache_read_tokens"] += cache_read

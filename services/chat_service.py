@@ -11,6 +11,7 @@ before the user has added any model in Settings gets a canned reply telling
 them to go add one, instead of silently spending a real Claude turn.
 """
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -21,7 +22,7 @@ from fastapi import HTTPException
 
 from claude_agent_sdk import CLIJSONDecodeError
 
-from core import attachments, chat_files, file_checkpoints, logs as log_files, mcp_oauth, model_catalog, model_endpoints, model_marks, permissions, token_usage
+from core import attachments, chat_files, file_checkpoints, logs as log_files, mcp_oauth, model_catalog, model_endpoints, model_marks, permissions, runs, token_usage
 from core.brain import Brain
 from core.codex_brain import CodexBrain
 from core.external_brain import ExternalBrain
@@ -421,9 +422,11 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
         brain.pending_reference_taint = True
     full_text = _vision_input(endpoint, _prime_with_history(session_id, just_created, endpoint, full_text, brain), image_ids)
     session = session_manager.get_session(session_id) or {}
+    usage = None
     try:
         async with file_checkpoints.around_turn(f"chat:{session_id}", session.get("workspace_dir")):
-            reply = await brain.run_turn(full_text)
+            outcome = await runs.complete(brain, full_text, _run_context(session_id, endpoint, is_admin))
+        reply, usage = outcome.text, outcome.usage
     except CLIJSONDecodeError:
         await close_session_brain(session_id)
         reply = ATTACHMENT_TOO_LARGE_MESSAGE
@@ -431,7 +434,7 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
         _remember_claude_session(session_id, brain, succeeded=False)
         await close_session_brain(session_id)
         raise
-    _record_turn_telemetry(session_id, endpoint, brain)
+    _record_turn_telemetry(session_id, endpoint, brain, usage)
     session_manager.append_message(session_id, "assistant", reply, extra=_tool_rounds(brain, endpoint))
     _remember_claude_session(session_id, brain)
     _reply_hook(session_id, endpoint, text, reply)
@@ -473,8 +476,10 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
         return
 
     reply_parts: list[str] = []
+    usages: list = []
     brain = None
     provider_started = False
+    context = _run_context(session_id, endpoint, is_admin)
     try:
         full_text = _prepare_sent_text(session_id, index, text, attachment_ids, reference_context)
         provider_started = True
@@ -484,10 +489,13 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
         full_text = _vision_input(endpoint, _prime_with_history(session_id, just_created, endpoint, full_text, brain), image_ids)
         session = session_manager.get_session(session_id) or {}
         async with file_checkpoints.around_turn(f"chat:{session_id}", session.get("workspace_dir")):
-            async for item in _stream_with_permission_prompts(session_id, brain, full_text):
-                if isinstance(item, str):
-                    reply_parts.append(item)
-                yield item
+            # Closed here, not left to garbage collection, so a stopped turn
+            # has finished stopping before the code below judges the stop.
+            async with contextlib.aclosing(_stream_with_permission_prompts(session_id, brain, full_text, usages)) as stream:
+                async for item in stream:
+                    if isinstance(item, str):
+                        reply_parts.append(item)
+                    yield item
     except CLIJSONDecodeError:
         await close_session_brain(session_id)
         reply_parts.append(ATTACHMENT_TOO_LARGE_MESSAGE)
@@ -506,16 +514,20 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
                                        status="failed" if failed else "interrupted", extra=extra)
         _remember_claude_session(session_id, brain, succeeded=False,
                                  cancelled=isinstance(exc, (asyncio.CancelledError, GeneratorExit)))
+        if not failed and brain is not None:
+            stop = await brain.cancel()
+            logger.info("run %s (chat %s) stopped: %s, %s", context.run_id, session_id,
+                        "confirmed" if stop.confirmed else "not confirmed", stop.how)
         await close_session_brain(session_id)
         raise
 
-    _record_turn_telemetry(session_id, endpoint, brain)
+    _record_turn_telemetry(session_id, endpoint, brain, runs.total(usages))
     session_manager.append_message(session_id, "assistant", "".join(reply_parts), extra=_tool_rounds(brain, endpoint))
     _remember_claude_session(session_id, brain)
     _reply_hook(session_id, endpoint, text, "".join(reply_parts))
 
 
-async def _stream_with_permission_prompts(session_id: str, brain, full_text: str):
+async def _stream_with_permission_prompts(session_id: str, brain, full_text: str, usages: list):
     """Reply text, plus any permission request raised while producing it.
 
     A model waiting on approval produces nothing, so simply iterating the
@@ -523,9 +535,12 @@ async def _stream_with_permission_prompts(session_id: str, brain, full_text: str
     the request queue together is what lets the prompt reach the person during
     the turn it belongs to. Text is yielded as a string exactly as before; a
     request is yielded as a dict, and only routes/chat_routes.py consumes this.
+
+    The brain's turn is read as events (core/runs.py): text goes out, each
+    provider call's usage is added to `usages`, the rest is not shown yet.
     """
     queue = permissions.open_channel(f"chat:{session_id}")
-    replies = brain.run_turn_stream(full_text).__aiter__()
+    replies = brain.events(full_text)
     next_chunk = asyncio.ensure_future(anext(replies))
     next_ask = asyncio.ensure_future(queue.get())
     try:
@@ -536,10 +551,13 @@ async def _stream_with_permission_prompts(session_id: str, brain, full_text: str
                 next_ask = asyncio.ensure_future(queue.get())
             if next_chunk in done:
                 try:
-                    chunk = next_chunk.result()
+                    item = next_chunk.result()
                 except StopAsyncIteration:
                     return
-                yield chunk
+                if item.kind is runs.EventKind.TEXT:
+                    yield item.data["text"]
+                elif item.kind is runs.EventKind.USAGE:
+                    usages.append(item.data["usage"])
                 next_chunk = asyncio.ensure_future(anext(replies))
     finally:
         next_ask.cancel()
@@ -549,18 +567,26 @@ async def _stream_with_permission_prompts(session_id: str, brain, full_text: str
         # cannot approve, and silence must never mean yes.
         permissions.close_channel(f"chat:{session_id}")
         await asyncio.gather(next_ask, next_chunk, return_exceptions=True)
+        await replies.aclose()
 
 
-def _record_turn_telemetry(session_id: str, endpoint: dict, brain) -> None:
+def _run_context(session_id: str, endpoint: dict, is_admin: bool) -> runs.RunContext:
+    session = session_manager.get_session(session_id) or {}
+    return runs.RunContext("chat", session_id=session_id, endpoint_id=endpoint["id"], model_kind=endpoint.get("kind"),
+                           is_admin=is_admin, agent_id=session.get("agent_id"))
+
+
+def _record_turn_telemetry(session_id: str, endpoint: dict, brain, turn_usage) -> None:
     """Both post-turn bookkeeping jobs in one place, called from the
     streaming and non-streaming paths alike so they can't drift apart.
 
-    Two genuinely different measurements come off the same usage payload:
-    record_usage() accumulates lifetime spend per endpoint (the Home tab's
-    card), while the context state is a point-in-time occupancy that
-    replaces its predecessor every turn (the chat header's meter). See
-    core/token_usage.py's extract_context_tokens() for why one can't be
-    derived from the other.
+    Two genuinely different measurements: record_usage() accumulates
+    lifetime spend per endpoint (the Home tab's card) from the whole turn's
+    usage, every provider call summed (`turn_usage`, core/runs.py); the
+    context state is a point-in-time occupancy that replaces its predecessor
+    every turn (the chat header's meter), from the turn's last call
+    (`brain.last_usage`). See core/token_usage.py's extract_context_tokens()
+    for why one can't be derived from the other.
 
     Deliberately non-fatal: the turn has already succeeded and its reply is
     about to be saved, so a telemetry failure must never turn a good answer
@@ -568,7 +594,7 @@ def _record_turn_telemetry(session_id: str, endpoint: dict, brain) -> None:
     """
     usage = getattr(brain, "last_usage", None)
     try:
-        token_usage.record_usage(endpoint["id"], usage)
+        token_usage.record_usage(endpoint["id"], turn_usage)
     except Exception:
         logger.exception("record_usage failed for endpoint %s", endpoint.get("id"))
     try:

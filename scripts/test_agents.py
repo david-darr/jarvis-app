@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from core import permissions, task_scheduler, tool_registry  # noqa: E402
+from core import permissions, runs, task_scheduler, tool_registry  # noqa: E402
 from core.middleware import require_admin, require_user  # noqa: E402
 from routes import agent_routes  # noqa: E402
 from services.agent_service import agent_service, is_silent  # noqa: E402
@@ -41,14 +41,15 @@ class FakeBrain:
     async def connect(self): pass
     async def disconnect(self): pass
 
-    async def run_turn(self, prompt):
+    async def events(self, prompt, stream=True):
         FakeBrain.prompts.append(prompt)
         step = FakeBrain.script.pop(0) if FakeBrain.script else "done"
         if callable(step):
-            return await step()
+            step = await step()
         if isinstance(step, Exception):
             raise step
-        return step
+        yield runs.text(step)
+        yield runs.result(False)
 
 
 class AgentTestCase(unittest.TestCase):

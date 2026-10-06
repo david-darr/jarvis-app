@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from core import attachments, chat_artifacts, image_gen, middleware
+from core import attachments, chat_artifacts, image_gen, middleware, runs
 from core.session_manager import session_manager, SessionManager
 from core import session_manager_store as session_store
 from core import memory_tools
@@ -304,8 +304,10 @@ class ChatTests(unittest.TestCase):
         class FakeBrain:
             model = "fake-astra"
             last_usage = {"total_tokens": 33000, "input_tokens": 30000, "cached_input_tokens": 10000, "output_tokens": 3000}
-            async def run_turn_stream(self, text):
-                yield "ok"
+            async def events(self, text, stream=True):
+                yield runs.text("ok")
+                yield runs.usage_event(self.last_usage)
+                yield runs.result(True)
         with patch("core.model_catalog.list_models", side_effect=lambda kind: FAKE_CATALOG.get(kind, [])):
             self.assertEqual(self.select("codex", "fake-astra").status_code, 200)
             # Nothing measured yet is "unavailable", not a zero or a guess.
@@ -466,8 +468,8 @@ class ChatTests(unittest.TestCase):
 
     def test_stream_failure_persists_partial(self):
         class FailingBrain:
-            async def run_turn_stream(self, text):
-                yield "Partial **answer**"
+            async def events(self, text, stream=True):
+                yield runs.text("Partial **answer**")
                 raise RuntimeError("private provider error")
         self.select()
         with patch.object(chat_service, '_get_brain', AsyncMock(return_value=(FailingBrain(), False))), patch.object(chat_service, 'close_session_brain', AsyncMock()):
@@ -727,8 +729,12 @@ class OpenMicTests(unittest.TestCase):
         async def run(open_mic: bool):
             if open_mic:
                 session_manager.set_open_mic(self.sid, True)
-            brain = AsyncMock()
-            brain.run_turn = AsyncMock(side_effect=lambda text: sent.append(text) or "ok")
+            class Brain:
+                async def events(self, text, stream=True):
+                    sent.append(text)
+                    yield runs.text("ok")
+                    yield runs.result(False)
+            brain = Brain()
             with patch.object(chat_service, "_get_brain", return_value=(brain, False)):
                 await chat_service.send_message(self.sid, "what is the weather")
 
@@ -1833,12 +1839,13 @@ class WorkBoardTests(unittest.TestCase):
         class FakeBrain:
             async def connect(self): pass
             async def disconnect(self): pass
-            async def run_turn(self, prompt):
+            async def events(self, prompt, stream=True):
                 test.prompts.append(prompt)
                 outcome = test.outputs.pop(0) if test.outputs else "done it"
                 if isinstance(outcome, Exception):
                     raise outcome
-                return outcome
+                yield runs.text(outcome)
+                yield runs.result(False)
 
         p = patch.object(task_scheduler, "_task_brain", side_effect=lambda task: FakeBrain())
         p.start()
@@ -1973,7 +1980,9 @@ class TaskRunHistoryTests(unittest.TestCase):
         class FakeBrain:
             async def connect(self): pass
             async def disconnect(self): pass
-            async def run_turn(self, prompt): return "the brief"
+            async def events(self, prompt, stream=True):
+                yield runs.text("the brief")
+                yield runs.result(False)
 
         for target, kwargs in ((task_scheduler, {"attribute": "_task_brain", "side_effect": lambda task: FakeBrain()}),
                                (task_scheduler.events, {"attribute": "emit"})):

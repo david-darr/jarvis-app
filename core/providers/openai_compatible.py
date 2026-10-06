@@ -47,6 +47,8 @@ in this module's local copy of the history and were dropped after every
 turn. Appended as they happen, not at the end, so a stopped turn still
 records the tools that actually ran.
 """
+import asyncio
+import contextlib
 import json
 import re
 from typing import Awaitable, AsyncIterator, Callable, Optional
@@ -54,7 +56,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from core import ollama_client
+from core import ollama_client, runs
 from core.providers import native_api
 
 TIMEOUT_SECONDS = 120
@@ -109,14 +111,14 @@ def _extract_fake_tool_call(content: Optional[str], tools: Optional[list[dict]])
 
 
 async def _answer_without_tools(client, base_url: str, api_key: Optional[str], model: str,
-                                working_messages: list[dict], num_ctx: Optional[int],
-                                on_usage: Optional[Callable[[dict], None]]) -> str:
+                                working_messages: list[dict], num_ctx: Optional[int]) -> tuple[str, Optional[dict]]:
     """When a model spends every tool round calling tools, ask once more
     with tools switched off, so it answers from what it gathered. The
     streaming path used to end with no reply at all (found live 2026-09-25:
     qwen2.5-coder:32b searched four times in a row and the chat got an empty
     answer). A server that rejects the tool history without tools gets the
-    old, honest note instead of an error."""
+    old, honest note instead of an error. Returns the answer and that
+    call's usage."""
     body = {"model": model, "messages": _request_messages(base_url, model, working_messages + [
         {"role": "user", "content": "[You have used all the tool calls available for this message. "
                                     "Answer now from what you found, without calling any tools.]"}])}
@@ -125,14 +127,12 @@ async def _answer_without_tools(client, base_url: str, api_key: Optional[str], m
     try:
         data = await _post_chat(client, base_url, api_key, body)
     except httpx.HTTPError:
-        return "(no response after tool calls)"
-    if on_usage and data.get("usage"):
-        on_usage(data["usage"])
+        return "(no response after tool calls)", None
     content = data["choices"][0]["message"].get("content") or ""
     # Still trying to call something: say so plainly rather than show JSON.
     if not content.strip() or _looks_like_call(content):
-        return "(no response after tool calls)"
-    return content
+        return "(no response after tool calls)", data.get("usage")
+    return content, data.get("usage")
 
 
 def _looks_like_call(content: str) -> bool:
@@ -308,8 +308,8 @@ async def run_turn(base_url: str, model: str, api_key: Optional[str], messages: 
                     on_usage: Optional[Callable[[dict], None]] = None, num_ctx: Optional[int] = None,
                     rounds: Optional[list[dict]] = None) -> str:
     """Non-streaming chat completion, with an optional bounded tool-calling
-    loop (David's ask 2026-08-31 — see module docstring). Without `tools`,
-    behaves exactly as before this change.
+    loop (David's ask 2026-08-31 — see module docstring): the whole reply of
+    turn_events(stream=False). Without `tools`, one plain request.
 
     on_usage (David's ask 2026-09-01, per-model token usage on Home) fires
     with the raw `usage` object from any response that includes one —
@@ -319,97 +319,87 @@ async def run_turn(base_url: str, model: str, api_key: Optional[str], messages: 
 
     num_ctx: see module docstring — applied by _post_chat().
     rounds: see module docstring."""
-    working_messages = list(messages)
-    async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
-        for _ in range(MAX_TOOL_ROUNDS if tools else 1):
-            body = {"model": model, "messages": _request_messages(base_url, model, working_messages)}
-            if tools:
-                body["tools"] = tools
-            if num_ctx:
-                body["num_ctx"] = num_ctx
-            try:
-                data = await _post_chat(client, base_url, api_key, body)
-            except httpx.HTTPStatusError as e:
-                if tools and e.response.status_code in (400, 422):
-                    # This endpoint doesn't understand `tools` at all — retry
-                    # once, plain, rather than failing the turn outright.
-                    retry_body = {"model": model, "messages": _request_messages(base_url, model, _without_tool_rounds(working_messages))}
-                    if num_ctx:
-                        retry_body["num_ctx"] = num_ctx
-                    data = await _post_chat(client, base_url, api_key, retry_body)
-                    if on_usage and data.get("usage"):
-                        on_usage(data["usage"])
-                    return data["choices"][0]["message"]["content"]
-                raise
-
-            if on_usage and data.get("usage"):
-                on_usage(data["usage"])
-            message = data["choices"][0]["message"]
-            tool_calls = message.get("tool_calls")
-            if not tool_calls and tool_executor:
-                rescued, prose = _rescue_tool_call(message.get("content"), tools)
-                if rescued:
-                    tool_calls = [rescued]
-                    # Rewrite so the appended history has a real tool_calls
-                    # field instead of the raw hallucinated JSON text — some
-                    # servers reject an assistant message followed by tool
-                    # messages when it doesn't actually claim to have called one.
-                    # Any sentence before the call stays as the message text.
-                    message = {"role": "assistant", "content": prose, "tool_calls": tool_calls}
-            if not tool_calls or not tool_executor:
-                return message.get("content") or ""
-
-            _record(working_messages, rounds, message)
-            for call in tool_calls:
-                fn = call["function"]
-                args = _parse_tool_arguments(fn.get("arguments"))
-                result = await tool_executor(fn["name"], args)
-                _record(working_messages, rounds, {
-                    "role": "tool",
-                    "tool_call_id": call["id"],
-                    "content": result,
-                })
-        # Ran out of rounds without a final answer: one more request with
-        # tools off, so the model answers from what it gathered.
-        return await _answer_without_tools(client, base_url, api_key, model, working_messages, num_ctx, on_usage)
+    parts: list[str] = []
+    async with contextlib.aclosing(turn_events(base_url, model, api_key, messages, tools=tools,
+                                               tool_executor=tool_executor, on_usage=on_usage, num_ctx=num_ctx,
+                                               rounds=rounds, stream=False)) as items:
+        async for item in items:
+            if item.kind is runs.EventKind.TEXT:
+                parts.append(item.data["text"])
+    return "".join(parts)
 
 
-async def run_turn_stream(base_url: str, model: str, api_key: Optional[str], messages: list[dict],
-                           tools: Optional[list[dict]] = None, tool_executor: Optional[Callable[[str, dict], Awaitable[str]]] = None,
-                           on_usage: Optional[Callable[[dict], None]] = None, num_ctx: Optional[int] = None,
-                           rounds: Optional[list[dict]] = None) -> AsyncIterator[str]:
-    """Streaming variant. Tool-calling rounds (if any) are resolved
+def run_turn_stream(base_url: str, model: str, api_key: Optional[str], messages: list[dict],
+                    tools: Optional[list[dict]] = None, tool_executor: Optional[Callable[[str, dict], Awaitable[str]]] = None,
+                    on_usage: Optional[Callable[[dict], None]] = None, num_ctx: Optional[int] = None,
+                    rounds: Optional[list[dict]] = None) -> AsyncIterator[str]:
+    """Streaming variant: the text of turn_events()."""
+    return runs.text_only(turn_events(base_url, model, api_key, messages, tools=tools, tool_executor=tool_executor,
+                                      on_usage=on_usage, num_ctx=num_ctx, rounds=rounds))
+
+
+def _tool_ok(result) -> bool:
+    """JARVIS's own tools answer "Not run: ..." when they refuse, and an MCP
+    call that fails answers "Tool error: ..."; anything else is a result."""
+    return not str(result).startswith(("Not run:", "Tool error:"))
+
+
+async def turn_events(base_url: str, model: str, api_key: Optional[str], messages: list[dict],
+                      tools: Optional[list[dict]] = None, tool_executor: Optional[Callable[[str, dict], Awaitable[str]]] = None,
+                      on_usage: Optional[Callable[[dict], None]] = None, num_ctx: Optional[int] = None,
+                      rounds: Optional[list[dict]] = None, stream: bool = True,
+                      _tally: Optional[dict] = None) -> AsyncIterator[runs.RunEvent]:
+    """One turn as typed events (core/runs.py): text, each tool call started
+    and finished, one usage event per provider call that reported usage
+    (2026-10-05: a turn used to keep only its last call's, so tool turns
+    under-counted), then RESULT. Tool-calling rounds (if any) are resolved
     non-streamed first — a tool call has no incremental text of its own to
     stream — then only the final round streams token-by-token, same
     real-time feel as before for the common no-tool-call case.
 
     on_usage, rounds: see run_turn's docstring.
-    num_ctx: see module docstring. The plain (no-tools) branch below is SSE-
+    stream: False for a caller that wants the whole reply (run_turn, a task,
+    a channel message): a turn without tools, and the fallback when a server
+    rejects them, is then one plain request rather than a token stream.
+    num_ctx: see module docstring. The streamed plain branch below is SSE-
     based and can't go through _post_chat()/chat_capped() — for a detected
-    capped-Ollama endpoint it instead falls back to one non-streamed
-    chat_capped() call and yields the whole reply at once (correctness over
+    capped-Ollama endpoint, or a native API, it instead makes one
+    non-streamed call and yields the whole reply at once (correctness over
     token-by-token smoothness for that specific case)."""
+    tally = _tally if _tally is not None else {"calls": 0, "reported": 0}
+
+    def account(raw: Optional[dict]) -> Optional[runs.RunEvent]:
+        """One provider call made: its usage as an event, when it said."""
+        tally["calls"] += 1
+        if not raw:
+            return None
+        tally["reported"] += 1
+        if on_usage:
+            on_usage(raw)
+        return runs.usage_event(raw)
+
+    def finished() -> runs.RunEvent:
+        return runs.result(tally["reported"] == tally["calls"])
+
     if not tools:
-        if native_api.mode(base_url):
+        if not stream or native_api.mode(base_url) or (num_ctx and ollama_client.is_ollama_url(base_url)):
+            body = {"model": model, "messages": _request_messages(base_url, model, messages)}
+            if num_ctx:
+                body["num_ctx"] = num_ctx
             async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
-                data = await native_api.post(client, base_url, model, api_key, messages)
-            if on_usage and data.get("usage"):
-                on_usage(data["usage"])
+                data = await _post_chat(client, base_url, api_key, body)
+            usage = account(data.get("usage"))
+            if usage:
+                yield usage
             content = data["choices"][0]["message"].get("content") or ""
             if content:
-                yield content
-            return
-        if num_ctx and ollama_client.is_ollama_url(base_url):
-            data = await ollama_client.chat_capped(model, messages, num_ctx, base_url=base_url)
-            if on_usage and data.get("usage"):
-                on_usage(data["usage"])
-            content = data["choices"][0]["message"].get("content") or ""
-            if content:
-                yield content
+                yield runs.text(content)
+            yield finished()
             return
 
         stream_body = {"model": model, "messages": _request_messages(base_url, model, messages), "stream": True,
                        "stream_options": {"include_usage": True}}
+        reported = None
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
             async with client.stream(
                 "POST", f"{base_url}/chat/completions", headers=_headers(api_key), json=stream_body,
@@ -422,12 +412,18 @@ async def run_turn_stream(base_url: str, model: str, api_key: Optional[str], mes
                     if payload == "[DONE]":
                         break
                     chunk = json.loads(payload)
-                    if on_usage and chunk.get("usage"):
-                        on_usage(chunk["usage"])
+                    # The last report wins: a server that repeats a running
+                    # total on later chunks must not be counted twice.
+                    if chunk.get("usage"):
+                        reported = chunk["usage"]
                     choices = chunk.get("choices") or []
                     delta = choices[0]["delta"].get("content") if choices else None
                     if delta:
-                        yield delta
+                        yield runs.text(delta)
+        usage = account(reported)
+        if usage:
+            yield usage
+        yield finished()
         return
 
     working_messages = list(messages)
@@ -440,15 +436,19 @@ async def run_turn_stream(base_url: str, model: str, api_key: Optional[str], mes
                 data = await _post_chat(client, base_url, api_key, body)
             except httpx.HTTPStatusError as e:
                 if e.response.status_code in (400, 422):
-                    # Fall back to a plain streamed call with no tools.
-                    async for chunk in run_turn_stream(base_url, model, api_key, _without_tool_rounds(working_messages),
-                                                       tools=None, on_usage=on_usage, num_ctx=num_ctx):
-                        yield chunk
+                    # This endpoint doesn't understand `tools` at all — retry
+                    # once, plain, rather than failing the turn outright.
+                    async with contextlib.aclosing(turn_events(
+                            base_url, model, api_key, _without_tool_rounds(working_messages),
+                            tools=None, on_usage=on_usage, num_ctx=num_ctx, stream=stream, _tally=tally)) as plain:
+                        async for item in plain:
+                            yield item
                     return
                 raise
 
-            if on_usage and data.get("usage"):
-                on_usage(data["usage"])
+            usage = account(data.get("usage"))
+            if usage:
+                yield usage
             message = data["choices"][0]["message"]
             tool_calls = message.get("tool_calls")
             if not tool_calls and tool_executor:
@@ -459,19 +459,42 @@ async def run_turn_stream(base_url: str, model: str, api_key: Optional[str], mes
             if not tool_calls or not tool_executor:
                 content = message.get("content") or ""
                 if content:
-                    yield content
+                    yield runs.text(content)
+                yield finished()
                 return
 
             _record(working_messages, rounds, message)
-            for call in tool_calls:
-                fn = call["function"]
-                args = _parse_tool_arguments(fn.get("arguments"))
-                result = await tool_executor(fn["name"], args)
-                _record(working_messages, rounds, {
-                    "role": "tool",
-                    "tool_call_id": call["id"],
-                    "content": result,
-                })
+            answered, running = 0, False
+            try:
+                for call in tool_calls:
+                    fn = call["function"]
+                    args = _parse_tool_arguments(fn.get("arguments"))
+                    call_id = call.get("id") or f"call-{round_num}-{answered}"
+                    yield runs.tool_started(call_id, fn["name"], args)
+                    running = True
+                    result = await tool_executor(fn["name"], args)
+                    running = False
+                    _record(working_messages, rounds, {
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": result,
+                    })
+                    answered += 1
+                    yield runs.tool_finished(call_id, _tool_ok(result), result)
+            except (asyncio.CancelledError, GeneratorExit):
+                # Stopped mid-round. Every call the model made still gets an
+                # answer in the kept history, saying what is known, so the
+                # next turn's request is one a provider accepts.
+                for index, call in enumerate(tool_calls[answered:]):
+                    note = ("Stopped: the turn was stopped while this tool was running; it may or may not have finished."
+                            if index == 0 and running else "Not run: the turn was stopped first.")
+                    _record(working_messages, rounds, {"role": "tool", "tool_call_id": call["id"], "content": note})
+                raise
         # Ran out of rounds without a final answer (every round called a
         # tool): this used to end the stream with nothing at all.
-        yield await _answer_without_tools(client, base_url, api_key, model, working_messages, num_ctx, on_usage)
+        content, raw = await _answer_without_tools(client, base_url, api_key, model, working_messages, num_ctx)
+        usage = account(raw)
+        if usage:
+            yield usage
+        yield runs.text(content)
+        yield finished()

@@ -23,9 +23,11 @@ list_skills/read_skill added 2026-09-01 (David's ask: "all models... know,
 utilize, and operate under jarvis's methods, skills, and memory, all as a
 hive mind") — same reasoning, same shared engine (core/memory_tools.py).
 """
+import asyncio
+import contextlib
 from typing import AsyncIterator
 
-from core import attachments, integrations, mcp_client, mcp_oauth, permissions, projects, system_prompt, tool_registry, tool_search
+from core import attachments, integrations, mcp_client, mcp_oauth, permissions, projects, runs, system_prompt, tool_registry, tool_search
 from core.providers import openai_compatible
 from core.session_manager import sent_text
 from core.turn_taint import TurnTaint
@@ -86,6 +88,8 @@ class ExternalBrain:
         # reply by services/chat_service.py, which is how they survive a
         # reconnect. See _seed below.
         self.last_tool_rounds: list[dict] = []
+        # The tool that was running when this turn was stopped, if one was.
+        self.interrupted_tool: str | None = None
 
     @staticmethod
     def _seed(history: list[dict], endpoint_id: str | None, supports_images: bool = False) -> list[dict]:
@@ -129,7 +133,12 @@ class ExternalBrain:
         reason = await hook_service.before_tool(real, real_args, **context)
         if reason:
             return f"Not run: blocked by a hook: {reason}"
-        result = await self._run_tool(name, args)
+        try:
+            result = await self._run_tool(name, args)
+        except asyncio.CancelledError:
+            # The turn was stopped while the tool ran; see cancel().
+            self.interrupted_tool = real or name
+            raise
         hook_service.after_tool(real, real_args, result, **context)
         return result
 
@@ -228,24 +237,45 @@ class ExternalBrain:
         self._messages.append({"role": "assistant", "content": reply})
         return reply
 
-    async def run_turn_stream(self, user_text: str | list[dict]) -> AsyncIterator[str]:
+    def run_turn_stream(self, user_text: str | list[dict]) -> AsyncIterator[str]:
+        """The reply's text: the text of events()."""
+        return runs.text_only(self.events(user_text))
+
+    async def events(self, user_text: str | list[dict], stream: bool = True) -> AsyncIterator[runs.RunEvent]:
+        """The turn as typed events (core/runs.py), from the provider loop:
+        text, each tool call started and finished, each provider call's
+        usage, then RESULT. The history is brought up to date before RESULT
+        goes out, so it is current whatever the caller does after it.
+        stream=False: plain requests, as run_turn makes (see turn_events)."""
         self.turn_taint.reset()
         if self.pending_reference_taint:
             self.turn_taint.mark("selected reference")
             self.pending_reference_taint = False
         self._messages.append({"role": "user", "content": user_text})
         self.last_tool_rounds = []
+        self.interrupted_tool = None
         parts: list[str] = []
-        async for chunk in openai_compatible.run_turn_stream(
+        async with contextlib.aclosing(openai_compatible.turn_events(
             self.base_url, self.model, self.api_key, self._messages,
             tools=self.tools, tool_executor=self._execute_tool,
             on_usage=lambda u: setattr(self, "last_usage", u), num_ctx=self.num_ctx,
-            rounds=self.last_tool_rounds,
-        ):
-            parts.append(chunk)
-            yield chunk
-        self._messages.extend(self.last_tool_rounds)
-        self._messages.append({"role": "assistant", "content": "".join(parts)})
+            rounds=self.last_tool_rounds, stream=stream,
+        )) as items:
+            async for item in items:
+                if item.kind is runs.EventKind.TEXT:
+                    parts.append(item.data["text"])
+                elif item.kind is runs.EventKind.RESULT:
+                    self._messages.extend(self.last_tool_rounds)
+                    self._messages.append({"role": "assistant", "content": "".join(parts)})
+                yield item
+
+    async def cancel(self) -> runs.StopResult:
+        """Nothing of this brain runs on its own once its turn is closed, so
+        a stop is confirmed unless a tool was cut off mid-run: a command or
+        sandbox run started by a tool may still finish."""
+        if self.interrupted_tool:
+            return runs.StopResult(False, f"the tool {self.interrupted_tool} was running when the turn stopped and may still finish")
+        return runs.StopResult(True, "the request was closed; the provider may still bill a call it had started")
 
     async def disconnect(self) -> None:
         pass

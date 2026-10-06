@@ -301,7 +301,8 @@ async def _run_triage_email() -> str:
     try:
         await brain.connect()
         async with file_checkpoints.around_turn("task:triage-email"):
-            raw = await brain.run_turn(prompt)
+            from core.task_scheduler import complete
+            raw = await complete(brain, prompt, {}, "task")
     finally:
         await brain.disconnect()
 

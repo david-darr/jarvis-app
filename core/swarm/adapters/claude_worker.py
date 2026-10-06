@@ -26,6 +26,8 @@ from claude_agent_sdk import (
     tool,
 )
 
+from core.runs import claude_quota
+
 from . import LEAD_MAX_TURNS, MAX_TURNS, QUOTA_FRESHNESS_SECONDS, role_prompt, task_prompt
 from ..models import EventKind, WorkerEvent
 from ..tools import ToolRejected
@@ -320,25 +322,9 @@ def _total_units(usage) -> int:
 
 
 def _quota_event(message):
-    """Turn the SDK's rate-limit message into a pool-level quota reading.
-
-    Utilization is reported as a fraction; the store stores a percentage.
-    Absence of a number is recorded as unknown, never as zero.
-    """
-    info = getattr(message, "rate_limit_info", None)
-    if info is None:
+    """Turn the SDK's rate-limit message into a pool-level quota reading
+    (read by core/runs.py claude_quota, shared with chat's Claude brain)."""
+    quota = claude_quota(message)
+    if quota is None:
         return None
-    status = {"allowed": "allowed", "allowed_warning": "warning", "rejected": "rejected"}.get(
-        getattr(info, "status", None), "unknown")
-    utilization = getattr(info, "utilization", None)
-    percent = None
-    if isinstance(utilization, (int, float)):
-        percent = float(utilization) * 100 if utilization <= 1 else float(utilization)
-        percent = max(0.0, min(100.0, percent))
-    return WorkerEvent(EventKind.QUOTA, uuid.uuid4().hex, {
-        "bucket": getattr(info, "rate_limit_type", None) or "account",
-        "used_percent": percent,
-        "status": status,
-        "resets_at": getattr(info, "resets_at", None),
-        "freshness": QUOTA_FRESHNESS_SECONDS,
-    })
+    return WorkerEvent(EventKind.QUOTA, uuid.uuid4().hex, {**quota, "freshness": QUOTA_FRESHNESS_SECONDS})

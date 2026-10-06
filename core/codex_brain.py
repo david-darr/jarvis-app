@@ -41,6 +41,7 @@ parity only. core/system_prompt.py's for_codex() is deliberately honest
 about that gap rather than promising tools that don't exist.
 """
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -54,7 +55,7 @@ from core.custom_tabs import USER_TAB_CODE_DIRS, ensure_user_tab_dirs
 from core.middleware import local_api_base
 from core.session_manager import sent_text, session_manager
 from core.vault import resolve_vault_dir
-from core import projects, system_prompt
+from core import projects, runs, system_prompt
 
 # Phase 2 (2026-09-11): the CLI wrapper hive-mind tools are invoked through
 # (see core/system_prompt.py's for_codex() and mcp_servers/hive_mind_cli.py's
@@ -106,8 +107,11 @@ def _writable_roots_override() -> str:
     return json.dumps(roots)
 
 
-async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
-    """Kill proc and everything it spawned.
+async def _kill_process_tree(proc: asyncio.subprocess.Process) -> bool:
+    """Kill proc and everything it spawned. True when the stop is confirmed:
+    the process had already exited on its own, or taskkill reported the whole
+    tree killed and the process has exited. Only the parent can be killed
+    elsewhere, which does not prove its children stopped.
 
     `codex exec` on Windows is a process tree (node -> codex.exe -> a cua-repl
     node/node_repl pair -> codex-code-mode-host.exe), not a single process.
@@ -121,16 +125,49 @@ async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
     taskkill itself is unavailable.
     """
     if proc.returncode is not None:
-        return
+        return True
+    tree_killed = False
     if sys.platform == "win32" and proc.pid:
         killer = await asyncio.create_subprocess_exec(
             "taskkill", "/T", "/F", "/PID", str(proc.pid),
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
         )
-        await killer.wait()
+        tree_killed = await killer.wait() == 0
     if proc.returncode is None:
         proc.kill()
     await proc.wait()
+    return tree_killed
+
+
+def _codex_tool(item: dict) -> tuple[str, object] | None:
+    """A tool-shaped `codex exec --json` item as (name, input), or None for
+    messages, reasoning and plans. Item types read from codex-cli 0.155.1's
+    own event enum (exec/src/lib.rs): command_execution, file_change,
+    mcp_tool_call, collab_tool_call, web_search; mapped as Hermes Agent's
+    agent/transports/codex_event_projector.py does (MIT, Nous Research)."""
+    kind = item.get("type")
+    if kind == "command_execution":
+        return "shell", {"command": item.get("command") or ""}
+    if kind == "file_change":
+        return "apply_patch", {"changes": [{"path": c.get("path"), "kind": c.get("kind")}
+                                           for c in item.get("changes") or [] if isinstance(c, dict)]}
+    if kind == "mcp_tool_call":
+        return f"mcp__{item.get('server') or 'mcp'}__{item.get('tool') or 'unknown'}", item.get("arguments") or {}
+    if kind == "collab_tool_call":
+        return item.get("tool") or "agent", {"prompt": item.get("prompt") or ""}
+    if kind == "web_search":
+        return "web_search", {"query": item.get("query") or ""}
+    return None
+
+
+def _codex_tool_outcome(item: dict) -> tuple[bool, object]:
+    ok = (item.get("status") not in ("failed", "declined") and item.get("exit_code") in (None, 0)
+          and not item.get("error"))
+    if item.get("type") == "command_execution":
+        return ok, item.get("aggregated_output") or ""
+    if item.get("type") == "file_change":
+        return ok, f"{len(item.get('changes') or [])} change(s), {item.get('status') or 'unknown'}"
+    return ok, item.get("error") or item.get("result") or item.get("status") or ""
 
 
 class CodexBrain:
@@ -172,6 +209,10 @@ class CodexBrain:
         # Present only once this session has completed at least one codex_cli
         # turn before — see set_codex_thread_id's caller below.
         self.thread_id: str | None = (session or {}).get("codex_thread_id")
+        # The current or last turn's process, and whether stopping it is
+        # confirmed (see cancel()).
+        self._proc: asyncio.subprocess.Process | None = None
+        self._stop_confirmed = True
 
     @staticmethod
     def _codex_path() -> str:
@@ -254,7 +295,28 @@ class CodexBrain:
         parts = [chunk async for chunk in self.run_turn_stream(user_text)]
         return "".join(parts).strip()
 
-    async def run_turn_stream(self, user_text: str):
+    def run_turn_stream(self, user_text: str):
+        """The reply's messages: the text of events()."""
+        return runs.text_only(self.events(user_text))
+
+    async def cancel(self) -> runs.StopResult:
+        """Stopping a Codex turn is killing its process tree. Closing the
+        turn's events already did that (their finally); otherwise it is done
+        here. Confirmed only on evidence: see _kill_process_tree."""
+        proc = self._proc
+        if proc is None:
+            return runs.StopResult(True, "no Codex process was running")
+        if proc.returncode is None:
+            self._stop_confirmed = await _kill_process_tree(proc)
+        if self._stop_confirmed:
+            return runs.StopResult(True, "Codex's process tree was killed and its process has exited")
+        return runs.StopResult(False, "Codex's process was killed, but its whole process tree could not be confirmed stopped")
+
+    async def events(self, user_text: str, stream: bool = True):
+        """The turn as typed events (core/runs.py): each finished message,
+        each tool Codex ran (started and finished), the turn's usage, then
+        RESULT. Codex sends whole messages either way, so `stream` changes
+        nothing here."""
         codex = self._codex_path()
         is_fresh_thread = self.thread_id is None
         args = self._build_args(codex)
@@ -311,17 +373,22 @@ class CodexBrain:
             stderr=asyncio.subprocess.PIPE,
             env=env,
         )
+        self._proc = proc
         proc.stdin.write(prompt.encode("utf-8"))
         proc.stdin.write_eof()
 
         stderr_task = asyncio.create_task(proc.stderr.read())
         try:
-            async for chunk in self._consume_process(proc, stderr_task, is_fresh_thread, user_text):
-                yield chunk
+            async for item in self._consume_process(proc, stderr_task, is_fresh_thread, user_text):
+                yield item
         finally:
             if google_token:
                 google_workspace.revoke_chat_token(google_token)
-            await _kill_process_tree(proc)
+            stopped = await _kill_process_tree(proc)
+            # A self-healing retry (see _consume_process) ran its own process
+            # and recorded its own stop; this older one must not overwrite it.
+            if self._proc is proc:
+                self._stop_confirmed = stopped
             if not stderr_task.done():
                 stderr_task.cancel()
             await asyncio.gather(stderr_task, return_exceptions=True)
@@ -330,6 +397,7 @@ class CodexBrain:
         has_text = False
         completed = False
         failure = None
+        open_tools: set[str] = set()
         while True:
             try:
                 line = await asyncio.wait_for(proc.stdout.readline(), timeout=CODEX_MESSAGE_TIMEOUT_SECONDS)
@@ -349,9 +417,18 @@ class CodexBrain:
                     session_manager.set_codex_thread_id(self.session_id, self.thread_id)
             elif etype == "item.completed" and event.get("item", {}).get("type") == "agent_message":
                 if has_text:
-                    yield "\n\n"
+                    yield runs.text("\n\n")
                 has_text = True
-                yield event["item"]["text"]
+                yield runs.text(event["item"]["text"])
+            elif etype in ("item.started", "item.completed") and _codex_tool(event.get("item") or {}):
+                item = event["item"]
+                item_id = str(item.get("id") or "")
+                if item_id not in open_tools:
+                    open_tools.add(item_id)
+                    yield runs.tool_started(item_id, *_codex_tool(item))
+                if etype == "item.completed":
+                    open_tools.discard(item_id)
+                    yield runs.tool_finished(item_id, *_codex_tool_outcome(item))
             elif etype == "turn.completed":
                 completed = True
                 usage = event.get("usage") or {}
@@ -401,12 +478,17 @@ class CodexBrain:
                 self.thread_id = None
                 if self.session_id:
                     session_manager.set_codex_thread_id(self.session_id, None)
-                async for chunk in self.run_turn_stream(user_text):
-                    yield chunk
+                async with contextlib.aclosing(self.events(user_text)) as retry:
+                    async for item in retry:
+                        yield item
                 return
             raise RuntimeError(f"Codex exited with an error (code {rc}). Check the selected model and CLI connection.")
         if failure or not completed:
             raise RuntimeError("Codex did not report a successful turn. Check the selected model and CLI connection.")
+        usage = runs.usage_event(self.last_usage)
+        if usage:
+            yield usage
+        yield runs.result(usage is not None, thread_id=self.thread_id)
 
     async def disconnect(self) -> None:
         pass  # no persistent process to close

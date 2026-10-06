@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -65,6 +66,13 @@ BLOCK_EXIT = script("block_exit", 'json.load(sys.stdin)\nsys.stderr.write("no no
 BLOCK_JSON = script("block_json", 'json.load(sys.stdin)\nprint(json.dumps({"decision": "block", "reason": "not that tool"}))\n')
 FAILS = script("fails", "sys.exit(1)\n")
 SLOW = script("slow", "time.sleep(30)\n")
+PID_FILE = SCRIPTS / "slow.pid"
+SLOW_PID = script("slow_pid", f'open(r"{PID_FILE}", "w").write(str(os.getpid()))\ntime.sleep(30)\n')
+
+
+def alive(pid: int) -> bool:
+    listed = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
+    return str(pid) in listed
 
 
 class Collector(BaseHTTPRequestHandler):
@@ -190,6 +198,31 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await hook_service.before_tool("Bash", {}, source="chat"))
         self.assertLess(time.monotonic() - started, 10, "a slow hook is stopped at its timeout")
         self.assertEqual(self.log(slow), ["timeout"])
+
+    async def test_a_stopped_turn_stops_its_command(self):
+        """A chat's Stop while a before-tool command runs kills the command
+        too, rather than leaving it running with nobody waiting (2026-10-05)."""
+        hook = self.hook(event="tool.before", action="command", config={"command": SLOW_PID})
+        if PID_FILE.exists():
+            PID_FILE.unlink()
+        check = asyncio.create_task(hook_service.before_tool("Bash", {}, source="chat"))
+        for _ in range(100):
+            if PID_FILE.exists() and PID_FILE.read_text():
+                break
+            await asyncio.sleep(0.1)
+        pid = int(PID_FILE.read_text())
+        try:
+            check.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await check
+            for _ in range(50):
+                if not alive(pid):
+                    break
+                await asyncio.sleep(0.1)
+            self.assertFalse(alive(pid), "the command is killed with the turn")
+            self.assertEqual(self.log(hook), ["skipped"])
+        finally:
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
 
     # -- events, filters, pause, re-firing ------------------------------------------
 

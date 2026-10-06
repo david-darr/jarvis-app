@@ -390,6 +390,12 @@ class HookService:
             await process.wait()
             self._log(hook, event, "timeout", f"stopped after {config['timeout']}s")
             return self._failure(hook, f"the hook \"{hook['name']}\" timed out") if blocking else None
+        except asyncio.CancelledError:
+            # The work it watches was stopped (a chat's Stop); so is the
+            # command, rather than running on with nobody waiting for it.
+            _kill_tree(process.pid)
+            self._log(hook, event, "skipped", "the turn was stopped while the command ran")
+            raise
         out = stdout[:OUTPUT_LIMIT].decode("utf-8", errors="replace").strip()
         err = stderr[:OUTPUT_LIMIT].decode("utf-8", errors="replace").strip()
         decision = None

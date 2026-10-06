@@ -31,7 +31,7 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import StreamEvent
 
-from core import custom_tabs, hive_mind_server, image_gen, integrations, mcp_oauth, permissions, projects, settings as settings_store, system_prompt
+from core import custom_tabs, hive_mind_server, image_gen, integrations, mcp_oauth, permissions, projects, runs, settings as settings_store, system_prompt
 from core.constants import DATA_DIR, REPO_CODE_DIRS
 from core.vault import resolve_vault_dir
 from core.turn_taint import TurnTaint
@@ -454,10 +454,26 @@ class Brain:
         parts = [chunk async for chunk in self.run_turn_stream(user_text)]
         return "".join(parts).strip()
 
-    async def run_turn_stream(self, user_text: str):
-        """Stream visible text deltas, never reasoning or tool-input events.
-        Completed blocks remain a fallback for CLI versions without deltas.
-        """
+    def run_turn_stream(self, user_text: str):
+        """Stream visible text deltas, never reasoning or tool-input events:
+        the text of events()."""
+        return runs.text_only(self.events(user_text))
+
+    async def cancel(self) -> runs.StopResult:
+        """Stop a turn the way Stop always has: close the connection, which
+        ends the CLI process. Claude Code's only acknowledgement would be
+        interrupt(), which Swarm measured hanging mid-turn
+        (core/swarm/adapters/claude_worker.py), so this stop is never called
+        confirmed."""
+        await self.disconnect()
+        return runs.StopResult(False, "Claude Code's connection was closed; it does not confirm the turn stopped")
+
+    async def events(self, user_text: str, stream: bool = True):
+        """The turn as typed events (core/runs.py): visible text deltas
+        (completed blocks remain a fallback for CLI versions without deltas),
+        each tool call started and finished, the turn's usage, an account
+        quota reading when the CLI sends one, then RESULT. One transport
+        either way, so `stream` changes nothing here."""
         if self._client is None:
             raise RuntimeError("Brain.connect() must be called before run_turn_stream().")
 
@@ -471,6 +487,7 @@ class Brain:
         streamed_blocks = {}
         has_text = False
         untrusted_tool_ids: dict[str, str] = {}
+        open_tools: set[str] = set()
         while True:
             try:
                 message = await asyncio.wait_for(
@@ -492,10 +509,10 @@ class Brain:
                     index = event.get("index", 0)
                     if chunk:
                         if index not in streamed_blocks and has_text:
-                            yield "\n\n"
+                            yield runs.text("\n\n")
                         streamed_blocks[index] = streamed_blocks.get(index, "") + chunk
                         has_text = True
-                        yield chunk
+                        yield runs.text(chunk)
             # Claude's native WebFetch/WebSearch, file reads, and connected
             # MCP servers do not all pass through JARVIS's own tool registry.
             # Pair tool requests with their results so only returned content
@@ -506,6 +523,9 @@ class Brain:
                     name = getattr(block, "name", "") or ""
                     block_id = getattr(block, "id", None)
                     tool_input = getattr(block, "input", {}) or {}
+                    if block_id and block_id not in open_tools:
+                        open_tools.add(block_id)
+                        yield runs.tool_started(block_id, name, tool_input)
                     if block_id and name.startswith("mcp__"):
                         untrusted_tool_ids[block_id] = "MCP output"
                     elif block_id and name in ("WebFetch", "WebSearch"):
@@ -520,20 +540,32 @@ class Brain:
                     source = untrusted_tool_ids.pop(tool_use_id, None)
                     if source and not getattr(block, "is_error", False):
                         self.turn_taint.mark(source)
+                    if tool_use_id in open_tools:
+                        open_tools.discard(tool_use_id)
+                        yield runs.tool_finished(tool_use_id, not getattr(block, "is_error", False),
+                                                 getattr(block, "content", ""))
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         if block.text in streamed_blocks.values():
                             continue
                         if has_text:
-                            yield "\n\n"
+                            yield runs.text("\n\n")
                         has_text = True
-                        yield block.text
+                        yield runs.text(block.text)
+            if type(message).__name__ == "RateLimitEvent":
+                quota = runs.claude_quota(message)
+                if quota:
+                    yield runs.event(runs.EventKind.QUOTA, **quota)
             if isinstance(message, ResultMessage):
                 self.last_usage = message.usage
                 self.cli_session_id = message.session_id or self.cli_session_id
                 if message.is_error:
                     raise RuntimeError("Claude Code reported an unsuccessful turn")
+                usage = runs.usage_event(message.usage)
+                if usage:
+                    yield usage
+                yield runs.result(usage is not None, cli_session_id=self.cli_session_id)
                 break
 
     async def disconnect(self) -> None:
