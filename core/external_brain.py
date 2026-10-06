@@ -37,7 +37,8 @@ class ExternalBrain:
                  session_id: str | None = None, num_ctx: int | None = None, is_admin: bool = False,
                  project_id: str | None = None, endpoint_id: str | None = None,
                  integration_ids: list[str] | None = None, allow_user_tab_source: bool = False,
-                 supports_images: bool = False, agent_id: str | None = None, agent_prompt: str = ""):
+                 supports_images: bool = False, agent_id: str | None = None, agent_prompt: str = "",
+                 window: int | None = None):
         self.base_url = base_url
         self.model = model
         self.api_key = api_key
@@ -52,7 +53,15 @@ class ExternalBrain:
         self.supports_images = supports_images
         self.turn_taint = TurnTaint()
         self.pending_reference_taint = False
-        self.tools = tool_registry.openai_tools(is_admin, agent=bool(agent_id))
+        # A known small window (local models, small API ones) gets the core
+        # tools and the bridge; the rest are searched for (2026-10-06,
+        # core/tool_registry.py). Decided once, so the cached prompt is stable.
+        self.small_window = bool(window and window <= tool_registry.SMALL_WINDOW)
+        self.tools = tool_registry.openai_tools(is_admin, agent=bool(agent_id), small_window=self.small_window)
+        self._deferred: dict[str, dict] = tool_registry.deferred_tools(is_admin, agent=bool(agent_id)) \
+            if self.small_window else {}
+        if self._deferred:
+            self.tools = self.tools + tool_search.bridge_schemas()
         if is_admin:
             # A visible, revocable built-in grant, like Claude's Bash; see
             # the run_shell tool in core/tool_registry.py.
@@ -75,6 +84,7 @@ class ExternalBrain:
             # core/brain.py/core/codex_brain.py — see core/projects.py's
             # project_addendum().
             seeded.insert(0, {"role": "system", "content": system_prompt.for_external(is_admin, allow_user_tab_source)
+                             + (system_prompt.DEFERRED_TOOLS_ADDENDUM if self._deferred else "")
                              + projects.project_addendum(project_id)
                              + (f"\n\n{agent_prompt}" if agent_prompt else "")})
         self._messages: list[dict] = seeded
@@ -138,25 +148,33 @@ class ExternalBrain:
                 raise
         return await hook_service.around_tool(real, real_args, run, **self._context().hook_context())
 
+    def _catalog(self) -> dict[str, dict]:
+        """What the bridge searches: JARVIS's deferred tools, then this
+        chat's MCP tools."""
+        return {**self._deferred, **self._mcp_tools}
+
     async def _run_tool(self, name: str, args: dict) -> str:
         if name == tool_search.SEARCH:
-            result = tool_search.search(self._mcp_tools, args.get("query", ""), args.get("limit", 5))
-            if result.startswith("["):
+            result = tool_search.search(self._catalog(), args.get("query", ""), args.get("limit", 5))
+            # Third-party descriptions are untrusted text; JARVIS's own are not.
+            if result.startswith("[") and tool_search.search(self._mcp_tools, args.get("query", ""), 10).startswith("["):
                 self.turn_taint.mark("MCP tool catalog")
             return result
         if name == tool_search.DESCRIBE:
             selected = args.get("name", "")
-            result = tool_search.describe(self._mcp_tools, selected)
+            result = tool_search.describe(self._catalog(), selected)
             if isinstance(selected, str) and selected in self._mcp_tools:
                 self.turn_taint.mark("MCP tool catalog")
             return result
         if name == tool_search.CALL:
             selected = args.get("name", "")
-            if not isinstance(selected, str) or selected not in self._mcp_tools:
+            if not isinstance(selected, str) or selected not in self._catalog():
                 return "Tool not available in this chat. Search again for an enabled tool."
             if not isinstance(args.get("arguments"), dict):
                 return "Tool arguments must be an object. Call jarvis_tool_describe to see its schema."
-            return await self._call_mcp(selected, args["arguments"])
+            if selected in self._mcp_tools:
+                return await self._call_mcp(selected, args["arguments"])
+            return await tool_registry.call(selected, args["arguments"], self._context(), tool_registry.OPENAI)
         if name in self._mcp_tools:
             return await self._call_mcp(name, args)
         return await tool_registry.call(name, args, self._context(), tool_registry.OPENAI)
@@ -213,7 +231,7 @@ class ExternalBrain:
         if not servers:
             return
         self._mcp_tools = await mcp_client.discover(servers)
-        if self._mcp_tools:
+        if self._mcp_tools and not self._deferred:
             self.tools = self.tools + tool_search.bridge_schemas()
 
     async def run_turn(self, user_text: str | list[dict]) -> str:

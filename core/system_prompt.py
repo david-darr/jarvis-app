@@ -71,7 +71,7 @@ Your file tools (Read/Glob/Grep/Write/Edit) are already scoped to the vault dire
 """ + _GENERATED_FILES_ADDENDUM("your file tools", "call the save_generated_file tool with that path and a short description (or save_generated_image for an image you already have a local file for)")
 
 _EXTERNAL_ADDENDUM = """
-You have these tools available: search_vault and read_vault_file (the vault), search_sessions (other conversations), search_skills/list_skills and read_skill (saved procedures), list_notes (open todos/priorities), list_tasks and list_task_runs (scheduled jobs and what they produced), list_upcoming_events (calendar), list_documents and read_document (the Library), list_contacts (people), list_specs and read_spec (architecture docs). Connected MCP tools are searchable through jarvis_tool_search; call jarvis_tool_describe for a matching tool's arguments, then jarvis_tool_call to use it. These bridge tools appear only when this chat has a connected MCP server. You can also write, not just read: create_note/update_note/delete_note, create_task/update_task/delete_task, create_event/update_event/delete_event — use these whenever the user wants something added, changed, or removed. You additionally have list_repo_directory/read_repo_file/write_repo_file for real read/write access to jarvis-app's own source code (core/, routes/, services/, static/, scripts/, specs/, mcp_servers/, electron/) for actual development work on the app itself. Use these tools when a question or request calls for it — don't guess, claim no memory exists, or say you can't make a change without checking/trying first."""
+You have these tools available: search_vault and read_vault_file (the vault), search_sessions (other conversations), search_skills/list_skills and read_skill (saved procedures), list_notes (open todos/priorities), list_tasks and list_task_runs (scheduled jobs and what they produced), list_upcoming_events (calendar), list_documents and read_document (the Library), list_contacts (people), list_specs and read_spec (architecture docs). Connected MCP tools are searchable through jarvis_tool_search; call jarvis_tool_describe for a matching tool's arguments, then jarvis_tool_call to use it. These bridge tools appear when this chat has a connected MCP server or a small context window. You can also write, not just read: create_note/update_note/delete_note, create_task/update_task/delete_task, create_event/update_event/delete_event — use these whenever the user wants something added, changed, or removed. You additionally have list_repo_directory/read_repo_file/write_repo_file for real read/write access to jarvis-app's own source code (core/, routes/, services/, static/, scripts/, specs/, mcp_servers/, electron/) for actual development work on the app itself. Use these tools when a question or request calls for it — don't guess, claim no memory exists, or say you can't make a change without checking/trying first."""
 
 _EXTERNAL_CUSTOM_TABS_ADDENDUM = """
 You also have file-tool access to user-built tab source through custom-tabs/routes/, custom-tabs/services/, and custom-tabs/views/. No other data/ paths are available through file tools."""
@@ -86,6 +86,15 @@ You also have a run_shell tool — admin-only (David's ask 2026-09-02), no restr
 
 def for_claude(is_admin: bool = False) -> str:
     return _SHARED_CORE + _CLAUDE_ADDENDUM + (_SHELL_ADDENDUM if is_admin else "")
+
+
+# A small-window local/API chat sees only JARVIS's core tools (2026-10-06,
+# core/tool_registry.py). Sent once per connection, so the prompt is stable.
+DEFERRED_TOOLS_ADDENDUM = (
+    "\n\nTo leave room for the conversation, only your most-used tools are listed. Every other tool "
+    "named here (tasks, calendar changes, documents, specs, contacts, Google, code and more) is still "
+    "yours: find it with jarvis_tool_search, see its arguments with jarvis_tool_describe, and use it "
+    "with jarvis_tool_call.")
 
 
 def for_external(is_admin: bool = False, allow_user_tab_source: bool = False) -> str:

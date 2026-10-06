@@ -30,10 +30,15 @@ from core.secret_storage import decrypt, encrypt
 
 ENDPOINTS_FILE = os.path.join(DATA_DIR, "model_endpoints.json")
 
-DEFAULT_LOCAL_NUM_CTX = 4096  # real incident, 2026-09-01: a local model loaded
+DEFAULT_LOCAL_NUM_CTX = 16384  # real incident, 2026-09-01: a local model loaded
 # with no cap defaulted to its max supported context (phi3's 131072) and its
 # KV cache alone ate ~21GB of system RAM. Every "local" endpoint gets a sane
 # cap by default instead of trusting the serving engine's own default.
+# 4096 until 2026-10-06, when JARVIS's own instructions and tool list were
+# measured at about 5,000 tokens: more than the whole window. 16,384 is about
+# the most a 27-32B model's cache (about 4 GB) adds while staying on a 24 GB
+# GPU. Connections already saved keep their value; Settings > Added Models
+# notes one under 8,192.
 
 
 def _load() -> dict:

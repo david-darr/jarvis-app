@@ -184,6 +184,10 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
     base_url, model, api_key, num_ctx = model_endpoints.resolve_runtime(endpoint["id"])
     if endpoint["kind"] == "api" and override is not None:
         model = override or endpoint["model"]
+    # The model's window, when known: a local connection's own cap, or the
+    # catalog's for an API model. A small one gets the core tools only.
+    capacity = model_catalog.context_capacity(endpoint["kind"], model) if endpoint["kind"] == "api" else None
+    window = num_ctx if endpoint["kind"] == "local" else (capacity or {}).get("window")
     # exclude_last: the current message is already saved by the time a brain
     # is built, and run_turn() adds it itself. Loading it here too sent it to
     # the model twice on every fresh connection (found 2026-09-22), and the
@@ -193,7 +197,7 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
                          endpoint_id=endpoint["id"], integration_ids=integration_ids,
                          allow_user_tab_source=(endpoint.get("kind") == "api" and model_marks.mark_for(endpoint) == "openai"),
                          supports_images=bool(endpoint.get("supports_images")), agent_id=agent_id,
-                         agent_prompt=(session or {}).get("agent_prompt") or "")
+                         agent_prompt=(session or {}).get("agent_prompt") or "", window=window)
 
 
 def _prime_with_history(session_id: str, just_created: bool, endpoint: dict, full_text: str,

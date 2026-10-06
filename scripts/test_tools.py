@@ -11,6 +11,7 @@
 - the command line parses every flag shape and posts to the address given.
 """
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -167,6 +168,96 @@ class RouteTests(unittest.TestCase):
         import core.middleware
         self.assertFalse(hasattr(core.auth, "INTERNAL_TOOL_TOKEN"))
         self.assertFalse(hasattr(core.middleware, "_INTERNAL_TOOL_ROUTES"))
+
+
+class SmallWindowTests(unittest.IsolatedAsyncioTestCase):
+    """A small window shows only the core tools; the rest are found through
+    the bridge and run exactly as before (2026-10-06, vault note "Local
+    Model Fit (Build Spec)")."""
+    CORE = {"search_sessions", "search_vault", "read_vault_file", "list_notes", "create_note", "update_note",
+            "list_tasks", "list_upcoming_events", "search_skills", "read_skill"}
+    BRIDGE = {"jarvis_tool_search", "jarvis_tool_describe", "jarvis_tool_call"}
+
+    def brain(self, window, **kw):
+        return ExternalBrain("http://fake", "m", None, session_id=self.sid, window=window, **kw)
+
+    async def asyncSetUp(self):
+        self.sid = session_manager.create_session("small window")["id"]
+        for hook in hook_service.hooks():
+            hook_service.delete(hook["id"])
+
+    async def test_a_small_window_shows_the_core_tools_and_the_bridge(self):
+        shown = lambda b: {t["function"]["name"] for t in b.tools}
+        self.assertEqual(shown(self.brain(8192, is_admin=True)), self.CORE | self.BRIDGE)
+        self.assertEqual(shown(self.brain(tool_registry.SMALL_WINDOW, is_admin=True)), self.CORE | self.BRIDGE)
+        self.assertIn("agent_remember", shown(self.brain(8192, agent_id="a1")), "an agent keeps its own tools")
+        for big in (None, tool_registry.SMALL_WINDOW + 1, 200000):
+            full = self.brain(big, is_admin=True)
+            self.assertEqual(shown(full), set(names(tool_registry.specs(tool_registry.OPENAI, True))), big)
+            self.assertNotIn("jarvis_tool_search", shown(full))
+            self.assertNotIn("only your most-used tools are listed", full._messages[0]["content"])
+        small = self.brain(8192, is_admin=True)
+        self.assertIn("only your most-used tools are listed", small._messages[0]["content"],
+                      "a small window is told the rest are searchable")
+
+    async def test_a_hidden_tool_is_found_and_runs_with_hooks_and_audit(self):
+        brain = self.brain(8192)
+        found = await brain._execute_tool("jarvis_tool_search", {"query": "create task"})
+        self.assertIn('"create_task"', found)
+        described = json.loads(await brain._execute_tool("jarvis_tool_describe", {"name": "create_task"}))
+        self.assertIn("schedule_kind", described["parameters"]["properties"])
+        made = await brain._execute_tool("jarvis_tool_call", {"name": "create_task", "arguments": {
+            "name": "Water the plants", "prompt": "remind me", "schedule_kind": "card"}})
+        self.assertTrue(made.startswith("Created task "), made)
+        self.assertEqual((permissions.audit()[-1]["tool"], permissions.audit()[-1]["decision"]), ("create_task", "tool used"))
+        script = Path(environment.name) / "block_tasks.py"
+        script.write_text("import json, sys\njson.load(sys.stdin)\nsys.stderr.write('no new tasks')\nsys.exit(2)\n")
+        hook_service.create("No tasks", event="tool.before", action="command", tool_pattern="create_task",
+                            config={"command": f'"{sys.executable}" "{script}"'})
+        blocked = await brain._execute_tool("jarvis_tool_call", {"name": "create_task", "arguments": {
+            "name": "x", "prompt": "y", "schedule_kind": "card"}})
+        self.assertEqual(blocked, "Not run: blocked by a hook: no new tasks", "hooks see the real tool behind the bridge")
+        self.assertFalse(brain.turn_taint.tainted, "JARVIS's own tool list is not untrusted text")
+
+    async def test_the_list_never_changes_within_a_chat(self):
+        brain = self.brain(8192)
+        before = json.dumps(brain.tools)
+        await brain._execute_tool("jarvis_tool_search", {"query": "calendar"})
+        await brain.connect()
+        self.assertEqual(json.dumps(brain.tools), before, "the cached prompt stays the same")
+        mcp = {"github__create_issue": {"server": "github", "name": "create_issue", "description": "Open an issue",
+                                        "schema": {"type": "object"}, "config": {}}}
+        with patch("core.integrations.list_mcp_servers_runtime", return_value={"github": {}}), \
+             patch("core.mcp_client.discover", new=AsyncMock(return_value=mcp)):
+            with_mcp = self.brain(8192)
+            await with_mcp.connect()
+        listed = [t["function"]["name"] for t in with_mcp.tools]
+        self.assertEqual(listed.count("jarvis_tool_search"), 1, "one bridge serves both")
+        found = await with_mcp._execute_tool("jarvis_tool_search", {"query": "create issue"})
+        self.assertIn("github__create_issue", found)
+        self.assertTrue(with_mcp.turn_taint.tainted, "a third-party tool's description is still untrusted")
+
+    def test_the_chat_tells_the_brain_its_window(self):
+        from services import chat_service
+        local = {"id": "loc", "name": "Local", "kind": "local", "model": "m"}
+        with patch("core.model_endpoints.resolve_runtime", return_value=("http://x", "m", None, 8192)):
+            self.assertTrue(chat_service._build_brain(local, self.sid).small_window)
+        with patch("core.model_endpoints.resolve_runtime", return_value=("http://x", "m", None, 16384)):
+            self.assertTrue(chat_service._build_brain(local, self.sid).small_window)
+        api = {"id": "api", "name": "API", "kind": "api", "model": "gpt-x"}
+        with patch("core.model_endpoints.resolve_runtime", return_value=("http://x", "gpt-x", None, None)):
+            with patch("core.model_catalog.context_capacity", return_value={"window": 400000, "effective": 380000}):
+                self.assertFalse(chat_service._build_brain(api, self.sid).small_window)
+            with patch("core.model_catalog.context_capacity", return_value=None):
+                self.assertFalse(chat_service._build_brain(api, self.sid).small_window, "an unknown window keeps them all")
+
+    def test_new_local_connections_default_to_16k_and_saved_ones_keep_theirs(self):
+        from core import model_endpoints
+        made = model_endpoints.create_endpoint("New local", base_url="http://localhost:11434", model="m", kind="local")
+        self.assertEqual(made["num_ctx"], 16384)
+        kept = model_endpoints.create_endpoint("Old local", base_url="http://localhost:11434", model="m", kind="local",
+                                               num_ctx=4096)
+        self.assertEqual(model_endpoints.get_endpoint(kept["id"])["num_ctx"], 4096)
 
 
 class CliTests(unittest.TestCase):

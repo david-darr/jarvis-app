@@ -631,6 +631,14 @@ async function renderAddedModelsPanel(body, _status, page) {
       ? `Model: ${ep.model || "CLI default"}`
       : [ep.model, ep.base_url, ep.has_api_key ? "key saved" : null, ep.kind === "local" && ep.num_ctx ? `context ${ep.num_ctx}` : null].filter(Boolean).join(" · ");
     const controls = [result];
+    // JARVIS's own instructions and core tools take about 2,100 tokens of
+    // every request (2026-10-06, vault note "Local Model Fit (Build Spec)").
+    if (ep.kind === "local" && ep.num_ctx && ep.num_ctx < 8192) {
+      const small = pill("Small window", "warn");
+      small.title = `JARVIS's own instructions and core tools take about 2,100 of these ${ep.num_ctx} tokens on every message, leaving little for the conversation. 16,384 is the default for new local models.`;
+      small.classList.add("small-window");
+      controls.push(small);
+    }
     if (ep.kind === "local" || ep.kind === "api") {
       controls.push(el("label", { class: "set-inline-switch" }, [el("span", { class: "meta", text: "Images" }),
         toggle({ checked: ep.supports_images, label: `${ep.name} accepts images`, onChange: async (on) => {

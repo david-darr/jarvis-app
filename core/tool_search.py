@@ -1,8 +1,10 @@
-"""Small, stable search bridge for the MCP tools of a local/API chat.
+"""Small, stable search bridge for a local/API chat's less-used tools: the
+MCP tools discovered for that connection, and on a small window JARVIS's own
+non-core tools (core/tool_registry.py deferred_tools, 2026-10-06).
 
-The catalog is built from the tools discovered for that connection. Only the
-three bridge schemas reach the model until it asks for a matching tool. A
-bridge call never bypasses the chat's integration scope or permission broker.
+Only the three bridge schemas reach the model until it asks for a matching
+tool. A bridge call never bypasses the chat's integration scope, permission
+broker, lifecycle hooks or audit.
 """
 import json
 import re
@@ -18,16 +20,17 @@ def bridge_schemas() -> list[dict]:
     """Byte-stable schemas, so a chat does not pay a cache miss as tools change."""
     return [
         _function(SEARCH,
-                  "Search tools from MCP integrations enabled for this chat. Use a service name and action, "
-                  "such as 'github create issue'. Returns matching tool names and short descriptions. "
-                  f"Then call {DESCRIBE} for arguments and {CALL} to use one. "
-                  "These are real connected tools; do not claim an integration is unavailable before searching.",
+                  "Search more tools: JARVIS's own less-used tools (tasks, calendar, documents, Google, "
+                  "code and more) and the MCP integrations enabled for this chat. Use an action or service, "
+                  "such as 'create task' or 'github create issue'. Returns matching tool names and short "
+                  f"descriptions. Then call {DESCRIBE} for arguments and {CALL} to use one. These are real "
+                  "tools; do not say one is unavailable before searching.",
                   {"query": {"type": "string", "description": "Service, action, or topic to find"},
                    "limit": {"type": "integer", "description": "Results to return, 1 to 10 (default 5)"}},
                   ["query"]),
         _function(DESCRIBE, "Get the full argument schema for one tool found by jarvis_tool_search.",
                   {"name": {"type": "string", "description": "Exact tool name returned by search"}}, ["name"]),
-        _function(CALL, "Use one connected MCP tool. The usual permission decision still applies.",
+        _function(CALL, "Use one tool found by jarvis_tool_search. The usual permission decision still applies.",
                   {"name": {"type": "string", "description": "Exact tool name returned by search"},
                    "arguments": {"type": "object", "description": "Arguments matching its schema"}},
                   ["name", "arguments"]),
@@ -65,7 +68,7 @@ def search(catalog: dict[str, dict], query: str, limit: int = 5) -> str:
         ranked.append((-score, name, {"name": name, "server": spec["server"],
                                       "description": (spec.get("description") or "")[:300]}))
     ranked.sort()
-    return json.dumps([entry for _, _, entry in ranked[:count]], ensure_ascii=False) if ranked else "No matching tools in this chat's enabled integrations."
+    return json.dumps([entry for _, _, entry in ranked[:count]], ensure_ascii=False) if ranked else "No matching tools."
 
 
 def describe(catalog: dict[str, dict], name: str) -> str:

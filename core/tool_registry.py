@@ -23,6 +23,12 @@ Each tool says what it does (`effect`): read, write (changes JARVIS data),
 exec (runs code) or external (reaches another service). Every call that is
 not a read is written to the permission audit (Settings > Permissions).
 
+A model with a small window (SMALL_WINDOW or less, 2026-10-06; vault note
+"Local Model Fit (Build Spec)") is shown only the `core` tools, plus an
+agent's own; the rest are found through core/tool_search.py's bridge, as
+Hermes Agent's Tool Search does. Every tool's definition is sent with every
+request, and the whole list was about 4,300 tokens.
+
 A handler takes the tool's arguments and a ToolContext and returns the text
 the model reads. Errors come back as text too: a tool failing must not end
 the turn. dispatch() is call() with the person's lifecycle hooks around it,
@@ -39,6 +45,7 @@ CLAUDE, OPENAI, CODEX = "claude", "openai", "codex"
 BOTH = frozenset({CLAUDE, OPENAI})
 ALL = frozenset({CLAUDE, OPENAI, CODEX})
 READ, WRITE, EXEC, EXTERNAL = "read", "write", "exec", "external"
+SMALL_WINDOW = 32768
 
 
 @dataclass(frozen=True)
@@ -78,6 +85,8 @@ class ToolSpec:
     admin_only: bool = False
     agent_only: bool = False
     effect: str = READ
+    # Always shown, even to a small-window model (see the module docstring).
+    core: bool = False
 
 
 def _object(properties: Optional[dict] = None, required: tuple = ()) -> dict:
@@ -92,13 +101,13 @@ _REGISTRY: dict[str, ToolSpec] = {}
 
 
 def register(name: str, description: str, schema: dict, surfaces: frozenset = ALL, admin_only: bool = False,
-             agent_only: bool = False, effect: str = READ):
+             agent_only: bool = False, effect: str = READ, core: bool = False):
     def decorate(handler):
         if name in _REGISTRY:
             raise ValueError(f"tool {name!r} registered twice")
         if effect not in (READ, WRITE, EXEC, EXTERNAL):
             raise ValueError(f"tool {name!r}: unknown effect {effect!r}")
-        _REGISTRY[name] = ToolSpec(name, description, schema, handler, surfaces, admin_only, agent_only, effect)
+        _REGISTRY[name] = ToolSpec(name, description, schema, handler, surfaces, admin_only, agent_only, effect, core)
         return handler
     return decorate
 
@@ -170,10 +179,21 @@ def cli_usage(spec: ToolSpec) -> str:
     return " ".join([spec.name, *flags])
 
 
-def openai_tools(is_admin: bool = False, agent: bool = False) -> list[dict]:
-    """The OpenAI function-calling list for one session."""
+def _shown(spec: ToolSpec, small_window: bool) -> bool:
+    return not small_window or spec.core or spec.agent_only
+
+
+def openai_tools(is_admin: bool = False, agent: bool = False, small_window: bool = False) -> list[dict]:
+    """The OpenAI function-calling list for one session: every tool, or on a
+    small window only the core ones (the rest: deferred_tools)."""
     return [{"type": "function", "function": {"name": s.name, "description": s.description, "parameters": s.schema}}
-            for s in specs(OPENAI, is_admin, agent)]
+            for s in specs(OPENAI, is_admin, agent) if _shown(s, small_window)]
+
+
+def deferred_tools(is_admin: bool = False, agent: bool = False) -> dict[str, dict]:
+    """A small window's hidden tools, as core/tool_search.py catalog entries."""
+    return {s.name: {"server": "jarvis", "name": s.name, "description": s.description, "schema": s.schema}
+            for s in specs(OPENAI, is_admin, agent) if not _shown(s, True)}
 
 
 def _fields(args: dict, key: str) -> tuple[str, dict]:
@@ -194,7 +214,9 @@ def _fields(args: dict, key: str) -> tuple[str, dict]:
     _object({"query": _str("Keyword or phrase to search for"),
              "this_chat": {"type": "boolean", "description": "Search this chat's compacted earlier messages instead of other chats"}},
             ("query",)),
+    core=True,
 )
+
 async def _search_sessions(args, ctx):
     if args.get("this_chat"):
         result = memory_tools.format_archive_hits(memory_tools.search_this_chat_archive(ctx.session_id, args["query"]))
@@ -223,7 +245,8 @@ async def _list_skills(args, ctx):
 
 
 @register("read_skill", "Read one Skill's full procedure by its slug (from search_skills or list_skills).",
-          _object({"slug": _str("The skill's slug, from search_skills or list_skills")}, ("slug",)))
+          _object({"slug": _str("The skill's slug, from search_skills or list_skills")}, ("slug",)), core=True)
+
 async def _read_skill(args, ctx):
     result = memory_tools.read_skill(args["slug"])
     if ctx.turn_taint:
@@ -233,7 +256,8 @@ async def _read_skill(args, ctx):
 
 @register("search_skills", "Search available Skills by name and short description. Returns matching slugs; "
           "call read_skill for the full procedure only when needed.",
-          _object({"query": _str("Topic or task to find a saved Skill for")}, ("query",)))
+          _object({"query": _str("Topic or task to find a saved Skill for")}, ("query",)), core=True)
+
 async def _search_skills(args, ctx):
     skills = memory_tools.search_skills(args["query"])
     if skills and ctx.turn_taint:
@@ -246,7 +270,9 @@ async def _search_skills(args, ctx):
     "List open (not-yet-completed) Notes — todos, reminders, priorities. Use this for "
     "anything like \"what do I need to do\" or \"what's on my priorities list\".",
     _object(),
+    core=True,
 )
+
 async def _list_notes(args, ctx):
     notes = memory_tools.list_notes()
     return "\n".join(f"- [{n['id']}] {n['text']}" + (f" (due {n['due_date']})" if n.get("due_date") else "")
@@ -258,7 +284,9 @@ async def _list_notes(args, ctx):
     "List scheduled/automated Tasks (recurring or one-shot jobs JARVIS runs on its own) — "
     "distinct from Notes' todos.",
     _object(),
+    core=True,
 )
+
 async def _list_tasks(args, ctx):
     return "\n".join(memory_tools.describe_task(t) for t in memory_tools.list_tasks()) or "No tasks configured."
 
@@ -268,7 +296,9 @@ async def _list_tasks(args, ctx):
     "List upcoming Calendar events and due-dated Notes for the next 14 days. Use this for "
     "\"what's coming up\" / \"do I have anything scheduled\" questions.",
     _object(),
+    core=True,
 )
+
 async def _list_upcoming_events(args, ctx):
     events = memory_tools.list_upcoming_events()
     return "\n".join(f"- [{e['id']}] {e['title']} ({e['start']})" for e in events) or "Nothing upcoming in the next 14 days."
@@ -334,7 +364,9 @@ async def _list_task_runs(args, ctx):
     _object({"text": _str(), "due_date": _str("Optional ISO 8601 datetime, e.g. 2026-09-01T15:00:00"),
              "project": _str("Defaults to 'personal' if omitted")}, ("text",)),
     effect=WRITE,
+    core=True,
 )
+
 async def _create_note(args, ctx):
     note = memory_tools.create_note(args["text"], due_date=args.get("due_date"), project=args.get("project", "personal"))
     return f"Created note {note['id']}: {note['text']}"
@@ -347,7 +379,9 @@ async def _create_note(args, ctx):
     _object({"note_id": _str(), "text": _str(), "due_date": _str(), "project": _str(),
              "completed": {"type": "boolean"}}, ("note_id",)),
     effect=WRITE,
+    core=True,
 )
+
 async def _update_note(args, ctx):
     note_id, fields = _fields(args, "note_id")
     return f"Updated note {memory_tools.update_note(note_id, **fields)['id']}"
@@ -520,7 +554,9 @@ def _register_artifact(ctx: ToolContext, url: str) -> None:
     "Search JARVIS's memory (the Obsidian vault) for notes matching a keyword or phrase. Returns short snippets, not full files.",
     _object({"query": _str("Keyword or phrase to search for")}, ("query",)),
     surfaces=frozenset({OPENAI}),
+    core=True,
 )
+
 async def _search_vault(args, ctx):
     results = memory_tools.search_vault(args.get("query", ""))
     if ctx.turn_taint and results:
@@ -534,7 +570,9 @@ async def _search_vault(args, ctx):
     "Read one specific vault note in full, by its relative path (as returned by search_vault).",
     _object({"path": _str("Relative path within the vault, e.g. 'Active Priorities.md'")}, ("path",)),
     surfaces=frozenset({OPENAI}),
+    core=True,
 )
+
 async def _read_vault_file(args, ctx):
     result = memory_tools.read_vault_file(args.get("path", ""))
     if ctx.turn_taint:
