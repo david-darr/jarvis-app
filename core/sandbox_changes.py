@@ -41,8 +41,10 @@ def available(root: str = BASE_DIR) -> bool:
     """Change sets only make sense for a development checkout (a folder with
     its .git). In an installed app the folder holds the bundled runtime - a
     copy is far over the sandbox's input limit - and an apply would write
-    into files the next update replaces (found 2026-09-25)."""
-    return os.path.isdir(os.path.join(root, ".git"))
+    into files the next update replaces (found 2026-09-25). In a git
+    worktree .git is a file pointing at the main repository, and that is
+    still a checkout (found 2026-10-05)."""
+    return os.path.exists(os.path.join(root, ".git"))
 
 
 def _path(change_id: str) -> str:

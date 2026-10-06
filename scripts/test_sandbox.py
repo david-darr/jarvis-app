@@ -481,6 +481,15 @@ class ChangeSetTests(unittest.TestCase):
         self.assertIn("development checkout", text)
         never.assert_not_called()
 
+    def test_a_git_worktree_counts_as_a_checkout(self):
+        """Found 2026-10-05: in a worktree .git is a file, not a folder."""
+        from core import sandbox_changes
+        shutil.rmtree(self.root / ".git")
+        (self.root / ".git").write_text("gitdir: elsewhere\n")
+        self.assertTrue(sandbox_changes.available(str(self.root)))
+        self.apply(self.forged("x.txt"))
+        self.assertTrue((self.root / "x.txt").exists())
+
     def test_a_change_set_for_another_folder_is_refused(self):
         from core import sandbox_changes
         elsewhere = Path(tempfile.mkdtemp(prefix="jarvis-elsewhere-"))

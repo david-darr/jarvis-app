@@ -27,7 +27,7 @@ STEP_TIMEOUT_SECONDS = 300
 STOP_GRACE_SECONDS = 5
 HELPER = Path(__file__).resolve().parents[1] / "codex_mcp.py"
 SUPERVISOR_PYTHON = getattr(sys, "_base_executable", sys.executable)
-VERIFIED_CLI_VERSION = "codex-cli 0.154.0"
+VERIFIED_CLI_VERSION = "codex-cli 0.155.1"
 
 
 def codex_path():
@@ -51,7 +51,7 @@ def _installation_check(path, stamp):
         # New releases may introduce native tools enabled by default. Re-run
         # the installed-binary surface test before admitting another version.
         if version.returncode or version.stdout.strip() != VERIFIED_CLI_VERSION:
-            return "This Codex CLI version has not been verified for Swarm's restricted tool surface (verified: 0.154.0)."
+            return "This Codex CLI version has not been verified for Swarm's restricted tool surface (verified: 0.155.1)."
         result = subprocess.run([path, "exec", "--help"], capture_output=True, text=True,
                                 timeout=5, creationflags=0x08000000 if sys.platform == "win32" else 0)
         required = ("--ignore-user-config", "--ignore-rules", "--ephemeral", "--strict-config")
