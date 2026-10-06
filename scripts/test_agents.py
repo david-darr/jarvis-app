@@ -195,7 +195,12 @@ class AutoModeTests(AgentTestCase):
         codex_endpoint = {"id": "codex", "kind": "codex_cli", "model": ""}
         codex = chat_service._build_brain(codex_endpoint, None, agent_id=self.agent["id"])
         self.assertIsInstance(codex, CodexBrain)
-        self.assertIn("--dangerously-bypass-approvals-and-sandbox", codex._build_args("codex"), "Codex runs in its Auto")
+        agent_args = codex._build_args("codex")
+        # Auto (nothing asks) inside Codex's own sandbox since roadmap phase 7
+        # (2026-10-06, David); before that, approve-all with the sandbox off.
+        self.assertIn('approval_policy="never"', agent_args, "Codex agents never ask")
+        self.assertEqual(agent_args[agent_args.index("-s") + 1], "workspace-write", "and run sandboxed")
+        self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", agent_args)
         plain = chat_service._build_brain(codex_endpoint, None)
         self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", plain._build_args("codex"),
                          "an ordinary Codex task keeps its sandbox")

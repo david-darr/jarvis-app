@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import os
+from typing import Optional
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -51,6 +52,23 @@ def _is_user_tab_source_path(path: str) -> bool:
     absolute = os.path.normcase(os.path.abspath(path))
     for root in custom_tabs.USER_TAB_CODE_DIRS:
         root = os.path.normcase(os.path.abspath(root))
+        try:
+            if os.path.commonpath([absolute, root]) == root:
+                return True
+        except ValueError:  # different drives on Windows
+            continue
+    return False
+
+
+# Claude Code's file tools and where each names its path.
+_FILE_TOOLS = {"Read": "file_path", "Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
+               "NotebookEdit": "notebook_path", "Glob": "path", "Grep": "path", "LS": "path"}
+
+
+def _inside(path: str, roots: list[str]) -> bool:
+    absolute = os.path.normcase(os.path.realpath(path))
+    for root in roots:
+        root = os.path.normcase(os.path.realpath(root))
         try:
             if os.path.commonpath([absolute, root]) == root:
                 return True
@@ -390,6 +408,9 @@ class Brain:
             if rule_content:
                 break
         args = arguments if isinstance(arguments, dict) else {}
+        fenced = self._fence_refusal(tool_name, args)
+        if fenced:
+            return PermissionResultDeny(message=fenced, interrupt=False)
         user_tab_write = False
         if tool_name in ("Write", "Edit", "MultiEdit"):
             path = args.get("file_path") or args.get("path")
@@ -412,6 +433,37 @@ class Brain:
         # The reason goes into the transcript, so the model is told it was
         # refused and why rather than silently failing or trying again.
         return PermissionResultDeny(message=decision.reason, interrupt=False)
+
+    def fence_roots(self) -> list[str]:
+        """Where Claude's file tools may reach in anything but an admin chat:
+        this chat's folder (the vault, or its workspace), generated files,
+        and an agent's own folder (roadmap phase 7, 2026-10-06)."""
+        roots = [self.cwd_override or self.vault_dir, image_gen.GENERATED_FILES_DIR]
+        if self.agent_id:
+            from services.agent_service import AGENTS_DIR
+            roots.append(os.path.join(AGENTS_DIR, self.agent_id))
+        return roots
+
+    def _fence_refusal(self, tool_name: str, args: dict) -> Optional[str]:
+        """Why a file tool may not run here, or None. Admin chats are not
+        fenced (David's choice). Everything else - non-admin chats, tasks,
+        cards, goals and agent runs - keeps Claude's file tools inside
+        fence_roots(): refused outside, never asked, since there is often
+        nobody to ask and Auto never asks. Before this, the standing Write and
+        Edit grants let any of them write anywhere you can, and an agent run
+        could read any file you can (found 2026-10-04 and live 2026-10-06)."""
+        if self.is_admin or tool_name not in _FILE_TOOLS:
+            return None
+        path = args.get(_FILE_TOOLS[tool_name]) or args.get("path") or args.get("file_path")
+        cwd = self.cwd_override or self.vault_dir
+        if not isinstance(path, str) or not path.strip():
+            path = cwd  # Glob or Grep with no path search the working folder
+        if not os.path.isabs(path):
+            path = os.path.join(cwd, path)
+        if _inside(path, self.fence_roots()):
+            return None
+        return (f"Not allowed: {path} is outside the folders this work may use (this chat's folder, generated files"
+                f"{', and the agent' + chr(39) + 's own folder' if self.agent_id else ''}).")
 
     async def connect(self) -> None:
         # Signed-in MCP servers need a live token in the header the CLI is

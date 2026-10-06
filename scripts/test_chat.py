@@ -2468,7 +2468,8 @@ class ToolRegistryTests(unittest.TestCase):
         admin = {t["function"]["name"] for t in ExternalBrain("http://x", "m", None, is_admin=True).tools}
         self.assertTrue({"search_vault", "read_repo_file", "run_shell"}.isdisjoint(claude), "Claude has its own file tools")
         self.assertTrue({"save_generated_image", "save_generated_file"}.isdisjoint(plain))
-        self.assertEqual(admin - plain, {"run_shell", "google_drive", "google_sheets", "google_forms"})
+        # write_repo_file is admin-only since roadmap phase 7 (2026-10-06).
+        self.assertEqual(admin - plain, {"run_shell", "google_drive", "google_sheets", "google_forms", "write_repo_file"})
         self.assertIn("Unknown tool", asyncio.run(reg.call("run_shell", {"command": "echo hi"}, reg.ToolContext(), reg.OPENAI)))
         self.assertIn("Unknown tool", asyncio.run(reg.call("save_generated_file", {}, reg.ToolContext(), reg.OPENAI)))
         self.assertIn("Unknown tool", asyncio.run(reg.call("no_such_tool", {}, reg.ToolContext(), reg.CLAUDE)))

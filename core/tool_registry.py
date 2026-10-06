@@ -635,7 +635,11 @@ async def _read_repo_file(args, ctx):
     "write_repo_file",
     "Create or overwrite one file in jarvis-app source with the given full content (full-file replacement, not a patch/diff). Supported OpenAI models can also write user tabs under custom-tabs/routes/, custom-tabs/services/, and custom-tabs/views/. Creates parent directories if needed.",
     _object({"path": _str(), "content": _str()}, ("path", "content")),
-    surfaces=frozenset({OPENAI}), effect=WRITE,
+    # Admin only (roadmap phase 7, 2026-10-06): JARVIS's own source runs as
+    # you at the next start, and Claude and Codex already give repo writes to
+    # admins alone. Every local or API session, agents and tasks included,
+    # could overwrite it before.
+    surfaces=frozenset({OPENAI}), admin_only=True, effect=WRITE,
 )
 async def _write_repo_file(args, ctx):
     path = args["path"]
