@@ -186,6 +186,14 @@ class Brain:
         # widen the agent's real tool access, filtered to this session's
         # chosen subset.
         mcp_servers = integrations.list_mcp_servers_runtime(self.integration_ids)
+        # An MCP tool that is new or changed since it was pinned waits for a
+        # person's OK (core/integrations.py, roadmap phase 6). Claude Code
+        # lists the server's tools itself, so the held ones are refused here
+        # by name; this list feeds the fingerprint, so an open chat picks up
+        # a hold or an acceptance on its next message.
+        disabled = [*disabled, *sorted(integrations.claude_tool_name(server, tool)
+                                       for server, tools in integrations.held_tools(self.integration_ids).items()
+                                       for tool in tools)]
         # Real gap found live: acceptEdits only auto-approves file-edit-type
         # prompts — a custom in-process MCP tool like search_sessions still
         # hit a permission prompt Claude has no way to answer headlessly, so

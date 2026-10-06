@@ -225,7 +225,79 @@ export async function render(container) {
     }
   }
 
+  // A skill whose SKILL.md can't be read (roadmap phase 6): no model gets it;
+  // here it says why and can be deleted.
+  function brokenSkillCard(item) {
+    return el("article", { class: "tool-store-card tool-store-broken", "data-skill": item.slug }, [
+      el("div", { class: "tool-store-card-top" }, [
+        el("span", { class: "tool-store-mark" }, [svg(ICONS.brain)]),
+        el("span", { class: "tool-store-badge blocked", text: "Can't be read" }),
+      ]),
+      el("h4", { text: item.slug }),
+      el("p", { text: `${item.error} No model is offered it until it is fixed or deleted.` }),
+      el("div", { class: "tool-store-card-foot" }, [
+        el("span", { class: "meta", text: "Unreadable skill" }),
+        el("button", { type: "button", class: "btn danger", text: "Delete", onclick: async () => {
+          try {
+            await api(`/api/skills/${encodeURIComponent(item.slug)}`, { method: "DELETE" });
+            state.skills = state.skills.filter((s) => s.slug !== item.slug);
+            toast(`Deleted ${item.slug}`, "success");
+            draw();
+          } catch (error) { toast(error.message, "error"); }
+        } }),
+      ]),
+    ]);
+  }
+
+  // An MCP server's health and the tools waiting for review (roadmap phase 6,
+  // core/integrations.py): a check is kept on the server, and a tool that is
+  // new or changed since it was pinned is held from every model until accepted.
+  function healthEl(integration) {
+    const status = integration.status;
+    const when = status?.checked_at ? new Date(status.checked_at * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+    const text = !status ? "Not checked yet"
+      : status.state === "working" ? `Working · ${status.tools} tool${status.tools === 1 ? "" : "s"} · checked ${when}`
+      : status.state === "signed_out" ? "Not signed in"
+      : `Not responding · ${status.error || "no answer"} · checked ${when}`;
+    const check = el("button", { type: "button", class: "btn quiet", text: "Check" });
+    check.addEventListener("click", async () => {
+      check.disabled = true;
+      check.textContent = "Checking…";
+      try {
+        const updated = await api(`/api/integrations/${integration.id}/check`, { method: "POST" });
+        Object.assign(integration, updated);
+        draw();
+      } catch (error) { toast(error.message, "error"); check.disabled = false; check.textContent = "Check"; }
+    });
+    const nodes = [el("div", { class: `tool-store-health health-${status?.state || "unknown"}` }, [el("span", { text }), check])];
+    const held = integration.held_tools || [];
+    if (held.length) {
+      const accept = async (names) => {
+        try {
+          Object.assign(integration, await api(`/api/integrations/${integration.id}/tools/accept`,
+            { method: "POST", body: JSON.stringify({ names }) }));
+          toast(names.length === 1 ? `${names[0]} accepted` : `${names.length} tools accepted`, "success");
+          draw();
+        } catch (error) { toast(error.message, "error"); }
+      };
+      nodes.push(el("div", { class: "tool-store-held" }, [
+        el("div", { class: "title", text: `${held.length} tool${held.length === 1 ? "" : "s"} new or changed: held from every model until you accept` }),
+        ...held.map((tool) => el("div", { class: "tool-store-held-tool" }, [
+          el("div", {}, [
+            el("strong", { text: tool.name }),
+            el("span", { class: "meta", text: tool.kind === "new" ? " · new" : " · changed since you added it" }),
+            el("div", { class: "meta", text: tool.description || "No description." }),
+          ]),
+          el("button", { type: "button", class: "btn quiet", text: "Accept", onclick: () => accept([tool.name]) }),
+        ])),
+        ...(held.length > 1 ? [el("button", { type: "button", class: "btn", text: "Accept all", onclick: () => accept(held.map((t) => t.name)) })] : []),
+      ]));
+    }
+    return nodes;
+  }
+
   function skillCard(item) {
+    if (item.error) return brokenSkillCard(item);
     const blocked = !!item.curation?.blocked_for_models;
     const detail = el("div", { class: "tool-store-detail" });
     const button = el("button", { type: "button", class: "btn quiet", text: "View skill", "aria-expanded": "false" });
@@ -258,7 +330,7 @@ export async function render(container) {
       el("h4", { text: item.slug }),
       el("p", { text: item.description || "No description provided." }),
       el("div", { class: "tool-store-card-foot" }, [
-        sourceLabel,
+        item.version ? el("span", { class: "tool-store-version" }, [sourceLabel, el("span", { class: "meta", text: ` · v${item.version}` })]) : sourceLabel,
         button,
       ]),
       detail,
@@ -297,10 +369,13 @@ export async function render(container) {
     return el("article", { class: "tool-store-card" }, [
       el("div", { class: "tool-store-card-top" }, [
         el("span", { class: "tool-store-mark" }, [svg(ICONS.store)]),
-        el("span", { class: "tool-store-badge" + (connected ? "" : " muted"), text: connected ? "Connected" : server.added ? "Needs sign-in" : "Tool server" }),
+        integration?.status?.state === "down"
+          ? el("span", { class: "tool-store-badge blocked", text: "Not responding" })
+          : el("span", { class: "tool-store-badge" + (connected ? "" : " muted"), text: connected ? "Connected" : server.added ? "Needs sign-in" : "Tool server" }),
       ]),
       el("h4", { text: server.name }),
       el("p", { text: server.description }),
+      ...(integration ? healthEl(integration) : []),
       el("div", { class: "tool-store-card-foot" }, [
         server.docs ? el("a", { href: server.docs, target: "_blank", rel: "noopener", text: "Documentation" }) : el("span"),
         actionHost,
@@ -316,10 +391,13 @@ export async function render(container) {
     return el("article", { class: "tool-store-card" }, [
       el("div", { class: "tool-store-card-top" }, [
         el("span", { class: "tool-store-mark" }, [svg(ICONS.store)]),
-        el("span", { class: "tool-store-badge" + (connected ? "" : " muted"), text: connected ? "Connected" : "Needs sign-in" }),
+        item.status?.state === "down"
+          ? el("span", { class: "tool-store-badge blocked", text: "Not responding" })
+          : el("span", { class: "tool-store-badge" + (connected ? "" : " muted"), text: connected ? "Connected" : "Needs sign-in" }),
       ]),
       el("h4", { text: item.name }),
-      el("p", { text: item.url || "Custom MCP server" }),
+      el("p", { text: item.url || (item.command ? `Local command: ${item.command}` : "Custom MCP server") }),
+      ...healthEl(item),
       el("div", { class: "tool-store-card-foot" }, [
         el("button", { type: "button", class: "btn quiet", text: "Manage", onclick: () => navigate("settings", { section: "integrations" }) }),
         actionHost,

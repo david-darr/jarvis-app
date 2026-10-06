@@ -11,10 +11,15 @@ chat's turns run in different request tasks, so a long-lived one could not
 be closed where it was opened. Servers are the same runtime configs Claude
 gets (core/integrations.list_mcp_servers_runtime): http with an optional
 bearer key, or a stdio command.
+
+Every listing is also a health check (roadmap phase 6, 2026-10-06): its
+result is kept on the integration (core/integrations.record_check), and a
+tool held for review there - new or changed since it was pinned - is left
+out of what a chat is offered.
 """
 import logging
 import re
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -73,18 +78,67 @@ def function_name(server: str, tool: str, taken: set[str]) -> str:
     return name
 
 
+def _record(**kwargs) -> None:
+    """Keep a check's result; never allowed to stop the chat that made it."""
+    from core import integrations
+    try:
+        integrations.record_check(**kwargs)
+    except Exception:
+        logger.exception("could not record an MCP check")
+
+
 async def discover(servers: dict[str, dict]) -> dict[str, dict[str, Any]]:
     """Every tool of every reachable server, keyed by the function name the
-    model will use. A server that cannot be reached is skipped and logged,
-    never allowed to stop the chat."""
+    model will use, except those held for review. A server that cannot be
+    reached is skipped and its status says so; it never stops the chat."""
+    from core import integrations
     found: dict[str, dict[str, Any]] = {}
     for server, config in servers.items():
         try:
             tools = await list_tools(config)
         except Exception as e:  # an unreachable server must not end the turn
             logger.warning("MCP server %r unavailable: %s", server, e)
+            _record(name=server, error=f"{type(e).__name__}: {e}")
             continue
+        _record(name=server, tools=tools)
+        held = integrations.held_tools().get(server, set())
         for tool in tools:
+            if tool["name"] in held:
+                continue
             name = function_name(server, tool["name"], set(found))
             found[name] = {"server": server, "config": config, **tool}
     return found
+
+
+async def check(item_id: str) -> Optional[dict]:
+    """Check one MCP server now (Tool Store's Check, adding a server, the
+    task loop): its status, pins and held tools, as the masked record. None
+    for an unknown server."""
+    from core import integrations, mcp_oauth
+    item = integrations.get_integration(item_id)
+    if item is None or item.get("kind") != "mcp_server":
+        return None
+    await mcp_oauth.refresh_due([item_id])
+    config = integrations.list_mcp_servers_runtime([item_id]).get(item["name"])
+    if config is None:  # an OAuth server not signed in is left out until it is
+        return integrations.record_check(item_id, signed_out=True)
+    try:
+        tools = await list_tools(config)
+    except Exception as e:
+        logger.warning("MCP server %r check failed: %s", item["name"], e)
+        return integrations.record_check(item_id, error=f"{type(e).__name__}: {e}")
+    return integrations.record_check(item_id, tools=tools)
+
+
+async def check_all() -> int:
+    """Check every MCP server; how many. The task loop's regular pass, which
+    is how a change reaches Claude chats: Claude Code lists a server's tools
+    itself and never tells JARVIS what it found."""
+    from core import integrations
+    ids = [i["id"] for i in integrations.list_integrations() if i["kind"] == "mcp_server"]
+    for item_id in ids:
+        try:
+            await check(item_id)
+        except Exception:
+            logger.exception("MCP check of %s failed", item_id)
+    return len(ids)

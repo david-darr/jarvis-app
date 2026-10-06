@@ -193,6 +193,8 @@ function fixture(url) {
   if (route === "/api/documents/search") return list(docs.filter(d => d.title.toLowerCase().includes(url.searchParams.get("q").toLowerCase())));
   if (route.startsWith("/api/documents/")) return { ...docs[0], content: "# Design principles\n\nMake the important things easy to find." };
   if (route === "/api/skills") return list([
+    // Roadmap phase 6: an unreadable skill is listed with its reason.
+    { slug: "broken-skill", description: "", error: "Can't be read: its SKILL.md is not UTF-8 text.", curation: null },
     { slug: "weekly-review", description: "Review the week and plan what comes next.",
       curation: { source: "bundled", origin: null, scan: null, blocked_for_models: false, approved: false, lint: [] } },
     { slug: "writing-partner", description: "Turn rough ideas into clear, useful writing.",
@@ -253,8 +255,15 @@ function fixture(url) {
   if (route === "/api/tab-school/courses") return list([{ name: "Software Design", upcoming_count: 2, overdue_count: 0, assignment_count: 8 }]);
   if (route === "/api/tab-school/assignments") return url.searchParams.has("overdue") ? [] : list([{ id: "a1", course: "Software Design", title: "Review the project brief", due: future(40), completed: false, attachment_links: [] }]);
   if (route === "/api/integrations") return [
-    { id: "i-notion", kind: "mcp_server", name: "Notion", mcp_type: "http", url: "https://mcp.notion.com/mcp", has_api_key: false, auth: "oauth", signed_in: true },
-    { id: "i-sentry", kind: "mcp_server", name: "Sentry", mcp_type: "http", url: "https://mcp.sentry.dev/mcp", has_api_key: false, auth: "oauth", signed_in: false }];
+    // Roadmap phase 6: a working server with a tool held for review, one
+    // signed out, and a local command that is not responding.
+    { id: "i-notion", kind: "mcp_server", name: "Notion", mcp_type: "http", url: "https://mcp.notion.com/mcp", has_api_key: false, auth: "oauth", signed_in: true,
+      status: { state: "working", tools: 12, checked_at: now - 300, error: null }, pinned: true,
+      held_tools: [{ name: "delete_page", kind: "new", description: "Delete a page and everything under it." }] },
+    { id: "i-sentry", kind: "mcp_server", name: "Sentry", mcp_type: "http", url: "https://mcp.sentry.dev/mcp", has_api_key: false, auth: "oauth", signed_in: false,
+      status: { state: "signed_out", tools: null, checked_at: now - 300, error: null }, pinned: false, held_tools: [] },
+    { id: "i-local", kind: "mcp_server", name: "Local files", mcp_type: "stdio", command: "npx", args: [], has_api_key: false, auth: "none", signed_in: false,
+      status: { state: "down", tools: null, checked_at: now - 60, error: "FileNotFoundError: npx" }, pinned: false, held_tools: [] }];
   if (route === "/api/integrations/contacts") return [];
   if (route === "/api/sandbox/changes") return [
     { id: "c0ffee000001", session_id: null, created: 1790200000, applicable: true,
@@ -424,6 +433,20 @@ app.whenReady().then(async () => {
           await capture(label + "-agent-page");
           await navigate("agents");
           await waitFor("document.querySelectorAll('.agent-tile:not(.team-tile)').length === 2");
+        }
+        if (tab === "tool-store" && !empty) {
+          // Roadmap phase 6: server health, a tool held for review, and an
+          // unreadable skill that says why.
+          await waitFor("document.querySelectorAll('.tool-store-health').length === 3");
+          assert.ok(await js("[...document.querySelectorAll('.tool-store-health')].some(n => n.textContent.includes('Working · 12 tools'))"), label + " a working server says so");
+          assert.ok(await js("[...document.querySelectorAll('.tool-store-health')].some(n => n.textContent.includes('Not responding · FileNotFoundError'))"), label + " a down server says why");
+          assert.ok(await js("[...document.querySelectorAll('.tool-store-health')].some(n => n.textContent.includes('Not signed in'))"), label + " a signed-out server says so");
+          assert.ok(await js("document.querySelector('.tool-store-held').textContent.includes('delete_page')"), label + " a held tool is listed for review");
+          assert.ok(await js("[...document.querySelectorAll('.tool-store-held button')].some(b => b.textContent === 'Accept')"), label + " and can be accepted");
+          assert.ok(await js("document.querySelector('.tool-store-broken').textContent.includes('not UTF-8')"), label + " an unreadable skill says why");
+          assert.ok(await js("[...document.querySelectorAll('.tool-store-card')].some(c => c.textContent.includes('Local files') && c.querySelector('.tool-store-badge').textContent === 'Not responding')"), label + " a down server is not called connected");
+          await js("document.querySelector('.tool-store-held').scrollIntoView()");
+          await capture(label + "-tool-store-health");
         }
         if (tab === "tasks" && !empty) {
           // The work board (Hermes track 2026-09-23): cards sit in their

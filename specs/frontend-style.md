@@ -141,6 +141,17 @@ The last group on Added Models (roadmap phase 5, 2026-10-06; core/helpers.py) is
 
 Claude and Codex are never offered, because their built-in tools can't be limited to reading; the backend refuses them too. Helpers have no page of their own. Their work shows in the chat as the `delegate` and `helper_results` tool calls.
 
+## Tool Store: health and review
+
+Roadmap phase 6 (2026-10-06): core/integrations.py and core/mcp_client.py. Every added MCP server's card shows a `.tool-store-health` line with a Check button:
+- **Working:** the usable tool count and when it was checked, in green.
+- **Not responding:** the error, in red. The card's badge says "Not responding", never "Connected".
+- **Not signed in.**
+
+When a server's tools are new or changed since they were pinned, a `.tool-store-held` box lists each one: its name, "new" or "changed since you added it", and its description, with Accept, plus "Accept all" when there are several. Held tools stay unavailable to every model until accepted.
+
+A skill whose SKILL.md can't be read shows as a `.tool-store-broken` card: a "Can't be read" badge, the reason, and Delete. A skill's frontmatter `version` follows its source label.
+
 ## Settings > Hooks
 
 `static/js/views/settingsHooks.js` (Administration, admin only) lists lifecycle hooks (services/hook_service.py) a row each: a badge for what it does (W web address, N vault note, C channel, > command), the event, the last run, the last outcome as a pill (OK, Blocked, Failed, Timed out) and an on/off switch, with Pause all and Add a hook in the header and a plain note of what hooks cannot see (Codex's own tools). A hook's page shows When (On, event, tools, where), Does (the exact command, address or note; a signed post says so and never shows its secret) and its recent runs, with Send a test event, Edit and Delete. The add form can start from an example and shows only the fields for the chosen event and kind. Saving a new or changed command always opens a confirmation that shows the exact command and when it will run.

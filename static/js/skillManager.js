@@ -138,14 +138,16 @@ async function buildSkillCard(skill, list) {
     toast("Skill deleted", "success");
   }, { danger: true });
   const editBtn = iconButton(ICONS.edit, "Edit skill", async () => {
-    const full = await api(`/api/skills/${skill.slug}`);
+    // An unreadable skill (roadmap phase 6) has nothing to edit; the API says why.
+    let full;
+    try { full = await api(`/api/skills/${skill.slug}`); } catch (problem) { toast(problem.message, "error"); return; }
     card.replaceWith(buildSkillEditor(full, list));
   });
   const card = el("div", { class: "glass bracket card has-row-actions", "data-skill": skill.slug }, [
     el("div", { class: "card-row" }, [
       el("div", {}, [
         el("div", { class: "title", text: skill.slug }),
-        el("div", { class: "meta", text: skill.description || "No description" }),
+        el("div", { class: "meta", text: skill.error || skill.description || "No description" }),
         ...curationDetails(skill, list),
       ]),
       el("div", { class: "row-actions" }, [editBtn, delBtn]),

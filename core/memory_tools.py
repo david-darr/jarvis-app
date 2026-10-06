@@ -130,7 +130,7 @@ def list_skills() -> list[dict]:
     A skill whose content scans "dangerous" and has not been approved is left
     out entirely (services/skill_curator.py)."""
     from services import skill_curator
-    return [s for s in skills_service.list_skills() if skill_curator.model_visible(s["slug"])]
+    return [s for s in skills_service.list_skills() if not s.get("error") and skill_curator.model_visible(s["slug"])]
 
 
 def search_skills(query: str, max_results: int = 5) -> list[dict]:

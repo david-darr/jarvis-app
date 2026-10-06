@@ -4,6 +4,12 @@ Matches the pattern researched from Odysseus (specs/memory-skills.md)
 
 Public GitHub SKILL.md imports use this service's community scan and
 provenance path. Auto-extraction from conversations remains out of scope.
+
+A skill that cannot be read (not UTF-8, an unreadable file) fails closed
+(roadmap phase 6, 2026-10-06): list_skills() gives it an `error` and no
+content, and get_skill() refuses it, so no model is offered it, and the rest
+still work. Before this, one such file made list_skills() raise, which took
+every skill away from every model and emptied Tool Store's list.
 """
 import logging
 import os
@@ -45,6 +51,27 @@ def _skill_path(slug: str) -> str:
     if not isinstance(slug, str) or not _VALID_SLUG_RE.fullmatch(slug):
         raise ValueError(f"invalid skill name: {slug!r}")
     return os.path.join(SKILLS_DIR, slug, "SKILL.md")
+
+
+class SkillUnreadable(ValueError):
+    """A SKILL.md that cannot be read as text."""
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except UnicodeDecodeError:
+        raise SkillUnreadable("its SKILL.md is not UTF-8 text")
+    except OSError as e:
+        raise SkillUnreadable(f"its SKILL.md could not be opened ({e.strerror or e})")
+
+
+def _frontmatter_value(frontmatter: str, key: str) -> str:
+    for line in (frontmatter or "").splitlines():
+        if line.startswith(f"{key}:"):
+            return line.split(":", 1)[1].strip().strip("'\"")
+    return ""
 
 
 def _parse(raw: str) -> dict:
@@ -155,9 +182,13 @@ def list_skills() -> list[dict]:
             continue
         path = _skill_path(slug)
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                parsed = _parse(f.read())
-            skills.append({"slug": slug, "description": parsed["description"]})
+            try:
+                parsed = _parse(_read(path))
+            except SkillUnreadable as e:
+                skills.append({"slug": slug, "description": "", "error": f"Can't be read: {e}."})
+                continue
+            skills.append({"slug": slug, "description": parsed["description"],
+                           "version": _frontmatter_value(parsed.get("frontmatter", ""), "version") or None})
     return skills
 
 
@@ -165,9 +196,7 @@ def get_skill(slug: str) -> Optional[dict]:
     path = _skill_path(slug)
     if not os.path.exists(path):
         return None
-    with open(path, "r", encoding="utf-8") as f:
-        parsed = _parse(f.read())
-    return {"slug": slug, **parsed}
+    return {"slug": slug, **_parse(_read(path))}
 
 
 def create_skill(name: str, description: str, body: str) -> dict:
@@ -188,9 +217,12 @@ def update_skill(slug: str, description: str, body: str) -> dict:
     if not os.path.exists(path):
         raise FileNotFoundError(f"no such skill: {slug}")
     # Read the existing frontmatter first so keys the app doesn't model
-    # (name, license, version, ...) survive the write.
-    with open(path, "r", encoding="utf-8") as f:
-        existing = _parse(f.read())
+    # (name, license, version, ...) survive the write. An unreadable file has
+    # none worth keeping: saving over it is how it gets fixed.
+    try:
+        existing = _parse(_read(path))
+    except SkillUnreadable:
+        existing = {}
     with open(path, "w", encoding="utf-8") as f:
         f.write(_render(description, body, existing.get("frontmatter", "")))
     return {"slug": slug, "description": description, "body": body}

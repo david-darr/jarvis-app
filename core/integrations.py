@@ -22,8 +22,29 @@ MCP Tool Server. Built:
 Still not offered: Claude Agent (Claude is a hardcoded Claude Agent SDK
 path, not an API-key config like the other providers) and Codex Agent
 (not integrated anywhere) — no foundation, not built as fake UI.
+
+MCP servers, roadmap phase 6 (2026-10-06; spec: the vault note "Skills and
+Integrations - Phase 6 (Build Spec)"):
+- Health: each check of a server (Tool Store's Check, adding it, a chat
+  connecting, the task loop every CHECK_EVERY_SECONDS) is kept as its
+  `status`: working with its tool count, down with the error, or signed out.
+- Pinning: the first good check records each tool's fingerprint (its name,
+  description and input schema). A tool that later appears, or whose
+  description or schema changes, is held: no model is offered it until a
+  person accepts it in Tool Store. MCP tool descriptions are read by the
+  model, so a rewritten one is a way to slip instructions in; this stops a
+  server changing its tools underneath you.
+- A clean environment: a stdio server starts through
+  mcp_servers/clean_launch.py, which passes it only safe system variables
+  and its own key, on every model kind. Claude Code used to start it with
+  the whole environment the backend had.
 """
+import hashlib
+import json
 import os
+import re
+import sys
+import time
 import uuid
 from typing import Any, Optional
 
@@ -32,6 +53,8 @@ from core.constants import DATA_DIR
 from core.secret_storage import decrypt, encrypt
 
 INTEGRATIONS_FILE = os.path.join(DATA_DIR, "integrations.json")
+CLEAN_LAUNCHER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mcp_servers", "clean_launch.py")
+CHECK_EVERY_SECONDS = 30 * 60
 
 KINDS = {"api_service", "mcp_server", "caldav_calendar", "carddav_contacts", "ical_feed"}
 MCP_TYPES = {"stdio", "http"}
@@ -56,6 +79,10 @@ def _masked(item: dict) -> dict:
         out["has_api_key"] = bool(item.get("api_key_encrypted"))
         out["auth"] = item.get("auth") or ("key" if item.get("api_key_encrypted") else "none")
         out["signed_in"] = bool((item.get("oauth") or {}).get("tokens"))
+        out["status"] = item.get("status")
+        out["pinned"] = "pinned_tools" in item
+        out["held_tools"] = [{"name": name, **{k: held[k] for k in ("kind", "description")}}
+                             for name, held in sorted((item.get("held_tools") or {}).items())]
     elif item["kind"] in ("caldav_calendar", "carddav_contacts", "ical_feed"):
         out["url"] = item.get("url", "")
         out["username"] = item.get("username", "")
@@ -100,9 +127,9 @@ def list_mcp_servers_runtime(only_ids: Optional[list[str]] = None) -> dict[str, 
             continue
         api_key = decrypt(item["api_key_encrypted"]) if item.get("api_key_encrypted") else None
         if item.get("mcp_type") == "stdio":
-            cfg: dict[str, Any] = {"type": "stdio", "command": item["command"]}
-            if item.get("args"):
-                cfg["args"] = item["args"]
+            # Through the clean launcher (the module docstring), whoever starts it.
+            cfg: dict[str, Any] = {"type": "stdio", "command": sys.executable,
+                                   "args": ["-I", CLEAN_LAUNCHER, "--", item["command"], *(item.get("args") or [])]}
             if api_key:
                 cfg["env"] = {"MCP_API_KEY": api_key}
         else:
@@ -118,6 +145,80 @@ def list_mcp_servers_runtime(only_ids: Optional[list[str]] = None) -> dict[str, 
                 cfg["headers"] = {"Authorization": f"Bearer {api_key}"}
         servers[item["name"]] = cfg
     return servers
+
+
+# -- MCP health and pinned tools (phase 6) ---------------------------------------
+
+def tool_fingerprint(tool: dict) -> str:
+    blob = json.dumps([tool.get("name"), tool.get("description") or "", tool.get("schema") or {}], sort_keys=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _mcp_item(data: dict, item_id: Optional[str] = None, name: Optional[str] = None) -> Optional[dict]:
+    for item in data.values():
+        if item.get("kind") == "mcp_server" and (item["id"] == item_id or (name is not None and item["name"] == name)):
+            return item
+    return None
+
+
+def record_check(item_id: Optional[str] = None, tools: Optional[list[dict]] = None, error: Optional[str] = None,
+                 signed_out: bool = False, name: Optional[str] = None) -> Optional[dict]:
+    """Keep one check of a server: its status, and with a good tool list its
+    pins and held tools. The first good check pins every tool it found.
+    Returns the masked record, or None for an unknown server."""
+    data = _load()
+    item = _mcp_item(data, item_id, name)
+    if item is None:
+        return None
+    now = time.time()
+    if signed_out:
+        item["status"] = {"state": "signed_out", "tools": None, "checked_at": now, "error": None}
+    elif tools is None:
+        item["status"] = {"state": "down", "tools": None, "checked_at": now, "error": (error or "no answer")[:300]}
+    else:
+        current = {t["name"]: {"fingerprint": tool_fingerprint(t), "description": (t.get("description") or "")[:500]}
+                   for t in tools}
+        if "pinned_tools" not in item:
+            item["pinned_tools"] = {n: c["fingerprint"] for n, c in current.items()}
+        pinned = item["pinned_tools"]
+        item["held_tools"] = {n: {**c, "kind": "new" if n not in pinned else "changed"}
+                              for n, c in current.items() if pinned.get(n) != c["fingerprint"]}
+        item["status"] = {"state": "working", "tools": len(current) - len(item["held_tools"]), "checked_at": now,
+                          "error": None}
+    write_json_atomic(INTEGRATIONS_FILE, data)
+    return _masked(item)
+
+
+def held_tools(only_ids: Optional[list[str]] = None) -> dict[str, set]:
+    """Held tool names by server name, for the servers a chat may use."""
+    return {item["name"]: set(item.get("held_tools") or {}) for item in _load().values()
+            if item.get("kind") == "mcp_server" and (only_ids is None or item["id"] in only_ids)
+            and item.get("held_tools")}
+
+
+def claude_tool_name(server: str, tool: str) -> str:
+    """The name Claude Code gives an MCP tool: mcp__<server>__<tool>, with
+    anything outside letters, digits, _ and - made an underscore."""
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", f"mcp__{server}__{tool}")
+
+
+def accept_tools(item_id: str, names: list[str]) -> dict:
+    """Pin these held tools as they were when the person reviewed them. A
+    tool that changed again since stays held."""
+    data = _load()
+    item = _mcp_item(data, item_id)
+    if item is None:
+        raise KeyError(item_id)
+    held = item.get("held_tools") or {}
+    unknown = [n for n in names if n not in held]
+    if unknown:
+        raise ValueError(f"not waiting for review: {', '.join(unknown)}")
+    for name in names:
+        item.setdefault("pinned_tools", {})[name] = held.pop(name)["fingerprint"]
+    if item.get("status", {}).get("state") == "working":
+        item["status"]["tools"] = (item["status"].get("tools") or 0) + len(names)
+    write_json_atomic(INTEGRATIONS_FILE, data)
+    return _masked(item)
 
 
 def _oauth_access_token(item: dict) -> Optional[str]:

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from core import contacts_store, dav_client, integrations, mcp_oauth, sync_engine
+from core import contacts_store, dav_client, integrations, mcp_client, mcp_oauth, sync_engine
 from core.middleware import local_api_base, require_admin
 from services.calendar_service import calendar_service
 
@@ -51,10 +51,38 @@ async def mcp_catalog(user: str = Depends(require_admin)) -> list[dict]:
 @router.post("/mcp-server")
 async def create_mcp_server(body: CreateMcpServerRequest, user: str = Depends(require_admin)) -> dict:
     try:
-        return integrations.create_mcp_server(body.name, body.mcp_type, body.command, body.args, body.url,
+        item = integrations.create_mcp_server(body.name, body.mcp_type, body.command, body.args, body.url,
                                               body.api_key, body.auth)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # Checked at once (roadmap phase 6): the answer says whether it works,
+    # and its tools are pinned as they are now.
+    return await mcp_client.check(item["id"]) or item
+
+
+class AcceptToolsRequest(BaseModel):
+    names: list[str]
+
+
+@router.post("/{item_id}/check")
+async def check_mcp_server(item_id: str, user: str = Depends(require_admin)) -> dict:
+    """Check an MCP server now: working, down or signed out, and which of its
+    tools are new or changed since they were pinned (core/integrations.py)."""
+    checked = await mcp_client.check(item_id)
+    if checked is None:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    return checked
+
+
+@router.post("/{item_id}/tools/accept")
+async def accept_mcp_tools(item_id: str, body: AcceptToolsRequest, user: str = Depends(require_admin)) -> dict:
+    """Let models use these held tools, as they were when reviewed."""
+    try:
+        return integrations.accept_tools(item_id, body.names)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 # OAuth sign-in for MCP servers (core/mcp_oauth.py). Starting, checking and

@@ -42,6 +42,8 @@ _locks: dict[str, tuple] = {}
 _running: dict[str, asyncio.Task] = {}
 # The two lanes' current background run (_tick).
 _lanes: dict[str, Optional[asyncio.Task]] = {"schedule": None, "card": None}
+# The regular MCP server check (core/mcp_client.check_all, roadmap phase 6).
+_mcp_check: dict = {"task": None, "last": 0.0}
 
 
 def _deliver(task: dict, output: str) -> Optional[str]:
@@ -373,6 +375,20 @@ async def _tick() -> None:
         # One card per pass (see dispatch_cards).
         _lanes["card"] = loop.create_task(dispatch_cards())
     await outbox.send_due()
+    _check_mcp_servers(loop)
+
+
+def _check_mcp_servers(loop) -> None:
+    """Every CHECK_EVERY_SECONDS, in the background: how a held MCP tool
+    reaches Claude chats, whose tools Claude Code lists itself."""
+    import time as clock
+    from core import integrations, mcp_client
+    running = _mcp_check["task"]
+    if (running is not None and not running.done()) or \
+            clock.time() - _mcp_check["last"] < integrations.CHECK_EVERY_SECONDS:
+        return
+    _mcp_check["last"] = clock.time()
+    _mcp_check["task"] = loop.create_task(mcp_client.check_all())
 
 
 async def _poll_loop() -> None:

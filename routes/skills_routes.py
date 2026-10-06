@@ -35,7 +35,9 @@ class InstallSkillUrlRequest(BaseModel):
 
 @router.get("")
 async def list_skills(user: str = Depends(require_user)) -> list[dict]:
-    return [{**skill, "curation": skill_curator.describe(skill["slug"])}
+    # An unreadable skill is listed with its error and no curation: there is
+    # no content to scan or lint (roadmap phase 6).
+    return [{**skill, "curation": None if skill.get("error") else skill_curator.describe(skill["slug"])}
             for skill in skills_service.list_skills()]
 
 
@@ -95,6 +97,8 @@ async def install_skill_url(body: InstallSkillUrlRequest, user: str = Depends(re
 async def get_skill(slug: str, user: str = Depends(require_user)) -> dict:
     try:
         skill = skills_service.get_skill(slug)
+    except skills_service.SkillUnreadable as e:
+        raise HTTPException(status_code=422, detail=f"This skill can't be read: {e}. Delete it, or replace its SKILL.md.")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if skill is None:
