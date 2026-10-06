@@ -298,14 +298,13 @@ class AgentService:
         events.emit(event, f"{agent['name']} {verb}: {title}", agent_id=agent_id, **extra)
         channel = agent.get("deliver_to_channel")
         if channel:
-            import asyncio
-            from core.channels import registry
+            from core import outbox
             text = (f"**{agent['name']}** {verb}: {title}" + (f"\n{body[:1500]}" if body else "")
                     + (f"\n_{footer}_" if footer else ""))
-            try:
-                asyncio.get_running_loop().create_task(registry.send_to_channel(channel, text))
-            except RuntimeError:
-                pass  # no running loop (a script or test): the feed still has it
+            # Through the outbox (2026-10-06): retried when the send fails,
+            # where it used to be one try with the result thrown away. Each
+            # notification is its own message, so the key is fresh.
+            outbox.enqueue(f"agent:{event}:{uuid.uuid4().hex}:{channel}", channel, text, label=agent["name"])
 
 
     # -- answering (the app's inbox and channel replies share these) ----------
@@ -377,10 +376,9 @@ class AgentService:
             return "the card will run again"
         goal = task_service.get_task(item["task_id"]) if item.get("task_id") else None
         if goal is not None:
-            import asyncio
-            from core.task_scheduler import _run_task, agent_may_run
-            if agent_may_run(goal):
-                asyncio.get_running_loop().create_task(_run_task(goal))
+            from core import task_scheduler
+            if task_scheduler.agent_may_run(goal):
+                task_scheduler.start_in_background(goal, "answer")
                 return "the goal is checking again now"
         return "noted"
 

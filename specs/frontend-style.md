@@ -102,7 +102,19 @@ A named instance (`npm run start:dev`, electron/instance.js) labels itself every
 
 ## Tasks: run history
 
-Every scheduled task and board card run records its start and end, duration, outcome (Succeeded, Failed, Didn't finish), model and card attempt; history is kept per task (50 runs each). `static/js/runHistory.js` renders it: a "Run history" disclosure on each board card, loaded when opened and kept open across the board's polling, and "Run history (n)" under each scheduled task beside its last-run line. Newest first, ten until "Show all", each row opening to its output. Records from before start times existed show "duration unknown" rather than a guess. A run cut off by the app closing is shown as Didn't finish.
+Every scheduled task and board card run records its start and end, duration, outcome (Succeeded, Failed, Didn't finish, Stopped), model and card attempt; history is kept per task (50 runs each). `static/js/runHistory.js` renders it: a "Run history" disclosure on each board card, loaded when opened and kept open across the board's polling, and "Run history (n)" under each scheduled task beside its last-run line. Newest first, ten until "Show all", each row opening to its output. Records from before start times existed show "duration unknown" rather than a guess. A run cut off by the app closing is shown as Didn't finish.
+
+Durable work (roadmap phase 4, 2026-10-06):
+- **Stop.** A running task shows Stop in place of Run now, and Stop also sits beside "Running..." during a Run now. A running board card shows Stop beside "Working on it". A stopped card goes to Blocked.
+- **Polling.** The scheduled list polls every 5 seconds while anything in it runs.
+- **Late runs.** A scheduled run that began more than 5 minutes after its time reads "late: due <time>" in its row.
+- **Deliveries** come from the outbox, as a `.run-delivery` line in the run's row:
+  - "delivered to <channel>";
+  - "didn't go through yet; trying again at <time> (attempt n)";
+  - "failed for a day and was given up", with **Send again**;
+  - "JARVIS closed while sending; it may not have arrived", with **Send again**.
+
+  The last-run line repeats a failure in red.
 
 ## Agents
 

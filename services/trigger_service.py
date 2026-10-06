@@ -375,14 +375,11 @@ class TriggerService:
         agent = agent_service.get(agent_id)
         channel = trigger.get("deliver_to_channel") or (agent or {}).get("deliver_to_channel")
         if channel:
-            import asyncio
-            from core.channels import registry
+            from core import outbox
             text = (f"**Trigger {trigger['name']}** ({pending['event_type']}) wants {work}: {pending['summary']}\n"
                     f"_Reply 'approve' to start it. {self.code_for(pending)}_")
-            try:
-                asyncio.get_running_loop().create_task(registry.send_to_channel(channel, text))
-            except RuntimeError:
-                pass  # no running loop (a script or test): the feed still has it
+            # Through the outbox (2026-10-06): retried when the send fails.
+            outbox.enqueue(f"trigger:{pending['id']}:{channel}", channel, text, label=f"Trigger {trigger['name']}")
 
     def resolve_code(self, text: str) -> Optional[dict]:
         match = CODE_RE.search(text or "")

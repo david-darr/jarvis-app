@@ -471,5 +471,12 @@ class SwarmTests(unittest.TestCase):
         self.assertLessEqual({kind.value for kind in SwarmEventKind}, contract)
 
 
+def tearDownModule():
+    # Release the session store so the temp data folder can be removed;
+    # Windows will not delete a database that is still open.
+    from core import session_manager_store
+    session_manager_store.close()
+
+
 if __name__ == "__main__":
     unittest.main()

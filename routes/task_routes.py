@@ -1,13 +1,13 @@
-"""Task CRUD + manual "run now" + run history — the Tasks tab."""
+"""Task CRUD + manual "run now" and stop + run history and delivery retry —
+the Tasks tab."""
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from core import model_endpoints
+from core import model_endpoints, outbox, task_scheduler
 from core.builtin_tasks import BUILTIN_TASKS, list_builtin_tasks
 from core.middleware import require_user
-from core.task_scheduler import _run_task
 from services.task_service import task_service
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -165,9 +165,36 @@ async def run_task_now(task_id: str, user: str = Depends(require_user)) -> dict:
         task = task_service.claim_next_card(card_id=task_id)
         if task is None:
             raise HTTPException(status_code=409, detail="this card is running, finished, or still waiting on other cards")
-    await _run_task(task)
+    if not await task_scheduler.start_run(task, "manual"):
+        raise HTTPException(status_code=409, detail="this task is already running")
+    # Its message, if any, goes out now, so the answer can say whether it landed.
+    await outbox.send_due()
     runs = task_service.list_runs(task_id)
     return runs[0] if runs else {"ok": True}
+
+
+@router.post("/{task_id}/stop")
+async def stop_task(task_id: str, user: str = Depends(require_user)) -> dict:
+    """Stop a running task, card or goal (roadmap phase 4). The run is
+    recorded as stopped; a stopped card goes to Blocked."""
+    if task_service.get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    if not task_scheduler.stop_run(task_id):
+        raise HTTPException(status_code=409, detail="this is not running")
+    return {"ok": True}
+
+
+@router.post("/deliveries/{delivery_id}/retry")
+async def retry_delivery(delivery_id: str, user: str = Depends(require_user)) -> dict:
+    """Send a failed or unknown channel message again (core/outbox.py)."""
+    try:
+        outbox.retry(delivery_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="no such delivery")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    await outbox.send_due()
+    return outbox.public(outbox.get(delivery_id))
 
 
 @router.get("/{task_id}/runs")

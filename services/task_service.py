@@ -33,6 +33,21 @@ Agents (services/agent_service.py, 2026-10-04): a task or card with
 `agent_id` is that agent's work - a card is a job it was given, a scheduled
 task is one of its standing goals. It runs on the agent's model with the
 agent's identity and memory; this module only stores and schedules it.
+
+Durable work (roadmap phase 4, 2026-10-06; spec: the vault note "Durable
+Work - Phase 4 (Build Spec)"):
+- A scheduled run claims its occurrence before it starts: the next time is
+  moved on and the start is stamped in the same write. A run cut off by a
+  crash is recorded as lost at the next start and never run again by itself;
+  before this the same occurrence ran again on every start.
+- Only the schedule moves the schedule. A Run now, a trigger's run or an
+  answered question leaves the next time alone.
+- A scheduled run that starts more than LATE_SECONDS after its time says so
+  (JARVIS was off, or busy).
+- A run can be stopped; it is recorded as stopped, and a stopped card goes
+  to Blocked rather than being retried.
+- A run's channel message is a row in the outbox (core/outbox.py); the run
+  record keeps its id, and the history reads its state from there.
 """
 import time
 import uuid
@@ -63,6 +78,9 @@ CARD_MAX_ATTEMPTS = 3
 # closed mid-run, say) and the card goes back to Ready, or Blocked when out of
 # attempts, so it can never sit in Running forever.
 CARD_LEASE_SECONDS = 30 * 60
+# A scheduled run starting this long after its time is marked late.
+LATE_SECONDS = 5 * 60
+STOPPED_NOTE = "Stopped by you."
 CARD_RESULT_INSTRUCTION = (
     "[This is a card on JARVIS's work board. Your reply is the result the user will review, so reply with the "
     "finished work itself, not a note about where you put it. Use tools only when the work itself needs them.]"
@@ -300,11 +318,15 @@ class TaskService:
         self._save_tasks()
         return card
 
-    def reclaim_stale_cards(self, now: Optional[float] = None) -> list[dict]:
-        """Running cards whose lease ran out: the run is taken as lost."""
+    def reclaim_stale_cards(self, now: Optional[float] = None, running=()) -> list[dict]:
+        """Running cards whose lease ran out: the run is taken as lost.
+        `running` names the cards this process is still running, which are
+        never lost however long they take: the task loop now keeps polling
+        while a card runs (2026-10-06), and would otherwise start a long
+        card a second time beside itself."""
         now = time.time() if now is None else now
         stale = [c for c in self._tasks.values() if c["schedule_kind"] == "card" and c["status"] == "running"
-                 and (c.get("claimed_until") or 0) < now]
+                 and (c.get("claimed_until") or 0) < now and c["id"] not in running]
         return [self.fail_card(c["id"], "The run did not finish (JARVIS may have closed while it ran).", lost=True)
                 for c in stale]
 
@@ -332,14 +354,24 @@ class TaskService:
         return next((c for c in reversed(card.get("comments") or []) if c["kind"] == kind), None)
 
     def _append_run(self, task: dict, output: str, error: Optional[str], outcome: str,
-                    delivered: Optional[bool] = None) -> None:
-        """One run record. outcome is "succeeded", "failed" or "lost" (a run
+                    delivered: Optional[bool] = None, delivery_id: Optional[str] = None) -> None:
+        """One run record. outcome is "succeeded", "failed", "lost" (a run
         that never reported back: the app closed mid-run, or a card's lease
-        ran out). The start time is the one mark_started() or a card's claim
-        left on the task; the caller saves the task."""
+        ran out) or "stopped". The start time is the one a claim or
+        mark_started() left on the task; the caller saves the task."""
         now = time.time()
         started = task.pop("run_started_at", None)
+        due_at = task.pop("run_for", None)
+        source = task.pop("run_source", None)
+        late = None
+        if due_at and started:
+            try:
+                behind = started - datetime.fromisoformat(due_at).timestamp()
+                late = round(behind) if behind > LATE_SECONDS else None
+            except ValueError:
+                pass  # an unreadable stored time: lateness unknown, not guessed
         self._runs.append({
+            "id": uuid.uuid4().hex[:12],
             "task_id": task["id"],
             "task_name": task["name"],
             "started_at": started,
@@ -353,6 +385,16 @@ class TaskService:
             # ask 2026-09-02 — a failed Discord delivery was previously silent
             # everywhere but the server log).
             "delivered": delivered,
+            # The run's message in the outbox (core/outbox.py); list_runs
+            # reads its state from there. Records from before 2026-10-06
+            # have only `delivered`.
+            "delivery_id": delivery_id,
+            # What started it (schedule, manual, trigger, answer), the time
+            # it was scheduled for, and how many seconds late it began when
+            # that was more than LATE_SECONDS.
+            "source": source,
+            "scheduled_for": due_at,
+            "late_seconds": late,
             # The model as named when it ran, so the history still reads
             # right after the task moves to another model or it is removed.
             "endpoint_id": task.get("endpoint_id"),
@@ -362,24 +404,66 @@ class TaskService:
         task["last_run_at"] = now
         self._save_runs()
 
-    def mark_started(self, task_id: str) -> None:
-        """A scheduled task's run begins. Persisted, so a run cut off by the
-        app closing is still found and recorded on the next start."""
+    def claim_occurrence(self, task_id: str) -> Optional[dict]:
+        """A scheduled run begins: its next time moves on and the start is
+        stamped, in one write, before any work happens. A crash from here on
+        loses this occurrence rather than running it twice. None when the
+        task is gone or no longer due."""
+        task = self._tasks.get(task_id)
+        if task is None or not self.is_due(task_id):
+            return None
+        task.update(run_started_at=time.time(), run_for=task["next_run_at"], run_source="schedule")
+        self._advance(task)
+        self._save_tasks()
+        return task
+
+    def mark_started(self, task_id: str, source: str = "manual") -> None:
+        """A run outside the schedule begins (Run now, a trigger, an answer).
+        Persisted, so a run cut off by the app closing is still found and
+        recorded on the next start; the schedule is left alone."""
         task = self._tasks.get(task_id)
         if task is not None:
-            task["run_started_at"] = time.time()
+            task.update(run_started_at=time.time(), run_for=None, run_source=source)
             self._save_tasks()
+
+    def is_due(self, task_id: str) -> bool:
+        task = self._tasks.get(task_id)
+        return bool(task and task["schedule_kind"] != "card" and task["enabled"] and task["next_run_at"]
+                    and task["next_run_at"] <= datetime.now(timezone.utc).isoformat())
 
     def recover_interrupted_runs(self) -> list[dict]:
         """At startup nothing is running yet, so a scheduled task still marked
-        as started was cut off: record it as lost. Cards are left to their
-        lease (reclaim_stale_cards), which already covers this."""
+        as started was cut off: record it as lost, once. It is not run again:
+        its occurrence was claimed before it started. A stamp left by a build
+        from before claims (no run_source) moves its schedule on here
+        instead, or the same occurrence would run again. Cards are left to
+        their lease (reclaim_stale_cards), which already covers this."""
         lost = [t for t in self._tasks.values() if t["schedule_kind"] != "card" and t.get("run_started_at")]
         for task in lost:
+            if "run_source" not in task and self.is_due(task["id"]):
+                self._advance(task)
             self._append_run(task, "", "The run did not finish (JARVIS closed while it ran).", "lost")
         if lost:
             self._save_tasks()
         return lost
+
+    def record_stopped(self, task_id: str) -> Optional[dict]:
+        """A run a person stopped. A card goes to Blocked, not back to Ready:
+        stopping it means "not this", so it is never retried by itself."""
+        task = self._tasks.get(task_id)
+        if task is None:
+            return None
+        if task["schedule_kind"] == "card":
+            if task.get("status") != "running":
+                return task
+            self._comment(task, "error", STOPPED_NOTE, "user")
+            task["status"] = "blocked"
+            task["claimed_until"] = None
+        elif not task.get("run_started_at"):
+            return task
+        self._append_run(task, "", STOPPED_NOTE, "stopped")
+        self._save_tasks()
+        return task
 
     def skip_occurrence(self, task_id: str) -> None:
         """Move a due goal to its next time without running it (its agent is
@@ -388,6 +472,13 @@ class TaskService:
         task = self._tasks.get(task_id)
         if task is None or task["schedule_kind"] == "card":
             return
+        self._advance(task)
+        self._save_tasks()
+
+    @staticmethod
+    def _advance(task: dict) -> None:
+        """The schedule's next time: a one-shot is done, a daily one is
+        tomorrow's (or today's, if still ahead), an interval is from now."""
         if task["schedule_kind"] == "once":
             task["enabled"] = False
             task["next_run_at"] = None
@@ -395,7 +486,6 @@ class TaskService:
             task["next_run_at"] = _next_daily(task["run_time"])
         else:
             task["next_run_at"] = _iso_in(task["interval_seconds"])
-        self._save_tasks()
 
     def delete_agent_work(self, agent_id: str) -> int:
         """An agent deleted: its goals and unfinished cards go; finished run
@@ -449,30 +539,38 @@ class TaskService:
             if t["enabled"] and t["next_run_at"] and t["next_run_at"] <= now_iso
         ]
 
-    def record_run(self, task_id: str, output: str, error: Optional[str] = None, delivered: Optional[bool] = None) -> None:
+    def record_run(self, task_id: str, output: str, error: Optional[str] = None, delivered: Optional[bool] = None,
+                   delivery_id: Optional[str] = None) -> None:
+        """A run finished. The schedule already moved on when a scheduled
+        run claimed its occurrence; nothing here moves it."""
         task = self._tasks.get(task_id)
         if task is None:
             return
-        self._append_run(task, output, error, "failed" if error else "succeeded", delivered)
+        self._append_run(task, output, error, "failed" if error else "succeeded", delivered, delivery_id)
         _hook("task.finished", {"source": "agent" if task.get("agent_id") else "task", "task": task["name"],
                                 "task_id": task_id, "agent_id": task.get("agent_id"), "output": output, "error": error})
-        if task["schedule_kind"] == "once":
-            task["enabled"] = False
-            task["next_run_at"] = None
-        elif task["schedule_kind"] == "daily":
-            task["next_run_at"] = _next_daily(task["run_time"])
-        else:
-            task["next_run_at"] = _iso_in(task["interval_seconds"])
         self._save_tasks()
 
     def list_runs(self, task_id: Optional[str] = None) -> list[dict]:
         """Newest first. Records from before 2026-10-02 have no start time or
         outcome: the outcome is read from the error and the duration stays
-        unknown rather than guessed."""
+        unknown rather than guessed. A run with a message in the outbox
+        carries its delivery's state, and `delivered` from it: True once it
+        landed, False when it failed or its fate is unknown, None while it is
+        still being tried."""
         runs = self._runs if task_id is None else [r for r in self._runs if r["task_id"] == task_id]
-        return [{"started_at": None, "duration_seconds": None, "model": None, "attempt": None, **r,
-                 "outcome": r.get("outcome") or ("failed" if r.get("error") else "succeeded")}
-                for r in sorted(runs, key=lambda r: r["ran_at"], reverse=True)]
+        shown = []
+        for r in sorted(runs, key=lambda r: r["ran_at"], reverse=True):
+            run = {"started_at": None, "duration_seconds": None, "model": None, "attempt": None, "late_seconds": None,
+                   **r, "outcome": r.get("outcome") or ("failed" if r.get("error") else "succeeded")}
+            if r.get("delivery_id"):
+                from core import outbox
+                delivery = outbox.public(outbox.get(r["delivery_id"]))
+                run["delivery"] = delivery
+                run["delivered"] = None if delivery is None or delivery["status"] in ("pending", "sending") \
+                    else delivery["status"] == "delivered"
+            shown.append(run)
+        return shown
 
 
 def _model_label(endpoint_id: Optional[str]) -> str:

@@ -330,12 +330,13 @@ def record(context: RunContext, tally: Tally, outcome: str, stop: Optional[StopR
         logger.exception("could not record run %s", context.run_id)
 
 
-async def complete(adapter: RunAdapter, prompt, context: RunContext) -> RunOutcome:
+async def complete(adapter: RunAdapter, prompt, context: RunContext, tally: Optional[Tally] = None) -> RunOutcome:
     """Run to the end: the reply as the old run_turn returned it (joined and
     stripped), its usage summed over every provider call, and how many tools
     it used; the run is recorded either way. Recording its usage on Home is
-    the caller's, which knows the endpoint."""
-    tally = Tally()
+    the caller's, which knows the endpoint. A caller that passes its own
+    tally still has what a stopped or failed run used (2026-10-06)."""
+    tally = Tally() if tally is None else tally
     try:
         async with contextlib.aclosing(adapter.events(prompt, stream=False)) as items:
             async for item in items:

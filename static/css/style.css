@@ -1755,6 +1755,10 @@ button.dashboard-row:hover { background: rgba(255,255,255,.035); }
 .run-outcome.run-succeeded { color: var(--success); }
 .run-outcome.run-failed { color: var(--danger); }
 .run-outcome.run-lost { color: #d9b67d; }
+.run-outcome.run-stopped { color: var(--text-dim); }
+.run-delivery { margin: 2px 0; font-size: 11px; color: var(--text-faint); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.run-delivery.is-error { color: var(--danger); }
+.run-delivery .btn { padding: 1px 8px; font-size: 11px; }
 .run-meta { color: var(--text-faint); }
 .run-text { margin: 4px 0 2px; max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
   font-size: 11.5px; color: var(--text-dim); }

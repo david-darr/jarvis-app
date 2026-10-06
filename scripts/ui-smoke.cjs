@@ -38,7 +38,10 @@ const events = [
   { id: "e3", title: "Weekly review", start: future(60), end: future(61), source: "event" },
 ];
 const tasks = [
-  { id: "t1", name: "Daily briefing", enabled: true, schedule_kind: "daily", run_time: "07:00", next_run_at: future(6), last_run_at: now - 3000 },
+  { id: "t1", name: "Daily briefing", enabled: true, schedule_kind: "daily", run_time: "07:00", next_run_at: future(6), last_run_at: now - 3000,
+    deliver_to_channel: "discord" },
+  // Running right now (roadmap phase 4): offers Stop instead of Run now.
+  { id: "t2", name: "Market check", enabled: true, schedule_kind: "interval", interval_seconds: 3600, next_run_at: future(1), run_started_at: now - 30 },
   // Work board cards (taskBoard.js): one in Review, one waiting on it, one Blocked.
   { id: "c1", name: "Gather sources", schedule_kind: "card", status: "review", depends_on: [], attempts: 1, endpoint_id: "m3",
     created_at: now - 900, last_run_at: now - 600, comments: [{ at: now - 600, kind: "result", text: "Three sources found: the design brief, the research notes and last week's review.", by: "jarvis" }] },
@@ -46,11 +49,16 @@ const tasks = [
     created_at: now - 800, comments: [] },
   { id: "c3", name: "Tidy the vault", schedule_kind: "card", status: "blocked", depends_on: [], attempts: 3, endpoint_id: null,
     created_at: now - 700, comments: [{ at: now - 60, kind: "error", text: "The model stopped responding.", by: "jarvis" }] },
+  { id: "c4", name: "Draft the newsletter", schedule_kind: "card", status: "running", depends_on: [], attempts: 1, endpoint_id: null,
+    created_at: now - 600, run_started_at: now - 120, comments: [] },
 ];
 // Run history (runHistory.js): one record of each outcome, newest first.
 const runs = {
   t1: [
-    { task_id: "t1", started_at: now - 3042, ran_at: now - 3000, duration_seconds: 42, outcome: "succeeded", output: "Two meetings today and one open priority.", error: null, delivered: null, model: "Claude", attempt: null },
+    { task_id: "t1", started_at: now - 3042, ran_at: now - 3000, duration_seconds: 42, outcome: "succeeded", output: "Two meetings today and one open priority.", error: null, delivered: false, model: "Claude", attempt: null,
+      delivery: { id: "d1", channel: "discord", status: "failed", attempts: 27, next_try_at: null, last_error: "the channel did not accept it", created_at: now - 3000, finished_at: now - 100 } },
+    { task_id: "t1", started_at: now - 7200, ran_at: now - 7190, duration_seconds: 10, outcome: "stopped", output: "", error: "Stopped by you.", delivered: null, model: "Claude", attempt: null,
+      late_seconds: 7200, scheduled_for: new Date((now - 14400) * 1000).toISOString(), source: "schedule" },
     { task_id: "t1", started_at: now - 90000, ran_at: now - 89990, duration_seconds: 10, outcome: "lost", output: "", error: "The run did not finish (JARVIS closed while it ran).", delivered: null, model: "Claude", attempt: null },
     { task_id: "t1", started_at: null, ran_at: now - 176400, duration_seconds: null, outcome: "failed", output: "", error: "The model stopped responding.", delivered: null, model: null, attempt: null },
   ],
@@ -421,7 +429,8 @@ app.whenReady().then(async () => {
           // The work board (Hermes track 2026-09-23): cards sit in their
           // columns with the actions that column allows, and stay out of the
           // scheduled list.
-          await waitFor("document.querySelectorAll('.board-card').length === 3");
+          await waitFor("document.querySelectorAll('.board-card').length === 4");
+          assert.ok(await js("[...document.querySelectorAll('.board-card-running button')].some(b => b.textContent === 'Stop')"), label + " a running card offers Stop");
           assert.ok(await js("[...document.querySelectorAll('.board-card-review button')].some(b => b.textContent === 'Approve')"), label + " review card offers Approve");
           assert.ok(await js("document.querySelector('.board-card-blocked .board-card-text').textContent.includes('model stopped')"), label + " blocked card shows its error");
           assert.ok(await js("document.querySelector('.board-card-ready').textContent.includes('waits for Gather sources')"), label + " a waiting card names what it waits for");
@@ -430,8 +439,16 @@ app.whenReady().then(async () => {
           // and a card's history loaded when opened.
           await waitFor("!!document.querySelector('#tasks-list .run-history-panel')");
           assert.ok(await js("document.getElementById('tasks-list').textContent.includes('Succeeded · 42s')"), label + " last run shows outcome and duration");
-          assert.equal(await js("document.querySelector('#tasks-list .run-history-panel > summary').textContent"), "Run history (3)", label + " history count");
-          assert.deepEqual(await js("[...document.querySelectorAll('#tasks-list .run-outcome')].map(n => n.textContent)"), ["Succeeded", "Didn't finish", "Failed"], label + " each outcome labelled");
+          assert.equal(await js("document.querySelector('#tasks-list .run-history-panel > summary').textContent"), "Run history (4)", label + " history count");
+          assert.deepEqual(await js("[...document.querySelectorAll('#tasks-list .run-outcome')].map(n => n.textContent)"), ["Succeeded", "Stopped", "Didn't finish", "Failed"], label + " each outcome labelled");
+          // Durable work (roadmap phase 4): a running task offers Stop, a late
+          // run says so, and a given-up delivery can be sent again.
+          assert.ok(await js("[...document.querySelectorAll('#tasks-list button')].some(b => b.textContent === 'Stop')"), label + " a running task offers Stop");
+          assert.ok(await js("document.getElementById('tasks-list').textContent.includes('was given up — check Settings > Channels')"), label + " a given-up delivery is said on the last run");
+          assert.ok(await js("[...document.querySelectorAll('#tasks-list .run-delivery button')].some(b => b.textContent === 'Send again')"), label + " and can be sent again");
+          assert.ok(await js("[...document.querySelectorAll('#tasks-list .run-meta')].some(n => n.textContent.includes('late: due'))"), label + " a late run says so");
+          await js("document.querySelector('#tasks-list .run-history-panel').open = true; document.getElementById('tasks-list').scrollIntoView()");
+          await capture(label + "-task-list");
           assert.ok(await js("document.querySelector('#tasks-list .run-history').textContent.includes('duration unknown')"), label + " an old record's duration is unknown, not guessed");
           await js("document.querySelector('.board-card-review .board-card-output:last-of-type').open = true");
           await waitFor("!!document.querySelector('.board-card-review .run-row')");

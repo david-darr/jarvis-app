@@ -91,9 +91,8 @@ def answer_reply(notification_text: str, reply: str) -> Optional[str]:
         except KeyError:
             return "That has already been answered."
         if run:
-            import asyncio
-            from core.task_scheduler import _run_task
-            asyncio.get_running_loop().create_task(_run_task(run))
+            from core import task_scheduler
+            task_scheduler.start_in_background(run, "trigger")
         return f"{pending['trigger_name']}: {outcome}."
     found = agent_service.resolve_code(notification_text)
     if found is None:

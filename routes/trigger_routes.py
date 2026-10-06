@@ -44,8 +44,8 @@ class AnswerBody(BaseModel):
 def start_run(task: dict) -> None:
     """A task or goal run with the event attached, in the background, the
     same way the scheduler runs it."""
-    from core.task_scheduler import _run_task
-    asyncio.get_running_loop().create_task(_run_task(task))
+    from core import task_scheduler
+    task_scheduler.start_in_background(task, "trigger")
 
 
 def _fields(body: TriggerBody) -> dict:

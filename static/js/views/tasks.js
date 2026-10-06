@@ -2,7 +2,7 @@ import { api, el, customSelect, toast, confirmDialog, iconButton, emptyState } f
 import { ICONS } from "../icons.js";
 import { renderBoard } from "./taskBoard.js";
 import { renderTriggers } from "./taskTriggers.js";
-import { runHistory, outcomeLabel, formatDuration, runTime } from "../runHistory.js";
+import { runHistory, outcomeLabel, formatDuration, runTime, deliveryState } from "../runHistory.js";
 
 // Built-in tasks gallery (David's ask 2026-08-31, matching Odysseus's
 // premade-action preset picker — src/builtin_actions.py's tidy_sessions/
@@ -172,11 +172,19 @@ async function refreshBuiltins(card) {
   card.appendChild(grid);
 }
 
+const POLL_MS = 5000;
+
 async function refresh(list) {
+  clearTimeout(list.pollTimer);
   const [allTasks, channels, models] = await Promise.all([api("/api/tasks"), api("/api/channels"), api("/api/models").catch(() => [])]);
   // Cards live on the work board above, not in the scheduled list.
   const tasks = allTasks.filter((t) => t.schedule_kind !== "card");
   list.innerHTML = "";
+  // While something runs, keep the list current so its Stop button and then
+  // its result appear without a reload (roadmap phase 4).
+  if (tasks.some((t) => t.run_started_at)) {
+    list.pollTimer = setTimeout(() => { if (document.body.contains(list)) refresh(list); }, POLL_MS);
+  }
   if (tasks.length === 0) {
     list.appendChild(emptyState({
       icon: ICONS.tasks,
@@ -195,14 +203,29 @@ async function refresh(list) {
     const runBtn = el("button", { class: "btn", text: "Run now", onclick: async () => {
       runBtn.disabled = true;
       runBtn.textContent = "Running...";
-      const run = await api(`/api/tasks/${task.id}/run`, { method: "POST" }).catch(() => null);
+      runBtn.after(stopBtn);
+      const run = await api(`/api/tasks/${task.id}/run`, { method: "POST" }).catch((problem) => {
+        toast(problem.message, "error");
+        return null;
+      });
       if (run) {
-        if (run.error) toast(`${task.name} failed: ${run.error}`, "error");
+        if (run.outcome === "stopped") toast(`${task.name} was stopped`, "success");
+        else if (run.error) toast(`${task.name} failed: ${run.error}`, "error");
         else if (run.delivered === false) toast(`${task.name} ran, but delivery failed — check Settings > Channels`, "error");
         else if (run.delivered === true) toast(`${task.name} ran and delivered`, "success");
+        else if (run.delivery) toast(`${task.name} ran; delivery didn't go through yet and will be tried again`, "error");
         else toast(`${task.name} ran`, "success");
       }
       await refresh(list);
+    }});
+    // Stop (roadmap phase 4): whoever started the run, it can be stopped.
+    const stopBtn = el("button", { class: "btn danger", text: "Stop", onclick: async () => {
+      stopBtn.disabled = true;
+      try {
+        await api(`/api/tasks/${task.id}/stop`, { method: "POST" });
+        toast(`Stopping ${task.name}`, "success");
+      } catch (problem) { toast(problem.message, "error"); }
+      setTimeout(() => refresh(list), 800);
     }});
     const delBtn = iconButton(ICONS.trash, "Delete task", async () => {
       const ok = await confirmDialog({
@@ -249,7 +272,8 @@ async function refresh(list) {
           el("div", { class: "title", text: task.name + (task.builtin_action ? " · built-in" : "") + (task.enabled ? "" : "  (disabled)") }),
           el("div", { class: "meta", text: schedText }),
         ]),
-        el("div", { class: "card-row", style: "gap:6px;" }, [modelSelect, deliverySelect, runBtn, el("div", { class: "row-actions" }, [delBtn])]),
+        el("div", { class: "card-row", style: "gap:6px;" }, [modelSelect, deliverySelect, task.run_started_at ? stopBtn : runBtn,
+          el("div", { class: "row-actions" }, [delBtn])]),
       ]),
       runsHost,
     ]);
@@ -277,11 +301,14 @@ async function refresh(list) {
         // Delivery outcome was previously silent everywhere but the server
         // log (David found this live 2026-09-02 — a Discord bot with no
         // allowed_user_id set failed delivery with no visible error at all).
-        if (last.delivered === false) {
+        // Since phase 4 a failed send is retried, and the history says so.
+        const state = deliveryState(last, deliveryLabel);
+        if (state && (state.error || last.delivery?.attempts)) {
           runsHost.append(el("div", {
             class: "meta",
-            style: "margin-top:4px;color:var(--danger);",
-            text: `Delivery to ${deliveryLabel} failed — check Settings > Channels.`,
+            style: `margin-top:4px;color:${state.error ? "var(--danger)" : "var(--text-dim)"};`,
+            text: state.error ? `${state.text[0].toUpperCase()}${state.text.slice(1)} — check Settings > Channels.`
+              : `${state.text[0].toUpperCase()}${state.text.slice(1)}.`,
           }));
         }
         runsHost.append(el("details", { class: "run-history-panel" }, [

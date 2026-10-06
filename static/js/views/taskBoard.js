@@ -151,7 +151,15 @@ function cardEl(columns, card, byId, modelName) {
   if (card.status === "running") {
     const since = card.run_started_at
       ? ` (started ${new Date(card.run_started_at * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })})` : "";
-    actions.append(el("span", { class: "meta", text: `Working on it${since}...` }));
+    actions.append(
+      el("span", { class: "meta", text: `Working on it${since}...` }),
+      // Stop (roadmap phase 4): the card goes to Blocked, not back to Ready.
+      button("Stop", async (event) => {
+        event.currentTarget.disabled = true;
+        try { await api(`/api/tasks/${card.id}/stop`, { method: "POST" }); } catch (problem) { toast(problem.message, "error"); }
+        setTimeout(() => refreshColumns(columns), 800);
+      }, "btn danger"),
+    );
   }
   if (card.status === "review") {
     const note = el("input", { class: "board-feedback", placeholder: "What should change?" });

@@ -58,12 +58,19 @@ confirmed), its tool calls and tokens, and the run that started it. A saved
 reply carries its `run_id`. Capped at RUNS_KEPT rows; a deleted chat takes
 its runs with it.
 
+Deliveries (schema v5, roadmap phase 4, 2026-10-06)
+---------------------------------------------------
+`deliveries` is the outbox for messages to a comms channel (core/outbox.py):
+one row per message, sent and retried from here, so a failed send or a
+restart neither loses it nor sends it twice.
+
 Upgrades
 --------
 Before an older database is upgraded, it is copied whole with SQLite's backup
 API to `sessions.db.pre-v<N>` (N = the version it was), and the log says so.
 Rolling an upgrade back is putting that file back.
 """
+import contextlib
 import glob
 import json
 import logging
@@ -87,7 +94,7 @@ LEGACY_INDEX_FILE = os.path.join(DATA_DIR, "sessions_index.json")
 LEGACY_CHANNEL_FILE = os.path.join(DATA_DIR, "channel_sessions.json")
 LEGACY_BACKUP_DIR = os.path.join(DATA_DIR, "sessions.pre-sqlite-backup")
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 RUNS_KEPT = 5000
 
 # meta key written as the import's last step; see _legacy_import_done().
@@ -185,6 +192,24 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE INDEX IF NOT EXISTS idx_runs_session ON runs (session_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_runs_started ON runs (started_at);
+
+-- The channel outbox (schema v5, core/outbox.py). `key` says what a message
+-- is (which run, which channel), so the same message queued twice is one row.
+CREATE TABLE IF NOT EXISTS deliveries (
+    id          TEXT PRIMARY KEY,
+    key         TEXT NOT NULL UNIQUE,
+    channel     TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    label       TEXT,
+    status      TEXT NOT NULL,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    next_try_at REAL,
+    last_error  TEXT,
+    created_at  REAL NOT NULL,
+    finished_at REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_deliveries_due ON deliveries (status, next_try_at);
 """
 
 _conn: Optional[sqlite3.Connection] = None
@@ -292,7 +317,8 @@ def _upgrade_schema(conn: sqlite3.Connection) -> None:
                 conn.execute("ALTER TABLE sessions ADD COLUMN agent_id TEXT")
             conn.execute("UPDATE sessions SET agent_id = json_extract(doc, '$.agent_id')")
 
-    # v4 adds only the runs table, created by _SCHEMA above.
+    # v4 adds only the runs table and v5 only the deliveries table, both
+    # created by _SCHEMA above.
 
     with conn:
         conn.execute(
@@ -305,6 +331,16 @@ def _upgrade_schema(conn: sqlite3.Connection) -> None:
 def connection() -> sqlite3.Connection:
     with _LOCK:
         return _connect()
+
+
+@contextlib.contextmanager
+def transaction():
+    """The store's connection inside one transaction, under the store's lock,
+    for a module that keeps its own table here (core/outbox.py)."""
+    with _LOCK:
+        conn = _connect()
+        with conn:
+            yield conn
 
 
 def _document_only(doc: dict) -> dict:
