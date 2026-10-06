@@ -11,6 +11,8 @@ whatever runs it - Claude Code, Codex, a local or API model, or Swarm:
 - StopResult: whether a stop is confirmed, and how. Swarm's rule now holds
   for every run: nothing claims a confirmed stop, or complete usage, without
   evidence.
+- record(): each run's row in the session store's `runs` table (roadmap
+  phase 3, 2026-10-05) - what ran, for whom, how it ended, what it used.
 
 An adapter (each chat brain) has events(prompt) and cancel(). A run that
 fails raises; a run that finished ends with one RESULT event. The adapters'
@@ -20,9 +22,11 @@ is the same text the contract carries.
 The usage buckets follow Hermes Agent's CanonicalUsage
 (agent/usage_pricing.py, MIT License, Copyright (c) 2025 Nous Research).
 """
+import asyncio
 import contextlib
 import json
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -100,6 +104,8 @@ class RunContext:
     model: Optional[str] = None
     is_admin: bool = False
     agent_id: Optional[str] = None
+    task_id: Optional[str] = None
+    started_at: float = field(default_factory=time.time)
     # Defined here and enforced nowhere yet: None everywhere is today's
     # behaviour (per-message timeouts only, no token budget for chats/tasks).
     deadline: Optional[float] = None
@@ -276,28 +282,76 @@ class RunOutcome:
     tool_calls: int
 
 
+@dataclass
+class Tally:
+    """What a run has produced so far, as its events go by."""
+    parts: list = field(default_factory=list)
+    usages: list = field(default_factory=list)
+    tool_calls: int = 0
+    finished: Optional[RunEvent] = None
+
+    def add(self, item: RunEvent) -> None:
+        if item.kind is EventKind.TEXT:
+            self.parts.append(item.data["text"])
+        elif item.kind is EventKind.USAGE:
+            self.usages.append(item.data["usage"])
+        elif item.kind is EventKind.TOOL_FINISHED:
+            self.tool_calls += 1
+        elif item.kind is EventKind.RESULT:
+            self.finished = item
+
+    @property
+    def usage(self) -> Optional[Usage]:
+        return total(self.usages)
+
+    @property
+    def usage_complete(self) -> bool:
+        return self.finished is not None and self.finished.data.get("usage_complete") is True
+
+
+def record(context: RunContext, tally: Tally, outcome: str, stop: Optional[StopResult] = None,
+           detail: str = "") -> None:
+    """The run's row in the session store (core/session_manager_store.py
+    `runs`). outcome: finished, failed or stopped. Never fails the run."""
+    usage = tally.usage
+    try:
+        from core import session_manager_store
+        session_manager_store.record_run({
+            "id": context.run_id, "parent_id": context.parent_run_id, "surface": context.surface,
+            "session_id": context.session_id, "agent_id": context.agent_id, "task_id": context.task_id,
+            "endpoint_id": context.endpoint_id, "model": context.model, "started_at": context.started_at,
+            "ended_at": time.time(), "outcome": outcome,
+            "stop_confirmed": None if stop is None else int(stop.confirmed),
+            "tool_calls": tally.tool_calls, "total_tokens": usage.total_tokens if usage else None,
+            "cache_read_tokens": usage.cache_read_tokens if usage else None,
+            "usage_complete": int(tally.usage_complete), "detail": (detail or "")[:500],
+        })
+    except Exception:
+        logger.exception("could not record run %s", context.run_id)
+
+
 async def complete(adapter: RunAdapter, prompt, context: RunContext) -> RunOutcome:
     """Run to the end: the reply as the old run_turn returned it (joined and
     stripped), its usage summed over every provider call, and how many tools
-    it used. Recording that usage is the caller's, which knows the endpoint."""
-    parts: list[str] = []
-    usages: list[Usage] = []
-    tools = 0
-    finished = None
-    async with contextlib.aclosing(adapter.events(prompt, stream=False)) as items:
-        async for item in items:
-            if item.kind is EventKind.TEXT:
-                parts.append(item.data["text"])
-            elif item.kind is EventKind.USAGE:
-                usages.append(item.data["usage"])
-            elif item.kind is EventKind.TOOL_FINISHED:
-                tools += 1
-            elif item.kind is EventKind.RESULT:
-                finished = item
-    if finished is None:
-        raise RuntimeError("the run ended without finishing")
-    outcome = RunOutcome("".join(parts).strip(), total(usages), finished.data.get("usage_complete") is True, tools)
+    it used; the run is recorded either way. Recording its usage on Home is
+    the caller's, which knows the endpoint."""
+    tally = Tally()
+    try:
+        async with contextlib.aclosing(adapter.events(prompt, stream=False)) as items:
+            async for item in items:
+                tally.add(item)
+        if tally.finished is None:
+            raise RuntimeError("the run ended without finishing")
+    except (asyncio.CancelledError, GeneratorExit):
+        record(context, tally, "stopped")
+        raise
+    except Exception as e:
+        record(context, tally, "failed", detail=f"{type(e).__name__}: {e}")
+        raise
+    record(context, tally, "finished")
+    outcome = RunOutcome("".join(tally.parts).strip(), tally.usage, tally.usage_complete, tally.tool_calls)
     spent = outcome.usage.total_tokens if outcome.usage else None
-    logger.info("run %s (%s) finished: %d tool call(s), %s tokens%s", context.run_id, context.surface, tools,
-                spent if spent is not None else "unreported", "" if outcome.usage_complete else " (usage incomplete)")
+    logger.info("run %s (%s) finished: %d tool call(s), %s tokens%s", context.run_id, context.surface,
+                outcome.tool_calls, spent if spent is not None else "unreported",
+                "" if outcome.usage_complete else " (usage incomplete)")
     return outcome

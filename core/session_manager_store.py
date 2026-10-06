@@ -49,6 +49,20 @@ pool and the Discord channel adapter runs its own loop in-process, so the
 lock is load-bearing rather than defensive. WAL mode is set so an external
 reader (a debugging shell, a future export script) can read while the app
 writes.
+
+Runs (schema v4, roadmap phase 3, 2026-10-05)
+---------------------------------------------
+`runs` keeps one row per model run (core/runs.py): what kind, for which chat,
+agent or task, on which model, when, how it ended (a stop with whether it was
+confirmed), its tool calls and tokens, and the run that started it. A saved
+reply carries its `run_id`. Capped at RUNS_KEPT rows; a deleted chat takes
+its runs with it.
+
+Upgrades
+--------
+Before an older database is upgraded, it is copied whole with SQLite's backup
+API to `sessions.db.pre-v<N>` (N = the version it was), and the log says so.
+Rolling an upgrade back is putting that file back.
 """
 import glob
 import json
@@ -73,7 +87,8 @@ LEGACY_INDEX_FILE = os.path.join(DATA_DIR, "sessions_index.json")
 LEGACY_CHANNEL_FILE = os.path.join(DATA_DIR, "channel_sessions.json")
 LEGACY_BACKUP_DIR = os.path.join(DATA_DIR, "sessions.pre-sqlite-backup")
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+RUNS_KEPT = 5000
 
 # meta key written as the import's last step; see _legacy_import_done().
 LEGACY_IMPORT_MARKER = "legacy_json_import_completed_at"
@@ -144,6 +159,32 @@ CREATE TABLE IF NOT EXISTS channel_sessions (
     channel_key TEXT PRIMARY KEY,
     session_id  TEXT NOT NULL
 );
+
+-- One row per model run (schema v4). No foreign key to sessions: tasks and
+-- agent goals have no chat, and a run outlives nothing but its chat, which
+-- deletes it explicitly.
+CREATE TABLE IF NOT EXISTS runs (
+    id                TEXT PRIMARY KEY,
+    parent_id         TEXT,
+    surface           TEXT NOT NULL,
+    session_id        TEXT,
+    agent_id          TEXT,
+    task_id           TEXT,
+    endpoint_id       TEXT,
+    model             TEXT,
+    started_at        REAL,
+    ended_at          REAL,
+    outcome           TEXT NOT NULL,
+    stop_confirmed    INTEGER,
+    tool_calls        INTEGER NOT NULL DEFAULT 0,
+    total_tokens      INTEGER,
+    cache_read_tokens INTEGER,
+    usage_complete    INTEGER NOT NULL DEFAULT 0,
+    detail            TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_runs_session ON runs (session_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_runs_started ON runs (started_at);
 """
 
 _conn: Optional[sqlite3.Connection] = None
@@ -165,6 +206,9 @@ def _connect() -> sqlite3.Connection:
     # it is per-connection rather than stored in the file.
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    # Before anything below touches an older database - even the CREATE IF
+    # NOT EXISTS of a newer table - keep a copy of it as it was.
+    _snapshot_before_upgrade(conn)
     conn.executescript(_SCHEMA)
     conn.execute(
         "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
@@ -178,6 +222,35 @@ def _connect() -> sqlite3.Connection:
     _upgrade_schema(conn)
     _migrate_if_needed(conn)
     return conn
+
+
+def _stored_version(conn: sqlite3.Connection) -> Optional[int]:
+    """The schema version an existing database was written at; None for a
+    new, empty one."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").fetchone():
+        return None
+    row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+    return int(row["value"]) if row else None
+
+
+def _snapshot_before_upgrade(conn: sqlite3.Connection) -> Optional[str]:
+    """Copy an older database whole before it is upgraded, with SQLite's
+    backup API (consistent even under WAL). Kept once per version: a second
+    start that finds the copy already there leaves it alone."""
+    version = _stored_version(conn)
+    if version is None or version >= SCHEMA_VERSION:
+        return None
+    target = f"{DB_FILE}.pre-v{version}"
+    if os.path.exists(target):
+        return target
+    copy = sqlite3.connect(target)
+    try:
+        conn.backup(copy)
+    finally:
+        copy.close()
+    logger.info("session store: kept a copy of the v%d database at %s before upgrading to v%d",
+                version, target, SCHEMA_VERSION)
+    return target
 
 
 def _upgrade_schema(conn: sqlite3.Connection) -> None:
@@ -218,6 +291,8 @@ def _upgrade_schema(conn: sqlite3.Connection) -> None:
             if "agent_id" not in columns:
                 conn.execute("ALTER TABLE sessions ADD COLUMN agent_id TEXT")
             conn.execute("UPDATE sessions SET agent_id = json_extract(doc, '$.agent_id')")
+
+    # v4 adds only the runs table, created by _SCHEMA above.
 
     with conn:
         conn.execute(
@@ -483,6 +558,7 @@ def delete_session(session_id: str) -> None:
         with conn:
             conn.execute("DELETE FROM messages_fts WHERE session_id = ?", (session_id,))
             conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            conn.execute("DELETE FROM runs WHERE session_id = ?", (session_id,))
             # messages goes via ON DELETE CASCADE; channel mappings are left
             # to resolve themselves the way they always did — see
             # get_channel_session_id(), which treats a mapping to a missing
@@ -498,6 +574,45 @@ def delete_all_sessions() -> None:
             conn.execute("DELETE FROM messages")
             conn.execute("DELETE FROM sessions")
             conn.execute("DELETE FROM channel_sessions")
+            conn.execute("DELETE FROM runs WHERE session_id IS NOT NULL")
+
+
+# -------------------------------------------------------------------- runs
+
+_RUN_COLUMNS = ("id", "parent_id", "surface", "session_id", "agent_id", "task_id", "endpoint_id", "model",
+                "started_at", "ended_at", "outcome", "stop_confirmed", "tool_calls", "total_tokens",
+                "cache_read_tokens", "usage_complete", "detail")
+
+
+def record_run(run: dict) -> None:
+    """Save one finished run (core/runs.py record), keeping the newest
+    RUNS_KEPT."""
+    with _LOCK:
+        conn = _connect()
+        with conn:
+            conn.execute(f"INSERT OR REPLACE INTO runs ({', '.join(_RUN_COLUMNS)}) "
+                         f"VALUES ({', '.join('?' for _ in _RUN_COLUMNS)})",
+                         tuple(run.get(c) for c in _RUN_COLUMNS))
+            conn.execute("DELETE FROM runs WHERE id IN (SELECT id FROM runs ORDER BY started_at DESC "
+                         "LIMIT -1 OFFSET ?)", (RUNS_KEPT,))
+
+
+def list_runs(session_id: Optional[str] = None, limit: int = 50) -> list[dict]:
+    """Newest first; one chat's, or every run's."""
+    with _LOCK:
+        conn = _connect()
+        if session_id:
+            rows = conn.execute("SELECT * FROM runs WHERE session_id = ? ORDER BY started_at DESC LIMIT ?",
+                                (session_id, limit)).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM runs ORDER BY started_at DESC LIMIT ?", (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_run(run_id: str) -> Optional[dict]:
+    with _LOCK:
+        row = _connect().execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+    return dict(row) if row else None
 
 
 # ---------------------------------------------------------------- channels
@@ -559,8 +674,9 @@ def search_archive(session_id: str, query: str, before_index: int, max_results: 
             try:
                 rows = conn.execute(
                     """SELECT f.idx, f.role, snippet(messages_fts, 0, '', '', '...', 32) AS snippet,
-                              bm25(messages_fts) AS rank
+                              bm25(messages_fts) AS rank, m.ts AS ts
                        FROM messages_fts f
+                       LEFT JOIN messages m ON m.session_id = f.session_id AND m.idx = f.idx
                        WHERE messages_fts MATCH ? AND f.session_id = ? AND f.idx < ?
                        ORDER BY rank
                        LIMIT ?""",
@@ -571,7 +687,7 @@ def search_archive(session_id: str, query: str, before_index: int, max_results: 
                 return []
         if rows:
             break
-    return [{"index": r["idx"], "role": r["role"], "snippet": r["snippet"]} for r in rows]
+    return [{"index": r["idx"], "role": r["role"], "snippet": r["snippet"], "ts": r["ts"]} for r in rows]
 
 
 def search_messages(query: str, exclude_session_id: Optional[str] = None,
@@ -591,11 +707,12 @@ def search_messages(query: str, exclude_session_id: Optional[str] = None,
         conn = _connect()
         try:
             rows = conn.execute(
-                """SELECT f.session_id, f.role, s.title AS session_title,
+                """SELECT f.session_id, f.role, f.idx, s.title AS session_title,
                           snippet(messages_fts, 0, '', '', '...', 24) AS snippet,
-                          bm25(messages_fts) AS rank
+                          bm25(messages_fts) AS rank, m.ts AS ts
                    FROM messages_fts f
                    JOIN sessions s ON s.id = f.session_id
+                   LEFT JOIN messages m ON m.session_id = f.session_id AND m.idx = f.idx
                    WHERE messages_fts MATCH ?
                    ORDER BY rank
                    LIMIT 500""",
@@ -620,6 +737,8 @@ def search_messages(query: str, exclude_session_id: Optional[str] = None,
             "session_title": r["session_title"],
             "role": r["role"],
             "snippet": r["snippet"],
+            "index": r["idx"],
+            "ts": r["ts"],
         })
         if len(results) >= max_results:
             break

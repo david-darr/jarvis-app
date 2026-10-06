@@ -187,7 +187,8 @@ def _fields(args: dict, key: str) -> tuple[str, dict]:
     "search_sessions",
     "Search across every other chat session's message history for a keyword or phrase. "
     "Use this to recall something discussed in a different conversation. Returns short "
-    "snippets, not full histories — call again with a more specific query to narrow results. "
+    "snippets, each with its chat, date and message number to cite when you use it, not full "
+    "histories — call again with a more specific query to narrow results. "
     "With this_chat=true it instead searches the earlier part of THIS chat that was compacted "
     "into a summary; use that only when the summary lacks a detail you need.",
     _object({"query": _str("Keyword or phrase to search for"),
@@ -201,8 +202,7 @@ async def _search_sessions(args, ctx):
             ctx.turn_taint.mark("chat history")
         return result
     results = memory_tools.search_sessions(args["query"], exclude_session_id=ctx.session_id, max_results=5)
-    result = "\n\n".join(f"[{r['session_title']}] ({r['role']}): {r['snippet']}" for r in results) \
-        or "No matches in other sessions."
+    result = memory_tools.format_session_hits(results)
     if ctx.turn_taint and results:
         ctx.turn_taint.mark("chat history")
     return result

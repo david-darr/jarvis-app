@@ -644,10 +644,19 @@ async function renderAddedModelsPanel(body, _status, page) {
   }
 
   const kinds = [["claude_cli", "Claude Code CLI"], ["codex_cli", "Codex CLI"], ["local", "Local"], ["api", "API"]];
+  const settings = await api("/api/settings").catch(() => ({}));
+  // Roadmap phase 3 (2026-10-05): local and API models have small windows
+  // and never compact themselves (services/chat_service.py).
+  const longChats = group({ title: "Long chats", cls: "long-chats" }, [row({
+    title: "Compact local and API chats automatically",
+    description: "When a chat fills 85% of the model's context window, JARVIS summarises its earlier part before your next message, as Compact does: the last messages stay word for word and nothing is deleted. Claude Code and Codex manage their own.",
+    control: toggle({ checked: settings.auto_compact !== false, label: "Compact local and API chats automatically",
+      onChange: (on) => api("/api/settings/auto-compact", { method: "POST", body: JSON.stringify({ enabled: on }) }) }),
+  })]);
   body.replaceChildren(...kinds.map(([kind, title]) => {
     const list = endpoints.filter((e) => e.kind === kind);
     return group({ title }, list.length ? list.map(endpointRow) : [empty("None added")]);
-  }));
+  }), longChats);
   if (!endpoints.length) body.prepend(note(["Nothing added yet. ", el("button", { type: "button", class: "btn quiet", text: "Add a model", onclick: () => selectSection("add-models") })]));
 }
 

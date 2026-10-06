@@ -69,6 +69,7 @@ async def get_settings(user: str = Depends(require_admin)) -> dict:
         "vault_dir": raw["vault_dir"] or resolve_vault_dir(),
         "disabled_tools": raw["disabled_tools"],
         "developer_mode_enabled": raw["developer_mode_enabled"],
+        "auto_compact": raw["auto_compact"],
     }
 
 
@@ -84,6 +85,18 @@ async def set_developer_mode(body: SetDeveloperModeRequest, user: str = Depends(
     custom tabs show up in the nav, only the theme."""
     settings_store.update_settings(developer_mode_enabled=body.enabled)
     return {"ok": True}
+
+
+class SetAutoCompactRequest(BaseModel):
+    enabled: bool
+
+
+@router.post("/auto-compact")
+async def set_auto_compact(body: SetAutoCompactRequest, user: str = Depends(require_admin)) -> dict:
+    """Settings > Added Models: compact local and API chats near a full
+    window (services/chat_service.py _compact_if_nearly_full)."""
+    settings_store.update_settings(auto_compact=body.enabled)
+    return {"ok": True, "auto_compact": body.enabled}
 
 
 @router.post("/onboarding-complete")

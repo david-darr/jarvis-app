@@ -12,6 +12,7 @@ them to go add one, instead of silently spending a real Claude turn.
 """
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import time
@@ -409,6 +410,7 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
                         is_admin: bool = False, reference_context: str = "",
                         references: list[dict] | None = None) -> str:
     image_ids = validate_image_attachments(session_id, attachment_ids)
+    await _compact_if_nearly_full(session_id)
     index = session_manager.append_message(session_id, "user", text,
                                            extra=_user_message_extra(references, attachment_ids))
     endpoint = _resolve_endpoint(session_id)
@@ -423,9 +425,10 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
     full_text = _vision_input(endpoint, _prime_with_history(session_id, just_created, endpoint, full_text, brain), image_ids)
     session = session_manager.get_session(session_id) or {}
     usage = None
+    context = _run_context(session_id, endpoint, is_admin)
     try:
         async with file_checkpoints.around_turn(f"chat:{session_id}", session.get("workspace_dir")):
-            outcome = await runs.complete(brain, full_text, _run_context(session_id, endpoint, is_admin))
+            outcome = await runs.complete(brain, full_text, context)
         reply, usage = outcome.text, outcome.usage
     except CLIJSONDecodeError:
         await close_session_brain(session_id)
@@ -435,7 +438,8 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
         await close_session_brain(session_id)
         raise
     _record_turn_telemetry(session_id, endpoint, brain, usage)
-    session_manager.append_message(session_id, "assistant", reply, extra=_tool_rounds(brain, endpoint))
+    session_manager.append_message(session_id, "assistant", reply,
+                                   extra={**(_tool_rounds(brain, endpoint) or {}), "run_id": context.run_id})
     _remember_claude_session(session_id, brain)
     _reply_hook(session_id, endpoint, text, reply)
     return reply
@@ -467,6 +471,7 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
                           is_admin: bool = False, reference_context: str = "",
                           references: list[dict] | None = None) -> AsyncIterator[str]:
     image_ids = validate_image_attachments(session_id, attachment_ids)
+    await _compact_if_nearly_full(session_id)
     index = session_manager.append_message(session_id, "user", text,
                                            extra=_user_message_extra(references, attachment_ids))
     endpoint = _resolve_endpoint(session_id)
@@ -476,7 +481,7 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
         return
 
     reply_parts: list[str] = []
-    usages: list = []
+    tally = runs.Tally()
     brain = None
     provider_started = False
     context = _run_context(session_id, endpoint, is_admin)
@@ -491,12 +496,13 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
         async with file_checkpoints.around_turn(f"chat:{session_id}", session.get("workspace_dir")):
             # Closed here, not left to garbage collection, so a stopped turn
             # has finished stopping before the code below judges the stop.
-            async with contextlib.aclosing(_stream_with_permission_prompts(session_id, brain, full_text, usages)) as stream:
+            async with contextlib.aclosing(_stream_with_permission_prompts(session_id, brain, full_text, tally)) as stream:
                 async for item in stream:
                     if isinstance(item, str):
                         reply_parts.append(item)
                     yield item
     except CLIJSONDecodeError:
+        runs.record(context, tally, "failed", detail="the reply was too large for Claude Code's buffer")
         await close_session_brain(session_id)
         reply_parts.append(ATTACHMENT_TOO_LARGE_MESSAGE)
         yield ATTACHMENT_TOO_LARGE_MESSAGE
@@ -510,24 +516,30 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
             extra.update({"failure_kind": failure_kind(exc) if provider_started else "request_error",
                           "failure_model_endpoint_id": endpoint["id"],
                           "failure_model_name": endpoint["name"], "failure_had_tools": bool(extra)})
+        extra["run_id"] = context.run_id
         session_manager.append_message(session_id, "assistant", "".join(reply_parts),
                                        status="failed" if failed else "interrupted", extra=extra)
         _remember_claude_session(session_id, brain, succeeded=False,
                                  cancelled=isinstance(exc, (asyncio.CancelledError, GeneratorExit)))
+        stop = None
         if not failed and brain is not None:
             stop = await brain.cancel()
             logger.info("run %s (chat %s) stopped: %s, %s", context.run_id, session_id,
                         "confirmed" if stop.confirmed else "not confirmed", stop.how)
+        runs.record(context, tally, "failed" if failed else "stopped", stop=stop,
+                    detail=f"{type(exc).__name__}: {exc}" if failed else "")
         await close_session_brain(session_id)
         raise
 
-    _record_turn_telemetry(session_id, endpoint, brain, runs.total(usages))
-    session_manager.append_message(session_id, "assistant", "".join(reply_parts), extra=_tool_rounds(brain, endpoint))
+    runs.record(context, tally, "finished")
+    _record_turn_telemetry(session_id, endpoint, brain, tally.usage)
+    session_manager.append_message(session_id, "assistant", "".join(reply_parts),
+                                   extra={**(_tool_rounds(brain, endpoint) or {}), "run_id": context.run_id})
     _remember_claude_session(session_id, brain)
     _reply_hook(session_id, endpoint, text, "".join(reply_parts))
 
 
-async def _stream_with_permission_prompts(session_id: str, brain, full_text: str, usages: list):
+async def _stream_with_permission_prompts(session_id: str, brain, full_text: str, tally: runs.Tally):
     """Reply text, plus any permission request raised while producing it.
 
     A model waiting on approval produces nothing, so simply iterating the
@@ -536,8 +548,8 @@ async def _stream_with_permission_prompts(session_id: str, brain, full_text: str
     the turn it belongs to. Text is yielded as a string exactly as before; a
     request is yielded as a dict, and only routes/chat_routes.py consumes this.
 
-    The brain's turn is read as events (core/runs.py): text goes out, each
-    provider call's usage is added to `usages`, the rest is not shown yet.
+    The brain's turn is read as events (core/runs.py): text goes out, and
+    every event is counted into `tally` (usage, tools, the result).
     """
     queue = permissions.open_channel(f"chat:{session_id}")
     replies = brain.events(full_text)
@@ -554,10 +566,9 @@ async def _stream_with_permission_prompts(session_id: str, brain, full_text: str
                     item = next_chunk.result()
                 except StopAsyncIteration:
                     return
+                tally.add(item)
                 if item.kind is runs.EventKind.TEXT:
                     yield item.data["text"]
-                elif item.kind is runs.EventKind.USAGE:
-                    usages.append(item.data["usage"])
                 next_chunk = asyncio.ensure_future(anext(replies))
     finally:
         next_ask.cancel()
@@ -573,7 +584,85 @@ async def _stream_with_permission_prompts(session_id: str, brain, full_text: str
 def _run_context(session_id: str, endpoint: dict, is_admin: bool) -> runs.RunContext:
     session = session_manager.get_session(session_id) or {}
     return runs.RunContext("chat", session_id=session_id, endpoint_id=endpoint["id"], model_kind=endpoint.get("kind"),
+                           model=session.get("model_override") or endpoint.get("model"),
                            is_admin=is_admin, agent_id=session.get("agent_id"))
+
+
+# Roadmap phase 3 (2026-10-05): a local or API chat whose last turn filled
+# this much of the model's known context window is compacted before its next
+# message. Claude Code and Codex compact their own context, and doing it
+# twice would break their caches.
+AUTO_COMPACT_PERCENT = 85
+AUTO_COMPACT_KINDS = ("local", "api")
+# The messages an automatic compaction keeps word for word may fill at most
+# this share of the window. Found live 2026-10-05 on an 8,192-token local
+# model: the usual six kept messages were the long ones, so a compaction at
+# 88% folded two short messages and left the chat at 96%.
+AUTO_COMPACT_TAIL_SHARE = 0.4
+CHARS_PER_TOKEN = 4  # an estimate, only to choose where the kept part starts
+
+
+def _auto_tail(messages: list[dict], window_tokens: int, overhead_chars: int = 0) -> int:
+    """How many of the newest messages an automatic compaction keeps: up to
+    COMPACTION_TAIL_KEEP, fewer when they would fill more than
+    AUTO_COMPACT_TAIL_SHARE of the room the window has once the fixed part of
+    every request (`overhead_chars`: system prompt and tool list) is in, never
+    fewer than the last exchange (two messages). A reply's saved tool calls
+    and results count too: they are replayed with it. Both found live
+    2026-10-05 on an 8,192-token local model: one turn's five tool calls
+    filled most of the window while its text was a line, and an admin chat's
+    system prompt and tools alone were about 20,000 characters."""
+    budget = max(0, window_tokens * CHARS_PER_TOKEN - overhead_chars) * AUTO_COMPACT_TAIL_SHARE
+    kept, used = 0, 0
+    for message in reversed(messages):
+        rounds = (message.get("tool_rounds") or {}).get("messages") or []
+        used += len(message.get("content") or "")
+        if rounds:
+            used += len(json.dumps(rounds, ensure_ascii=False))
+        if kept >= 2 and (kept >= COMPACTION_TAIL_KEEP or used > budget):
+            break
+        kept += 1
+    return kept
+
+
+def _fixed_prompt_chars(session_id: str) -> int:
+    """The part of every request a chat's live local/API brain sends before
+    the conversation: its system message and tool list, measured, not
+    guessed. Zero when no brain is open (nothing to measure)."""
+    brain = _brains.get(session_id)
+    if not isinstance(brain, ExternalBrain):
+        return 0
+    system = brain._messages[0].get("content") if brain._messages and brain._messages[0].get("role") == "system" else ""
+    return len(json.dumps(system, ensure_ascii=False)) + len(json.dumps(brain.tools, ensure_ascii=False))
+
+
+async def _compact_if_nearly_full(session_id: str) -> bool:
+    """Compact a local/API chat near a full window, before the next message
+    goes in (Settings > Added Models; on by default). The same Compact as the
+    button: a summary, the last messages kept word for word, nothing deleted.
+    A compaction that fails or has nothing new to fold never blocks the
+    message."""
+    from core import settings as settings_store
+    if not settings_store.get_setting("auto_compact"):
+        return False
+    endpoint = _resolve_endpoint(session_id)
+    state = (session_manager.get_session(session_id) or {}).get("context_state") or {}
+    if (endpoint is None or endpoint.get("kind") not in AUTO_COMPACT_KINDS
+            or not isinstance(state.get("percent"), (int, float)) or state["percent"] < AUTO_COMPACT_PERCENT):
+        return False
+    messages = (session_manager.get_session(session_id) or {}).get("messages", [])
+    keep = _auto_tail(messages, int(state.get("capacity_tokens") or 0), _fixed_prompt_chars(session_id))
+    try:
+        result = await _compact_session(session_id, keep_tail=keep)
+    except HTTPException as e:
+        logger.info("auto-compact of chat %s skipped: %s", session_id, e.detail)
+        return False
+    except Exception:
+        logger.exception("auto-compact of chat %s failed; the message goes ahead", session_id)
+        return False
+    logger.info("auto-compacted chat %s at %s%% of its window (%s messages folded)",
+                session_id, state["percent"], result.get("archived"))
+    return True
 
 
 def _record_turn_telemetry(session_id: str, endpoint: dict, brain, turn_usage) -> None:
@@ -736,7 +825,7 @@ async def compact_session(session_id: str) -> dict:
         return await _compact_session(session_id)
 
 
-async def _compact_session(session_id: str) -> dict:
+async def _compact_session(session_id: str, keep_tail: int = COMPACTION_TAIL_KEEP) -> dict:
     session = session_manager.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -747,7 +836,7 @@ async def _compact_session(session_id: str) -> dict:
     messages = session.get("messages", [])
     compactions = session.get("compactions") or []
     prior_through = compactions[-1]["through_index"] if compactions else 0
-    through_index = max(prior_through, len(messages) - COMPACTION_TAIL_KEEP)
+    through_index = max(prior_through, len(messages) - keep_tail)
     if through_index <= prior_through:
         raise HTTPException(status_code=400, detail="not enough new conversation to compact yet")
 

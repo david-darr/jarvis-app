@@ -86,8 +86,9 @@ async def complete(brain, prompt: str, task: dict, surface: str) -> str:
     the reply as run_turn gave it, and the run's usage - every provider call
     - counted on Home, which task runs never were before 2026-10-05."""
     endpoint_id = task_endpoint_id(task)
-    outcome = await runs.complete(brain, prompt, runs.RunContext(surface, endpoint_id=endpoint_id,
-                                                                 agent_id=task.get("agent_id")))
+    outcome = await runs.complete(brain, prompt, runs.RunContext(surface, endpoint_id=endpoint_id, task_id=task.get("id"),
+                                                                 agent_id=task.get("agent_id"),
+                                                                 model=getattr(brain, "model", None)))
     if endpoint_id:
         try:
             token_usage.record_usage(endpoint_id, outcome.usage)

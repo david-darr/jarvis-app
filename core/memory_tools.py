@@ -77,8 +77,26 @@ def search_this_chat_archive(session_id: Optional[str], query: str, max_results:
     return store.search_archive(session_id, query, compactions[-1]["through_index"], max_results=max_results)
 
 
+def _when(ts) -> str:
+    """A hit's date, for citing where something was said (roadmap phase 3,
+    2026-10-05); nothing when the message has no time."""
+    import datetime
+    return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if isinstance(ts, (int, float)) else ""
+
+
+def cite(chat: str, hit: dict) -> str:
+    """Where a search hit came from: the chat, its date, its place."""
+    parts = [chat, _when(hit.get("ts")), f"message {hit['index'] + 1}" if isinstance(hit.get("index"), int) else ""]
+    return "[" + ", ".join(p for p in parts if p) + "]"
+
+
+def format_session_hits(hits: list[dict]) -> str:
+    return "\n\n".join(f"{cite(h['session_title'], h)} ({h['role']}): {h['snippet']}" for h in hits) \
+        or "No matches in other sessions."
+
+
 def format_archive_hits(hits: list[dict]) -> str:
-    return "\n\n".join(f"[earlier in this chat, message {h['index'] + 1}] ({h['role']}): {h['snippet']}" for h in hits) \
+    return "\n\n".join(f"{cite('earlier in this chat', h)} ({h['role']}): {h['snippet']}" for h in hits) \
         or "Nothing in this chat's compacted part matches. It was either never said, or said in other words."
 
 

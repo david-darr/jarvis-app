@@ -699,6 +699,11 @@ app.whenReady().then(async () => {
         assert.deepEqual(await overflow(), [], `${label} ${id} overflow`);
         await capture(`${label}-settings-${id}`);
       }
+      // Long local/API chats compact themselves unless switched off (roadmap phase 3).
+      await js("document.querySelector('[data-section=\"added-models\"]').click()");
+      await waitFor("!!document.querySelector('.long-chats .set-switch')");
+      assert.equal(await js("document.querySelector('.long-chats .set-switch').getAttribute('aria-checked')"), "true",
+        label + " auto-compaction is on by default");
       // A long dropdown scrolls instead of closing (found 2026-10-05: the
       // platform list closed the moment it was scrolled). Add Models' provider
       // list is long enough to scroll.
