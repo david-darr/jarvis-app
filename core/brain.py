@@ -32,7 +32,7 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import StreamEvent
 
-from core import custom_tabs, hive_mind_server, image_gen, integrations, mcp_oauth, permissions, projects, runs, settings as settings_store, system_prompt, tool_registry
+from core import claude_cli, custom_tabs, hive_mind_server, image_gen, integrations, mcp_oauth, permissions, projects, runs, settings as settings_store, system_prompt, tool_registry
 from core.constants import DATA_DIR, REPO_CODE_DIRS
 from core.vault import resolve_vault_dir
 from core.turn_taint import TurnTaint
@@ -319,6 +319,7 @@ class Brain:
         os.makedirs(image_gen.GENERATED_FILES_DIR, exist_ok=True)
 
         return ClaudeAgentOptions(
+            cli_path=claude_cli.preferred_cli_path(),
             can_use_tool=self._permission,
             cwd=self.cwd_override or self.vault_dir,
             # Full read/write on jarvis-app's own source (David's ask

@@ -10,7 +10,11 @@
 
 fastapi>=0.115,<0.143
 uvicorn[standard]>=0.30,<0.55
-claude-agent-sdk>=0.2,<0.4
+# 0.2.159 bundles Claude Code 2.1.281, which supports the new models.
+# As of 2026-10-06, later SDK releases omit the Windows wheel; a source install has
+# no bundled CLI and would break clean packaged installs. The lock's compile
+# command holds this package at the latest release with a Windows wheel.
+claude-agent-sdk>=0.2.159,<0.4
 pydantic>=2,<3
 bcrypt>=4,<6
 pyotp>=2.9,<3

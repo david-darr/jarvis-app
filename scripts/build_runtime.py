@@ -104,6 +104,7 @@ BASE_DIR = os.path.dirname(SCRIPT_DIR)
 RUNTIME_DIR = os.path.join(BASE_DIR, "electron", "runtime")
 REQUIREMENTS = os.path.join(BASE_DIR, "requirements.txt")
 LOCKFILE = os.path.join(BASE_DIR, "requirements.lock")
+LOCK_STAMP = os.path.join(RUNTIME_DIR, ".requirements-lock-sha256")
 
 
 def log(msg: str) -> None:
@@ -295,6 +296,20 @@ def missing_distributions(python_exe: str) -> list:
     return json.loads(result.stdout.strip() or "[]")
 
 
+def lock_fingerprint() -> str:
+    with open(LOCKFILE, "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+
+
+def runtime_matches_lock() -> bool:
+    """A present runtime is reusable only if it has this exact locked set."""
+    try:
+        with open(LOCK_STAMP, encoding="ascii") as handle:
+            return handle.read().strip() == lock_fingerprint()
+    except OSError:
+        return False
+
+
 def verify(python_exe: str) -> None:
     """Prove the runtime can actually import the app's real dependency graph
     before we call the build good — a runtime that installs cleanly but
@@ -312,6 +327,24 @@ def verify(python_exe: str) -> None:
     missing = missing_distributions(python_exe)
     if missing:
         raise RuntimeError("runtime is missing required packages: " + ", ".join(missing))
+    # A source distribution can satisfy the SDK version pin while shipping no
+    # Claude executable. Clean installs need the wheel's bundled CLI; a
+    # separately installed native CLI is only an optional newer override.
+    cli_check = """
+import claude_agent_sdk, pathlib, platform, re, subprocess
+path = pathlib.Path(claude_agent_sdk.__file__).parent / '_bundled' / ('claude.exe' if platform.system() == 'Windows' else 'claude')
+if not path.is_file():
+    raise RuntimeError('SDK wheel has no bundled Claude Code CLI')
+version = subprocess.run([str(path), '--version'], capture_output=True, text=True, timeout=10)
+match = re.match(r'^(\\d+)\\.(\\d+)\\.(\\d+)', version.stdout) if version.returncode == 0 else None
+if not match or tuple(map(int, match.groups())) < (2, 1, 280):
+    raise RuntimeError('SDK wheel must bundle Claude Code 2.1.280 or newer')
+print('bundled Claude Code', version.stdout.strip())
+"""
+    result = subprocess.run([python_exe, "-c", cli_check], cwd=BASE_DIR, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError("runtime Claude CLI verification failed:\n" + result.stderr.strip())
+    log(result.stdout.strip())
 
 
 def main() -> int:
@@ -326,8 +359,9 @@ def main() -> int:
                   else os.path.join(RUNTIME_DIR, "bin", "python3"))
 
     if os.path.exists(python_exe) and not args.force:
-        stale = missing_distributions(python_exe)
-        if stale:
+        if not runtime_matches_lock():
+            log("requirements.lock changed - rebuilding runtime instead of reusing it")
+        elif stale := missing_distributions(python_exe):
             # Self-healing rather than merely loud: a runtime built before a
             # dependency was added to requirements.txt is stale, and someone
             # running `npm run dist` without --force is precisely how that
@@ -386,13 +420,16 @@ def main() -> int:
     # anything the lock did not already name.
     log("installing requirements.lock with hash checking (this takes a few minutes)")
     run(python_exe, ["-m", "pip", "install", "--no-warn-script-location",
-                     "--require-hashes", "--no-deps", "-r", LOCKFILE])
+                     "--require-hashes", "--no-deps", "--only-binary=claude-agent-sdk",
+                     "-r", LOCKFILE])
 
     # pip itself is ~13MB and is never needed at runtime by the shipped app.
     log("removing pip/setuptools from the shipped runtime")
     run(python_exe, ["-m", "pip", "uninstall", "-y", "pip", "setuptools", "wheel"])
 
     verify(python_exe)
+    with open(LOCK_STAMP, "w", encoding="ascii") as handle:
+        handle.write(lock_fingerprint() + "\n")
 
     total = sum(
         os.path.getsize(os.path.join(root, f))

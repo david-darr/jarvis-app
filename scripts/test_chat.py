@@ -1762,6 +1762,19 @@ class DependencyPinningTests(unittest.TestCase):
             "(--extra-index-url, --find-links) can serve any package in PyPI's place.",
         )
 
+    def test_runtime_is_reused_only_for_the_same_lock(self):
+        root = Path(self.tmp.name)
+        lock = root / "requirements.lock"
+        stamp = root / ".requirements-lock-sha256"
+        self.build.LOCKFILE = str(lock)
+        self.build.LOCK_STAMP = str(stamp)
+        lock.write_text("claude-agent-sdk==0.2.153\n", encoding="utf-8")
+        self.assertFalse(self.build.runtime_matches_lock())
+        stamp.write_text(self.build.lock_fingerprint() + "\n", encoding="ascii")
+        self.assertTrue(self.build.runtime_matches_lock())
+        lock.write_text("claude-agent-sdk==0.2.159\n", encoding="utf-8")
+        self.assertFalse(self.build.runtime_matches_lock())
+
     def _policy_check(self, requirements, lock):
         root = Path(self.tmp.name)
         (root / "requirements.txt").write_text(requirements, encoding="utf-8")
