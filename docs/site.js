@@ -1,14 +1,14 @@
-// Kairos site behaviour: the hero halftone, the navigation, the preview
-// switcher, and download buttons that match the visitor's system and the
-// latest release. Everything degrades to plain links when scripts or the
-// network are unavailable.
+// Kairos site behaviour: the hero halftone, the navigation, and download
+// buttons that match the visitor's system and the latest release. Everything
+// degrades to plain links when scripts or the network are unavailable. The
+// live demo (docs/demo) runs on its own in its frame.
+// The halftone renderer is the app's own (static/js/dither.js), from the demo's copy.
+import { mountDither } from "./demo/static/js/dither.js";
 const REPO = "david-darr/kairos";
 
-// -- hero halftone (dither.js) --------------------------------------------
+// -- hero halftone ----------------------------------------------------------
 const art = document.querySelector(".hero-art");
-if (art && window.kairosDither) {
-  window.kairosDither(art, "img/hero-figure.webp", { cell: 4, fade: [0.72, 1.0], focusX: 0.62, focusY: 0.35 });
-}
+if (art) mountDither(art, "img/hero-figure.webp", { cell: 4, fade: [0.72, 1.0], focusX: 0.5, focusY: 0.35 });
 
 // -- navigation ----------------------------------------------------------
 const nav = document.querySelector(".site-nav");
@@ -23,38 +23,6 @@ function setMenu(open) {
 menu.addEventListener("click", () => setMenu(!nav.classList.contains("open")));
 document.querySelectorAll(".nav-links a").forEach((link) => link.addEventListener("click", () => setMenu(false)));
 document.addEventListener("keydown", (event) => { if (event.key === "Escape" && nav.classList.contains("open")) { setMenu(false); menu.focus(); } });
-
-// -- preview switcher ----------------------------------------------------
-const previews = {
-  home: ["The opening is now.", "Kairos Home with a quiet sky card, recent conversations and upcoming work. Demo data."],
-  "chat-new": ["One thought is enough to begin.", "A centered new-chat composer, hidden chat history and a slim icon rail. Demo data."],
-  chat: ["A little space to think.", "A focused conversation with its floating composer and model controls. Demo data."],
-  vault: ["A connected home for your knowledge.", "The vault map with linked notes and folders. Demo data."],
-  "sidebar-collapsed": ["More room. Everything still in reach.", "Kairos Home with its sidebar collapsed to an icon rail. Demo data."],
-};
-const previewImage = document.getElementById("preview-image");
-let selection = 0;
-document.querySelectorAll("[data-preview]").forEach((button) => {
-  button.addEventListener("click", async () => {
-    const key = button.dataset.preview;
-    const version = ++selection;
-    const source = "img/" + key + ".png";
-    const image = new Image();
-    image.src = source;
-    try { await image.decode(); } catch (_) { return; }
-    if (version !== selection) return;
-    document.querySelectorAll("[data-preview]").forEach((item) => {
-      item.classList.toggle("active", item === button);
-      item.setAttribute("aria-pressed", String(item === button));
-    });
-    previewImage.classList.remove("changing");
-    previewImage.src = source;
-    previewImage.alt = previews[key][1];
-    document.getElementById("preview-link").href = source;
-    document.getElementById("preview-caption").textContent = previews[key][0];
-    requestAnimationFrame(() => previewImage.classList.add("changing"));
-  });
-});
 
 // -- downloads: the visitor's system, then the latest release's files ---------
 function platform() {

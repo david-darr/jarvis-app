@@ -370,8 +370,10 @@ async function createWindow() {
     backgroundColor: "#F3EADB",
     title: INSTANCE.label,
     titleBarStyle: "hidden",
+    // Height matches the page's title bar (static/css/style.css --titlebar-h);
+    // the colour is that bar's, so the controls sit in it seamlessly.
     ...(process.platform === "win32" ? { titleBarOverlay: {
-      color: "#F3EADB", symbolColor: "#6B5646", height: 32,
+      color: "#EFE4D2", symbolColor: "#6B5646", height: 36,
     } } : {}),
     autoHideMenuBar: true,
     icon: windowIcon(),

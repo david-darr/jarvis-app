@@ -312,14 +312,14 @@ app.whenReady().then(async () => {
     await waitFor("!document.querySelector('#context-pill').hidden");
     assert.equal(await js("document.querySelector('.context-text').textContent"), '50%');
     assert.equal(await js("document.querySelector('#context-pill').dataset.level"), 'ok');
-    assert.equal(await js("document.querySelector('.context-bar-fill').style.width"), '50%');
+    assert.equal(await js("document.querySelector('.context-ring-fill').getAttribute('stroke-dasharray')"), '50 100');
     assert.ok(await js("document.querySelector('#context-pill').title.includes('reported by the provider')"));
     // A real reading with no published capacity shows the token count and
     // deliberately no percentage.
     chats.s1.context_state = { used_tokens: 4200, capacity_tokens: null, percent: null, estimated_capacity: false, capacity_source: null, model: 'unlisted' };
     await win.loadURL(base); await mount();
     await waitFor("document.querySelector('.context-text').textContent==='4.2k ctx'");
-    assert.equal(await js("document.querySelector('.context-bar')"), null);
+    assert.equal(await js("document.querySelector('.context-ring')"), null);
     assert.ok(await js("document.querySelector('#context-pill').title.includes('No context capacity is published')"));
     // A high reading is flagged visually without changing the number.
     chats.s1.context_state = { used_tokens: 87000, capacity_tokens: 90000, percent: 96.7, estimated_capacity: true, capacity_source: 'curated', model: 'catalog-astra' };

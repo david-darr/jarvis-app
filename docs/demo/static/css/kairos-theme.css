@@ -1,0 +1,50 @@
+/* Kairos brand layer: the self-hosted fonts, the raw brand palette and the
+   two brand primitives. From the brand handoff (BRAND.md, "Parchment &
+   Bistre", 2026-10-06). style.css maps the app's working tokens onto these;
+   views use the working tokens, never these raw values. Loaded before
+   style.css. Fonts are self-hosted: the app works offline. */
+
+@font-face {
+  font-family: "Jost";
+  src: url("/static/fonts/Jost-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Cormorant Garamond";
+  src: url("/static/fonts/CormorantGaramond-Italic-Variable.woff2") format("woff2");
+  font-weight: 300 700;
+  font-style: italic;
+  font-display: swap;
+}
+
+:root {
+  --k-parchment:   #F3EADB;  /* app ground */
+  --k-surface:     #FBF6EE;  /* cards, panels, inputs */
+  --k-surface-2:   #EDE2D0;  /* hover, selected, pressed */
+  --k-ink:         #3A2A20;  /* bistre: primary text, the logo ring */
+  --k-ink-dim:     #6B5646;  /* secondary text */
+  --k-ink-faint:   #7A6553;  /* meta, timestamps */
+  --k-gold:        #B8893B;  /* the point, hairlines, icons; never text */
+  --k-gold-hi:     #D9B260;  /* gilded highlight */
+  --k-gold-text:   #83601F;  /* gold when it must be text, a link or focus */
+  --k-rose:        #D99A92;  /* illustration and states; never text */
+  --k-powder:      #B9D2E3;  /* illustration and info; never text */
+  --k-danger:      #A8432F;
+  --k-success:     #4F6E4A;
+
+  --k-hairline:      rgba(184, 137, 59, .55);  /* the gilded frame line */
+  --k-hairline-soft: rgba(184, 137, 59, .28);
+  --k-bloom: drop-shadow(0 0 4px rgba(242, 208, 138, .9)) drop-shadow(0 0 14px rgba(226, 160, 120, .45));
+
+  --k-font-sans:  "Jost", "Futura", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --k-font-serif: "Cormorant Garamond", "Garamond", "Times New Roman", serif;
+}
+
+/* Display type: headlines, empty states, the tagline. Never body copy,
+   labels, buttons or data. Sentence case, no trailing period. */
+.k-display { font-family: var(--k-font-serif); font-style: italic; font-weight: 500; letter-spacing: 0; }
+
+/* The one ornament: a gilded hairline. Hero panels and featured cards only. */
+.k-frame { border: 1px solid var(--k-hairline); }
