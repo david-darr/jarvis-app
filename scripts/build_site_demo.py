@@ -37,8 +37,13 @@ def sources():
     return files
 
 
+def file_hash(path):
+    # Line endings are normalised: Git may check text files out as CRLF.
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
 def digest(files):
-    return {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in files.items()}
+    return {name: file_hash(path) for name, path in files.items()}
 
 
 def index_html():
@@ -78,7 +83,7 @@ def check():
         stale.append("index.html")
     for name, sha in have.items():
         built = OUT / name
-        if not built.exists() or hashlib.sha256(built.read_bytes()).hexdigest() != sha:
+        if not built.exists() or file_hash(built) != sha:
             stale.append("docs/demo/" + name)
     return stale
 
