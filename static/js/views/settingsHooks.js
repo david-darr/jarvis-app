@@ -3,7 +3,7 @@ import { group, row, field, toggle, pill, note, empty, badge } from "../settings
 
 // Settings > Administration > Hooks (2026-10-05; services/hook_service.py,
 // spec: the vault note "Lifecycle Hooks (Build Spec)"). A hook is a step of
-// the person's own that runs on a JARVIS event: post to a web address, add a
+// the person's own that runs on a Kairos event: post to a web address, add a
 // line to a vault note, send to a channel, or run a command on this computer.
 // Only a command on "Before a tool runs" can block. Saving a new or changed
 // command first asks to confirm the exact command.
@@ -54,7 +54,7 @@ export async function renderHooksPanel(body, _status, page) {
           description: `${data.events[h.event]} · ${label.toLowerCase()} · last run ${when(h.last_run_at)}`,
           control: [pill(outcome, tone), switchFor(h, `${h.name} on`), el("span", { class: "set-chevron", text: "›" })] }, () => showHook(h.id));
       }) : [empty("No hooks yet. Add one to run a step of your own when something happens.")]),
-      note("Before-tool hooks see every tool Claude and your local and API models use, and every JARVIS tool Codex uses. Codex's own shell and file tools run inside its program, out of JARVIS's sight, so they are not covered. Hooks never set off other hooks, and a failing hook never stops the work it watches unless you set it to."),
+      note("Before-tool hooks see every tool Claude and your local and API models use, and every Kairos tool Codex uses. Codex's own shell and file tools run inside its program, out of Kairos's sight, so they are not covered. Hooks never set off other hooks, and a failing hook never stops the work it watches unless you set it to."),
     );
   }
 
@@ -115,7 +115,7 @@ export async function renderHooksPanel(body, _status, page) {
   function showEdit(existing, events) {
     const start = existing || {};
     const c = start.config || {};
-    page.sub({ title: existing ? `Edit ${existing.name}` : "Add a hook", description: "A step of your own that runs when something happens in JARVIS.",
+    page.sub({ title: existing ? `Edit ${existing.name}` : "Add a hook", description: "A step of your own that runs when something happens in Kairos.",
       back: existing ? () => showHook(existing.id) : showList });
     const name = el("input", { value: start.name || "", placeholder: "Log agent results" });
     const event = select(Object.entries(events), start.event || "card.review");
@@ -135,7 +135,7 @@ export async function renderHooksPanel(body, _status, page) {
 
     const rows = {
       tool: field("Tools", toolPattern, "Which tools, by name. Separate names with |, and * matches anything. Empty means every tool."),
-      webhook: [field("Web address", url), field("Secret", secret, "Signs each post (X-JARVIS-Signature) so the receiver knows it came from JARVIS.")],
+      webhook: [field("Web address", url), field("Secret", secret, "Signs each post (X-JARVIS-Signature) so the receiver knows it came from Kairos.")],
       vault_note: [field("Note", notePath, "A path inside the vault. The note is created if it does not exist.")],
       channel: [field("Channel", channel)],
       template: field("Text", template, "Fill in with {field}: {time}, {event}, {summary}, and the event's own fields such as {agent}, {card}, {task}, {reply} or {tool}."),

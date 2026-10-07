@@ -2,27 +2,26 @@ import { api, el, toast, confirmDialog } from "./api.js";
 import { renderMessageBody } from "./chatContent.js";
 
 // Library's optional Vault Map view (first built 2026-09-01) — force-directed graph of
-// the vault's folders/notes, ported from the original JARVIS kiosk
+// the vault's folders/notes, ported from the original Kairos kiosk
 // (voice-visualizer/index.html's Vault tab), restyled onto this app's own
 // design tokens (see specs/frontend-style.md). Same radial-tree-plus-light-
 // physics layout, same canvas rendering approach — a real port, not a
 // from-scratch reinvention, since the original was already live-tuned.
 
-const PALETTE = [
-  "#a894eb", "#7e9ed0", "#ce91b7", "#83b8a4",
-  "#d7b27c", "#84b9c5", "#bd8d92", "#b7b38a",
-];
+// Colors come from the theme (--chart-1..8, --point, --text), read when drawn.
+const token = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const PALETTE = Array.from({ length: 8 }, (_, i) => `--chart-${i + 1}`);
 const RING = 95;
 
 function topFolder(node) { return (node.folder || "").split("/")[0] || "(root)"; }
 function colorForFolder(name) {
   let hash = 0;
   for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
-  return PALETTE[hash % PALETTE.length];
+  return token(PALETTE[hash % PALETTE.length]);
 }
 function nodeRadius(node) { return node.type === "folder" ? (node.id === "" ? 11 : 7) : 4; }
 function nodeColor(node) {
-  if (node.type === "folder") return node.id === "" ? "#e2d9f3" : "#d7b27c";
+  if (node.type === "folder") return node.id === "" ? token("--text") : token("--point");
   return colorForFolder(topFolder(node));
 }
 
@@ -213,7 +212,7 @@ export function createVaultGraph(container) {
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
       const connected = selectedId !== null && (e.source === selectedId || e.target === selectedId);
-      ctx.strokeStyle = connected ? "rgba(193,173,242,.65)" : e.kind === "link" ? "rgba(167,148,211,.18)" : "rgba(191,174,147,.09)";
+      ctx.strokeStyle = connected ? `rgba(${token("--accent-rgb")}, .65)` : `rgba(${token("--ink-rgb")}, ${e.kind === "link" ? .22 : .12})`;
       ctx.lineWidth = (e.kind === "link" ? 0.9 : 0.6) / transform.scale;
       ctx.stroke();
     });
@@ -235,14 +234,14 @@ export function createVaultGraph(container) {
       ctx.globalAlpha = 1;
       if (n.id === selectedId || n.id === hoveredId) {
         ctx.lineWidth = 2 / transform.scale;
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+        ctx.strokeStyle = token("--text");
         ctx.stroke();
       }
       const showLabel = n.id === selectedId
         || n.id === hoveredId || (n.type === "folder" ? transform.scale > 0.35 : transform.scale > 1.6);
       if (showLabel) {
-        ctx.font = (n.type === "folder" ? 11 : 10) / transform.scale + "px Segoe UI, sans-serif";
-        ctx.fillStyle = n.id === selectedId ? "#eeedf0" : "#aaa5b5";
+        ctx.font = (n.type === "folder" ? 11 : 10) / transform.scale + "px Jost, Segoe UI, sans-serif";
+        ctx.fillStyle = token(n.id === selectedId ? "--text" : "--text-dim");
         ctx.fillText(n.name, n.x + r + 3, n.y + 3);
       }
     });

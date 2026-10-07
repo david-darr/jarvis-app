@@ -21,7 +21,7 @@ a task's) stops its helpers.
 
 Every helper is a row in the session store's `helpers` table (schema v6), and
 its run a `runs` row whose parent is the run that asked. A helper left
-waiting or running when JARVIS closed is marked lost at the next start and
+waiting or running when Kairos closed is marked lost at the next start and
 never run again (as phase 4 does for scheduled runs); finished results stay
 collectable. Findings always come back fenced as untrusted data, and taint
 the turn that reads them.
@@ -121,13 +121,13 @@ def _update(helper_id: str, **fields) -> None:
 
 def recover() -> int:
     """At startup nothing is running: a helper still waiting or running was
-    cut off by JARVIS closing. Marked lost, never run again."""
+    cut off by Kairos closing. Marked lost, never run again."""
     with store.transaction() as conn:
         cut = conn.execute("UPDATE helpers SET status = 'lost', ended_at = ?, "
-                           "error = 'JARVIS closed while it worked; it was not run again' "
+                           "error = 'Kairos closed while it worked; it was not run again' "
                            "WHERE status IN ('waiting', 'running')", (time.time(),)).rowcount
     if cut:
-        logger.warning("helpers: %d helper(s) were cut off by JARVIS closing; marked lost", cut)
+        logger.warning("helpers: %d helper(s) were cut off by Kairos closing; marked lost", cut)
     return cut
 
 

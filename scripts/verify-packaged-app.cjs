@@ -38,7 +38,7 @@ const path = require('node:path');
 const os = require('node:os');
 
 const root = path.resolve(__dirname, '..');
-const appExe = path.join(root, 'dist', 'win-unpacked', 'JARVIS.exe');
+const appExe = path.join(root, 'dist', 'win-unpacked', 'Kairos.exe');
 const asar = path.join(root, 'dist', 'win-unpacked', 'resources', 'app.asar');
 const backendDir = path.join(root, 'dist', 'win-unpacked', 'resources', 'backend');
 const runtimeExe = path.join(backendDir, 'runtime', 'python.exe');
@@ -131,7 +131,9 @@ async function launch(profile, label, { args = [], env: extra = {} } = {}) {
   await requireFreePort();
   const logPath = path.join(profile, `packaged-${label}.log`);
   const log = fs.openSync(logPath, 'a');
-  const env = { ...process.env, ELECTRON_ENABLE_LOGGING: '1', ...extra };
+  // A second isolation layer: if the package ever ignores --user-data-dir,
+  // its pinned JARVIS folder still lands under this throwaway profile.
+  const env = { ...process.env, ELECTRON_ENABLE_LOGGING: '1', ...extra, APPDATA: profile };
   delete env.JARVIS_BACKEND_URL; // An inherited override would bypass the packaged backend.
   child = spawn(appExe, ['--user-data-dir=' + profile, ...args], { stdio: ['ignore', log, log], env });
   fs.closeSync(log);

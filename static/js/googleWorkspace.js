@@ -35,7 +35,7 @@ function renderConnection(host, status, refresh) {
     placeholder: 'Google OAuth Desktop client ID', 'aria-label': 'Google OAuth Desktop client ID' });
   const secret = el('input', { type: 'password', placeholder: 'Client secret, if provided',
     'aria-label': 'Google OAuth client secret' });
-  const note = el('p', { class: 'meta', text: 'Create a Desktop OAuth client in Google Cloud with Drive, Sheets, and Forms APIs enabled. Add your Google account as a test user if the consent app is in Testing. Sign in on the computer running JARVIS; connected files are then available from other devices.' });
+  const note = el('p', { class: 'meta', text: 'Create a Desktop OAuth client in Google Cloud with Drive, Sheets, and Forms APIs enabled. Add your Google account as a test user if the consent app is in Testing. Sign in on the computer running Kairos; connected files are then available from other devices.' });
   const save = button('Save client ID', async () => {
     await action('/client', { client_id: client.value.trim(), client_secret: secret.value });
     toast('Google client saved', 'success');
@@ -63,7 +63,7 @@ function renderConnection(host, status, refresh) {
     el('div', { class: 'google-field-row' }, [client, secret, save]),
     el('div', { class: 'google-field-row' }, [
       status.configured ? connect : el('span', { class: 'meta', text: 'Save a client ID to continue.' }),
-      !onHost ? el('span', { class: 'meta', text: 'Open Library on the JARVIS host computer to connect.' }) : null,
+      !onHost ? el('span', { class: 'meta', text: 'Open Library on the Kairos host computer to connect.' }) : null,
       el('a', { href: 'https://console.cloud.google.com/apis/credentials', target: '_blank', rel: 'noopener noreferrer', text: 'Google Cloud credentials ↗' }),
     ]),
   ]));
@@ -112,7 +112,7 @@ function renderDrive(host, status, refreshAll) {
     }),
   ]);
   const disconnect = button('Disconnect', async () => {
-    const yes = await confirmDialog({ title: 'Disconnect Google?', message: 'JARVIS will forget this account’s tokens. Files stay in Google Drive.', confirmLabel: 'Disconnect' });
+    const yes = await confirmDialog({ title: 'Disconnect Google?', message: 'Kairos will forget this account’s tokens. Files stay in Google Drive.', confirmLabel: 'Disconnect' });
     if (yes) { await api(`${BASE}/connection`, { method: 'DELETE' }); refreshAll(); }
   }, 'btn quiet');
   host.append(

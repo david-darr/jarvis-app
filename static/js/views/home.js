@@ -1,6 +1,6 @@
 import { api, el, modelMark } from "../api.js";
 import { ICONS } from "../icons.js";
-import { mount as mountCore } from "../core3d.js";
+import { mount as mountCore } from "../kairosSky.js";
 import { listInFlight, subscribeAll } from "../chatStream.js";
 
 const navigate = (tab, options = {}) => document.dispatchEvent(new CustomEvent("jarvis:navigate", { detail: { tab, ...options } }));
@@ -38,11 +38,11 @@ function compactTokens(n) {
 }
 
 // What a model row may honestly claim (2026-09-22). This used to show each
-// model's share of all JARVIS-recorded tokens labelled "% used", which read
+// model's share of all Kairos-recorded tokens labelled "% used", which read
 // as a quota and was inflated by cache reads. A subscription CLI's real usage
 // comes only from the provider's own limits, so those rows show nothing here
 // until that source is wired in (the parked desktop usage overlay reads it).
-// Everything else shows tokens actually spent through JARVIS, with cache
+// Everything else shows tokens actually spent through Kairos, with cache
 // reuse - cheap re-reads of a prompt the provider already holds - kept apart.
 function usageLabel(endpoint, usage) {
   if (!usage || endpoint.kind === "claude_cli" || endpoint.kind === "codex_cli") return null;
@@ -50,8 +50,8 @@ function usageLabel(endpoint, usage) {
   if (!spent) return null;
   const cached = usage.cache_read_tokens ? ` · ${compactTokens(usage.cache_read_tokens)} reused from cache` : "";
   return {
-    text: `${compactTokens(spent)} tokens via JARVIS${cached}`,
-    title: "Tokens this JARVIS install sent and received through this model: new input, cache writes and output. Not a quota.",
+    text: `${compactTokens(spent)} tokens via Kairos${cached}`,
+    title: "Tokens this Kairos install sent and received through this model: new input, cache writes and output. Not a quota.",
   };
 }
 
@@ -75,7 +75,7 @@ export function render(container) {
   let disposed = false, refreshing = false, systemStatus = null, nextTask = null;
   const statusLabel = el("span", { text: "Checking system" });
   const statusDot = el("span", { class: "status-dot" });
-  const coreHost = el("div", { class: "core-stage", "aria-label": "JARVIS particle core" });
+  const coreHost = el("div", { class: "core-stage" });
   const coreState = el("span", { class: "core-state", text: "Connecting" });
   const coreToggle = el("button", { class: "core-motion-toggle", type: "button", text: "Pause motion", "aria-pressed": "false" });
   const nextTaskLabel = el("span", { class: "dashboard-next", text: "Checking schedule…" });
@@ -85,14 +85,16 @@ export function render(container) {
     el("div", { class: "dashboard-system-pill", role: "status" }, [statusDot, statusLabel]),
   ]);
   const hero = el("section", { class: "dashboard-hero" }, [
+    el("div", { class: "dashboard-core" }, [coreHost]),
+    header,
     el("div", { class: "dashboard-intro" }, [
-      el("div", { class: "eyebrow", text: "A little space to think" }),
-      el("h1", { text: "Your day, in focus." }),
-      el("p", { text: "Your conversations, knowledge, and next steps. All connected, right here." }),
+      el("div", { class: "eyebrow", text: "Kairos, the opportune moment" }),
+      el("h1", { class: "k-display", text: "Not more time. The right time." }),
+      el("p", { text: "Your conversations, notes and next steps, ready for the moment you need them." }),
       el("div", { class: "dashboard-actions" }, [action("Start a conversation", "chat", true), action("Explore your vault ↗", "library", false, { section: "vault" })]),
       nextTaskLabel,
     ]),
-    el("div", { class: "dashboard-core" }, [coreHost, el("div", { class: "core-caption" }, [coreState, coreToggle])]),
+    el("div", { class: "core-caption" }, [coreState, coreToggle]),
   ]);
   const stats = el("div", { class: "dashboard-stats" });
   const chats = section("Pick up where you left off", "All chats ↗", "chat");
@@ -101,16 +103,19 @@ export function render(container) {
   const activity = section("Recent activity", "Tasks ↗", "tasks");
   const system = section("Connected systems", "Settings ↗", "settings");
   const models = section("Your models", "Manage ↗", "settings");
-  content.append(header, hero, stats, el("div", { class: "dashboard-grid" }, [chats.panel, schedule.panel, projects.panel, models.panel, activity.panel, system.panel]));
+  content.append(hero, stats, el("div", { class: "dashboard-grid" }, [chats.panel, schedule.panel, projects.panel, models.panel, activity.panel, system.panel]));
   container.appendChild(content);
   const disposeCore = mountCore(coreHost);
-  let paused = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
+  let paused = false;
   function updateMotion() {
+    coreToggle.hidden = motionPreference.matches;
     coreToggle.textContent = paused ? "Resume motion" : "Pause motion";
     coreToggle.setAttribute("aria-pressed", String(paused));
-    disposeCore.setPaused?.(paused);
+    disposeCore.setPaused?.(paused || motionPreference.matches);
   }
   coreToggle.addEventListener("click", () => { paused = !paused; updateMotion(); });
+  motionPreference.addEventListener("change", updateMotion);
   updateMotion();
   function updateCoreState() {
     if (disposed) return;
@@ -193,5 +198,5 @@ export function render(container) {
   refresh();
   const refreshTimer = setInterval(() => { if (!document.hidden) refresh(); }, 30000);
   const countdownTimer = setInterval(updateCountdown, 1000);
-  return () => { disposed = true; disposeCore(); unsubscribe(); clearInterval(refreshTimer); clearInterval(countdownTimer); };
+  return () => { disposed = true; disposeCore(); unsubscribe(); motionPreference.removeEventListener("change", updateMotion); clearInterval(refreshTimer); clearInterval(countdownTimer); };
 }

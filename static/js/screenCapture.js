@@ -1,5 +1,5 @@
-// One person-initiated still from the browser running JARVIS. The browser's
-// picker owns source choice; JARVIS never receives an ongoing screen stream.
+// One person-initiated still from the browser running Kairos. The browser's
+// picker owns source choice; Kairos never receives an ongoing screen stream.
 export function openWebCapture({ onAttach, onClose }) {
   const previousFocus = document.activeElement;
   // Only offer browser picking when it can keep the capturing tab focused.
@@ -21,7 +21,7 @@ export function openWebCapture({ onAttach, onClose }) {
       <div class="screen-capture-choices">
         <button type="button" class="screen-capture-choice" data-action="screen">
           <span class="screen-capture-choice-icon" aria-hidden="true">▣</span>
-          <span><strong>Choose a tab, window, or screen</strong><small>Your browser will ask what to share. JARVIS takes one still.</small></span>
+          <span><strong>Choose a tab, window, or screen</strong><small>Your browser will ask what to share. Kairos takes one still.</small></span>
           <span class="screen-capture-arrow" aria-hidden="true">→</span>
         </button>
         <button type="button" class="screen-capture-choice" data-action="upload">
@@ -121,8 +121,8 @@ export function openWebCapture({ onAttach, onClose }) {
         catch { controller.setFocusBehavior("focus-capturing-application"); }
       } catch {
         screenButton.disabled = true;
-        screenButton.querySelector("small").textContent = "This browser cannot keep JARVIS in front. Upload a screenshot instead.";
-        setStatus("This browser cannot keep JARVIS in front. Upload a screenshot instead.");
+        screenButton.querySelector("small").textContent = "This browser cannot keep Kairos in front. Upload a screenshot instead.";
+        setStatus("This browser cannot keep Kairos in front. Upload a screenshot instead.");
         return;
       }
       // This call stays inside the click handler, before any await. Permission
@@ -208,7 +208,7 @@ export function openWebCapture({ onAttach, onClose }) {
   screenButton.onclick = capture;
   if (!pickerAvailable) {
     screenButton.disabled = true;
-    screenButton.querySelector("small").textContent = "This browser cannot keep JARVIS in front. Upload a screenshot instead.";
+    screenButton.querySelector("small").textContent = "This browser cannot keep Kairos in front. Upload a screenshot instead.";
   }
   dialog.querySelector('[data-action="upload"]').onclick = () => fileInput.click();
   fileInput.onchange = async () => {

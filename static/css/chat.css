@@ -51,11 +51,11 @@
 .chat-prose th, .chat-prose td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); min-width: 100px; }
 .chat-prose th { background: var(--bg-panel); font-weight: 550; }
 .chat-prose tr:last-child td { border-bottom: 0; }
-.hljs-comment, .hljs-quote { color: #8b909e; }
-.hljs-keyword, .hljs-selector-tag, .hljs-literal { color: #c6b5f6; }
-.hljs-string, .hljs-attr, .hljs-template-tag { color: #a8c8ad; }
-.hljs-number, .hljs-symbol, .hljs-variable { color: #e5bd99; }
-.hljs-title, .hljs-built_in, .hljs-type { color: #a4c9e5; }
+.hljs-comment, .hljs-quote { color: var(--text-faint); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal { color: var(--accent); }
+.hljs-string, .hljs-attr, .hljs-template-tag { color: var(--success); }
+.hljs-number, .hljs-symbol, .hljs-variable { color: var(--warn); }
+.hljs-title, .hljs-built_in, .hljs-type { color: var(--text); font-weight: 600; }
 .msg-interrupted { font-size: 12px; color: var(--text-dim); margin-top: 14px; padding: 10px 12px; border-left: 2px solid var(--danger); background: var(--bg-panel); }
 .chat-fallback-panel { margin: 12px 0 4px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); }
 .chat-fallback-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -88,7 +88,7 @@
   background: var(--bg-panel-solid); box-shadow: var(--shadow-elevated); color: var(--text); font-size: 11px; }
 .chat-timeline-point:hover .chat-timeline-preview, .chat-timeline-point:focus-visible .chat-timeline-preview { display: block; }
 .chat-summary-backdrop { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center;
-  padding: 20px; background: rgba(0, 0, 0, .6); }
+  padding: 20px; background: rgba(var(--shade-rgb), .6); }
 .chat-summary-dialog { display: flex; flex-direction: column; width: min(580px, 100%); max-height: min(690px, 86vh);
   padding: 22px; border: 1px solid var(--border-strong); border-radius: 16px;
   background: var(--bg-panel-solid); box-shadow: var(--shadow-elevated); color: var(--text); }
@@ -192,8 +192,8 @@
 .context-bar { width: 42px; height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
 .context-bar-fill { height: 100%; width: 0; border-radius: 2px; background: var(--text-faint); transition: width 240ms ease-out; }
 .context-text { font-variant-numeric: tabular-nums; }
-.context-pill[data-level='warn'] .context-bar-fill { background: #e5bd99; }
-.context-pill[data-level='warn'] .context-text { color: #e5bd99; }
+.context-pill[data-level='warn'] .context-bar-fill { background: var(--warn); }
+.context-pill[data-level='warn'] .context-text { color: var(--warn); }
 .context-pill[data-level='high'] .context-bar-fill { background: var(--danger); }
 .context-pill[data-level='high'] .context-text { color: var(--danger); }
 @media (prefers-reduced-motion: reduce) { .context-bar-fill { transition: none; } }
@@ -339,7 +339,7 @@
 /* Permission prompt (David's ask 2026-09-18). Shared by every feature that
    can ask; the request's own text is rendered as content, never as markup. */
 .permission-dialog { color: var(--text); background: var(--bg-panel-solid); border: 1px solid var(--border-strong); border-radius: var(--radius); width: min(560px, calc(100vw - 32px)); padding: 22px 24px; box-shadow: var(--shadow-elevated); }
-.permission-dialog::backdrop { background: rgba(0,0,0,.65); }
+.permission-dialog::backdrop { background: rgba(var(--shade-rgb), .65); }
 .permission-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .permission-head h2 { font-size: 17px; font-weight: 500; margin: 0; }
 .permission-tool { font-size: 11px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 20px; padding: 3px 10px; }
@@ -365,7 +365,7 @@
 }
 :root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) > .msg.user .msg-body::before { content: 'you \276F  '; color: var(--accent); font-weight: 600; }
 :root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) > .msg.assistant::before {
-  content: 'jarvis \276F'; color: var(--text-faint); font-weight: 600; margin-bottom: 2px;
+  content: 'kairos \276F'; color: var(--text-faint); font-weight: 600; margin-bottom: 2px;
 }
 :root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) > .msg.assistant .msg-body { padding-left: 2ch; border-left: 1px solid var(--border); }
 :root[data-chat-style='terminal'] :is(#chat-messages, .side-messages) > .msg.user .msg-actions { justify-content: flex-start; }
@@ -421,7 +421,7 @@
 .side-chat-drop-hint {
   position: absolute; top: 12px; right: 12px; bottom: 12px; width: calc(50% - 18px); z-index: 5; pointer-events: none;
   display: grid; place-items: center; border: 2px dashed var(--accent); border-radius: 16px;
-  background: rgba(var(--accent-rgb, 179, 167, 245), .08); color: var(--accent); font-size: 13px;
+  background: rgba(var(--accent-rgb), .08); color: var(--accent); font-size: 13px;
   opacity: 0; transition: opacity .12s;
 }
 .side-chat-drop-hint.active { opacity: 1; }
@@ -448,11 +448,11 @@
 .chat-find-input { width: 200px; min-width: 0; font-size: 12.5px; padding: 4px 8px; }
 .chat-find-count { font-size: 11.5px; color: var(--text-faint); min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; }
 ::highlight(chat-find) { background-color: rgba(var(--accent-rgb), .28); color: inherit; }
-::highlight(chat-find-current) { background-color: rgba(var(--accent-rgb), .75); color: #111; }
+::highlight(chat-find-current) { background-color: rgba(var(--accent-rgb), .45); color: var(--text); }
 
 /* Message actions: text buttons in the hover action row. */
 .msg-actions .msg-edit, .msg-actions .msg-regenerate, .msg-actions .msg-fork { font-size: 11.5px; padding: 3px 7px; }
-.msg-actions .msg-edit:hover, .msg-actions .msg-regenerate:hover, .msg-actions .msg-fork:hover { color: var(--text); background: rgba(255, 255, 255, .05); }
+.msg-actions .msg-edit:hover, .msg-actions .msg-regenerate:hover, .msg-actions .msg-fork:hover { color: var(--text); background: rgba(var(--ink-rgb), .05); }
 .attach-chip-preview {
   width: 31px;
   height: 31px;
@@ -476,7 +476,7 @@
   flex-direction: column;
   gap: 12px;
   padding: 24px;
-  background: rgba(3, 8, 17, .9);
+  background: var(--scrim);
 }
 .chat-image-preview img {
   max-width: 94vw;
@@ -501,7 +501,7 @@
    dialog only reviews the still image before adding it to the composer. */
 .screen-capture-dialog {
   position: fixed; inset: 0; z-index: 10020; display: grid; place-items: center;
-  padding: 20px; background: rgba(0, 0, 0, .72);
+  padding: 20px; background: rgba(var(--shade-rgb), .72);
 }
 .screen-capture-dialog[hidden], .screen-capture-review[hidden],
 .screen-capture-choices[hidden], .screen-capture-selection[hidden] { display: none; }
@@ -517,7 +517,7 @@
   color: var(--text-dim); background: transparent; font-size: 20px; line-height: 1; cursor: pointer; }
 .screen-capture-choices { display: grid; gap: 10px; }
 .screen-capture-choice { display: flex; align-items: center; gap: 13px; width: 100%; text-align: left;
-  color: var(--text); background: rgba(255,255,255,.035); border: 1px solid var(--border);
+  color: var(--text); background: rgba(var(--ink-rgb), .035); border: 1px solid var(--border);
   border-radius: 10px; padding: 14px; cursor: pointer; }
 .screen-capture-choice:hover, .screen-capture-choice:focus-visible { border-color: var(--accent); background: rgba(var(--accent-rgb), .09); }
 .screen-capture-choice:disabled { opacity: .55; cursor: not-allowed; }
@@ -531,9 +531,9 @@
 .screen-capture-image-wrap { position: relative; display: table; max-width: 100%; margin: auto; cursor: crosshair; touch-action: none; }
 .screen-capture-image-wrap img { display: block; max-width: 100%; max-height: 48vh; border-radius: 8px; user-select: none; }
 .screen-capture-selection { position: absolute; border: 2px solid var(--accent); background: rgba(var(--accent-rgb), .13);
-  box-shadow: 0 0 0 1px rgba(0,0,0,.4); pointer-events: none; }
+  box-shadow: 0 0 0 1px rgba(var(--shade-rgb), .4); pointer-events: none; }
 .screen-capture-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-top: 15px; }
-.screen-capture-actions button { color: var(--text); background: rgba(255,255,255,.05); border: 1px solid var(--border-strong);
+.screen-capture-actions button { color: var(--text); background: rgba(var(--ink-rgb), .05); border: 1px solid var(--border-strong);
   border-radius: 9px; padding: 8px 12px; cursor: pointer; }
 .screen-capture-actions button[data-action="crop"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
 .screen-capture-actions button:disabled { opacity: .45; cursor: not-allowed; }

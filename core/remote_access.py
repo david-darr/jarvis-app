@@ -334,7 +334,7 @@ async def start() -> dict:
     if not available:
         return {"ok": False, "error": (
             f"Port {port} is already in use on this machine — something else is bound to it "
-            f"(another JARVIS listener, or scripts/run_remote.py). Pick a different port below, "
+            f"(another Kairos listener, or scripts/run_remote.py). Pick a different port below, "
             f"or stop whatever is using it. ({bind_error})"
         )}
 

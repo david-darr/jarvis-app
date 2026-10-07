@@ -1,4 +1,5 @@
 import { ICONS } from "./icons.js";
+import { WORDMARK } from "./brand.js";
 import { api } from "./api.js";
 import * as onboarding from "./onboarding.js";
 import * as auth from "./auth.js";
@@ -158,14 +159,17 @@ document.addEventListener("jarvis:agents-changed", refreshAgentBadge);
 
 async function buildSidebar() {
   const brand = document.getElementById("brand");
-  brand.innerHTML = `<img src="/static/img/jarvis-logo.png" alt="" class="brand-logo"><span>JARVIS</span>`;
+  brand.innerHTML = WORDMARK;
+  brand.firstElementChild.classList.add("brand-wordmark");
+  brand.firstElementChild.setAttribute("role", "img");
+  brand.firstElementChild.setAttribute("aria-label", "Kairos");
   // A development copy (scripts/dev_instance.py) says so on every page, so it
   // is never mistaken for the real app.
   api("/api/auth/status").then((status) => {
     if (!status?.instance) return;
     brand.append(Object.assign(document.createElement("span"), { className: "instance-badge", textContent: status.instance.toUpperCase(),
-      title: `Development copy "${status.instance}": its own data, separate from your real JARVIS` }));
-    document.title = `JARVIS (${status.instance})`;
+      title: `Development copy "${status.instance}": its own data, separate from your real Kairos` }));
+    document.title = `Kairos (${status.instance})`;
   }).catch(() => {});
 
   const nav = document.getElementById("nav");

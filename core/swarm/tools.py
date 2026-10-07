@@ -9,7 +9,7 @@ a convenience, never the boundary.
 Deliberately absent in C1: shell execution, file writes, repository access and
 vault access. While an unauthenticated loopback request resolves to the local
 admin (core/middleware.py), a worker able to run commands could call every
-ordinary JARVIS API as the owner, so no tool filter here could honestly be
+ordinary Kairos API as the owner, so no tool filter here could honestly be
 called containment. Those roles stay blocked until that boundary is real.
 """
 import json
@@ -177,7 +177,7 @@ _LEAD = {
 
 _MEMORY = {
     "search_memory": {
-        "description": "Search this company's enabled JARVIS memory sources. Returns a few short snippets and references. Use it only when prior context would materially help the assigned work.",
+        "description": "Search this company's enabled Kairos memory sources. Returns a few short snippets and references. Use it only when prior context would materially help the assigned work.",
         "parameters": {
             "type": "object",
             "properties": {"query": {"type": "string"}},
@@ -185,7 +185,7 @@ _MEMORY = {
         },
     },
     "read_memory": {
-        "description": "Read one bounded JARVIS memory item using a reference returned by search_memory.",
+        "description": "Read one bounded Kairos memory item using a reference returned by search_memory.",
         "parameters": {
             "type": "object",
             "properties": {"ref": {"type": "string"}},
@@ -375,7 +375,7 @@ class ToolService:
 
     def _search_memory(self, arguments):
         if not self.memory or not self.memory.enabled:
-            raise ToolRejected("JARVIS memory is not enabled for this company.")
+            raise ToolRejected("Kairos memory is not enabled for this company.")
         query = _text(arguments.get("query"), "query", 500)
         results = self.memory.search(query)
         self.memory_refs.update(item.get("ref") for item in results if item.get("ref"))
@@ -385,7 +385,7 @@ class ToolService:
 
     def _read_memory(self, arguments):
         if not self.memory or not self.memory.enabled:
-            raise ToolRejected("JARVIS memory is not enabled for this company.")
+            raise ToolRejected("Kairos memory is not enabled for this company.")
         reference = _text(arguments.get("ref"), "ref", 1000)
         if reference not in self.memory_refs:
             raise ToolRejected("Read a reference returned by search_memory in this worker step.")

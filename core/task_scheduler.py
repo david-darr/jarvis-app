@@ -411,11 +411,11 @@ def _when(iso: Optional[str]) -> str:
 
 
 def _report_lost(task: dict) -> None:
-    """A run cut off by JARVIS closing: said in the feed, and on the task's
+    """A run cut off by Kairos closing: said in the feed, and on the task's
     channel when it has one, since it will not run again by itself."""
     after = (f"It runs again at {_when(task.get('next_run_at'))}" if task.get("enabled") and task.get("next_run_at")
              else "It won't run again by itself")
-    text = f"{task['name']} was cut off when JARVIS closed. {after}; use Run now on the Tasks tab to redo it."
+    text = f"{task['name']} was cut off when Kairos closed. {after}; use Run now on the Tasks tab to redo it."
     logger.warning("task '%s' (%s): %s", task["name"], task["id"], text)
     events.emit("task.lost", text, level="warning", task_id=task["id"])
     channel = task.get("deliver_to_channel")

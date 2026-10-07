@@ -7,7 +7,7 @@ their memory, triggers, hooks, connectors, integrations, run history, model
 connections - as one zip:
 
 - SQLite stores (the session store, Swarm's) are copied with SQLite's backup
-  API, so the copy is consistent even while JARVIS writes.
+  API, so the copy is consistent even while Kairos writes.
 - Saved passwords and keys are left out unless asked for. The encryption key
   (.secret_key) lives in the data folder, so a backup carrying it is as
   sensitive as the passwords themselves. Without it, every encrypted value
@@ -145,10 +145,10 @@ def check_backup(path: str) -> dict:
         with zipfile.ZipFile(path) as archive:
             names = archive.namelist()
             if MANIFEST not in names:
-                raise BackupRefused("this is not a JARVIS backup (no manifest)")
+                raise BackupRefused("this is not a Kairos backup (no manifest)")
             manifest = json.loads(archive.read(MANIFEST))
             if manifest.get("version") != VERSION:
-                raise BackupRefused("this backup was made by a version of JARVIS this one can't read")
+                raise BackupRefused("this backup was made by a version of Kairos this one can't read")
             total = 0
             for info in archive.infolist():
                 name = info.filename
@@ -158,7 +158,7 @@ def check_backup(path: str) -> dict:
                     raise BackupRefused("the backup contains the restore area")
                 total += info.file_size
             if total > MAX_RESTORE_BYTES:
-                raise BackupRefused("the backup is larger than JARVIS restores (4 GB)")
+                raise BackupRefused("the backup is larger than Kairos restores (4 GB)")
             bad = archive.testzip()
             if bad:
                 raise BackupRefused(f"the backup is damaged ({bad})")

@@ -53,11 +53,11 @@ def split_reply(text: str) -> tuple[str, str]:
 class Email(Connector):
     kind = "email"
     label = "Email"
-    description = "An inbox JARVIS reads and answers. Use a dedicated address, not your main one."
+    description = "An inbox Kairos reads and answers. Use a dedicated address, not your main one."
     docs_url = "https://support.google.com/mail/answer/185833"
     message_limit = 50000
     target_field = "default_to"
-    sender_help = ("Email addresses allowed to write to JARVIS, one per line. Only mail your server marked "
+    sender_help = ("Email addresses allowed to write to Kairos, one per line. Only mail your server marked "
                    "DMARC-pass counts, so a forged sender is ignored.")
     fields = (
         Field("address", "Email address", placeholder="jarvis@example.com"),
@@ -116,7 +116,7 @@ class Email(Connector):
         message = EmailMessage()
         message["From"] = self.setting("address")
         message["To"] = to
-        message["Subject"] = subject if subject.lower().startswith("re:") else (f"Re: {subject}" if subject else "From JARVIS")
+        message["Subject"] = subject if subject.lower().startswith("re:") else (f"Re: {subject}" if subject else "From Kairos")
         message["Message-ID"] = f"<{uuid.uuid4().hex}@jarvis>"
         if in_reply_to:
             message["In-Reply-To"] = in_reply_to

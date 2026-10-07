@@ -1,7 +1,7 @@
 """Owner-facing Swarm boundary. Importing it has no startup side effects.
 
 Since agents phase 5 (2026-10-05) Swarm is the engine behind teams in the
-Agents tab: a teammate may stand for one of the owner's JARVIS agents. Such a
+Agents tab: a teammate may stand for one of the owner's Kairos agents. Such a
 teammate takes its name, role and default model from the agent, carries the
 agent's identity and notes into its prompt, and what happens on the team is
 carried back to the agent (reports and questions in its inbox, revision notes
@@ -126,12 +126,12 @@ class SwarmService:
                     "detail": "Swarm storage or coordinator is unavailable. Check the backend log.",
                     "blockers": []}
         result = {"available": True, "execution_available": True, "code": "ready", "blockers": [],
-                  "detail": "Workers have no shell, raw file or JARVIS memory access unless the company explicitly enables bounded read-only retrieval."}
+                  "detail": "Workers have no shell, raw file or Kairos memory access unless the company explicitly enables bounded read-only retrieval."}
         if system_id:
             system = self.store.get_system(system_id)
             configuration = json.loads(system.get("configuration") or "{}")
             if (configuration.get("memory") or {}).get("sources"):
-                result["detail"] = "Workers have no shell or raw file access. Enabled JARVIS memory is read-only, bounded and audited."
+                result["detail"] = "Workers have no shell or raw file access. Enabled Kairos memory is read-only, bounded and audited."
             problems = self.agent_blockers(system_id)
             if problems:
                 result.update({"execution_available": False, "code": "setup_blocked",
@@ -690,7 +690,7 @@ class SwarmService:
 
     @staticmethod
     def _link(member, is_lead):
-        """A teammate standing for a JARVIS agent takes the agent's name and
+        """A teammate standing for a Kairos agent takes the agent's name and
         role, and its model unless the team picks another."""
         if not member.get("agent_id"):
             return member
@@ -705,7 +705,7 @@ class SwarmService:
         pool_limit = data.get("pool_limit")
         memory = data.get("memory") or {}
         if "project" in (memory.get("sources") or ()) and not projects.get_project(memory.get("project_id")):
-            raise ValueError("That JARVIS Project does not exist")
+            raise ValueError("That Kairos Project does not exist")
         seats = [m["agent_id"] for m in [data["lead"], *data["specialists"]] if m.get("agent_id")]
         if len(seats) != len(set(seats)):
             raise ValueError("An agent can hold only one seat on a team")

@@ -17,13 +17,13 @@ import { api, el } from "./api.js";
 // authenticated API.
 // A development copy (scripts/dev_instance.py) names itself on the sign-in
 // card too, so a password is never typed into the wrong window by mistake.
-let appName = "JARVIS";
+let appName = "Kairos";
 
 export async function run(overlay) {
   const status = await api("/api/auth/status");
-  if (status.instance) appName = `JARVIS (${status.instance})`;
+  if (status.instance) appName = `Kairos (${status.instance})`;
   if (status.local_access_locked) {
-    // Accounts are off and this page is not the JARVIS app window, so the
+    // Accounts are off and this page is not the Kairos app window, so the
     // backend answers it nothing (core/auth.py's UI_SECRET). Say how to get
     // in rather than render an app whose every request would fail.
     renderLocalAccessLocked(overlay);
@@ -40,10 +40,10 @@ export async function run(overlay) {
 function renderLocalAccessLocked(overlay) {
   overlay.innerHTML = "";
   overlay.appendChild(card([
-    el("h2", { text: "Open JARVIS from the app" }),
+    el("h2", { text: "Open Kairos from the app" }),
     el("div", { class: "sub", text:
-      "This JARVIS only answers its own window, so other programs on this computer can't use it as you. "
-      + "To use it in a browser, right-click the JARVIS icon in the system tray and choose Open in browser." }),
+      "This Kairos only answers its own window, so other programs on this computer can't use it as you. "
+      + "To use it in a browser, right-click the Kairos icon in the system tray and choose Open in browser." }),
   ]));
 }
 
@@ -58,7 +58,7 @@ function card(children) {
 function renderSetup(overlay, onDone) {
   const userInput = el("input", { placeholder: "Username", autocomplete: "username" });
   const passInput = el("input", { type: "password", placeholder: "Password", autocomplete: "new-password" });
-  const err = el("div", { class: "meta", style: "color: var(--danger, #e55); min-height: 18px; margin-top: 8px;" });
+  const err = el("div", { class: "meta", style: "color: var(--danger); min-height: 18px; margin-top: 8px;" });
 
   const submit = async () => {
     err.textContent = "";
@@ -76,7 +76,7 @@ function renderSetup(overlay, onDone) {
 
   overlay.innerHTML = "";
   overlay.appendChild(card([
-    el("h2", { text: "Set up JARVIS" }),
+    el("h2", { text: "Set up Kairos" }),
     el("div", { class: "sub", text: "First connection to this instance — create the admin account. This is your login, not a chat setting." }),
     userInput,
     passInput,
@@ -93,7 +93,7 @@ function renderLogin(overlay, onDone) {
   const userInput = el("input", { placeholder: "Username", autocomplete: "username" });
   const passInput = el("input", { type: "password", placeholder: "Password", autocomplete: "current-password" });
   const totpInput = el("input", { placeholder: "2FA code", style: "display:none;" });
-  const err = el("div", { class: "meta", style: "color: var(--danger, #e55); min-height: 18px; margin-top: 8px;" });
+  const err = el("div", { class: "meta", style: "color: var(--danger); min-height: 18px; margin-top: 8px;" });
 
   const submit = async () => {
     err.textContent = "";
@@ -142,7 +142,7 @@ function renderLogin(overlay, onDone) {
 function renderForgotPassword(overlay, onDone) {
   const userInput = el("input", { placeholder: "Username", autocomplete: "username" });
   const emailInput = el("input", { placeholder: "Connected email address", type: "email", autocomplete: "email" });
-  const err = el("div", { class: "meta", style: "color: var(--danger, #e55); min-height: 18px; margin-top: 8px;" });
+  const err = el("div", { class: "meta", style: "color: var(--danger); min-height: 18px; margin-top: 8px;" });
   const info = el("div", { class: "meta", style: "min-height: 18px; margin-top: 8px;" });
 
   const submit = async () => {
@@ -188,7 +188,7 @@ function renderForgotPassword(overlay, onDone) {
 function renderResetCode(overlay, username, onDone) {
   const codeInput = el("input", { placeholder: "6-digit code", autocomplete: "one-time-code", inputmode: "numeric" });
   const passInput = el("input", { type: "password", placeholder: "New password (8+ characters)", autocomplete: "new-password" });
-  const err = el("div", { class: "meta", style: "color: var(--danger, #e55); min-height: 18px; margin-top: 8px;" });
+  const err = el("div", { class: "meta", style: "color: var(--danger); min-height: 18px; margin-top: 8px;" });
 
   const submit = async () => {
     err.textContent = "";

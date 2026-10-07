@@ -1,45 +1,47 @@
-/* Public site: same quiet-intelligence palette as static/css/style.css. */
-:root { color-scheme: dark; --bg: #101113; --panel: #17181b; --text: #eeedf0; --dim: #b0afb8; --faint: #92919c; --accent: #b3a7f5; --border: rgba(255,255,255,.08); --strong: rgba(255,255,255,.17); --ease: cubic-bezier(.22,1,.36,1); }
+/* Public site: Kairos parchment and bistre, matching the desktop app. */
+@font-face { font-family: Jost; src: url('fonts/Jost-Variable.woff2') format('woff2'); font-style: normal; font-weight: 100 900; font-display: swap; }
+@font-face { font-family: 'Cormorant Garamond'; src: url('fonts/CormorantGaramond-Italic-Variable.woff2') format('woff2'); font-style: italic; font-weight: 300 700; font-display: swap; }
+:root { color-scheme: light; --bg: #F3EADB; --panel: #FBF6EE; --text: #3A2A20; --dim: #6B5646; --faint: #745F4D; --accent: #815E1E; --gold: #B8893B; --border: rgba(58,42,32,.13); --strong: rgba(58,42,32,.24); --ease: cubic-bezier(.22,1,.36,1); }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; scroll-padding-top: 100px; }
-body { margin: 0; color: var(--text); background: var(--bg); font-family: Inter, "Segoe UI", system-ui, sans-serif; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+body { margin: 0; color: var(--text); background: var(--bg); font-family: Jost, "Segoe UI", system-ui, sans-serif; line-height: 1.65; -webkit-font-smoothing: antialiased; }
 a { color: inherit; text-decoration: none; }
 button { font: inherit; }
 button, a, summary { -webkit-tap-highlight-color: transparent; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
-::selection { background: #49415f; color: #fff; }
+::selection { background: #EDE2D0; color: var(--text); }
 .wrap { width: min(1184px, calc(100% - 64px)); margin-inline: auto; }
 .skip-link { position: fixed; top: 8px; left: 8px; z-index: 100; background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; transform: translateY(-150%); }
 .skip-link:focus { transform: none; }
-.site-nav { position: sticky; top: 0; z-index: 20; background: rgba(16,17,19,.93); border-bottom: 1px solid var(--border); backdrop-filter: blur(16px); }
+.site-nav { position: sticky; top: 0; z-index: 20; background: rgba(251,246,238,.93); border-bottom: 1px solid var(--border); backdrop-filter: blur(16px); }
 .nav-inner { height: 76px; display: flex; align-items: center; gap: 36px; }
-.brand { display: inline-flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 600; letter-spacing: .1em; flex-shrink: 0; }
-.brand img { filter: grayscale(1) brightness(1.5); }
+.brand { display: inline-flex; align-items: center; flex-shrink: 0; }
+.brand img { display: block; width: 132px; height: auto; }
 .nav-links { display: flex; gap: 28px; margin: 0 auto; }
 .nav-links a, .nav-github { font-size: 12px; color: var(--dim); transition: color 160ms ease; }
 .nav-links a:hover, .nav-github:hover { color: var(--text); }
 .nav-github span { margin-left: 8px; }
-.hero { text-align: center; padding-top: 84px; }
+.hero { text-align: center; padding-top: 84px; background: linear-gradient(rgba(243,234,219,.65), var(--bg) 75%), url('img/kairos-sky.jpg') center top / 100% auto no-repeat; }
 .eyebrow, .section-number { font: 10px/1.5 "Cascadia Code", "SFMono-Regular", Consolas, monospace; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
 .hero .eyebrow { display: inline-flex; align-items: center; gap: 8px; }
-.status-dot { width: 5px; height: 5px; border-radius: 50%; background: #8cc8ac; }
-h1 { font-size: clamp(42px, 5.5vw, 76px); line-height: 1.06; font-weight: 450; letter-spacing: -.065em; margin: 24px 0; }
+.status-dot { width: 5px; height: 5px; border-radius: 50%; background: #4D6C48; }
+h1 { font-family: 'Cormorant Garamond', Garamond, serif; font-style: italic; font-size: clamp(48px, 6.2vw, 90px); line-height: 1.02; font-weight: 500; letter-spacing: 0; margin: 24px 0; }
 h1 span { color: var(--dim); }
 .hero-description { color: var(--faint); font-size: 16px; line-height: 1.8; margin: 0 0 28px; }
 .actions { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
-.button { display: inline-flex; align-items: center; justify-content: center; gap: 22px; padding: 11px 18px; border-radius: 9px; border: 1px solid var(--strong); font-size: 12px; font-weight: 500; transition: background 180ms ease, transform 180ms var(--ease), box-shadow 180ms ease; }
-.button.primary { color: #19191e; background: #e9e6ee; border-color: transparent; }
-.button.primary:hover { background: #fff; box-shadow: 0 4px 16px #0003; transform: translateY(-1px); }
+.button { display: inline-flex; align-items: center; justify-content: center; gap: 22px; padding: 11px 18px; border-radius: 999px; border: 1px solid var(--strong); font-size: 12px; font-weight: 500; transition: background 180ms ease, transform 180ms var(--ease), box-shadow 180ms ease; }
+.button.primary { color: var(--panel); background: var(--text); border-color: var(--text); }
+.button.primary:hover { background: #543D2E; box-shadow: 0 4px 16px rgba(58,42,32,.16); transform: translateY(-1px); }
 .button.secondary { color: var(--dim); background: transparent; border-color: var(--border); }
 .button.secondary:hover { background: var(--panel); color: var(--text); }
 .button:active { transform: translateY(1px); }
 .download-note { color: var(--faint); font-size: 10px; margin: 16px 0 52px; }
-.preview-switcher { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 4px; padding: 4px; border: 1px solid var(--border); border-radius: 12px; background: #151618; }
+.preview-switcher { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 4px; padding: 4px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
 .preview-button { border: 0; border-radius: 6px; padding: 7px 14px; color: var(--faint); background: transparent; font-size: 11px; cursor: pointer; transition: color 160ms ease, background 160ms ease; }
 .preview-button:hover { color: var(--text); }
-.preview-button.active { background: #26262e; color: var(--text); box-shadow: inset 0 0 0 1px #ffffff08, 0 1px 3px #0003; }
+.preview-button.active { background: #EDE2D0; color: var(--text); box-shadow: inset 0 0 0 1px var(--border), 0 1px 3px rgba(58,42,32,.1); }
 .product-preview { margin: 18px 0 0; text-align: left; }
-.product-preview > a { display: block; overflow: hidden; border: 1px solid var(--strong); border-radius: 14px; box-shadow: 0 28px 70px #0004; }
+.product-preview > a { display: block; overflow: hidden; border: 1px solid var(--strong); border-radius: 14px; box-shadow: 0 28px 70px rgba(58,42,32,.18); }
 .product-preview img { display: block; width: 100%; height: auto; aspect-ratio: 16/10; object-fit: cover; }
 .product-preview img.changing { animation: preview-in 220ms var(--ease); }
 @keyframes preview-in { from { opacity: .4; transform: translateY(3px); } }
@@ -50,7 +52,7 @@ figcaption { display: flex; justify-content: space-between; gap: 16px; color: va
 .section { padding-block: 92px; }
 .section-heading { margin-bottom: 42px; }
 .section-heading .eyebrow { margin: 0 0 18px; }
-.section-heading h2 { font-size: clamp(32px,4vw,48px); line-height: 1.15; letter-spacing: -.05em; font-weight: 400; margin: 0; }
+.section-heading h2 { font-family: 'Cormorant Garamond', Garamond, serif; font-style: italic; font-size: clamp(40px,5vw,58px); line-height: 1.1; letter-spacing: 0; font-weight: 500; margin: 0; }
 .section-heading > p:last-child:not(.eyebrow) { color: var(--faint); font-size: 14px; margin: 16px 0 0; }
 .feature-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
 .feature { padding: 26px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); transition: border-color 180ms ease; }
@@ -63,13 +65,13 @@ figcaption { display: flex; justify-content: space-between; gap: 16px; color: va
 .tour-row { display: grid; grid-template-columns: 1fr 1.8fr; gap: 54px; align-items: center; }
 .tour-row.reverse { grid-template-columns: 1.8fr 1fr; }
 .tour-row.reverse .tour-copy { order: 2; }
-.tour-copy h3 { font-size: 27px; font-weight: 400; letter-spacing: -.045em; line-height: 1.2; margin: 16px 0; }
+.tour-copy h3 { font-family: 'Cormorant Garamond', Garamond, serif; font-style: italic; font-size: 34px; font-weight: 500; letter-spacing: 0; line-height: 1.1; margin: 16px 0; }
 .tour-copy p { font-size: 13px; color: var(--dim); margin: 0; }
 .tour-copy .detail { color: var(--faint); font-size: 12px; margin-top: 18px; }
 .screenshot { display: block; border: 1px solid var(--strong); border-radius: 11px; overflow: hidden; transition: border-color 160ms ease; }
-.screenshot:hover { border-color: #777080; }
+.screenshot:hover { border-color: var(--gold); }
 .screenshot img { display: block; width: 100%; height: auto; }
-.install-section { background: #131416; border-block: 1px solid var(--border); }
+.install-section { background: #EDE2D0; border-block: 1px solid var(--border); }
 .install-section .section-heading { text-align: center; }
 .steps { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 36px; counter-reset: steps; list-style: none; padding: 0; margin: 54px auto 40px; max-width: 940px; }
 .steps li { counter-increment: steps; border-top: 1px solid var(--strong); padding-top: 22px; }

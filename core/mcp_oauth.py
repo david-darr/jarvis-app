@@ -3,7 +3,7 @@
 55 of the 65 catalog servers want OAuth 2.1 rather than an API key. The
 protocol work - discovery, client registration, PKCE, the code exchange -
 is the mcp package's OAuthClientProvider, the same class Hermes Agent's
-tools/mcp_oauth*.py wraps. This module supplies the parts that are JARVIS's:
+tools/mcp_oauth*.py wraps. This module supplies the parts that are Kairos's:
 
 - Storage. Tokens and the client registration live encrypted on the
   integration item (core/secret_storage), like an API key.
@@ -19,7 +19,7 @@ tools/mcp_oauth*.py wraps. This module supplies the parts that are JARVIS's:
   refreshed token reconnects the chat at its next turn boundary (resuming
   the same CLI session) instead of failing mid-chat on the old one.
 
-Sign-in has to happen on the machine running JARVIS: the provider sends the
+Sign-in has to happen on the machine running Kairos: the provider sends the
 browser back to 127.0.0.1.
 """
 import asyncio
@@ -40,7 +40,7 @@ CALLBACK_PATH = "/integrations/oauth/callback"  # under local_api_base(), which 
 SIGN_IN_TIMEOUT_SECONDS = 300
 START_TIMEOUT_SECONDS = 30
 REFRESH_MARGIN_SECONDS = 300
-CLIENT_NAME = "JARVIS"
+CLIENT_NAME = "Kairos"
 
 
 def _item(item_id: str) -> dict:
@@ -230,7 +230,7 @@ async def finish_sign_in(state: str, code: Optional[str], iss: Optional[str], er
     from mcp.shared.auth import AuthorizationCodeResult
     sign_in = _pending.pop(state or "", None)
     if sign_in is None:
-        return False, "This sign-in link is not one JARVIS is waiting for. Start again from Settings."
+        return False, "This sign-in link is not one Kairos is waiting for. Start again from Settings."
     name = (integrations.get_integration(sign_in.item_id) or {}).get("name", "the server")
     if error or not code:
         _last_error[sign_in.item_id] = f"the provider refused: {error or 'no code returned'}"
@@ -241,7 +241,7 @@ async def finish_sign_in(state: str, code: Optional[str], iss: Optional[str], er
         await asyncio.wait_for(asyncio.shield(sign_in.task), 60)
     except Exception:
         return False, f"Signing in to {name} failed: {_last_error.get(sign_in.item_id, 'no answer from the server')}"
-    return True, f"Signed in to {name}. You can close this page and go back to JARVIS."
+    return True, f"Signed in to {name}. You can close this page and go back to Kairos."
 
 
 def status(item_id: str) -> dict:
@@ -255,7 +255,7 @@ def status(item_id: str) -> dict:
 
 def sign_out(item_id: str) -> None:
     """Forget the tokens and the registration. The provider may still list
-    JARVIS as a connected app until it is removed on the provider's side."""
+    Kairos as a connected app until it is removed on the provider's side."""
     _item(item_id)
     _save_oauth(item_id, None)
     _last_error.pop(item_id, None)

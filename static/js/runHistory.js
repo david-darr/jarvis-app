@@ -52,7 +52,7 @@ export function deliveryState(run, deliveryLabel) {
       : `delivering${to}` };
   }
   if (d.status === "failed") return { text: `delivery${to} failed for a day and was given up`, error: true, retry: true };
-  return { text: `JARVIS closed while sending${to}; it may not have arrived`, error: true, retry: true };
+  return { text: `Kairos closed while sending${to}; it may not have arrived`, error: true, retry: true };
 }
 
 function deliveryRow(run, deliveryLabel) {

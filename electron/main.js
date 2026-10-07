@@ -38,7 +38,7 @@ let INSTANCE;
 try {
   INSTANCE = resolveInstance({ argv: process.argv, env: process.env, appData: app.getPath("appData") });
 } catch (err) {
-  dialog.showErrorBox("JARVIS couldn't start", err.message);
+  dialog.showErrorBox("Kairos couldn't start", err.message);
   app.exit(1);
 }
 if (INSTANCE && INSTANCE.userData) app.setPath("userData", INSTANCE.userData);
@@ -271,15 +271,15 @@ async function launch() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents
         .executeJavaScript(
-          `window.setStatus("JARVIS couldn't start", ${JSON.stringify(detail)}, true)`,
+          `window.setStatus("Kairos couldn't start", ${JSON.stringify(detail)}, true)`,
         )
         .catch(() => {
           // The splash itself never loaded, so there's nowhere on screen to
           // put this. A native dialog is the last channel left.
-          dialog.showErrorBox("JARVIS couldn't start", detail);
+          dialog.showErrorBox("Kairos couldn't start", detail);
         });
     } else {
-      dialog.showErrorBox("JARVIS couldn't start", detail);
+      dialog.showErrorBox("Kairos couldn't start", detail);
     }
   }
 }
@@ -335,8 +335,8 @@ async function openInBrowser() {
   try {
     await shell.openExternal(await browserHandoffUrl(fetch, BACKEND_URL, UI_SECRET));
   } catch (err) {
-    console.error(`[ui-access] couldn't open JARVIS in the browser: ${err.message}`);
-    dialog.showErrorBox("Couldn't open JARVIS in the browser", err.message);
+    console.error(`[ui-access] couldn't open Kairos in the browser: ${err.message}`);
+    dialog.showErrorBox("Couldn't open Kairos in the browser", err.message);
   }
 }
 
@@ -366,11 +366,12 @@ async function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
-    backgroundColor: "#101113",
+    // Kairos parchment until the page reports its own colors (window:title-bar).
+    backgroundColor: "#F3EADB",
     title: INSTANCE.label,
     titleBarStyle: "hidden",
     ...(process.platform === "win32" ? { titleBarOverlay: {
-      color: "#101113", symbolColor: "#b0afb8", height: 32,
+      color: "#F3EADB", symbolColor: "#6B5646", height: 32,
     } } : {}),
     autoHideMenuBar: true,
     icon: windowIcon(),
@@ -456,7 +457,7 @@ async function createWindow() {
     if (tray && process.platform === "win32" && !win.__toldAboutTray) {
       win.__toldAboutTray = true;
       tray.displayBalloon({
-        title: "JARVIS is still running",
+        title: "Kairos is still running",
         content: "Remote access stays available. Reopen or quit from the icon in the system tray.",
       });
     }
@@ -478,7 +479,7 @@ async function createWindow() {
 
   if (!ok) {
     say(
-      "JARVIS couldn't start",
+      "Kairos couldn't start",
       "The local engine didn't come up in time.\n\n" +
       `Most often this is another program already using port ${INSTANCE.port}, or the app still being ` +
       "scanned by your system on first launch — try opening it again.\n\n" +
@@ -616,6 +617,15 @@ for (const [channel, fn] of [
 ]) {
   ipcMain.on(channel, (event) => { if (fromAppWindow(event)) fn(); });
 }
+// The window controls drawn over the page (Windows) follow its Appearance:
+// the page sends its background and text colors whenever they change.
+const HEX = /^#[0-9a-f]{6}$/i;
+ipcMain.on("window:title-bar", (event, color, symbolColor) => {
+  if (!fromAppWindow(event) || !HEX.test(color) || !HEX.test(symbolColor)) return;
+  mainWindow.setBackgroundColor(color);
+  if (process.platform === "win32") mainWindow.setTitleBarOverlay({ color, symbolColor });
+});
+
 ipcMain.on("browser:bounds", (event, rect) => {
   if (fromAppWindow(event)) sideBrowser.setBounds(rect);
 });
@@ -658,7 +668,7 @@ function setupAutoUpdate() {
       defaultId: 0,
       cancelId: 1,
       title: "Update ready",
-      message: `JARVIS ${info.version} is ready to install.`,
+      message: `Kairos ${info.version} is ready to install.`,
       detail: "It will be applied automatically the next time you quit, or you can restart now.",
     });
     if (response === 0) autoUpdater.quitAndInstall();
@@ -671,7 +681,7 @@ function setupAutoUpdate() {
 }
 
 // Single-instance lock — mandatory now that closing only hides the window.
-// Without it, clicking the Start Menu shortcut while JARVIS sits in the tray
+// Without it, clicking the Start Menu shortcut while Kairos sits in the tray
 // launches a SECOND copy, which then fails to bind its port and shows the
 // "couldn't start" screen while the original is running fine. Instead, the
 // second launch hands off to the first, which simply reveals itself. The

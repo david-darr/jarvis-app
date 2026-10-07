@@ -16,6 +16,8 @@ module.exports = async function checkAppearance({ js, win, waitFor, capture, bas
   const preview = () => js("document.querySelector('.appearance-preview canvas').toDataURL()");
   await open();
   assert.equal(await js("document.querySelectorAll('.appearance-mode').length"), 4);
+  assert.equal(await js("document.querySelector('[data-mode=default] strong').textContent"), 'Kairos');
+  assert.equal(await js("document.querySelector('.appearance-preview-copy strong').textContent"), 'Not more time. The right time.');
   await js("document.querySelector('[data-mode=color]').click()");
   await set({ mode: 'color', color: '#23302e' });
   assert.equal(await js("getComputedStyle(document.querySelector('#sidebar')).backgroundColor"), 'rgb(29, 39, 38)');
@@ -28,6 +30,8 @@ module.exports = async function checkAppearance({ js, win, waitFor, capture, bas
   })()`);
   assert.ok(contrast >= 4.5, 'Light sidebar text stays readable');
   await capture('appearance-light');
+  await set({ mode: 'shader', color: '#f3eadb', motion: false });
+  await capture('appearance-flow-parchment');
   await set({ mode: 'shader', color: '#23302e', motion: false });
   await js("document.querySelector('[data-section=appearance]').click()");
   assert.equal((await state()).staticFallback, false, 'Shader compiles and runs');
@@ -110,6 +114,7 @@ module.exports = async function checkAppearance({ js, win, waitFor, capture, bas
   assert.equal((await state()).staticFallback, false, 'Restored context returns to the shader');
   await js("document.querySelector(\".settings-titlebar-btn[title='Close']\").click()");
   await js("import('/static/js/app.js').then(m=>m.switchTab('chat'))");
+  assert.ok(!await js("getComputedStyle(document.querySelector('.chat-layout')).backgroundImage.includes('kairos-sky.jpg')"), 'Flow appearance keeps its chosen background');
   await capture('appearance-flow-workspace');
   await open();
   await js("document.querySelector('[data-mode=image]').click()");

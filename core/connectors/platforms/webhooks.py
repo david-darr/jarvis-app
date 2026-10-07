@@ -1,7 +1,7 @@
 """Platforms that deliver messages to a URL: SMS through Twilio, WhatsApp
 Cloud API, LINE, and a generic signed webhook. Each verifies the platform's
 signature before reading anything, answers the webhook at once, and handles
-the message in the background (Hub.spawn). They receive only once JARVIS's
+the message in the background (Hub.spawn). They receive only once Kairos's
 webhook URL is reachable from the internet; sending works regardless.
 
 References: Hermes plugins/platforms/sms, plugins/platforms/line and
@@ -46,11 +46,11 @@ class TwilioSMS(Connector):
     kind = "sms"
     label = "SMS (Twilio)"
     webhook = True
-    description = "Text JARVIS from your phone through a Twilio number."
+    description = "Text Kairos from your phone through a Twilio number."
     docs_url = "https://www.twilio.com/docs/messaging/guides/webhook-request"
     message_limit = 1500
     target_field = "default_to"
-    sender_help = "Phone numbers allowed to text JARVIS, in +15551234567 form, one per line."
+    sender_help = "Phone numbers allowed to text Kairos, in +15551234567 form, one per line."
     fields = (
         Field("account_sid", "Account SID", placeholder="AC..."),
         Field("auth_token", "Auth token", secret=True),
@@ -89,7 +89,7 @@ class WhatsAppCloud(Connector):
     docs_url = "https://developers.facebook.com/docs/whatsapp/cloud-api/get-started"
     message_limit = 4096
     target_field = "default_to"
-    sender_help = "WhatsApp numbers allowed to message JARVIS, digits with country code (15551234567), one per line."
+    sender_help = "WhatsApp numbers allowed to message Kairos, digits with country code (15551234567), one per line."
     fields = (
         Field("phone_number_id", "Phone number ID"),
         Field("access_token", "Access token", secret=True),
@@ -180,7 +180,7 @@ class GenericWebhook(Connector):
     kind = "webhook"
     label = "Webhook"
     webhook = True
-    description = ("Any service or script: POST signed JSON to JARVIS; replies are POSTed to your URL. "
+    description = ("Any service or script: POST signed JSON to Kairos; replies are POSTed to your URL. "
                    'Body: {"text": "...", "sender": "...", "conversation": "..."}; header '
                    "X-JARVIS-Signature: sha256=<HMAC-SHA256 of the body with the secret>.")
     docs_url = ""
@@ -189,7 +189,7 @@ class GenericWebhook(Connector):
     sender_help = "Sender names your service will put in \"sender\", one per line."
     fields = (
         Field("secret", "Signing secret", secret=True, help="Shared with the sending service; unsigned requests are refused."),
-        Field("reply_url", "Reply URL", required=False, help="Where JARVIS POSTs replies and notifications as JSON."),
+        Field("reply_url", "Reply URL", required=False, help="Where Kairos POSTs replies and notifications as JSON."),
     )
 
     async def handle_webhook(self, method, headers, query, body):

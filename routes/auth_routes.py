@@ -46,7 +46,7 @@ async def status(request: Request) -> dict:
         # is safe to expose to anyone so the sidebar can gate the option.
         "other_users_exist": auth_enabled() and len(auth_manager.list_users()) > 1,
         # Accounts off, and this request is not the app's own window (see
-        # core/auth.py's UI_SECRET): the page says to open JARVIS from the app.
+        # core/auth.py's UI_SECRET): the page says to open Kairos from the app.
         "local_access_locked": not auth_enabled() and user is None,
         # "" for the real app; a development copy's name otherwise (the DEV badge).
         "instance": INSTANCE,
@@ -70,7 +70,7 @@ async def ui_handoff(code: str = "") -> Response:
     """Redeem a code from /ui-code: sets the app's access cookie in this
     browser and opens the app. Single use, 60 seconds."""
     if auth_enabled() or not auth_module.UI_SECRET or not auth_module.redeem_ui_code(code):
-        raise HTTPException(status_code=403, detail="this link has expired; use Open in browser from the JARVIS tray again")
+        raise HTTPException(status_code=403, detail="this link has expired; use Open in browser from the Kairos tray again")
     response = RedirectResponse("/", status_code=303)
     # A session cookie (never written to disk by the browser), not readable
     # by page scripts, and never sent on a request another site starts.
@@ -141,9 +141,9 @@ async def forgot_password(body: ForgotPasswordRequest) -> dict:
         email_service.send_message(
             account["id"],
             to=account["email"],
-            subject="JARVIS password reset code",
+            subject="Kairos password reset code",
             body=(
-                f"Your JARVIS password reset code is: {code}\n\n"
+                f"Your Kairos password reset code is: {code}\n\n"
                 "This code expires in 15 minutes and can only be used once. "
                 "If you didn't request this, you can safely ignore this email."
             ),

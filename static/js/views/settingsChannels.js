@@ -52,7 +52,7 @@ export async function renderChannelsPanel(body, _status, page) {
         ...bots.map((bot) => discordRow(bot, live.has(bot.name))),
         ...connectors.map((record) => connectorRow(record)),
       ];
-      listGroup.body.replaceChildren(...(rows.length ? rows : [empty("No channels yet. Add one to reach JARVIS from your phone.")]));
+      listGroup.body.replaceChildren(...(rows.length ? rows : [empty("No channels yet. Add one to reach Kairos from your phone.")]));
       timer = setTimeout(draw, POLL_MS);
     };
     await draw();
@@ -89,7 +89,7 @@ export async function renderChannelsPanel(body, _status, page) {
   // -- the platform picker ---------------------------------------------------
   function showPicker() {
     stop();
-    page.sub({ title: "Add a channel", description: "Pick where you want to reach JARVIS, or where results should go.", back: showList });
+    page.sub({ title: "Add a channel", description: "Pick where you want to reach Kairos, or where results should go.", back: showList });
     const tile = (kind, label, description, onclick) => el("button", { type: "button", class: "set-tile", "data-kind": kind, onclick }, [
       badge(label, kind === "discord" ? 235 : hueFor(kind)),
       el("span", {}, [el("strong", { text: label }), el("span", { class: "meta", text: description })]),
@@ -105,9 +105,9 @@ export async function renderChannelsPanel(body, _status, page) {
     const viaWebhook = kinds.filter((k) => k.two_way && k.webhook);
     const sendOnly = kinds.filter((k) => !k.two_way);
     body.replaceChildren(...[
-      section("Two-way", "Talk to JARVIS and your agents. No public address needed.",
+      section("Two-way", "Talk to Kairos and your agents. No public address needed.",
         [tile("discord", "Discord", "A Discord bot in your server or DMs.", showAddDiscord), ...kindTiles(twoWay)]),
-      section("Two-way through a webhook", "The platform calls JARVIS, so JARVIS must be reachable from the internet to receive. Sending works regardless.",
+      section("Two-way through a webhook", "The platform calls Kairos, so Kairos must be reachable from the internet to receive. Sending works regardless.",
         kindTiles(viaWebhook)),
       section("Send only", "For task results and agent notifications. No bot needed.", kindTiles(sendOnly)),
     ].filter(Boolean));
@@ -182,7 +182,7 @@ export async function renderChannelsPanel(body, _status, page) {
     ];
     if (webhookUrl) {
       statusRows.push(row({ title: "Webhook address", description: [el("div", { class: "set-mono", text: webhookUrl }),
-        el("div", { text: "Give this to the platform. It must reach JARVIS from the internet; nothing arrives until then." })],
+        el("div", { text: "Give this to the platform. It must reach Kairos from the internet; nothing arrives until then." })],
         control: el("button", { class: "btn", text: "Copy", onclick: async () => { await navigator.clipboard.writeText(webhookUrl); toast("Copied", "success"); } }) }));
     }
     const parts = [group({ title: "Status" }, statusRows)];
@@ -233,7 +233,7 @@ export async function renderChannelsPanel(body, _status, page) {
     });
     body.replaceChildren(
       group({ title: "Settings", cls: "connector-add" }, [
-        field("Name", name, "How it appears in JARVIS."), ...rows,
+        field("Name", name, "How it appears in Kairos."), ...rows,
         ...(kind.two_way ? [
           row({ stack: true, title: "Allowed senders", description: kind.sender_help, control: allowed }),
           row({ title: "Model for chats", description: "Which model answers messages here.", control: model }),
@@ -325,7 +325,7 @@ export async function renderChannelsPanel(body, _status, page) {
   function showAddDiscord() {
     stop();
     page.sub({ title: "Add Discord", description: "A Discord bot that answers you in your server or DMs.", back: showPicker });
-    const name = el("input", { placeholder: "JARVIS" });
+    const name = el("input", { placeholder: "Kairos" });
     const token = el("input", { type: "password", placeholder: "Bot token", autocomplete: "off" });
     const allowed = el("input", { placeholder: "Your Discord user ID" });
     const model = modelPicker(models, null, "No default model");

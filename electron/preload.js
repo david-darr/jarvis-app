@@ -18,6 +18,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 // renderer the entire IPC surface and undo the point of this file.
 contextBridge.exposeInMainWorld("jarvis", {
   pickVaultFolder: () => ipcRenderer.invoke("pick-vault-folder"),
+  // Two #rrggbb colors; main.js checks both and that the call came from this window.
+  setTitleBar: (color, symbolColor) => ipcRenderer.send("window:title-bar", String(color), String(symbolColor)),
   openGoogleSignIn: (url) => ipcRenderer.invoke("google:open-sign-in", url),
 
   screenGrab: {

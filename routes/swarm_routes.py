@@ -59,7 +59,7 @@ class Member(StrictModel):
     model: Annotated[str, Field(max_length=200)] | None = None
     effort: Annotated[str, Field(max_length=40)] | None = None
     step_limit: int | None = Field(default=None, strict=True, ge=500, le=1_000_000_000)
-    # One of the owner's JARVIS agents this teammate stands for (agents phase
+    # One of the owner's Kairos agents this teammate stands for (agents phase
     # 5). Its name, role and default model come from the agent; admin only,
     # like everything else about agents.
     agent_id: ID | None = None
@@ -96,7 +96,7 @@ class MemorySettings(StrictModel):
         if len(self.sources) != len(set(self.sources)):
             raise ValueError("Memory sources must be unique")
         if "project" in self.sources and not self.project_id:
-            raise ValueError("Choose a JARVIS Project before enabling project memory")
+            raise ValueError("Choose a Kairos Project before enabling project memory")
         return self
 
 

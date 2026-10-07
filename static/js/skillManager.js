@@ -109,7 +109,7 @@ async function refresh(list) {
     list.appendChild(emptyState({
       icon: ICONS.brain,
       title: "No skills yet",
-      hint: "Skills are reusable SKILL.md procedures JARVIS can follow. Create one above, or import an existing .md file.",
+      hint: "Skills are reusable SKILL.md procedures Kairos can follow. Create one above, or import an existing .md file.",
     }));
     return;
   }
@@ -157,8 +157,8 @@ async function buildSkillCard(skill, list) {
 }
 
 const SOURCE_LABELS = {
-  bundled: "Bundled with JARVIS",
-  user: "Written in JARVIS",
+  bundled: "Bundled with Kairos",
+  user: "Written in Kairos",
   imported: "Imported",
   unknown: "Origin unknown (created before curation)",
 };

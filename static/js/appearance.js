@@ -1,10 +1,17 @@
 // Device-local appearance. Images are decoded into canvas pixels, never
 // injected as URLs or uploaded. IndexedDB keeps them out of small JSON storage.
-const DEFAULTS = Object.freeze({ mode: 'default', color: '#23302e', tint: .65,
+const DEFAULTS = Object.freeze({ mode: 'default', color: '#f3eadb', tint: .65,
   distortion: .35, swirl: .3, grainMixer: .2, grainOverlay: .12, motion: true, chatStyle: 'standard' });
 const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
 const TOKENS = ['--bg', '--bg-panel', '--bg-panel-solid', '--surface-2', '--sidebar-bg',
-  '--text', '--text-dim', '--text-faint', '--sidebar-text', '--sidebar-muted', '--sidebar-accent', '--border', '--border-strong', '--accent', '--accent-rgb'];
+  '--text', '--text-dim', '--text-faint', '--sidebar-text', '--sidebar-muted', '--sidebar-accent', '--border', '--border-strong', '--accent', '--accent-rgb',
+  '--ink-rgb', '--shade-rgb', '--scrim', '--danger', '--danger-rgb', '--success', '--success-rgb', '--warn', '--warn-rgb'];
+// Status colors that stay readable on each kind of base: Kairos's own on a
+// light one, lighter tints on a dark one (both clear WCAG AA on their base).
+const STATUS = {
+  light: { danger: [168, 67, 47], success: [77, 108, 72], warn: [140, 88, 21] },
+  dark: { danger: [240, 128, 136], success: [140, 200, 172], warn: [217, 182, 125] },
+};
 let settings = { ...DEFAULTS }, storageKey = '', imageBitmap = null;
 let imageCanvas, shaderCanvas, previewCanvas, glScene, animation = 0, lastFrame = 0, time = 0;
 let storageIssue = '', imageRevision = 0, identityRevision = 0, imageQueue = Promise.resolve();
@@ -29,6 +36,18 @@ function luminance(color) {
   return color.map(v => v / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4)
     .reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
 }
+const contrast = (a, b) => {
+  const [x, y] = [luminance(a), luminance(b)];
+  return (Math.max(x, y) + .05) / (Math.min(x, y) + .05);
+};
+// A status color moved toward the text color until it reads on the base.
+function legible(status, base, text) {
+  for (let amount = 0; amount <= 1; amount += .05) {
+    const value = status.map((v, i) => Math.round(v * (1 - amount) + text[i] * amount));
+    if (contrast(value, base) >= 4.5) return value;
+  }
+  return text;
+}
 function readable(color, fade = 0) {
   const foreground = luminance(color) > .179 ? 0 : 255;
   for (let amount = fade; amount >= 0; amount -= .02) {
@@ -49,7 +68,7 @@ function imageStore(action, value) {
     const request = indexedDB.open('jarvis-appearance', 1);
     request.onupgradeneeded = () => request.result.createObjectStore('images');
     request.onerror = () => reject(request.error);
-    request.onblocked = () => reject(new Error('Image storage is busy. Close other JARVIS windows and retry.'));
+    request.onblocked = () => reject(new Error('Image storage is busy. Close other Kairos windows and retry.'));
     request.onsuccess = () => {
       const db = request.result;
       const tx = db.transaction('images', action === 'get' ? 'readonly' : 'readwrite');
@@ -157,6 +176,7 @@ function apply() {
     const color = rgb(settings.color), light = luminance(color) > .179;
     const sidebar = mix(color, 0, .18).map(Math.round);
     const accent = readable(color, .12);
+    const text = readable(color), status = STATUS[light ? 'light' : 'dark'];
     const values = {
       '--bg': css(color), '--sidebar-bg': css(sidebar),
       '--sidebar-text': css(readable(sidebar)), '--sidebar-muted': css(readable(sidebar, .28)),
@@ -170,14 +190,38 @@ function apply() {
       '--border': light ? 'rgba(0,0,0,.13)' : 'rgba(255,255,255,.12)',
       '--border-strong': light ? 'rgba(0,0,0,.25)' : 'rgba(255,255,255,.25)',
       '--accent': css(accent), '--accent-rgb': accent.join(', '),
+      '--ink-rgb': light ? text.join(', ') : '255, 255, 255',
+      '--shade-rgb': light ? text.join(', ') : '0, 0, 0',
+      '--scrim': light ? `rgba(${text.join(', ')}, .28)` : 'rgba(0, 0, 0, .55)',
     };
+    for (const [name, wanted] of Object.entries(status)) {
+      const value = legible(wanted, color, text);
+      values[`--${name}`] = css(value); values[`--${name}-rgb`] = value.join(', ');
+    }
     for (const [key, value] of Object.entries(values)) root.style.setProperty(key, value);
     root.style.colorScheme = light ? 'light' : 'dark';
   }
   if (settings.mode === 'shader' && glScene === undefined) glScene = createShader();
   draw(); animate();
+  syncTitleBar();
 }
 
+// The desktop window's own controls (electron/preload.js setTitleBar).
+function syncTitleBar() {
+  if (!window.jarvis?.setTitleBar) return;
+  const probe = document.createElement('span');
+  document.body.append(probe);
+  const hex = name => {
+    probe.style.color = `var(${name})`;
+    const [r, g, b] = getComputedStyle(probe).color.match(/\d+/g).map(Number);
+    return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+  };
+  const colors = [hex('--bg'), hex('--text-dim')];
+  probe.remove();
+  window.jarvis.setTitleBar(...colors);
+}
+
+const token = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 function fit(canvas, width, height) {
   if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
 }
@@ -200,7 +244,7 @@ function draw() {
     glScene.draw(width, height, motionQuery.matches ? 0 : time, settings);
   } else {
     const ctx = imageCanvas.getContext('2d');
-    ctx.fillStyle = settings.mode === 'default' ? '#101113' : settings.color;
+    ctx.fillStyle = settings.mode === 'default' ? token('--bg') : settings.color;
     ctx.fillRect(0, 0, width, height);
     if (settings.mode === 'image' && imageBitmap) {
       cover(ctx, imageBitmap, width, height);
@@ -215,7 +259,7 @@ function draw() {
   if (previewCanvas?.isConnected) {
     const ctx = previewCanvas.getContext('2d');
     ctx.drawImage(isShader ? shaderCanvas : imageCanvas, 0, 0, previewCanvas.width, previewCanvas.height);
-    ctx.fillStyle = settings.mode === 'default' ? '#0c0d0f' : css(mix(rgb(settings.color), 0, .18));
+    ctx.fillStyle = settings.mode === 'default' ? token('--sidebar-bg') : css(mix(rgb(settings.color), 0, .18));
     ctx.fillRect(0, 0, previewCanvas.width * .16, previewCanvas.height);
   } else previewCanvas = null;
 }
@@ -249,7 +293,7 @@ function createShader() {
     gl.attachShader(program, compile(gl.FRAGMENT_SHADER, `
       precision highp float;
       uniform vec2 resolution; uniform vec3 base;
-      uniform float clock, distortion, swirl, mixer, grain;
+      uniform float clock, distortion, swirl, mixer, grain, lightBase;
       float noise(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
       void main(){
         vec2 p=(gl_FragCoord.xy-.5*resolution)/resolution.y;
@@ -258,7 +302,9 @@ function createShader() {
         p+=distortion*.4*vec2(sin(p.y*5.+clock*.12),cos(p.x*4.-clock*.1));
         float band=.5+.5*sin(p.x*4.+p.y*2.+sin(p.y*3.)+clock*.1);
         band=mix(band,noise(floor(p*180.)),mixer*.55);
-        vec3 color=mix(base*.96,mix(base,vec3(1.),.22),smoothstep(.15,.9,band));
+        vec3 shade=mix(base*.96,mix(base,vec3(.227,.165,.125),.06),lightBase);
+        vec3 lift=mix(mix(base,vec3(1.),.22),mix(base,vec3(.851,.698,.376),.12),lightBase);
+        vec3 color=mix(shade,lift,smoothstep(.15,.9,band));
         color+=(noise(gl_FragCoord.xy)-.5)*grain*.16;
         gl_FragColor=vec4(clamp(color,0.,1.),1.);
       }`));
@@ -270,11 +316,13 @@ function createShader() {
     gl.useProgram(program);
     const position = gl.getAttribLocation(program, 'position');
     gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
-    const uniforms = Object.fromEntries(['resolution', 'base', 'clock', 'distortion', 'swirl', 'mixer', 'grain'].map(key => [key, gl.getUniformLocation(program, key)]));
+    const uniforms = Object.fromEntries(['resolution', 'base', 'clock', 'distortion', 'swirl', 'mixer', 'grain', 'lightBase'].map(key => [key, gl.getUniformLocation(program, key)]));
     return { draw(width, height, elapsed, prefs) {
       gl.viewport(0, 0, width, height);
       gl.uniform2f(uniforms.resolution, width, height);
-      gl.uniform3fv(uniforms.base, rgb(prefs.color).map(v => v / 255));
+      const base = rgb(prefs.color);
+      gl.uniform3fv(uniforms.base, base.map(v => v / 255));
+      gl.uniform1f(uniforms.lightBase, luminance(base) > .179 ? 1 : 0);
       gl.uniform1f(uniforms.clock, elapsed);
       gl.uniform1f(uniforms.distortion, prefs.distortion); gl.uniform1f(uniforms.swirl, prefs.swirl);
       gl.uniform1f(uniforms.mixer, prefs.grainMixer); gl.uniform1f(uniforms.grain, prefs.grainOverlay);

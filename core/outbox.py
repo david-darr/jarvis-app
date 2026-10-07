@@ -1,7 +1,7 @@
 """The channel outbox (roadmap phase 4, 2026-10-06; spec: the vault note
 "Durable Work - Phase 4 (Build Spec)").
 
-Every message JARVIS sends to a comms channel by itself - a task's output,
+Every message Kairos sends to a comms channel by itself - a task's output,
 an agent's question, report or result, a trigger asking for approval - is
 queued here instead of sent on the spot, then sent from the queue:
 
@@ -9,7 +9,7 @@ queued here instead of sent on the spot, then sent from the queue:
   hourly, and given up after a day: the row is marked failed and the activity
   feed says so. Before this, a failed send was never retried, and agent and
   trigger messages failed without a trace.
-- A row found mid-send when JARVIS starts is marked unknown and never sent
+- A row found mid-send when Kairos starts is marked unknown and never sent
   again. The send may well have landed; a second copy is worse than a gap.
   (Hermes Agent's cron/delivery_queue.py makes the same call.)
 - The same message queued twice (one `key`) is one row, sent once.
@@ -150,10 +150,10 @@ def recover() -> int:
     now = time.time()
     with store.transaction() as conn:
         cut = conn.execute("UPDATE deliveries SET status = 'unknown', finished_at = ?, next_try_at = NULL, "
-                           "last_error = 'JARVIS closed while sending it; it may or may not have arrived' "
+                           "last_error = 'Kairos closed while sending it; it may or may not have arrived' "
                            "WHERE status = 'sending'", (now,)).rowcount
     if cut:
-        logger.warning("outbox: %d message(s) were cut off mid-send by JARVIS closing; not sent again", cut)
+        logger.warning("outbox: %d message(s) were cut off mid-send by Kairos closing; not sent again", cut)
     return cut
 
 

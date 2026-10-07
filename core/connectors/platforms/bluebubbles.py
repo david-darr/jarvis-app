@@ -1,7 +1,7 @@
 """iMessage, through a BlueBubbles server running on a Mac you own.
 Reference: Hermes gateway/platforms/bluebubbles.py (MIT), which takes
 BlueBubbles webhooks; this polls the server's REST API instead, so it works
-without exposing JARVIS to the internet."""
+without exposing Kairos to the internet."""
 import asyncio
 import time
 import uuid
@@ -18,7 +18,7 @@ class BlueBubbles(Connector):
     docs_url = "https://bluebubbles.app/"
     message_limit = 10000
     target_field = "default_chat"
-    sender_help = "Phone numbers or Apple ID emails allowed to message JARVIS, one per line."
+    sender_help = "Phone numbers or Apple ID emails allowed to message Kairos, one per line."
     fields = (
         Field("server_url", "BlueBubbles server URL", placeholder="http://192.168.1.20:1234"),
         Field("password", "Server password", secret=True),

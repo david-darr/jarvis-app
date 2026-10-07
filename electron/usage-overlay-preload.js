@@ -1,7 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 // The notch page's only reach into the main process. Nothing here returns data
-// from the system; the page gets its readings from the JARVIS backend.
+// from the system; the page gets its readings from the Kairos backend.
 contextBridge.exposeInMainWorld("usageOverlay", {
   // Whether the pointer is over the pill or card: the window takes clicks only then.
   setInteractive: (on) => ipcRenderer.send("usage-overlay:interactive", !!on),

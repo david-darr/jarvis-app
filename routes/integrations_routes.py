@@ -121,7 +121,7 @@ async def oauth_callback(state: str = "", code: Optional[str] = None, iss: Optio
                          error: Optional[str] = None) -> HTMLResponse:
     ok, message = await mcp_oauth.finish_sign_in(state, code, iss, error)
     title = "Signed in" if ok else "Sign-in did not finish"
-    page = (f"<!doctype html><meta charset=utf-8><title>JARVIS - {title}</title>"
+    page = (f"<!doctype html><meta charset=utf-8><title>Kairos - {title}</title>"
             f"<body style=\"font-family:system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem\">"
             f"<h1 style=\"font-size:1.3rem\">{title}</h1><p>{html.escape(message)}</p></body>")
     return HTMLResponse(page, status_code=200 if ok else 400)

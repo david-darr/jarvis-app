@@ -28,7 +28,7 @@ export async function render(container) {
 
   const header = el("div", { class: "new-tab-header" }, [
     el("h1", { text: "New Tab" }),
-    el("p", { text: "Add a ready-made tab, or describe your own and JARVIS builds it with your connected AI model." }),
+    el("p", { text: "Add a ready-made tab, or describe your own and Kairos builds it with your connected AI model." }),
   ]);
 
   // Premade tabs (David's ask 2026-09-03) — real, already-built tabs that

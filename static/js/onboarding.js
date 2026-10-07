@@ -26,8 +26,8 @@ export async function run(overlay, onComplete) {
 
   const STEP_RENDERERS = {
     welcome: () => el("div", {}, [
-      el("h2", { text: "All systems online." }),
-      el("div", { class: "sub", text: "Let's get JARVIS set up on this machine. This takes under a minute — everything here can also be changed later from Settings or Cookbook." }),
+      el("h2", { text: "Not more time. The right time." }),
+      el("div", { class: "sub", text: "Let's get Kairos set up on this machine. This takes under a minute — everything here can also be changed later from Settings or Cookbook." }),
       el("div", { class: "onboarding-actions" }, [
         el("div", {}),
         el("button", { class: "btn", text: "Get Started", onclick: () => goTo(1) }),
@@ -69,11 +69,11 @@ export async function run(overlay, onComplete) {
       const profileInput = el("textarea", {
         rows: "3",
         style: "width:100%;margin-top:10px;",
-        placeholder: "Tell JARVIS a bit about yourself — your role, what you're working on. It'll write this straight into the vault index instead of leaving it blank.",
+        placeholder: "Tell Kairos a bit about yourself — your role, what you're working on. It'll write this straight into the vault index instead of leaving it blank.",
       });
       const buildStatus = el("div", { class: "meta", style: "margin-top:8px;" });
       const questionnaireWrap = el("div", { style: "display:none;margin-top:12px;" }, [
-        el("div", { class: "sub", text: "What do you want JARVIS tracking for you? (Tasks and daily notes are included either way.)" }),
+        el("div", { class: "sub", text: "What do you want Kairos tracking for you? (Tasks and daily notes are included either way.)" }),
         ...checkboxes.map((c) => c.row),
         profileInput,
         el("button", { class: "btn", style: "margin-top:10px;", text: "Build My Vault", onclick: async () => {
@@ -94,7 +94,7 @@ export async function run(overlay, onComplete) {
 
       return el("div", {}, [
         el("h2", { text: "Your vault" }),
-        el("div", { class: "sub", text: "This is where JARVIS's memory lives — notes, priorities, everything it remembers between sessions. Use the seeded default, point it at a vault you already have, or answer a few quick questions and JARVIS will build one shaped to you." }),
+        el("div", { class: "sub", text: "This is where Kairos's memory lives — notes, priorities, everything it remembers between sessions. Use the seeded default, point it at a vault you already have, or answer a few quick questions and Kairos will build one shaped to you." }),
         pathEl,
         el("div", { style: "display:flex;gap:8px;" }, [pickBtn, questionnaireBtn]),
         questionnaireWrap,
@@ -121,8 +121,8 @@ export async function run(overlay, onComplete) {
         statusEl.textContent = "Connected. Pick its default model later in Settings > Channels.";
       }});
       return el("div", {}, [
-        el("h2", { text: "Talk to JARVIS from Discord" }),
-        el("div", { class: "sub", text: "Optional — Discord is the fastest way to reach JARVIS outside this app. Paste a bot token now, or skip and add it later from Settings." }),
+        el("h2", { text: "Talk to Kairos from Discord" }),
+        el("div", { class: "sub", text: "Optional — Discord is the fastest way to reach Kairos outside this app. Paste a bot token now, or skip and add it later from Settings." }),
         tokenInput, allowedInput, connectBtn, statusEl,
         el("div", { class: "onboarding-actions" }, [
           el("button", { class: "btn", text: "Back", onclick: () => goTo(1) }),
@@ -158,8 +158,8 @@ export async function run(overlay, onComplete) {
         });
 
       return el("div", {}, [
-        el("h2", { text: "Reach JARVIS from anywhere" }),
-        el("div", { class: "sub", text: "Optional — JARVIS can be reachable from your phone or another computer over Tailscale, a private network between your own devices. Nothing is exposed to the public internet, and it requires a login." }),
+        el("h2", { text: "Reach Kairos from anywhere" }),
+        el("div", { class: "sub", text: "Optional — Kairos can be reachable from your phone or another computer over Tailscale, a private network between your own devices. Nothing is exposed to the public internet, and it requires a login." }),
         statusEl,
         el("a", {
           href: "https://tailscale.com/download", target: "_blank", rel: "noopener",
@@ -175,10 +175,10 @@ export async function run(overlay, onComplete) {
 
     finish: () => el("div", {}, [
       el("h2", { text: "You're set." }),
-      el("div", { class: "sub", text: "One last thing — JARVIS doesn't come with a default model. Head to Settings → Add Models to connect Claude Code CLI, a local server (Ollama, llama.cpp, vLLM), or an API provider, then pick it from the dropdown above the chat box. You can add more any time." }),
+      el("div", { class: "sub", text: "One last thing — Kairos doesn't come with a default model. Head to Settings → Add Models to connect Claude Code CLI, a local server (Ollama, llama.cpp, vLLM), or an API provider, then pick it from the dropdown above the chat box. You can add more any time." }),
       el("div", { class: "onboarding-actions" }, [
         el("button", { class: "btn", text: "Back", onclick: () => goTo(3) }),
-        el("button", { class: "btn", text: "Enter JARVIS", onclick: async () => {
+        el("button", { class: "btn", text: "Enter Kairos", onclick: async () => {
           await api("/api/settings/onboarding-complete", { method: "POST" });
           onComplete();
         }}),

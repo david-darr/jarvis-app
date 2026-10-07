@@ -239,7 +239,7 @@ async def file_content(file_id: str, export_mime: str | None = None) -> bytes:
     if not isinstance(content, bytes):
         raise GoogleError("Google returned no file content", 502)
     if len(content) > MAX_DOWNLOAD:
-        raise GoogleError("This file is larger than JARVIS's 25 MB download limit", 413)
+        raise GoogleError("This file is larger than Kairos's 25 MB download limit", 413)
     return content
 
 

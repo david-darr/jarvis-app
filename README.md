@@ -1,4 +1,4 @@
-# JARVIS
+# Kairos
 
 An open-source, self-hosted AI workspace and agent harness. Everything runs on your own machine: your chats, notes, calendar, email, documents, and scheduled automations all live in local files you own, and you plug in whichever models you want.
 
@@ -6,15 +6,15 @@ This is the real product (v2). [jarvis-starter-kit](https://github.com/david-dar
 
 **[Website](https://david-darr.github.io/jarvis-app/)** · **[Download the latest release](https://github.com/david-darr/jarvis-app/releases/latest)**
 
-![JARVIS Home dashboard with its particle core and connected workspace](docs/img/home.png)
+![Kairos Home dashboard with its ring mark and connected workspace](docs/img/home.png)
 
 *Development UI preview with sample data. The latest packaged release may differ.*
 
 ## What it does
 
 - **Chat** with any model you connect — Claude via the Agent SDK, any OpenAI-compatible endpoint, or a local model (Ollama, or the built-in llama.cpp engine). Pick the model and its reasoning level per conversation from a searchable list of what your CLI actually offers, with an exact-ID box for anything unlisted, plus a context meter showing how full the current conversation is. File attachments, folder-scoped workspaces, and slash commands. Responses render as formatted Markdown with syntax-highlighted, copyable code; generated files show up as in-chat cards with previews for images, PDFs, Markdown, text/code, static HTML, and Office documents — spreadsheets as sheet tabs and a grid, documents as a reading view, slides one at a time, CSV as a table. Office files are read locally and never uploaded to a converter.
-- **A side browser** in the chat, opened when you ask for it or when you follow a link in a reply. In the desktop app it runs as a real sandboxed browser view with its own cookies, separate from the app's, and it cannot reach JARVIS's own backend. In a plain browser tab it falls back to an embedded frame, with open-in-new-tab always available for sites that refuse to be embedded.
-- **Home dashboard**: recent conversations, projects, upcoming events, connected systems, and a live activity feed around a responsive particle core.
+- **A side browser** in the chat, opened when you ask for it or when you follow a link in a reply. In the desktop app it runs as a real sandboxed browser view with its own cookies, separate from the app's, and it cannot reach Kairos's own backend. In a plain browser tab it falls back to an embedded frame, with open-in-new-tab always available for sites that refuse to be embedded.
+- **Home dashboard**: recent conversations, projects, upcoming events, connected systems, and a live activity feed beside the Kairos mark and cloud-ring sky.
 - **A focused workspace**: a centered new-chat composer that settles below the conversation, independently collapsible chat history, and a 52px icon rail. Layout preferences are remembered; mobile keeps full navigation and chat-history drawers.
 - **Notes, Calendar, Email, Library** — one unified place for priorities and todos (due-dated notes render on the calendar), CalDAV/iCal calendar sync, IMAP/SMTP email accounts, documents and chat files. Library also lets you browse, search, read and edit Vault notes, with a Map for their links.
 - **Tasks** — scheduled automations, either your own prompts or built-in ones (Daily Brief, tidy-up jobs, skill audits). Output can be delivered to a connected channel rather than just sitting in the tab.
@@ -22,7 +22,7 @@ This is the real product (v2). [jarvis-starter-kit](https://github.com/david-dar
 - **One memory, not two** — checkbox items in your vault's `Active Priorities.md` are synced into Notes on every launch, grouped by their vault headings, so asking about your priorities returns what's actually written in your vault. Ticking one in the app ticks it in the vault file too.
 - **Channels** — reach the same assistant from Discord, with conversation state shared through the same sessions and vault.
 - **Cookbook** — download and run local models without a separate install.
-- **Remote access** — reach JARVIS from your phone or another computer over [Tailscale](https://tailscale.com), set up from Settings → Remote Access. Nothing is exposed to the public internet: the listener binds only to your Tailscale address, serves real HTTPS, and requires a login.
+- **Remote access** — reach Kairos from your phone or another computer over [Tailscale](https://tailscale.com), set up from Settings → Remote Access. Nothing is exposed to the public internet: the listener binds only to your Tailscale address, serves real HTTPS, and requires a login.
 
 Memory is a folder of markdown notes, not a database — so it stays readable, portable, and editable by you or any other tool.
 
@@ -50,18 +50,18 @@ The same workspace, with more room for your content. Demo data shown.
 
 | Platform | Download |
 |---|---|
-| Windows 10/11 | [`JARVIS-Setup.exe`](https://github.com/david-darr/jarvis-app/releases/latest) |
-| macOS (Apple Silicon) | [`JARVIS-arm64.dmg`](https://github.com/david-darr/jarvis-app/releases/latest) |
+| Windows 10/11 | `Kairos-Setup-<version>.exe` on the [latest release](https://github.com/david-darr/jarvis-app/releases/latest) |
+| macOS (Apple Silicon) | `Kairos-<version>-arm64.dmg` on the [latest release](https://github.com/david-darr/jarvis-app/releases/latest) |
 
-Download it, run it, open JARVIS. **Nothing else needs to be installed** — a complete Python runtime with every dependency ships inside the app, so it works on a machine that has never had Python on it.
+Download it, run it, open Kairos. **Nothing else needs to be installed** — a complete Python runtime with every dependency ships inside the app, so it works on a machine that has never had Python on it.
 
 Neither build is code-signed yet. Windows SmartScreen will warn on first run (**More info → Run anyway**); macOS Gatekeeper will block it (right-click the app → **Open**, or allow it under System Settings → Privacy & Security). Intel Macs aren't supported yet — the macOS build is Apple Silicon only.
 
 First launch walks you through onboarding: pick a vault folder and connect at least one model.
 
-Your data lives in `%APPDATA%\JARVIS\data` (Windows), separate from the program files, so updating or reinstalling never touches your chats, notes, or credentials.
+Your data stays in `%APPDATA%\JARVIS\data` (Windows), the existing JARVIS location. Kairos keeps that path so an upgrade retains your chats, notes, credentials, and encryption key.
 
-JARVIS updates itself: new versions download in the background and install when you quit, so an update never interrupts what you're doing.
+Kairos updates itself: new versions download in the background and install when you quit, so an update never interrupts what you're doing.
 
 ## Developing
 
@@ -84,9 +84,9 @@ npm start
 
 In dev the shell uses your `.venv`; a packaged build uses its own bundled runtime.
 
-`npm start` runs as the real app: it uses the same data folder (`%APPDATA%\JARVIS` on Windows), instance lock and port 8420 as an installed JARVIS, so the two cannot run together and anything you try touches your real data.
+`npm start` runs as the real app: it uses the same data folder (`%APPDATA%\JARVIS` on Windows), instance lock and port 8420 as an installed Kairos, so the two cannot run together and anything you try touches your real data.
 
-**Development copy:** `npm run start:dev` starts "JARVIS (dev)" beside the real app, with its own data folder (`%APPDATA%\JARVIS-dev`), port 8430, no auto-update and no global Quick Entry shortcut. The sidebar shows a DEV badge. Fill its data folder first:
+**Development copy:** `npm run start:dev` starts "Kairos (dev)" beside the real app, with its own data folder (`%APPDATA%\JARVIS-dev`), port 8430, no auto-update and no global Quick Entry shortcut. The sidebar shows a DEV badge. Fill its data folder first:
 ```
 python scripts/dev_instance.py fresh     # empty
 python scripts/dev_instance.py copy      # a copy of your real data

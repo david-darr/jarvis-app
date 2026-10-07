@@ -1,20 +1,23 @@
+/* Kairos (2026-10-06): the app's own palette, as fixed values; these
+   windows load before and apart from the app's stylesheets. */
+@font-face { font-family: "Jost"; src: url("fonts/Jost-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
 :root {
-  color-scheme: dark;
-  --bg: #101113;
-  --panel: #17181b;
-  --surface: #1c1d21;
-  --surface-hover: #222328;
-  --border: rgba(255,255,255,.08);
-  --border-strong: rgba(255,255,255,.17);
-  --text: #eeedf0;
-  --text-dim: #b0afb8;
-  --text-faint: #92919c;
-  --accent: #b3a7f5;
-  --danger: #f08088;
+  color-scheme: light;
+  --bg: #F3EADB;
+  --panel: #FBF6EE;
+  --surface: #FBF6EE;
+  --surface-hover: #EDE2D0;
+  --border: rgba(58, 42, 32, .12);
+  --border-strong: rgba(58, 42, 32, .24);
+  --text: #3A2A20;
+  --text-dim: #6B5646;
+  --text-faint: #7A6553;
+  --accent: #83601F;
+  --danger: #A8432F;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; width: 100%; height: 100%; }
-body { color: var(--text); background: var(--bg); font: 13px/1.45 Inter, "Segoe UI", system-ui, sans-serif; letter-spacing: -.01em; }
+body { color: var(--text); background: var(--bg); font: 13px/1.45 "Jost", "Segoe UI", system-ui, sans-serif; }
 button, select, textarea, input { font: inherit; }
 button { cursor: pointer; }
 button:disabled { opacity: .45; cursor: not-allowed; }
@@ -51,8 +54,8 @@ small { color: var(--text-faint); }
 .bottom { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
 .bottom label { color: var(--text-dim); font-size: 11px; }
 .bottom select { flex: 1; min-width: 0; height: 34px; padding: 0 9px; }
-#send, #region { padding: 0 15px; height: 34px; border: 1px solid #eeedf0; border-radius: 8px; color: var(--bg); background: var(--text); font-weight: 650; }
-#send:hover, #region:hover { background: #d9d7de; }
+#send, #region { padding: 0 15px; height: 34px; border: 1px solid var(--text); border-radius: 999px; color: var(--panel); background: var(--text); font-weight: 500; }
+#send:hover, #region:hover { background: var(--text-dim); border-color: var(--text-dim); }
 #settings { display: none; margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
 #settings label { display: block; margin-bottom: 7px; color: var(--text-dim); font-size: 11px; }
 .settings-row { display: flex; gap: 7px; }

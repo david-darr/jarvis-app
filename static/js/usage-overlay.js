@@ -1,10 +1,10 @@
-/* JARVIS desktop usage overlay - the notch's behaviour.
+/* Kairos desktop usage overlay - the notch's behaviour.
 
    Ported from CodeNotch's Windows notch (windows/codenotch/ui/notch.html at
    117a38b, https://github.com/vinzdg/codenotch), MIT licensed, (c) 2026 Vinz;
    the full notice is in static/css/usage-overlay.css. The rendering (rings,
    card, tail, fold, handles) follows CodeNotch's code closely. What changed:
-   Tauri's invoke/listen became JARVIS's own API plus a small Electron bridge
+   Tauri's invoke/listen became Kairos's own API plus a small Electron bridge
    (window.usageOverlay, electron/usage-overlay-preload.js); CodeNotch's other
    providers, translations and drag-to-another-edge were left out; and the
    hot-rectangle reporting became one signal - is the pointer over the notch -
@@ -15,9 +15,9 @@
 */
 const bridge = window.usageOverlay || {};
 
-/* Colour ramp (CodeNotch's palette values) */
-const AMPLE = '#00FF88', WATCH = '#F2FF00', CRIT = '#FF3F00';
-const TRACK = '#303030', INK = '#ffffff';
+/* Colour ramp: CodeNotch's three steps, in the notch's Kairos tones (usage-overlay.css :root) */
+const AMPLE = 'var(--n-ample)', WATCH = 'var(--n-watch)', CRIT = 'var(--n-crit)';
+const TRACK = 'var(--n-track)';
 const tone = f => f >= 0.8 ? CRIT : f >= 0.5 ? WATCH : AMPLE;
 // Whole percents, except where rounding would read as nothing used or nothing left
 function smallPct(v) {
@@ -94,7 +94,7 @@ function staleOf(snap) { if (snap.status === 'stale') return true; return snap.f
 function svgArc(r, frac, color, width, extra = '') {
   if (!(frac > 0)) return '';
   const C = 2 * Math.PI * r;
-  return `<circle cx="28" cy="28" r="${r}" fill="none" stroke="${color}" stroke-width="${width}"
+  return `<circle cx="28" cy="28" r="${r}" fill="none" style="stroke:${color}" stroke-width="${width}"
     stroke-dasharray="${(C * frac).toFixed(2)} ${C.toFixed(2)}" stroke-linecap="round"
     transform="rotate(-90 28 28)" ${extra}/>`;
 }
@@ -114,14 +114,14 @@ function renderRing() {
     const cell = pill.querySelector(`.cell[data-p="${p.id}"]`); if (!cell) continue;
     const svg = cell.querySelector('svg.ring'), reading = cell.querySelector('svg.reading'), pct = cell.querySelector('.pct'), glyph = cell.querySelector('.glyph'), wrap = cell.querySelector('.ringwrap');
     const h = headlineOf(p.snap);
-    let inner = `<circle cx="28" cy="28" r="22" fill="#2a2a2a"/><circle cx="28" cy="28" r="25" fill="none" stroke="${TRACK}" stroke-width="5"/>`;
+    let inner = `<circle cx="28" cy="28" r="22" style="fill:var(--n-face)"/><circle cx="28" cy="28" r="25" fill="none" style="stroke:${TRACK}" stroke-width="5"/>`;
     wrap.classList.toggle('pressed', !!refreshing[p.id]);
     reading.innerHTML = h ? svgArc(25, Math.min(h.used, 1), tone(h.used), 5) : '';
     if (weeklyRing !== 'off') {  // the week, thinner, at its own radius: a session at 12% beside a week at 91% is why
       const wk = weeklyOf(p.snap);
       if (wk && (!h || wk.id !== h.id)) {
         const r = weeklyRing === 'inside' ? 16 : 31;
-        inner += `<circle cx="28" cy="28" r="${r}" fill="none" stroke="${TRACK}" stroke-width="2.4" opacity="0.7"/>`
+        inner += `<circle cx="28" cy="28" r="${r}" fill="none" style="stroke:${TRACK}" stroke-width="2.4" opacity="0.7"/>`
           + svgArc(r, Math.min(wk.used, 1), tone(wk.used), 2.4, 'opacity="0.85"');
       }
     }
@@ -276,7 +276,7 @@ async function refreshRing(id) {
     if (response.ok) applyReadings(await response.json());
     else if (response.status === 429) notice('Refreshed a moment ago. Try again shortly.');
     else notice('Could not refresh usage.');
-  } catch { notice('JARVIS is not reachable.'); }
+  } catch { notice('Kairos is not reachable.'); }
   const wait = refreshing[id] + PRESS_MIN - Date.now();
   setTimeout(() => { delete refreshing[id]; renderRing(); }, Math.max(0, wait));
 }
@@ -294,7 +294,7 @@ function notice(msg) {
 }
 
 /* ---- The handles --------------------------------------------------------------
-   Settings past the far end of the pill opens JARVIS; the move handle past the
+   Settings past the far end of the pill opens Kairos; the move handle past the
    near end slides the notch along its edge. */
 const orb = document.getElementById('orb'), moveHandle = document.getElementById('move');
 const HANDLE_REACH = 28.5;
@@ -420,7 +420,7 @@ Promise.resolve(bridge.getConfig ? bridge.getConfig() : null).then(applyConfig).
 async function refresh() {
   try {
     const response = await fetch('/api/models/quotas', { credentials: 'same-origin', cache: 'no-store' });
-    if (response.status === 401 || response.status === 403) { notice('Open JARVIS and sign in to see usage.'); return; }
+    if (response.status === 401 || response.status === 403) { notice('Open Kairos and sign in to see usage.'); return; }
     if (!response.ok) throw new Error('unavailable');
     applyReadings(await response.json());
   } catch {

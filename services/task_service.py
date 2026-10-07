@@ -1,4 +1,4 @@
-"""Tasks: scheduled/automated jobs — distinct from Notes' todos (see JARVIS
+"""Tasks: scheduled/automated jobs — distinct from Notes' todos (see Kairos
 Plan's Phase 3 scoping: "not to be confused with Notes' todos"). Formalizes
 what bridge_sync.py's poll cycle + proactive nudges already do today into a
 real scheduler.
@@ -43,7 +43,7 @@ Work - Phase 4 (Build Spec)"):
 - Only the schedule moves the schedule. A Run now, a trigger's run or an
   answered question leaves the next time alone.
 - A scheduled run that starts more than LATE_SECONDS after its time says so
-  (JARVIS was off, or busy).
+  (Kairos was off, or busy).
 - A run can be stopped; it is recorded as stopped, and a stopped card goes
   to Blocked rather than being retried.
 - A run's channel message is a row in the outbox (core/outbox.py); the run
@@ -82,7 +82,7 @@ CARD_LEASE_SECONDS = 30 * 60
 LATE_SECONDS = 5 * 60
 STOPPED_NOTE = "Stopped by you."
 CARD_RESULT_INSTRUCTION = (
-    "[This is a card on JARVIS's work board. Your reply is the result the user will review, so reply with the "
+    "[This is a card on Kairos's work board. Your reply is the result the user will review, so reply with the "
     "finished work itself, not a note about where you put it. Use tools only when the work itself needs them.]"
 )
 
@@ -327,7 +327,7 @@ class TaskService:
         now = time.time() if now is None else now
         stale = [c for c in self._tasks.values() if c["schedule_kind"] == "card" and c["status"] == "running"
                  and (c.get("claimed_until") or 0) < now and c["id"] not in running]
-        return [self.fail_card(c["id"], "The run did not finish (JARVIS may have closed while it ran).", lost=True)
+        return [self.fail_card(c["id"], "The run did not finish (Kairos may have closed while it ran).", lost=True)
                 for c in stale]
 
     def card_prompt(self, card: dict) -> str:
@@ -453,7 +453,7 @@ class TaskService:
         for task in lost:
             if "run_source" not in task and self.is_due(task["id"]):
                 self._advance(task)
-            self._append_run(task, "", "The run did not finish (JARVIS closed while it ran).", "lost")
+            self._append_run(task, "", "The run did not finish (Kairos closed while it ran).", "lost")
         if lost:
             self._save_tasks()
         return lost

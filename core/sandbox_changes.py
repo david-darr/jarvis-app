@@ -1,6 +1,6 @@
 """Change sets: sandbox edits waiting for a person (Hermes phase 7, 2026-09-24).
 
-A run_code call that starts from a copy of the JARVIS code can change files,
+A run_code call that starts from a copy of the Kairos code can change files,
 but core/sandbox.py throws its copy away. When it does change something,
 the edit is kept here as a change set: the new bytes of each added or
 modified file, the sha256 each touched file had when it was copied in, the
@@ -129,7 +129,7 @@ def discard(change_id: str) -> None:
 def apply(change_id: str, allowed_root: str = BASE_DIR) -> list[dict]:
     """Write a change set into its folder, all or nothing. Returns the
     changes applied; raises Conflict (nothing written) or KeyError. Only the
-    JARVIS folder is ever written, whatever a stored record names."""
+    Kairos folder is ever written, whatever a stored record names."""
     record = _load(change_id)
     if not record.get("applicable"):
         raise Conflict("this change set was too large to keep, so it can only be read")
@@ -137,7 +137,7 @@ def apply(change_id: str, allowed_root: str = BASE_DIR) -> list[dict]:
     if root != Path(allowed_root).resolve():
         raise Conflict("this change set is for a different folder")
     if not available(str(root)):
-        raise Conflict("changes can only be applied to a development checkout of JARVIS, not an installed app")
+        raise Conflict("changes can only be applied to a development checkout of Kairos, not an installed app")
     plan = []
     for change in record["changes"]:
         rel, status = change["path"], change["status"]

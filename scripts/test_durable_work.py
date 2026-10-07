@@ -145,7 +145,7 @@ class AtMostOnceTests(Base):
         self.assertEqual(restarted.recover_interrupted_runs(), [], "recorded once")
         with patch.object(task_scheduler, "task_service", restarted), patch.object(events, "emit") as emitted:
             task_scheduler._report_lost(lost[0])
-        self.assertIn("cut off when JARVIS closed", emitted.call_args.args[1])
+        self.assertIn("cut off when Kairos closed", emitted.call_args.args[1])
         row = store.connection().execute("SELECT channel, text FROM deliveries").fetchone()
         self.assertEqual(row["channel"], "discord")
         self.assertIn("Run now", row["text"])

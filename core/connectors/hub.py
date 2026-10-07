@@ -166,7 +166,7 @@ class Hub:
         return ids
 
     async def send_reply(self, adapter: Connector, conversation: str, reply: str) -> None:
-        """Text in the platform's size limit; files JARVIS generated are
+        """Text in the platform's size limit; files Kairos generated are
         uploaded where the platform allows it, else named."""
         from core.channels.discord_channel import _extract_generated_attachments
         text, paths = _extract_generated_attachments(reply)
@@ -177,7 +177,7 @@ class Hub:
             except Exception:
                 logger.exception("connector %s could not upload %s", adapter.record["name"], path)
             import os
-            text += f"\n(Saved in JARVIS: {os.path.basename(path)})"
+            text += f"\n(Saved in Kairos: {os.path.basename(path)})"
         for piece in chunk(text, adapter.message_limit):
             await adapter.send(conversation, piece)
 

@@ -8,12 +8,12 @@ export function renderAppearancePanel(content, _status, page) {
   const status = el('p', { class: 'appearance-status meta', role: 'status', 'aria-live': 'polite' });
   const preview = el('canvas', { width: '640', height: '280', 'aria-hidden': 'true' });
   const previewFrame = el('div', { class: 'appearance-preview' }, [preview,
-    el('div', { class: 'appearance-preview-copy' }, [el('span', { text: 'YOUR WORKSPACE' }), el('strong', { text: 'Make room for your own style.' })]),
+    el('div', { class: 'appearance-preview-copy' }, [el('span', { text: 'KAIROS' }), el('strong', { text: 'Not more time. The right time.' })]),
     el('span', { class: 'appearance-preview-badge', text: 'Live preview' }),
   ]);
   const modeButtons = new Map();
   const modes = el('div', { class: 'appearance-modes', role: 'group', 'aria-label': 'Background style' });
-  for (const [mode, title, subtitle] of [['default', 'Original', 'Quiet & familiar'], ['color', 'Color', 'A clean canvas'], ['image', 'Image', 'Your perspective'], ['shader', 'Flow', 'Color in motion']]) {
+  for (const [mode, title, subtitle] of [['default', 'Kairos', 'Parchment & bistre'], ['color', 'Color', 'A clean canvas'], ['image', 'Image', 'Your perspective'], ['shader', 'Flow', 'Color in motion']]) {
     const button = el('button', { type: 'button', class: 'appearance-mode', 'data-mode': mode, onclick: () => {
       updateAppearance({ mode }); sync();
     } }, [el('span', { class: `appearance-mode-art art-${mode}`, 'aria-hidden': 'true' }), el('strong', { text: title }), el('span', { text: subtitle })]);
@@ -32,12 +32,12 @@ export function renderAppearancePanel(content, _status, page) {
   }
   const chatStyleSection = el('section', { class: 'appearance-chat-style-setting' }, [
     el('h3', { text: 'Chat style' }), chatStyles,
-    el('p', { class: 'meta', text: 'Terminal changes how chats look, not what JARVIS can do. Type /terminal in a chat to switch.' }),
+    el('p', { class: 'meta', text: 'Terminal changes how chats look, not what Kairos can do. Type /terminal in a chat to switch.' }),
   ]);
   const color = el('input', { type: 'color', id: 'appearance-color', 'aria-label': 'Custom base color' });
   const hex = el('span', { class: 'appearance-color-value' });
   const swatches = el('div', { class: 'appearance-swatches', role: 'group', 'aria-label': 'Base colors' });
-  for (const [name, value] of [['Graphite', '#202127'], ['Forest', '#23302e'], ['Ocean', '#233447'], ['Plum', '#3c2943'], ['Clay', '#533c32'], ['Stone', '#a7aca5'], ['Cream', '#e6dfd1']]) {
+  for (const [name, value] of [['Parchment', '#f3eadb'], ['Linen', '#e9e4da'], ['Stone', '#a7aca5'], ['Clay', '#533c32'], ['Plum', '#3c2943'], ['Ocean', '#233447'], ['Forest', '#23302e'], ['Graphite', '#202127']]) {
     swatches.append(el('button', { type: 'button', title: name, 'aria-label': name, 'data-color': value,
       style: `--swatch:${value}`, onclick: () => { updateAppearance({ color: value }); sync(); } }));
   }

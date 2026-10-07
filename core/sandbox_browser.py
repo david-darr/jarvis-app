@@ -1,7 +1,7 @@
 """A read-only browser for models (Hermes phase 7 step 3, 2026-09-24).
 
 Hermes Agent's browser tools drive Chromium sessions; this is the narrow
-JARVIS version: fetch one public page, rendered, and hand back its title,
+Kairos version: fetch one public page, rendered, and hand back its title,
 readable text and links. Each call is a fresh headless Chromium inside a
 core/sandbox.py container on core/sandbox_egress.py's filtered network, so
 it reaches public addresses on 80/443 only, and it keeps nothing: no
@@ -119,7 +119,8 @@ async def browse(url: str) -> dict:
         return {"url": url, "title": "", "text": "", "links": [],
                 "error": f"the browser did not finish (exit {result.exit_code})"}
     error: Optional[str] = None
-    if "Blocked by the JARVIS sandbox egress filter" in page["text"]:
+    if ("Blocked by the Kairos sandbox egress filter" in page["text"] or
+            "Blocked by the JARVIS sandbox egress filter" in page["text"]):
         error = "refused: " + page["text"].split("egress filter:", 1)[-1].strip()[:200]
         page.update(text="", links=[])
     elif not page["text"] and not page["title"]:

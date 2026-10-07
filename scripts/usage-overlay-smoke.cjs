@@ -89,7 +89,7 @@ async function run() {
   await move(rest[0], rest[1]);
   await waitFor("!document.body.classList.contains('folded')");
   assert.equal(interactive[interactive.length - 1], true, 'pointer over the notch takes clicks');
-  assert.match(await js("document.querySelector('.cell[data-p=codex] svg.reading').innerHTML"), /#FF3F00/i);
+  assert.equal(await js("getComputedStyle(document.querySelector('.cell[data-p=codex] svg.reading circle')).stroke"), 'rgb(224, 132, 111)');
 
   // Hovering a ring opens its card, CodeNotch's layout: title, windows, reset copy, used and left.
   const ring = await js("(r => [r.left + r.width / 2, r.top + r.height / 2])(document.querySelector('.cell[data-p=claude] .ringwrap').getBoundingClientRect())");

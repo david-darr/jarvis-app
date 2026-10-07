@@ -59,7 +59,7 @@ function installScreenGrab({ getMainWindow, showMainWindow, python, repoRoot, si
       quickWindow = new BrowserWindow({
         width: 560, height: 338, minWidth: 460, minHeight: 320,
         frame: false, alwaysOnTop: true, skipTaskbar: true, show: false,
-        backgroundColor: "#101113",
+        backgroundColor: "#F3EADB",
         webPreferences: { contextIsolation: true, nodeIntegration: false,
           preload: path.join(__dirname, "screen-grab-preload.js") },
       });
@@ -113,7 +113,7 @@ function installScreenGrab({ getMainWindow, showMainWindow, python, repoRoot, si
     });
     pickerWindow = new BrowserWindow({
       width: 800, height: 660, minWidth: 650, minHeight: 510, show: false,
-      backgroundColor: "#101113", frame: false, autoHideMenuBar: true,
+      backgroundColor: "#F3EADB", frame: false, autoHideMenuBar: true,
       webPreferences: { contextIsolation: true, nodeIntegration: false,
         preload: path.join(__dirname, "screen-grab-preload.js") },
     });
@@ -132,7 +132,7 @@ function installScreenGrab({ getMainWindow, showMainWindow, python, repoRoot, si
     if (sideBrowser.isOpen()) {
       const image = await sideBrowser.captureStill();
       if (image && !image.isEmpty()) choices.unshift({
-        id: "jarvis-browser", name: "JARVIS side browser", kind: "tab", image: image.resize({ width: 300 }).toDataURL(),
+        id: "jarvis-browser", name: "Kairos side browser", kind: "tab", image: image.resize({ width: 300 }).toDataURL(),
       });
     }
     pickerWindow.webContents.send("screen-grab:sources", choices);
@@ -175,7 +175,7 @@ function installScreenGrab({ getMainWindow, showMainWindow, python, repoRoot, si
     pickerWindow = null;
     overlayWindow = new BrowserWindow({
       ...display.bounds, frame: false, alwaysOnTop: true, skipTaskbar: true,
-      movable: false, resizable: false, show: false, backgroundColor: "#10141c",
+      movable: false, resizable: false, show: false, backgroundColor: "#241A14",
       webPreferences: { contextIsolation: true, nodeIntegration: false,
         preload: path.join(__dirname, "screen-grab-preload.js") },
     });
@@ -199,7 +199,7 @@ function installScreenGrab({ getMainWindow, showMainWindow, python, repoRoot, si
   }
 
   ipcMain.handle("screen-grab:capture", event => {
-    if (!isMain(event) && !isQuick(event)) throw new Error("Capture is available only in JARVIS.");
+    if (!isMain(event) && !isQuick(event)) throw new Error("Capture is available only in Kairos.");
     return capture(isQuick(event));
   });
   ipcMain.handle("screen-grab:shortcut", event => {
@@ -242,7 +242,7 @@ function installScreenGrab({ getMainWindow, showMainWindow, python, repoRoot, si
     const timer = setTimeout(() => {
       quickRequests.delete(requestId);
       if (quickWindow && !quickWindow.isDestroyed()) {
-        quickWindow.webContents.send("screen-grab:quick-result", { ok: false, error: "JARVIS did not receive the draft. Open the app and try again." });
+        quickWindow.webContents.send("screen-grab:quick-result", { ok: false, error: "Kairos did not receive the draft. Open the app and try again." });
       }
     }, 45000);
     quickRequests.set(requestId, timer);

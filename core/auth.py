@@ -1,5 +1,5 @@
 """Auth: single-user-by-default with a real login/session model when enabled,
-matching Odysseus's own approach (see JARVIS Plan's v2 scoping — "match what
+matching Odysseus's own approach (see Kairos Plan's v2 scoping — "match what
 Odysseus uses" for auth was David's explicit call, 2026-08-31).
 
 - AUTH_ENABLED=false (default): single trusted local user, no login screen —
@@ -211,7 +211,7 @@ class AuthManager:
         secret = pyotp.random_base32()
         self._users["users"][username]["totp_secret"] = secret
         write_json_atomic(AUTH_FILE, self._users)
-        return pyotp.totp.TOTP(secret).provisioning_uri(name=username, issuer_name="JARVIS")
+        return pyotp.totp.TOTP(secret).provisioning_uri(name=username, issuer_name="Kairos")
 
     def confirm_totp_enrollment(self, username: str, code: str) -> bool:
         user = self._users["users"].get(username)

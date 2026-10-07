@@ -26,7 +26,7 @@ function renderSources() {
     const empty = document.createElement("div");
     empty.id = "empty";
     empty.style.display = "block";
-    empty.textContent = filter === "tab" ? "Open a page in JARVIS's side browser to capture it directly." :
+    empty.textContent = filter === "tab" ? "Open a page in Kairos's side browser to capture it directly." :
       "No sources match this view.";
     host.append(empty);
   }

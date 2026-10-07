@@ -86,7 +86,7 @@ def build_worker(context: WorkerContext):
 
 
 def role_prompt(context: WorkerContext) -> str:
-    """The worker's whole idea of who it is. Not JARVIS's landing zone.
+    """The worker's whole idea of who it is. Not Kairos's landing zone.
 
     A Swarm worker is not the owner's assistant: it has no raw vault, chat
     history or repository access. An opted-in company may receive bounded,
@@ -107,7 +107,7 @@ def role_prompt(context: WorkerContext) -> str:
     ]
     if getattr(context.tool_service, "memory", None) and context.tool_service.memory.enabled:
         lines += [
-            "- search_memory and read_memory are bounded, read-only access to the JARVIS memory sources the owner enabled. "
+            "- search_memory and read_memory are bounded, read-only access to the Kairos memory sources the owner enabled. "
             "Search only when prior context would materially improve the work, and cite the returned reference in your result.",
         ]
     if context.is_lead:
@@ -131,7 +131,7 @@ def role_prompt(context: WorkerContext) -> str:
         ]
     if agent.get("instructions"):
         lines += ["", "Your standing instructions from the owner:", agent["instructions"]]
-    # A teammate standing for one of the owner's JARVIS agents brings who it
+    # A teammate standing for one of the owner's Kairos agents brings who it
     # is and its notes (services/swarm_service.py _identity). Text only: it
     # never widens the tools above.
     if agent.get("identity"):

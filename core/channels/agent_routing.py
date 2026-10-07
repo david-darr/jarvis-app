@@ -55,7 +55,7 @@ async def direct(agent: dict, rest: str, channel_key: str, channel_label: str,
         return f"{agent['name']} here. What do you need?"
     endpoint_id = agent_service.chat_endpoint(agent)
     if endpoint_id is None:
-        return f"{agent['name']} has no model to answer with. Pick one on its page in JARVIS."
+        return f"{agent['name']} has no model to answer with. Pick one on its page in Kairos."
     session_id = session_manager.get_or_create_channel_session(
         f"{channel_key}:agent:{agent['id']}", f"{agent['name']} on {channel_label}", model_endpoint_id=endpoint_id)
     agent_service.make_agent_chat(session_id, agent)

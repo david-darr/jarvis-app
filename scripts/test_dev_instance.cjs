@@ -10,9 +10,11 @@ function check(name, fn) {
   try { fn(); console.log("ok   " + name); } catch (e) { failures += 1; console.log("FAIL " + name + "\n     " + e.message); }
 }
 
-check("an ordinary launch is the real app, unchanged", () => {
+check("an ordinary launch is the real app, in its existing JARVIS folder", () => {
   const real = resolveInstance({ argv: ["electron", "."], env: {}, appData });
-  assert.deepEqual(real, { name: "", port: DEFAULT_PORT, label: "JARVIS", userData: null, machineWide: true });
+  assert.deepEqual(real, { name: "", port: DEFAULT_PORT, label: "Kairos", userData: path.join(appData, "JARVIS"), machineWide: true });
+  // The Kairos rename must never move anyone's data: Electron's default would follow productName.
+  assert.notEqual(real.userData, path.join(appData, "Kairos"));
 });
 
 check("a named instance gets its own folder, port and no machine-wide hooks", () => {
@@ -22,7 +24,16 @@ check("a named instance gets its own folder, port and no machine-wide hooks", ()
   assert.equal(dev.port, INSTANCE_PORT);
   assert.notEqual(dev.port, DEFAULT_PORT);
   assert.equal(dev.machineWide, false);
-  assert.equal(dev.label, "JARVIS (dev)");
+  assert.equal(dev.label, "Kairos (dev)");
+});
+
+check("an explicit user-data folder stays isolated from the pinned real profile", () => {
+  const profile = path.join(appData, "test-profile");
+  const isolated = resolveInstance({ argv: ["Kairos.exe", `--user-data-dir=${profile}`], env: {}, appData });
+  assert.equal(isolated.userData, profile);
+  assert.equal(isolated.port, DEFAULT_PORT);
+  assert.equal(isolated.machineWide, false);
+  assert.throws(() => resolveInstance({ argv: ["Kairos.exe", "--user-data-dir=relative"], env: {}, appData }), /absolute folder/);
 });
 
 check("the environment variable names it too; the flag wins", () => {

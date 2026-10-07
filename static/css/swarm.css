@@ -35,7 +35,7 @@
 .swarm-record .btn { margin: 4px 6px 0 0; }
 .swarm-footer { justify-content: space-between; font-size: 11px; }
 .swarm-dialog { color: var(--text); background: var(--bg-panel-solid); border: 1px solid var(--border-strong); border-radius: var(--radius); width: min(720px,calc(100vw - 32px)); max-height: calc(100dvh - 40px); padding: 0; box-shadow: var(--shadow-elevated); }
-.swarm-dialog::backdrop { background: rgba(0,0,0,.65); }
+.swarm-dialog::backdrop { background: rgba(var(--shade-rgb), .65); }
 .swarm-dialog-header { padding: 18px 24px; border-bottom: 1px solid var(--border); justify-content: space-between; }
 .swarm-dialog-header h2 { margin: 0; }
 .swarm-dialog-body { padding: 24px; }
@@ -77,7 +77,7 @@
    because the flex/grid declarations below and above it would otherwise beat
    the user-agent rule and leave an "inactive" view on screen. */
 .swarm-view [hidden] { display: none !important; }
-.swarm-view { --swarm-ready: var(--text-faint); --swarm-running: var(--accent); --swarm-blocked: var(--danger); --swarm-review: #d7b26b; --swarm-done: var(--success); --swarm-cancelled: var(--text-faint); }
+.swarm-view { --swarm-ready: var(--text-faint); --swarm-running: var(--accent); --swarm-blocked: var(--danger); --swarm-review: var(--warn); --swarm-done: var(--success); --swarm-cancelled: var(--text-faint); }
 .swarm-view-tabs { display: flex; flex-wrap: wrap; gap: 5px; }
 .swarm-view-tabs .btn { font-size: 12px; padding: 6px 11px; }
 .swarm-canvas-wrap, .swarm-board-wrap { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
@@ -86,13 +86,13 @@
 .swarm-board-status .btn { margin-left: 8px; font-size: 12px; padding: 4px 8px; }
 .swarm-canvas-bar .btn { min-width: 38px; }
 
-.swarm-canvas { position: relative; flex: 1; min-height: 320px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); background-color: var(--bg-panel); background-image: radial-gradient(circle, rgba(255,255,255,.075) 1px, transparent 1px); cursor: grab; touch-action: none; }
+.swarm-canvas { position: relative; flex: 1; min-height: 320px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); background-color: var(--bg-panel); background-image: radial-gradient(circle, rgba(var(--ink-rgb), .075) 1px, transparent 1px); cursor: grab; touch-action: none; }
 .swarm-canvas-dragging { cursor: grabbing; }
 .swarm-canvas-surface { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
 .swarm-canvas-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 20px; }
 .swarm-lanes, .swarm-nodes { position: absolute; top: 0; left: 0; }
 .swarm-lane { position: absolute; top: 0; left: 0; border-bottom: 1px solid var(--border); }
-.swarm-lane:nth-child(odd) { background: rgba(255,255,255,.017); }
+.swarm-lane:nth-child(odd) { background: rgba(var(--ink-rgb), .017); }
 .swarm-lane-labels { position: absolute; top: 0; left: 0; width: 132px; transform-origin: 0 0; pointer-events: none; z-index: 2; }
 .swarm-lane-label { position: absolute; top: 0; left: 0; width: 132px; display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 0 12px; background: linear-gradient(90deg, var(--bg-panel-solid) 78%, transparent); overflow: hidden; }
 .swarm-lane-label strong { font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
@@ -156,7 +156,7 @@
 .swarm-agent-task { color: var(--text); overflow-wrap: anywhere; }
 /* Team thread (agents phase 5): who said what to whom, and what the team did. */
 .swarm-agent-linked { color: var(--accent); }
-.swarm-thread-finding { border-left: 2px solid #d9b67d; padding-left: 8px; }
+.swarm-thread-finding { border-left: 2px solid var(--warn); padding-left: 8px; }
 .swarm-thread-review { border-left: 2px solid var(--accent); padding-left: 8px; }
 .swarm-thread-event p { color: var(--text-dim); font-style: italic; }
 .swarm-recipient { max-width: 180px; }

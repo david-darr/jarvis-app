@@ -135,7 +135,7 @@ TAB_TEMPLATES = {
     "school": {
         "label": "School",
         "blurb": "Track courses, assignments and due dates, with a per-course chat that remembers what you're working on.",
-        "detail": "Built around coursework: add assignments with due dates, keep drafts, and talk to JARVIS about a specific class in a chat that accumulates that course's context.",
+        "detail": "Built around coursework: add assignments with due dates, keep drafts, and talk to Kairos about a specific class in a chat that accumulates that course's context.",
     },
 }
 

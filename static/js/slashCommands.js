@@ -3,7 +3,7 @@
 // /notes /email /memory list, etc." Cross-checked the real registry shape
 // against ~/odysseus/static/js/slashCommands.js (COMMANDS object, grouped by
 // category, /help renders them grouped) rather than guessed — but scoped
-// down hard to commands backed by real JARVIS functionality. Odysseus's
+// down hard to commands backed by real Kairos functionality. Odysseus's
 // registry has ~60 commands across Compare/Gallery/Cookbook/RAG/research/
 // shell-access/etc.; we don't have most of those features at all, so this
 // is a real, working subset, not a padded-out copy. "Memory" maps to our
@@ -29,7 +29,7 @@ export const COMMANDS = {
   },
   demo: {
     category: "Getting started",
-    help: "Quick tour of what JARVIS can do",
+    help: "Quick tour of what Kairos can do",
     usage: "/demo",
     handler: () =>
       "Quick tour:\n" +
@@ -140,7 +140,7 @@ export const COMMANDS = {
 
   memory: {
     category: "Memory",
-    help: "List saved Skills (JARVIS's memory/knowledge layer)",
+    help: "List saved Skills (Kairos's memory/knowledge layer)",
     usage: "/memory list",
     handler: () => listSkills(),
   },
@@ -176,7 +176,7 @@ export const COMMANDS = {
     handler: async (args, ctx) => {
       if (!ctx.sessionId()) return "No active chat.";
       const session = await api(`/api/sessions/${ctx.sessionId()}`);
-      return session.model_endpoint_id ? `Pinned to endpoint ${session.model_endpoint_id}.` : "JARVIS (Claude) — the default.";
+      return session.model_endpoint_id ? `Pinned to endpoint ${session.model_endpoint_id}.` : "Kairos (Claude) — the default.";
     },
   },
   models: {

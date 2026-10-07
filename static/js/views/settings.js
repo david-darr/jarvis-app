@@ -74,7 +74,7 @@ const SECTION_GROUPS = [
   {
     id: "models", label: "Models", sections: [
       { id: "add-models", label: "Add Models", render: renderAddModelsPanel,
-        description: "JARVIS ships with no default model. Add at least one, then pick it from the model menu above the chat box.",
+        description: "Kairos ships with no default model. Add at least one, then pick it from the model menu above the chat box.",
         keywords: ["provider", "api key", "openai", "anthropic", "claude", "codex", "ollama", "local model", "endpoint", "base url", "openrouter", "gemini"] },
       { id: "added-models", label: "Added Models", render: renderAddedModelsPanel,
         description: "The model connections you have added. Test checks that each one answers.",
@@ -84,21 +84,21 @@ const SECTION_GROUPS = [
   {
     id: "connections", label: "Connections", sections: [
       { id: "integrations", label: "Integrations", render: renderIntegrationsPanel,
-        description: "Tool servers, calendars, contacts and API services JARVIS can use.",
+        description: "Tool servers, calendars, contacts and API services Kairos can use.",
         keywords: ["mcp", "connector", "tools", "caldav", "ical", "calendar feed", "google", "api service"] },
       { id: "channels", label: "Channels", render: renderChannelsPanel,
-        description: "Reach JARVIS and your agents from Discord, Telegram, Slack and other apps, and choose where task results and notifications go.",
+        description: "Reach Kairos and your agents from Discord, Telegram, Slack and other apps, and choose where task results and notifications go.",
         keywords: ["discord", "bot", "token", "telegram", "slack", "signal", "imessage", "email", "sms", "whatsapp", "matrix",
                    "mattermost", "irc", "line", "teams", "google chat", "ntfy", "webhook", "connector", "channel override", "announcements", "dm"] },
       { id: "remote", label: "Remote Access", render: renderRemotePanel,
-        description: "Reach this JARVIS from your phone or another computer over Tailscale, a private network between your own devices. Nothing is exposed to the public internet.",
+        description: "Reach this Kairos from your phone or another computer over Tailscale, a private network between your own devices. Nothing is exposed to the public internet.",
         keywords: ["tailscale", "remote", "phone", "https", "certificate", "tunnel", "sign in", "account login", "url"] },
     ],
   },
   {
     id: "workspace", label: "Workspace", sections: [
       { id: "vault", label: "Vault", render: renderVaultPanel,
-        description: "The notes folder JARVIS reads and writes as its memory.",
+        description: "The notes folder Kairos reads and writes as its memory.",
         keywords: ["obsidian", "notes folder", "memory", "path", "sync", "location"] },
       { id: "speech", label: "Speech", render: renderSpeechPanel,
         description: "Dictate messages by voice. Audio is transcribed on this machine and never uploaded.",
@@ -130,13 +130,13 @@ const SECTION_GROUPS = [
         description: "Your own steps that run when something happens: post to a web address, add to a vault note, send to a channel, or run a command that can block a tool.",
         keywords: ["hook", "hooks", "lifecycle", "before tool", "after tool", "webhook", "block", "script", "automation", "event"] },
       { id: "users", label: "Users", render: renderUsersPanel,
-        description: "Who can sign in to this JARVIS, and who is an admin.",
+        description: "Who can sign in to this Kairos, and who is an admin.",
         keywords: ["accounts", "add user", "roles", "admin", "people"] },
       { id: "system", label: "System", render: renderSystemPanel,
         description: "Health, backups, and permanent resets.",
         keywords: ["backup", "export", "import", "diagnostics", "health", "reset", "wipe", "danger"] },
       { id: "logs", label: "Logs", render: renderLogsPanel,
-        description: "What JARVIS has been doing. Errors keeps only warnings and errors; Desktop is the app window itself. Pick a chat to see only its turns.",
+        description: "What Kairos has been doing. Errors keeps only warnings and errors; Desktop is the app window itself. Pick a chat to see only its turns.",
         keywords: ["log", "logs", "errors", "debug", "troubleshoot", "crash", "backend", "desktop", "warnings"] },
       { id: "runs", label: "Runs", render: renderRunsPanel,
         description: "Every model run: chat turns, tasks, cards, goals, helpers and agents. Open one to see what it did, step by step. Failed and stopped runs are one filter away.",
@@ -505,13 +505,13 @@ async function selectSection(id) {
   await section.render(body, cachedStatus, page);
 }
 
-// -- Add Models (moved from Cookbook, David's ask 2026-08-31). JARVIS ships
+// -- Add Models (moved from Cookbook, David's ask 2026-08-31). Kairos ships
 // with no default model, so Claude itself has to be added here like anything
 // else, not assumed. ---------------------------------------------------------
 
 // Known API providers (mirrors Odysseus's provider list). Only providers that
 // work with a plain bearer-token key over an OpenAI-compatible endpoint;
-// device-auth flows JARVIS does not have are left out, not faked.
+// device-auth flows Kairos does not have are left out, not faked.
 const KNOWN_API_PROVIDERS = [
   { label: "OpenAI", base_url: "https://api.openai.com/v1" },
   { label: "Anthropic", base_url: "https://api.anthropic.com" },
@@ -636,11 +636,11 @@ async function renderAddedModelsPanel(body, _status, page) {
       ? `Model: ${ep.model || "CLI default"}`
       : [ep.model, ep.base_url, ep.has_api_key ? "key saved" : null, ep.kind === "local" && ep.num_ctx ? `context ${ep.num_ctx}` : null].filter(Boolean).join(" · ");
     const controls = [result];
-    // JARVIS's own instructions and core tools take about 2,100 tokens of
+    // Kairos's own instructions and core tools take about 2,100 tokens of
     // every request (2026-10-06, vault note "Local Model Fit (Build Spec)").
     if (ep.kind === "local" && ep.num_ctx && ep.num_ctx < 8192) {
       const small = pill("Small window", "warn");
-      small.title = `JARVIS's own instructions and core tools take about 2,100 of these ${ep.num_ctx} tokens on every message, leaving little for the conversation. 16,384 is the default for new local models.`;
+      small.title = `Kairos's own instructions and core tools take about 2,100 of these ${ep.num_ctx} tokens on every message, leaving little for the conversation. 16,384 is the default for new local models.`;
       small.classList.add("small-window");
       controls.push(small);
     }
@@ -662,7 +662,7 @@ async function renderAddedModelsPanel(body, _status, page) {
   // and never compact themselves (services/chat_service.py).
   const longChats = group({ title: "Long chats", cls: "long-chats" }, [row({
     title: "Compact local and API chats automatically",
-    description: "When a chat fills 85% of the model's context window, JARVIS summarises its earlier part before your next message, as Compact does: the last messages stay word for word and nothing is deleted. Claude Code and Codex manage their own.",
+    description: "When a chat fills 85% of the model's context window, Kairos summarises its earlier part before your next message, as Compact does: the last messages stay word for word and nothing is deleted. Claude Code and Codex manage their own.",
     control: toggle({ checked: settings.auto_compact !== false, label: "Compact local and API chats automatically",
       onChange: (on) => api("/api/settings/auto-compact", { method: "POST", body: JSON.stringify({ enabled: on }) }) }),
   })]);
@@ -932,7 +932,7 @@ async function mcpCatalogSection(rerender) {
   search.addEventListener("input", draw);
   details.append(
     el("summary", { text: `Browse the MCP catalog (${catalog.length} servers)` }),
-    note("Tools from these servers are available to every model: Claude directly, local and API models through JARVIS, which asks you before each call. Signing in happens in a browser on this computer."),
+    note("Tools from these servers are available to every model: Claude directly, local and API models through Kairos, which asks you before each call. Signing in happens in a browser on this computer."),
     el("div", { class: "set-toolbar" }, [search]), list,
   );
   draw();
@@ -966,7 +966,7 @@ function renderDavForm(host, rerender, kind) {
   const pass = el("input", { type: "password", placeholder: "Password", autocomplete: "off" });
   integrationForm(host, {
     title: isCal ? "Add a CalDAV calendar" : "Add contacts (CardDAV)",
-    description: "One-way read sync into JARVIS, nothing written back. Use a specific calendar or address-book collection URL, not the server root.",
+    description: "One-way read sync into Kairos, nothing written back. Use a specific calendar or address-book collection URL, not the server root.",
     label: "Add and sync",
     fields: { rows: [field("Name", name), field("URL", url), field("Username", user), field("Password", pass)],
       check: () => (!name.value.trim() || !url.value.trim() || !user.value.trim() || !pass.value) ? "All fields are required." : null },
@@ -1085,8 +1085,8 @@ async function renderVaultPanel(body, status, page) {
   body.replaceChildren(
     group({}, [
       row({ title: "Vault folder", description: [el("span", { class: "set-mono", text: settings.vault_dir })], control: pick,
-        below: el("div", { class: "set-row-description", text: "Point JARVIS at an existing vault on this device, or keep the default. Open chats keep their old vault until reconnected." }) }),
-      row({ title: "Task list sync", description: "Checkbox items in your vault's Active Priorities.md show up as Notes, and ticking one here ticks it there. Runs every time JARVIS starts.",
+        below: el("div", { class: "set-row-description", text: "Point Kairos at an existing vault on this device, or keep the default. Open chats keep their old vault until reconnected." }) }),
+      row({ title: "Task list sync", description: "Checkbox items in your vault's Active Priorities.md show up as Notes, and ticking one here ticks it there. Runs every time Kairos starts.",
         control: [syncStatus, sync] }),
     ]),
   );
@@ -1139,14 +1139,14 @@ async function renderRemotePanel(body) {
       // Binding needs no permission, so without this rule everything looks
       // right and no other device can connect.
       { ok: s.firewall_ok, label: "Allowed through Windows Firewall",
-        hint: s.firewall_ok ? "Incoming connections to JARVIS are allowed."
-          : "Windows is blocking incoming connections to JARVIS, so no other device can reach it. Adding the rule needs your permission; Windows will ask.",
+        hint: s.firewall_ok ? "Incoming connections to Kairos are allowed."
+          : "Windows is blocking incoming connections to Kairos, so no other device can reach it. Adding the rule needs your permission; Windows will ask.",
         action: s.firewall_ok ? null : { label: "Allow", handler: async () => {
           await api("/api/remote/firewall", { method: "POST" });
           toast("Firewall rule added", "success");
           await refresh();
         } } },
-      { ok: s.auth_ready, label: "JARVIS login",
+      { ok: s.auth_ready, label: "Kairos login",
         hint: s.auth_ready ? "A login is set up."
           : s.has_any_users ? "An account exists, but login enforcement is off. Turn it on below."
             : "Remote access needs a real login; without one anyone reaching this machine would get straight in." },
@@ -1195,7 +1195,7 @@ async function renderRemotePanel(body) {
         } finally { create.disabled = false; }
       });
       parts.push(group({ title: "Create your login",
-        description: "This turns on accounts for JARVIS everywhere, this computer included, so you'll sign in here too." },
+        description: "This turns on accounts for Kairos everywhere, this computer included, so you'll sign in here too." },
         [field("Username", user), field("Password", pass), el("div", { class: "set-row-actions" }, [create])]));
     }
 
@@ -1230,7 +1230,7 @@ async function renderRemotePanel(body) {
       // Marked as not live: a real-looking address with nothing listening
       // was the same trap as the bare hostname (David, 2026-09-03).
       parts.push(group({ title: "Address" }, [
-        row({ title: [el("span", { text: "Where JARVIS will be reachable" }), pill("Not live yet", "muted")],
+        row({ title: [el("span", { text: "Where Kairos will be reachable" }), pill("Not live yet", "muted")],
           description: address, control: el("button", { class: "btn", text: "Copy", onclick: async () => {
             await navigator.clipboard.writeText(address.textContent); toast("Address copied", "success"); } }) }),
         row({ title: "Port", description: "Part of the address you type.", control: [portStatus, port] }),
@@ -1257,7 +1257,7 @@ async function renderRemotePanel(body) {
       title: allReady ? "Last step: turn it on" : "Finish the setup steps first",
       description: allReady ? "Nothing is reachable until you do. It stays on across restarts." : "This unlocks once Tailscale is signed in and you have a login.",
       control: [el("button", { class: "btn", text: "Refresh", onclick: refresh }), enable] })]));
-    parts.push(note("The first time, JARVIS asks Tailscale for an HTTPS certificate so your browser trusts the connection. If your tailnet hasn't enabled HTTPS certificates, you'll be told where to switch them on."));
+    parts.push(note("The first time, Kairos asks Tailscale for an HTTPS certificate so your browser trusts the connection. If your tailnet hasn't enabled HTTPS certificates, you'll be told where to switch them on."));
     body.replaceChildren(...parts);
   }
   await refresh();
@@ -1267,7 +1267,7 @@ async function renderRemotePanel(body) {
 async function renderAccountPanel(body, status) {
   if (!status.auth_enabled) {
     body.replaceChildren(group({}, [row({ title: "Sign-in is off",
-      description: "JARVIS trusts this computer's single user, so there is nothing to manage here. Turn on logins in Remote Access, or with AUTH_ENABLED." })]));
+      description: "Kairos trusts this computer's single user, so there is nothing to manage here. Turn on logins in Remote Access, or with AUTH_ENABLED." })]));
     return;
   }
   const err = el("div", { class: "set-error" });
@@ -1472,7 +1472,7 @@ async function renderSystemPanel(body, status, page) {
     restoreInput.value = "";
     if (!file) return;
     const ok = await confirmDialog({ title: "Restore this backup?",
-      message: "At the next start, JARVIS replaces its data with this backup. Your current data is kept first as a safety copy in the data folder. Your vault is not touched.",
+      message: "At the next start, Kairos replaces its data with this backup. Your current data is kept first as a safety copy in the data folder. Your vault is not touched.",
       confirmLabel: "Restore at next start" });
     if (!ok) return;
     restoreMsg.textContent = "Checking the backup…";
@@ -1482,7 +1482,7 @@ async function renderSystemPanel(body, status, page) {
       const res = await fetch("/api/system/backup/restore", { method: "POST", body: form });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : `HTTP ${res.status}`);
-      toast("Backup ready: restart JARVIS to finish restoring", "success");
+      toast("Backup ready: restart Kairos to finish restoring", "success");
       await renderSystemPanel(body, status, page);
     } catch (e) { restoreMsg.textContent = e.message; }
   });
@@ -1490,7 +1490,7 @@ async function renderSystemPanel(body, status, page) {
   const restoreRows = [];
   if (restoreState.pending) {
     restoreRows.push(row({ title: "A restore is waiting", cls: "backup-pending",
-      description: `The backup from ${when(restoreState.pending.created_at)}${restoreState.pending.includes_keys ? " (with keys)" : ""} replaces the current data when JARVIS next starts.`,
+      description: `The backup from ${when(restoreState.pending.created_at)}${restoreState.pending.includes_keys ? " (with keys)" : ""} replaces the current data when Kairos next starts.`,
       control: el("button", { class: "btn quiet", text: "Cancel", onclick: async () => {
         await api("/api/system/backup/restore", { method: "DELETE" });
         await renderSystemPanel(body, status, page);
@@ -1526,7 +1526,7 @@ async function renderSystemPanel(body, status, page) {
         control: [el("label", { class: "set-inline-switch" }, [el("span", { class: "meta", text: "Keys" }), withKeys]),
           el("button", { class: "btn", text: "Back up", onclick: fullBackupLink })] }),
       row({ title: "Restore from a backup", cls: "backup-restore",
-        description: "Replaces JARVIS's data with a backup at the next start, keeping the current data as a safety copy first.",
+        description: "Replaces Kairos's data with a backup at the next start, keeping the current data as a safety copy first.",
         control: [restoreMsg, restoreInput, el("button", { class: "btn", text: "Restore…", onclick: () => restoreInput.click() })] }),
       ...restoreRows,
       row({ title: "Export settings, notes and skills", description: "A small JSON file that works on another computer or version.", control: el("button", { class: "btn quiet", text: "Export", onclick: exportBackup }) }),
@@ -1736,7 +1736,7 @@ async function renderFileCheckpointsPanel(body, status, page) {
 }
 
 // Sandbox changes (Hermes phase 7, 2026-09-24): edits a model made to a
-// sandboxed copy of the JARVIS code wait here until an admin applies or
+// sandboxed copy of the Kairos code wait here until an admin applies or
 // discards them (core/sandbox_changes.py). No model can apply one. Applying
 // is all or nothing and refuses if a file changed since the run; it does not
 // commit. Diffs are shown as text, never as HTML.
@@ -1768,7 +1768,7 @@ async function renderSandboxChangesPanel(body, status, page) {
     const applyBtn = el("button", { class: "btn primary", text: "Apply", disabled: !change.applicable });
     applyBtn.addEventListener("click", async () => {
       const ok = await confirmDialog({ title: "Apply these changes?",
-        message: `${change.changes.length} file(s) will be written into the JARVIS folder. Nothing is committed.`, confirmLabel: "Apply changes" });
+        message: `${change.changes.length} file(s) will be written into the Kairos folder. Nothing is committed.`, confirmLabel: "Apply changes" });
       if (!ok) return;
       try {
         await api(`/api/sandbox/changes/${change.id}/apply`, { method: "POST" });
@@ -1808,19 +1808,19 @@ async function renderCustomTabsPanel(body, status, page) {
   const waitingForRestart = approvals.filter((entry) => entry.approved && !tabs.some((tab) => tab.id === entry.id));
   if (pending.length) {
     parts.push(group({ title: "Source awaiting approval", cls: "set-danger",
-      description: "Custom-tab code runs inside JARVIS. Review these files in your JARVIS data folder before approving. Any source change invalidates every tab approval." },
+      description: "Custom-tab code runs inside Kairos. Review these files in your Kairos data folder before approving. Any source change invalidates every tab approval." },
       pending.map((entry) => {
         const approve = el("button", { class: "btn primary", text: "Approve this source", disabled: !!entry.blocked });
         approve.addEventListener("click", async () => {
           const ok = await confirmDialog({
             title: `Approve the "${entry.id}" tab source?`,
-            message: `This allows these files to run as JARVIS custom-tab code. Inspect all files before approving.\n\n${entry.files.join("\n")}\n\nFingerprint: ${entry.fingerprint}`,
+            message: `This allows these files to run as Kairos custom-tab code. Inspect all files before approving.\n\n${entry.files.join("\n")}\n\nFingerprint: ${entry.fingerprint}`,
             confirmLabel: "Approve source", danger: false,
           });
           if (!ok) return;
           try {
             await api(`/api/system/custom-tabs/${encodeURIComponent(entry.id)}/approve`, { method: "POST", body: JSON.stringify({ fingerprint: entry.fingerprint }) });
-            toast("Source approved. Restart JARVIS to load the tab.", "success");
+            toast("Source approved. Restart Kairos to load the tab.", "success");
           } catch (error) { toast(error.message || "Approval failed; review the current source again.", "error"); }
           await rerender();
         });
@@ -1830,7 +1830,7 @@ async function renderCustomTabsPanel(body, status, page) {
       })));
   }
   if (waitingForRestart.length) {
-    parts.push(note(`Approved source for ${waitingForRestart.map((entry) => entry.id).join(", ")}. Restart JARVIS to load it.`));
+    parts.push(note(`Approved source for ${waitingForRestart.map((entry) => entry.id).join(", ")}. Restart Kairos to load it.`));
   }
   if (!tabs.length) {
     if (!pending.length && !waitingForRestart.length) parts.push(group({}, [empty("No custom tabs yet. Use \"+ New Tab\" in the sidebar.")]));

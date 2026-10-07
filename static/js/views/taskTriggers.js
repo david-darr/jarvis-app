@@ -25,7 +25,7 @@ export async function renderTriggers(host) {
 
   const doesWhat = (t) => t.action === "task"
     ? `runs "${taskName.get(t.task_id) || "a removed task"}"`
-    : `makes a card for ${t.agent_id ? agentName.get(t.agent_id) || "a deleted agent" : "JARVIS"}`;
+    : `makes a card for ${t.agent_id ? agentName.get(t.agent_id) || "a deleted agent" : "Kairos"}`;
 
   async function showList() {
     const data = await api("/api/triggers");
@@ -76,7 +76,7 @@ export async function renderTriggers(host) {
       row({ title: trigger.preset === "github" ? "In GitHub" : "From your service", description: trigger.preset === "github"
         ? "Repository Settings, Webhooks, Add webhook: paste the address as the Payload URL, choose application/json, paste the secret, pick the events."
         : "POST JSON to the address with the header X-JARVIS-Signature: sha256=<HMAC-SHA256 of the body with the secret>. Optional: X-JARVIS-Delivery with a unique id per event." }),
-      note("Events only arrive once JARVIS can be reached from the internet. Until then you can test from this computer."),
+      note("Events only arrive once Kairos can be reached from the internet. Until then you can test from this computer."),
     ]);
   }
 
@@ -148,7 +148,7 @@ export async function renderTriggers(host) {
     const name = el("input", { placeholder: "GitHub pushes" });
     const preset = customSelect({}, [el("option", { value: "github", text: "GitHub" }), el("option", { value: "generic", text: "Any service (signed JSON)" })]);
     const action = customSelect({}, [el("option", { value: "card", text: "Make a card" }), ...(runnable.length ? [el("option", { value: "task", text: "Run a task or agent goal" })] : [])]);
-    const agent = customSelect({}, [el("option", { value: "", text: "JARVIS (no agent)" }), ...agents.map((a) => el("option", { value: a.id, text: a.name }))]);
+    const agent = customSelect({}, [el("option", { value: "", text: "Kairos (no agent)" }), ...agents.map((a) => el("option", { value: a.id, text: a.name }))]);
     const task = customSelect({}, runnable.map((t) => el("option", { value: t.id, text: t.agent_id ? `${agentName.get(t.agent_id) || "Agent"}: ${t.name}` : t.name })));
     const events = el("input", { placeholder: "push" });
     const title = el("input", { placeholder: "Push to {repository.full_name}: {head_commit.message}" });

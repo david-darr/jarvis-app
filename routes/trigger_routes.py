@@ -124,7 +124,7 @@ async def receive(trigger_id: str, request: Request) -> JSONResponse:
         except Exception as e:  # a removed agent or model: logged here and on the trigger's page
             logger.exception("trigger %s: could not start its work", trigger_id)
             trigger_service.record_failure(work, str(e))
-            return JSONResponse({"error": "could not start; see JARVIS"}, status_code=500)
+            return JSONResponse({"error": "could not start; see Kairos"}, status_code=500)
         if started.get("run"):
             start_run(started["run"])
         if started.get("pending"):

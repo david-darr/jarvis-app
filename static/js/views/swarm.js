@@ -188,7 +188,7 @@ export function render(root, _tab, options = {}) {
       const maxCycles = el("input", { type: "number", min: "1", max: "50", step: "1", value: savedSchedule.max_cycles || 5, required: true });
       const scheduledSpend = el("input", { type: "checkbox", checked: !!savedSchedule.auto_spend_confirmed });
       const scheduleBox = el("fieldset", { class: "swarm-schedule" }, [el("legend", { text: "Scheduled work period" }),
-        el("p", { class: "muted", text: "JARVIS starts one durable shift in each local-time window while the app is running. Waiting costs no model tokens." }),
+        el("p", { class: "muted", text: "Kairos starts one durable shift in each local-time window while the app is running. Waiting costs no model tokens." }),
         el("div", { class: "swarm-days" }, days.map(item => item.node)), label("Local start", shiftStart),
         label("Local end", shiftEnd), label("Maximum cycles per shift", maxCycles),
         label("Allow automatic provider spending during these shifts", scheduledSpend)]);
@@ -196,16 +196,16 @@ export function render(root, _tab, options = {}) {
       mode.addEventListener("change", updateSchedule); updateSchedule();
 
       const savedMemory = snapshot?.system.configuration.memory || {};
-      const memorySources = [["vault", "Vault notes"], ["sessions", "Past chats"], ["library", "Library documents"], ["project", "JARVIS Project"]]
+      const memorySources = [["vault", "Vault notes"], ["sessions", "Past chats"], ["library", "Library documents"], ["project", "Kairos Project"]]
         .map(([source, text]) => {
           const input = el("input", { type: "checkbox", value: source, checked: (savedMemory.sources || []).includes(source) });
           return { source, input, node: label(text, input) };
         });
-      const project = el("select", { "aria-label": "JARVIS Project" }, [el("option", { value: "", text: "Choose a project" }),
+      const project = el("select", { "aria-label": "Kairos Project" }, [el("option", { value: "", text: "Choose a project" }),
         ...availableProjects.map(item => el("option", { value: item.id, text: item.name }))]);
       project.value = savedMemory.project_id || "";
       const maxMemory = el("input", { type: "number", min: "1", max: "5", step: "1", value: savedMemory.max_results || 5, required: true });
-      const memoryBox = el("fieldset", { class: "swarm-memory" }, [el("legend", { text: "JARVIS memory" }),
+      const memoryBox = el("fieldset", { class: "swarm-memory" }, [el("legend", { text: "Kairos memory" }),
         el("p", { class: "muted", text: "Workers can keyword-search only the sources you select, then read one bounded result. Every search and read is audited." }),
         el("div", { class: "swarm-memory-sources" }, memorySources.map(item => item.node)), label("Project", project),
         label("Maximum search results", maxMemory)]);
@@ -233,7 +233,7 @@ export function render(root, _tab, options = {}) {
       form.append(label(embedded ? "Team name" : "System name", name), label("Mission", mission), label("Intended operating mode", mode), scheduleBox, memoryBox,
         el("p", { class: "muted", text: connections.length
           ? (jarvisAgents.length ? "Seat your agents, or add members for this team only. " : "")
-            + "Give every teammate a connection. Workers have no shell or raw file access. Enabled JARVIS memory is read-only and bounded."
+            + "Give every teammate a connection. Workers have no shell or raw file access. Enabled Kairos memory is read-only and bounded."
           : "No model connections are available to you. Add one in Settings (or ask an admin) before this company can run." }));
       const members = [];
       const teamHost = el("div", { class: "swarm-form-team" });
@@ -430,7 +430,7 @@ export function render(root, _tab, options = {}) {
         return el("li", { text: `${agent.name}: ${connection} · ${agent.model || "connection default"} · ${agent.effort || "default effort"}` });
       });
       host.append(
-        el("p", { text: "This can spend allowance on the providers below. JARVIS allocations pause local work; they are not provider billing caps." }),
+        el("p", { text: "This can spend allowance on the providers below. Kairos allocations pause local work; they are not provider billing caps." }),
         el("h3", { text: "Local allocations" }),
         el("ul", {}, [systemLimit ? allocation("Company", systemLimit) : null, runLimit ? allocation("This run", runLimit) : null]),
         el("h3", { text: "Enabled teammates" }), el("ul", {}, team),
@@ -462,7 +462,7 @@ export function render(root, _tab, options = {}) {
         } catch (problem) { remove.disabled = false; host.querySelector('[role="alert"]').textContent = problem.message; }
       }, { class: "btn danger", disabled: true });
       confirmation.addEventListener("input", () => { remove.disabled = confirmation.value !== snapshot.system.name; });
-      host.append(el("p", { text: "This permanently removes the company, its messages, tasks, runs, usage records, and saved checkpoint records from JARVIS." }),
+      host.append(el("p", { text: "This permanently removes the company, its messages, tasks, runs, usage records, and saved checkpoint records from Kairos." }),
         el("p", { text: `Type ${snapshot.system.name} to continue.` }), label("Company name", confirmation),
         el("p", { role: "alert", class: "swarm-error" }),
         el("div", { class: "swarm-actions" }, [button("Cancel", cancel), remove]));
@@ -756,8 +756,8 @@ export function render(root, _tab, options = {}) {
       case "run.completed": return "Cycle completed.";
       case "shift.opened": return `Scheduled shift opened for ${clip(data.starts_at)}.`;
       case "shift.finished": return `Shift finished: ${clip(data.summary) || data.reason}.`;
-      case "memory.search": return `${who} searched enabled JARVIS memory for ${clip(data.query)}.`;
-      case "memory.read": return `${who} read ${clip(data.ref)} from enabled JARVIS memory.`;
+      case "memory.search": return `${who} searched enabled Kairos memory for ${clip(data.query)}.`;
+      case "memory.read": return `${who} read ${clip(data.ref)} from enabled Kairos memory.`;
       case "task.unblocked": return `${who} can continue: ${clip(data.note)}`;
       case "mission.reopened": return "You answered, so the work started again.";
       case "system.reopened": return "The company was started again after being stopped.";

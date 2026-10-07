@@ -36,7 +36,10 @@ MEMORY_LIMIT = 8000
 DEFAULT_DAILY_RUN_CAP = 12
 MEMORY_SECTIONS = ("About this work", "Preferences", "Corrections", "Notes")
 INBOX_KINDS = ("report", "question")
-COLORS = ("#b3a7f5", "#7dd3c0", "#f0b37e", "#e88f8f", "#8fb8e8", "#c9d67a")
+COLORS = ("#d9b260", "#b9d2e3", "#e8c39e", "#d99a92", "#b5c7a5", "#cdbfd9")
+# The palette before the Kairos rebrand (2026-10-06); an agent saved with one
+# of these gets the color in the same position.
+LEGACY_COLORS = dict(zip(("#b3a7f5", "#7dd3c0", "#f0b37e", "#e88f8f", "#8fb8e8", "#c9d67a"), COLORS))
 # Fields a person may change; everything else is the service's.
 EDITABLE = ("name", "role", "instructions", "endpoint_id", "color", "enabled", "daily_run_cap",
             "deliver_to_channel", "integration_ids")
@@ -51,6 +54,10 @@ APPROVALS = {"approve", "approved", "lgtm", "ok", "okay", "yes", "looks good", "
 class AgentService:
     def __init__(self) -> None:
         self._agents: dict = read_json(AGENTS_FILE, {})
+        if any(agent.get("color") in LEGACY_COLORS for agent in self._agents.values()):
+            for agent in self._agents.values():
+                agent["color"] = LEGACY_COLORS.get(agent.get("color"), agent.get("color"))
+            self._save()
         self._inbox: list = read_json(INBOX_FILE, [])
         # agent id -> the card or task its run is working on right now, so a
         # question raised mid-run knows what it belongs to.
@@ -446,7 +453,7 @@ def identity_block(agent: dict, memory: str, chat: bool = False, team: bool = Fa
     person's, but parts came from web pages and tool results, so they are
     fenced as data. chat: the person is talking to it directly. team: it is
     working as a teammate (agents phase 5), with only the team's tools."""
-    lines = [f"[You are {agent['name']}, one of the person's JARVIS agents."
+    lines = [f"[You are {agent['name']}, one of the person's Kairos agents."
              + (" The person is talking with you directly in this chat." if chat else "")
              + (" Here you are working as part of a team." if team else "")]
     if agent.get("role"):

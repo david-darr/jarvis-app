@@ -1,5 +1,5 @@
 """Small, stable search bridge for a local/API chat's less-used tools: the
-MCP tools discovered for that connection, and on a small window JARVIS's own
+MCP tools discovered for that connection, and on a small window Kairos's own
 non-core tools (core/tool_registry.py deferred_tools, 2026-10-06).
 
 Only the three bridge schemas reach the model until it asks for a matching
@@ -20,7 +20,7 @@ def bridge_schemas() -> list[dict]:
     """Byte-stable schemas, so a chat does not pay a cache miss as tools change."""
     return [
         _function(SEARCH,
-                  "Search more tools: JARVIS's own less-used tools (tasks, calendar, documents, Google, "
+                  "Search more tools: Kairos's own less-used tools (tasks, calendar, documents, Google, "
                   "code and more) and the MCP integrations enabled for this chat. Use an action or service, "
                   "such as 'create task' or 'github create issue'. Returns matching tool names and short "
                   f"descriptions. Then call {DESCRIBE} for arguments and {CALL} to use one. These are real "

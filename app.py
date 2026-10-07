@@ -159,7 +159,7 @@ async def lifespan(_app: FastAPI):
             llamacpp_engine.stop()
 
 
-app = FastAPI(title="JARVIS", lifespan=lifespan)
+app = FastAPI(title="Kairos", lifespan=lifespan)
 
 app.add_middleware(SecurityHeadersMiddleware)
 

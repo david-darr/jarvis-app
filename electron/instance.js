@@ -44,15 +44,25 @@ function portFor(name, env) {
 function resolveInstance({ argv, env, appData }) {
   const name = instanceName(argv, env);
   const port = portFor(name, env);
+  // Electron's --user-data-dir is used by the packaged verifier (and by
+  // isolated launches). Honor it before pinning the ordinary profile below.
+  const profileFlag = (argv || []).find((arg) => arg.startsWith("--user-data-dir="));
+  const profile = profileFlag && profileFlag.slice("--user-data-dir=".length);
+  if (profileFlag && (!profile || !path.isAbsolute(profile))) {
+    throw new Error("--user-data-dir must name an absolute folder.");
+  }
   return {
     name,
     port,
-    label: name ? `JARVIS (${name})` : "JARVIS",
-    // null leaves Electron's own default, %APPDATA%\JARVIS, untouched.
-    userData: name ? path.join(appData, `JARVIS-${name}`) : null,
+    label: name ? `Kairos (${name})` : "Kairos",
+    // Pinned, never Electron's default: that default follows productName, so
+    // the rename to Kairos (2026-10-06) would otherwise have opened an empty
+    // %APPDATA%\Kairos and left everyone's chats, notes and keys behind.
+    // The folder keeps its JARVIS name; nothing is moved.
+    userData: profile || path.join(appData, name ? `JARVIS-${name}` : "JARVIS"),
     // The real app's alone: a second copy would race it for the global
     // shortcut and install releases over a development checkout.
-    machineWide: !name,
+    machineWide: !name && !profile,
   };
 }
 

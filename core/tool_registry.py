@@ -1,6 +1,6 @@
 """The hive-mind tools, declared once.
 
-Every model reaches JARVIS's memory through the same tools: search past chats,
+Every model reaches Kairos's memory through the same tools: search past chats,
 skills, notes, tasks and the work board, calendar, documents, contacts,
 specs. They used to be written out twice by hand - once as Claude's in-process
 MCP server (core/hive_mind_server.py) and once as the function list and a
@@ -19,7 +19,7 @@ mcp_servers/hive_mind_cli.py and POST /api/tools/{name} (roadmap phase 2,
 Claude, has its own shell and files, and its own sandbox, so it is offered
 neither the file tools nor run_code/browse.
 
-Each tool says what it does (`effect`): read, write (changes JARVIS data),
+Each tool says what it does (`effect`): read, write (changes Kairos data),
 exec (runs code) or external (reaches another service). Every call that is
 not a read is written to the permission audit (Settings > Permissions).
 
@@ -174,7 +174,7 @@ async def dispatch(name: str, args: dict, ctx: ToolContext, surface: str) -> str
 
 
 def claude_preapproved(agent: bool = False) -> list[str]:
-    """Claude's pre-approved JARVIS tools: every registry tool on its surface.
+    """Claude's pre-approved Kairos tools: every registry tool on its surface.
     Each asks the person itself where it needs to (Google changes, run_code
     with the internet), so none needs Claude Code's own prompt."""
     return [f"mcp__hive_mind__{s.name}" for s in specs(CLAUDE, is_admin=True, agent=agent)]
@@ -299,7 +299,7 @@ async def _list_notes(args, ctx):
 
 @register(
     "list_tasks",
-    "List scheduled/automated Tasks (recurring or one-shot jobs JARVIS runs on its own) — "
+    "List scheduled/automated Tasks (recurring or one-shot jobs Kairos runs on its own) — "
     "distinct from Notes' todos.",
     _object(),
     core=True,
@@ -325,7 +325,7 @@ async def _list_upcoming_events(args, ctx):
 @register(
     "list_specs",
     "List every architecture/subsystem spec doc (specs/*.md) — real documentation about how "
-    "JARVIS itself is built (auth, frontend style, etc.), not user data.",
+    "Kairos itself is built (auth, frontend style, etc.), not user data.",
     _object(),
 )
 async def _list_specs(args, ctx):
@@ -417,7 +417,7 @@ async def _delete_note(args, ctx):
     "Create a new scheduled/automated Task. schedule_kind is 'once' (needs run_at, an ISO "
     "datetime), 'interval' (needs interval_seconds), or 'daily' (needs run_time — use this "
     "whenever the user names a time of day, e.g. 'every morning at 6am'), or 'card' for one-off "
-    "work on the board: JARVIS runs a 'ready' card by itself and puts the result up for the "
+    "work on the board: Kairos runs a 'ready' card by itself and puts the result up for the "
     "user's review; depends_on makes it wait for other cards and receive their results.",
     _object({
         "name": _str(),
@@ -569,7 +569,7 @@ def _register_artifact(ctx: ToolContext, url: str) -> None:
 
 @register(
     "search_vault",
-    "Search JARVIS's memory (the Obsidian vault) for notes matching a keyword or phrase. Returns short snippets, not full files.",
+    "Search Kairos's memory (the Obsidian vault) for notes matching a keyword or phrase. Returns short snippets, not full files.",
     _object({"query": _str("Keyword or phrase to search for")}, ("query",)),
     surfaces=frozenset({OPENAI}),
     core=True,
@@ -635,7 +635,7 @@ async def _read_repo_file(args, ctx):
     "write_repo_file",
     "Create or overwrite one file in jarvis-app source with the given full content (full-file replacement, not a patch/diff). Supported OpenAI models can also write user tabs under custom-tabs/routes/, custom-tabs/services/, and custom-tabs/views/. Creates parent directories if needed.",
     _object({"path": _str(), "content": _str()}, ("path", "content")),
-    # Admin only (roadmap phase 7, 2026-10-06): JARVIS's own source runs as
+    # Admin only (roadmap phase 7, 2026-10-06): Kairos's own source runs as
     # you at the next start, and Claude and Codex already give repo writes to
     # admins alone. Every local or API session, agents and tasks included,
     # could overwrite it before.
@@ -694,15 +694,15 @@ async def _run_shell(args, ctx):
     "Run a shell command in an isolated Linux sandbox (Debian, Python 3.12; no internet unless internet=true, "
     "which asks the person first). "
     "Its working directory /work starts with the files you pass (path -> text) and, in an admin chat "
-    "with copy_repo=true, a copy of the JARVIS code. Returns the output and a diff of what the command "
+    "with copy_repo=true, a copy of the Kairos code. Returns the output and a diff of what the command "
     "changed; nothing is written back to any real folder. Use it to run code, tests or scripts safely.",
     _object({
         "command": _str("A shell command run with sh in /work, not Python source. To run Python, put the "
                         "code in files (e.g. {\"main.py\": \"...\"}) and use the command \"python main.py\""),
         "files": {"type": "object", "additionalProperties": {"type": "string"},
                   "description": "Optional files to create first: relative path -> text content"},
-        "copy_repo": {"type": "boolean", "description": "Admin chats only, and only when JARVIS runs from a "
-                                                        "development checkout: start with a copy of the JARVIS code"},
+        "copy_repo": {"type": "boolean", "description": "Admin chats only, and only when Kairos runs from a "
+                                                        "development checkout: start with a copy of the Kairos code"},
         "timeout_seconds": {"type": "integer", "description": "Optional, default 120, at most 900"},
         "internet": {"type": "boolean", "description": "Optional: reach public websites (e.g. to install a package). "
                                                        "The person is asked first each time."},
@@ -727,9 +727,9 @@ async def _run_code(args, ctx):
         return "Not run: files must be an object of path -> text."
     copy_repo = args.get("copy_repo") in (True, "true", "True")
     if copy_repo and not ctx.is_admin:
-        return "Not run: only an admin chat can copy the JARVIS code into the sandbox."
+        return "Not run: only an admin chat can copy the Kairos code into the sandbox."
     if copy_repo and not sandbox_changes_available():
-        return ("Not run: copy_repo only works when JARVIS runs from a development checkout of its code. "
+        return ("Not run: copy_repo only works when Kairos runs from a development checkout of its code. "
                 "This is an installed app, whose folder holds the bundled runtime and is replaced on update.")
     try:
         timeout = int(args.get("timeout_seconds") or sandbox.DEFAULT_TIMEOUT_SECONDS)
@@ -763,7 +763,7 @@ async def _run_code(args, ctx):
     changes = "\n".join(f"  {c['status']}: {c['path']}" for c in result.changes) or "  none"
     kept = ""
     if copy_repo:
-        # Edits to the JARVIS code wait for the person (core/sandbox_changes.py);
+        # Edits to the Kairos code wait for the person (core/sandbox_changes.py);
         # there is deliberately no tool that applies them.
         from core import sandbox_changes
         change_id = sandbox_changes.record(result, ctx.session_id)

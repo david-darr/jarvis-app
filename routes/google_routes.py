@@ -88,10 +88,10 @@ async def start(user: str = Depends(require_admin)) -> dict:
 async def callback(state: str = "", code: str | None = None, error: str | None = None) -> HTMLResponse:
     try:
         account = await google.finish_sign_in(state, code, local_api_base() + CALLBACK, error)
-        message, status_code = f"Connected {html.escape(account)}. Return to JARVIS.", 200
+        message, status_code = f"Connected {html.escape(account)}. Return to Kairos.", 200
     except google.GoogleError as problem:
         message, status_code = html.escape(str(problem)), problem.status
-    return HTMLResponse(f"<!doctype html><meta charset=utf-8><title>JARVIS Google connection</title>"
+    return HTMLResponse(f"<!doctype html><meta charset=utf-8><title>Kairos Google connection</title>"
                         f"<body style='font-family:system-ui;max-width:34rem;margin:4rem auto;padding:1rem'>"
                         f"<h1>Google Workspace</h1><p>{message}</p></body>", status_code=status_code)
 

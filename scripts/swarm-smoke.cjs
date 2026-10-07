@@ -31,7 +31,7 @@ const CATALOG = {
 };
 // One of the owner's agents, as GET /api/agents returns it (admin only), so
 // a teammate can be seated as that agent (agents phase 5).
-const AGENTS = [{ id: 'agent-1', name: 'Scout', role: 'Researcher', endpoint_id: 'claude-1', color: '#b3a7f5', enabled: true,
+const AGENTS = [{ id: 'agent-1', name: 'Scout', role: 'Researcher', endpoint_id: 'claude-1', color: '#d9b260', enabled: true,
   status: 'idle', status_detail: '', runs_today: 0, daily_run_cap: 12, needs_you: 0, created_at: 1 }];
 const now = () => Date.now() / 1000;
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -205,7 +205,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === '/') {
     res.setHeader('Content-Type', 'text/html');
-    res.end('<!doctype html><html data-theme="dark"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/css/style.css"><link rel="stylesheet" href="/static/css/swarm.css"></head><body><main id="view-content"></main><script type="module" src="/fixture.js"></script></body></html>'); return;
+    res.end('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/css/kairos-theme.css"><link rel="stylesheet" href="/static/css/style.css"><link rel="stylesheet" href="/static/css/swarm.css"></head><body><main id="view-content"></main><script type="module" src="/fixture.js"></script></body></html>'); return;
   }
   if (url.pathname === '/fixture.js') {
     res.setHeader('Content-Type', 'text/javascript');
@@ -283,8 +283,8 @@ app.whenReady().then(async () => {
       [...document.querySelectorAll('[aria-label="Reasoning effort"]')][1].value='low'; }`);
     await js(`{ const mode=document.querySelector('[name=mode]'); mode.value='scheduled'; mode.dispatchEvent(new Event('change'));
       [...document.querySelectorAll('.swarm-schedule label')].find(n=>n.textContent.includes('automatic provider spending')).querySelector('input').checked=true;
-      [...document.querySelectorAll('.swarm-memory-sources label')].filter(n=>['Vault notes','JARVIS Project'].includes(n.textContent.trim())).forEach(n=>n.querySelector('input').checked=true);
-      document.querySelector('[aria-label="JARVIS Project"]').value='project-1';
+      [...document.querySelectorAll('.swarm-memory-sources label')].filter(n=>['Vault notes','Kairos Project'].includes(n.textContent.trim())).forEach(n=>n.querySelector('input').checked=true);
+      document.querySelector('[aria-label="Kairos Project"]').value='project-1';
       const run=[...document.querySelectorAll('.swarm-limits')].find(n=>n.querySelector('legend').textContent==='Per-run allocation');
       run.querySelector('input[type=checkbox]').click(); }`);
     assert.equal(await js("document.querySelector('.swarm-schedule').hidden"), false, 'Scheduled mode exposes its work window');

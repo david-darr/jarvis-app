@@ -268,7 +268,7 @@ class RestartTests(Base):
         self.assertEqual(self.statuses(), ["done", "lost", "lost"])
         report = helpers.results_text(batch, Ctx())
         self.assertIn("Found it for: find A", report)
-        self.assertIn("JARVIS closed while it worked", report)
+        self.assertIn("Kairos closed while it worked", report)
         self.assertEqual(FakeBrain.started, started, "nothing ran again")
 
 

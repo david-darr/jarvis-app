@@ -1,5 +1,5 @@
 """IRC, over a plain asyncio TLS socket. Reference: Hermes
-plugins/platforms/irc (MIT). In a channel JARVIS answers only messages
+plugins/platforms/irc (MIT). In a channel Kairos answers only messages
 addressed to its nick ("jarvis: ..."); private messages always.
 
 Nicknames are only trustworthy on a network where they are registered, so
@@ -21,7 +21,7 @@ class IRC(Connector):
     docs_url = "https://libera.chat/guides/"
     message_limit = 2000
     target_field = "default_target"
-    sender_help = "Nicknames allowed to talk to JARVIS (registered nicks only), one per line."
+    sender_help = "Nicknames allowed to talk to Kairos (registered nicks only), one per line."
     fields = (
         Field("server", "Server", placeholder="irc.libera.chat"),
         Field("port", "Port", kind="number", default="6697", required=False),
@@ -45,7 +45,7 @@ class IRC(Connector):
             if self.setting("password"):
                 await self._line(f"PASS {self.setting('password')}")
             await self._line(f"NICK {nick}")
-            await self._line(f"USER {nick} 0 * :JARVIS")
+            await self._line(f"USER {nick} 0 * :Kairos")
             while True:
                 raw = await reader.readline()
                 if not raw:

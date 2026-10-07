@@ -3,7 +3,7 @@
 core/sandbox.py runs with no network. Some runs need the internet - fetching
 a package, the read-only browser of step 3 - but on Docker Desktop an
 ordinarily networked container reaches services on this computer's
-loopback, JARVIS's own API among them (scripts/test_sandbox.py proves it).
+loopback, Kairos's own API among them (scripts/test_sandbox.py proves it).
 So a networked run gets no route of its own:
 
 - It joins `jarvis-sbx-internal`, a Docker network created `--internal`:
@@ -51,7 +51,7 @@ async def refuse(w, why):
     print("BLOCKED", why, flush=True)
     try:
         w.write(b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n"
-                b"Blocked by the JARVIS sandbox egress filter: " + why.encode() + b"\n")
+                b"Blocked by the Kairos sandbox egress filter: " + why.encode() + b"\n")
         await w.drain()
     finally:
         w.close()

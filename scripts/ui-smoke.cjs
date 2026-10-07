@@ -59,17 +59,17 @@ const runs = {
       delivery: { id: "d1", channel: "discord", status: "failed", attempts: 27, next_try_at: null, last_error: "the channel did not accept it", created_at: now - 3000, finished_at: now - 100 } },
     { task_id: "t1", started_at: now - 7200, ran_at: now - 7190, duration_seconds: 10, outcome: "stopped", output: "", error: "Stopped by you.", delivered: null, model: "Claude", attempt: null,
       late_seconds: 7200, scheduled_for: new Date((now - 14400) * 1000).toISOString(), source: "schedule" },
-    { task_id: "t1", started_at: now - 90000, ran_at: now - 89990, duration_seconds: 10, outcome: "lost", output: "", error: "The run did not finish (JARVIS closed while it ran).", delivered: null, model: "Claude", attempt: null },
+    { task_id: "t1", started_at: now - 90000, ran_at: now - 89990, duration_seconds: 10, outcome: "lost", output: "", error: "The run did not finish (Kairos closed while it ran).", delivered: null, model: "Claude", attempt: null },
     { task_id: "t1", started_at: null, ran_at: now - 176400, duration_seconds: null, outcome: "failed", output: "", error: "The model stopped responding.", delivered: null, model: null, attempt: null },
   ],
   c1: [{ task_id: "c1", started_at: now - 725, ran_at: now - 600, duration_seconds: 125, outcome: "succeeded", output: "Three sources found.", error: null, delivered: null, model: "Local model", attempt: 1 }],
 };
 // Agents (views/agents.js): one waiting on the person, one at work.
 const agentsFixture = [
-  { id: "a1", name: "Scout", role: "Watches job postings and applications", instructions: "Be brief.", color: "#b3a7f5",
+  { id: "a1", name: "Scout", role: "Watches job postings and applications", instructions: "Be brief.", color: "#d9b260",
     endpoint_id: null, enabled: true, daily_run_cap: 12, deliver_to_channel: null, status: "needs_you", status_detail: "",
     needs_you: 2, runs_today: 3 },
-  { id: "a2", name: "Archivist", role: "Files and tidies notes", instructions: "", color: "#7dd3c0", endpoint_id: "m3",
+  { id: "a2", name: "Archivist", role: "Files and tidies notes", instructions: "", color: "#b9d2e3", endpoint_id: "m3",
     enabled: true, daily_run_cap: 12, deliver_to_channel: null, status: "working", status_detail: "Sort inbox notes",
     needs_you: 0, runs_today: 1 },
 ];
@@ -355,7 +355,20 @@ app.whenReady().then(async () => {
     win.webContents.debugger.attach("1.3");
     await win.webContents.debugger.sendCommand("Emulation.setFocusEmulationEnabled", { enabled: true });
     await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
+    assert.ok(await js("document.querySelector('.dashboard-hero').contains(document.querySelector('.dashboard-header')) && !document.querySelector('.dashboard-hero').contains(document.querySelector('.dashboard-stats'))"), "Home keeps the header and introduction in one card above the summary strip");
+    assert.ok(await js("!!document.querySelector('.kairos-sky-image') && !document.querySelector('.kairos-mark')"), "Home uses the quiet sky scene");
+    assert.equal(await js("getComputedStyle(document.querySelector('.kairos-sky-image')).animationName"), "kairos-sky-drift");
+    await js("document.querySelector('.core-motion-toggle').click()");
+    assert.equal(await js("getComputedStyle(document.querySelector('.kairos-sky-image')).animationPlayState"), "paused");
+    await js("document.querySelector('.core-motion-toggle').click()");
     await require('./appearance-checks.cjs')({ js, win, waitFor, capture, base, delay });
+    await js("(async () => { const overlay=document.getElementById('onboarding-overlay'); overlay.classList.remove('hidden'); await import('/static/js/onboarding.js').then(m => m.run(overlay, () => {})); })()");
+    assert.equal(await js("document.querySelector('.onboarding-card h2').textContent"), 'Not more time. The right time.');
+    await capture('desktop-onboarding');
+    win.setContentSize(390, 844); await delay(100);
+    await capture('mobile-onboarding');
+    win.setContentSize(1440, 900); await delay(350);
+    await js("document.getElementById('onboarding-overlay').classList.add('hidden')");
     const railWidth = () => js("document.querySelector('#sidebar').getBoundingClientRect().width");
     assert.equal(await railWidth(), 204);
     await js("document.querySelector('#sidebar-toggle').click()");
@@ -403,13 +416,16 @@ app.whenReady().then(async () => {
       await delay(100);
       for (const tab of ["home", "chat", "notes", "library", "calendar", "tasks", "email", "tool-store", "agents", "cookbook", "school"]) {
         await navigate(tab);
+        if (tab === "chat") {
+          assert.ok(await js("getComputedStyle(document.querySelector('.chat-layout')).backgroundImage.includes('kairos-sky.jpg')"), label + " default Chat uses the Kairos sky");
+        }
         if (tab === "home") {
           await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
           await waitFor("document.querySelectorAll('.dashboard-model-usage').length > 0");
           // Only the local model carries a usage label, and it is tokens
           // spent, never a "% used" figure that reads like a quota.
           const labels = await js("[...document.querySelectorAll('.dashboard-model-usage')].map(n => n.textContent)");
-          assert.deepEqual(labels, ["842K tokens via JARVIS"], label + " home model usage labels");
+          assert.deepEqual(labels, ["842K tokens via Kairos"], label + " home model usage labels");
           // Provider logos where known (core/model_marks.py); the generic icon where not.
           const marks = await js("[...document.querySelectorAll('.dashboard-row > .model-mark')].map(n => n.getAttribute('aria-label'))");
           assert.deepEqual(marks, ["Claude", "Codex"], label + " home model logos");
@@ -874,7 +890,7 @@ app.whenReady().then(async () => {
     assert.equal(await js("document.documentElement.dataset.chatStyle"), 'terminal');
     assert.ok(await js("/Cascadia|Consolas/.test(getComputedStyle(document.querySelector('#chat-messages')).fontFamily)"), "Terminal style is monospace");
     assert.equal(await js("getComputedStyle(document.querySelector('#chat-messages .msg.user .msg-body')).backgroundColor"), 'rgba(0, 0, 0, 0)', "No bubble in terminal style");
-    assert.ok(await js("getComputedStyle(document.querySelector('#chat-messages .msg.assistant'), '::before').content.includes('jarvis')"), "Assistant turns carry a prompt label");
+    assert.ok(await js("getComputedStyle(document.querySelector('#chat-messages .msg.assistant'), '::before').content.includes('kairos')"), "Assistant turns carry a prompt label");
     assert.deepEqual(await overflow(), [], "terminal style overflow");
     await capture("desktop-conversation-terminal");
     await js("import('/static/js/appearance.js').then((m) => m.updateAppearance({ chatStyle: 'standard' }))");
@@ -906,6 +922,12 @@ app.whenReady().then(async () => {
     assert.equal(await sideId(), null);
     assert.equal(await js("document.querySelector('.chat-layout').classList.contains('has-side-chat')"), false);
     assert.equal(await js("localStorage.getItem('jarvis:side-chat')"), null, "a closed side chat does not come back");
+    // The side browser shares this right-hand region; capture its own toolbar.
+    await js("import('/static/js/browserPane.js').then((m) => m.openBrowser('about:blank'))");
+    await waitFor("!!document.querySelector('.browser-panel .browser-toolbar')");
+    assert.deepEqual(await overflow(), [], "side browser chrome overflow");
+    await capture("desktop-side-browser");
+    await js("import('/static/js/browserPane.js').then((m) => m.closeBrowser())");
     // -- Find in chat (Ctrl+F, 2026-09-25).
     await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true }))");
     assert.equal(await js("document.querySelector('.chat-find').hidden"), false, "Ctrl+F opens the find bar");
@@ -947,7 +969,8 @@ app.whenReady().then(async () => {
     assert.equal(await js("getComputedStyle(document.querySelector('.border-beam'),'::before').animationName"), "none");
     assert.ok(await js("parseFloat(getComputedStyle(document.querySelector('#sidebar')).transitionDuration) < .01"), "Reduced motion disables the rail transition");
     await navigate("home");
-    await waitFor("document.querySelector('.core-motion-toggle')?.textContent === 'Resume motion'");
+    await waitFor("document.querySelector('.core-motion-toggle')?.hidden === true");
+    assert.equal(await js("getComputedStyle(document.querySelector('.kairos-sky-image')).animationName"), "none");
     await capture("desktop-reduced-motion");
     await win.webContents.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [] });
     await navigate("chat");
@@ -991,7 +1014,7 @@ app.whenReady().then(async () => {
     // The empty pass plays a development copy: its name on every page.
     await win.loadURL(base);
     await waitFor("document.querySelector('#brand .instance-badge')?.textContent === 'DEV'");
-    assert.equal(await js("document.title"), "JARVIS (dev)");
+    assert.equal(await js("document.title"), "Kairos (dev)");
     for (const tab of ["home", "chat", "notes", "library", "calendar", "tasks", "email", "tool-store", "agents", "cookbook", "school"]) {
       await navigate(tab);
       if (tab === "home") await waitFor("document.querySelector('.dashboard-stat-value')?.textContent === '0'");

@@ -9,8 +9,8 @@ it, which chat it belongs to, whether it is for an agent - is decided once,
 in core/connectors/hub.py, the same way for every platform.
 
 Modelled on Hermes Agent's BasePlatformAdapter (gateway/platforms/base.py,
-MIT), reduced to what JARVIS needs. No platform SDKs: each adapter talks to
-its service's HTTP or WebSocket API with httpx/websockets, which JARVIS
+MIT), reduced to what Kairos needs. No platform SDKs: each adapter talks to
+its service's HTTP or WebSocket API with httpx/websockets, which Kairos
 already ships.
 """
 from dataclasses import dataclass, field
@@ -66,7 +66,7 @@ class Connector:
     webhook: bool = False       # receives through POST /api/connectors/<id>/webhook
     message_limit: int = 4000   # the platform's per-message text limit
     target_field: Optional[str] = None  # the setting naming where deliveries go
-    sender_help: str = "Sender IDs allowed to message JARVIS here, one per line."
+    sender_help: str = "Sender IDs allowed to message Kairos here, one per line."
 
     def __init__(self, record: dict, secrets: dict, hub: "Hub", transport: Optional[httpx.AsyncBaseTransport] = None):
         self.record = record
@@ -103,7 +103,7 @@ class Connector:
         raise NotImplementedError
 
     async def send_file(self, conversation: str, path: str) -> bool:
-        """Upload a file JARVIS generated. False: this platform cannot, and
+        """Upload a file Kairos generated. False: this platform cannot, and
         the hub mentions the file by name instead."""
         return False
 

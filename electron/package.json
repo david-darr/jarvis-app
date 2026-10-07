@@ -1,10 +1,10 @@
 {
   "name": "jarvis-app",
   "version": "1.15.0",
-  "description": "JARVIS — a self-hosted AI workspace and agent harness.",
+  "description": "Kairos — a self-hosted AI workspace and agent harness.",
   "//build.files": "build.files uses *.js rather than naming main.js and preload.js individually. It is an ALLOWLIST, so a new main-process module is silently omitted from the package: electron/browser.js was, and 1.9.0 shipped an app whose main process died on require() before starting the backend, so it never opened at all. The glob means the next module added here is packaged automatically. Verify with scripts/verify-packaged-app.cjs, which checks main.js's relative requires against the real asar and then launches the packaged app. This note lives at the top level because electron-builder rejects unknown keys inside build.",
   "//productName": "Top-level (not just under build) on purpose: Electron's app.getName() prefers productName over name, and that name decides app.getPath('userData') — i.e. where every user's data lives. Without this it resolved to %APPDATA%\\jarvis-app. Changing it after release would silently orphan existing installs' data, so it has to be right before the first public build.",
-  "productName": "JARVIS",
+  "productName": "Kairos",
   "main": "main.js",
   "author": "David Darr",
   "license": "MIT",
@@ -25,7 +25,7 @@
   },
   "build": {
     "appId": "com.davidmichael.jarvis",
-    "productName": "JARVIS",
+    "productName": "Kairos",
     "copyright": "Copyright © 2026 David Darr",
     "directories": {
       "output": "../dist",
@@ -38,7 +38,9 @@
       "icon.png",
       "icon.ico",
       "node_modules/**/*",
-      "splash.html"
+      "splash.html",
+      "splash-sky.jpg",
+      "fonts/*"
     ],
     "extraResources": [
       {
@@ -89,7 +91,7 @@
         }
       ],
       "icon": "icon.ico",
-      "artifactName": "JARVIS-Setup-${version}.${ext}"
+      "artifactName": "Kairos-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -97,7 +99,7 @@
       "perMachine": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "JARVIS",
+      "shortcutName": "Kairos",
       "deleteAppDataOnUninstall": false,
       "installerIcon": "icon.ico",
       "uninstallerIcon": "icon.ico"
@@ -112,8 +114,8 @@
         }
       ],
       "category": "public.app-category.productivity",
-      "icon": "icon.png",
-      "artifactName": "JARVIS-${version}-${arch}.${ext}",
+      "icon": "icon-mac.png",
+      "artifactName": "Kairos-${version}-${arch}.${ext}",
       "darkModeSupport": true,
       "hardenedRuntime": false
     },

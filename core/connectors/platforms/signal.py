@@ -19,10 +19,10 @@ class Signal(Connector):
     docs_url = "https://github.com/bbernhard/signal-cli-rest-api"
     message_limit = 6000
     target_field = "default_recipient"
-    sender_help = "Phone numbers allowed to message JARVIS, in +15551234567 form, one per line."
+    sender_help = "Phone numbers allowed to message Kairos, in +15551234567 form, one per line."
     fields = (
         Field("api_url", "signal-cli REST URL", placeholder="http://127.0.0.1:8080"),
-        Field("number", "JARVIS's Signal number", placeholder="+15551234567"),
+        Field("number", "Kairos's Signal number", placeholder="+15551234567"),
         Field("poll_seconds", "Check every (seconds)", kind="number", default="5", required=False),
         Field("default_recipient", "Notify (number)", required=False, placeholder="+15557654321"),
     )

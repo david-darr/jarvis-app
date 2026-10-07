@@ -1,7 +1,7 @@
 """Live, connection-scoped model discovery for chat pickers.
 
 The cache is intentionally short-lived. A picker request after a release should
-see the provider's current list without requiring a JARVIS update or restart.
+see the provider's current list without requiring a Kairos update or restart.
 Failed probes keep the last successful result; no credential is returned to the
 browser or written to this cache.
 """
@@ -164,7 +164,7 @@ async def _codex_cli_models() -> list[dict]:
 
     try:
         await send({"method": "initialize", "id": 1, "params": {"clientInfo": {
-            "name": "jarvis_app", "title": "JARVIS", "version": "1.0.0"}}})
+            "name": "jarvis_app", "title": "Kairos", "version": "1.0.0"}}})
         if not await response_for(1):
             return []
         await send({"method": "initialized", "params": {}})
@@ -197,7 +197,7 @@ async def _codex_cli_models() -> list[dict]:
         if process.returncode is None:
             if os.name == "nt":
                 # npm's codex.CMD is a parent launcher. Killing only it can
-                # orphan codex.exe, as JARVIS's chat timeout once did.
+                # orphan codex.exe, as Kairos's chat timeout once did.
                 try:
                     await asyncio.to_thread(subprocess.run,
                         ["taskkill", "/T", "/F", "/PID", str(process.pid)],

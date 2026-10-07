@@ -27,7 +27,7 @@ import { mountChatTimeline } from '../chatTimeline.js';
 // document's content into the composer, same mechanism as "Prompt" below
 // (which does the same thing for Skills) — not Odysseus's own RAG-backed
 // approach (which sends a document reference the model retrieves at query
-// time), since JARVIS doesn't have a RAG layer. Simpler and honest about
+// time), since Kairos doesn't have a RAG layer. Simpler and honest about
 // the difference: the whole document goes into the message up front.
 
 const ICON_ATTACH = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
@@ -634,7 +634,7 @@ export async function render(container, tabId, options = {}) {
   const attachStrip = el("div", { id: "attach-strip", class: "attach-strip" });
 
   // -- composer: top row (textarea + model picker) --------------------
-  const input = el("textarea", { id: "chat-input", rows: "1", placeholder: "Where should we start?", "aria-label": "Message JARVIS" });
+  const input = el("textarea", { id: "chat-input", rows: "1", placeholder: "Where should we start?", "aria-label": "Message Kairos" });
   const modelBtn = el("button", { type: "button", class: "model-picker-btn", id: "model-picker-btn" }, [
     el("span", { id: "model-picker-label", text: "No model — add one in Settings" }),
   ]);
@@ -1539,7 +1539,7 @@ async function setOpenMic(active, button) {
 
 // -- model picker -----------------------------------------------------------
 // David's ask 2026-08-31 (follow-up): no default model — the picker used to
-// always list a free "JARVIS (Claude)" option (id ""). Now every option,
+// always list a free "Kairos (Claude)" option (id ""). Now every option,
 // Claude included, is a real endpoint the user added in Settings > Add
 // Models; an empty list means truly nothing's configured yet.
 const NO_MODEL_LABEL = "No model — add one in Settings";

@@ -17,7 +17,7 @@ async function refreshModels() {
     for (const model of models) modelSelect.add(new Option(model.label, model.id));
     if (models.some(model => model.id === preferred)) modelSelect.value = preferred;
     else if (models.length === 1) modelSelect.value = models[0].id;
-  } catch { status.textContent = "Open JARVIS to choose a model."; }
+  } catch { status.textContent = "Open Kairos to choose a model."; }
 }
 refreshModels();
 window.screenGrab.onShown(refreshModels);

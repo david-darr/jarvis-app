@@ -2,7 +2,7 @@ import { api, el, customSelect, toast, confirmDialog } from "../api.js";
 import { runHistory } from "../runHistory.js";
 
 // The work board (Hermes track 2026-09-23, after Hermes's kanban): one-off
-// cards JARVIS works through by itself. The task loop claims one Ready card at
+// cards Kairos works through by itself. The task loop claims one Ready card at
 // a time, runs it and puts the result in Review; a person approves it or sends
 // it back with a note. See services/task_service.py.
 
@@ -22,7 +22,7 @@ export async function renderBoard(host) {
   host.append(
     el("div", { class: "title", text: "Work board" }),
     el("div", { class: "meta", style: "margin:4px 0 12px;", text:
-      "One-off work JARVIS does by itself. Ready cards run one at a time; results wait in Review for you. "
+      "One-off work Kairos does by itself. Ready cards run one at a time; results wait in Review for you. "
       + "A card can wait for others and gets their results." }),
     addForm(columns, cards, models),
     columns,
@@ -78,7 +78,7 @@ function modelOptions(models, selected = "") {
 function addForm(columns, cards, models) {
   const form = el("details", { class: "disclosure-panel" });
   const nameInput = el("input", { placeholder: "e.g. Draft the release notes" });
-  const promptInput = el("textarea", { rows: "3", placeholder: "What should JARVIS do? Be as specific as you would with a person." });
+  const promptInput = el("textarea", { rows: "3", placeholder: "What should Kairos do? Be as specific as you would with a person." });
   const modelSelect = customSelect({}, modelOptions(models));
   const waitSelect = customSelect({}, [
     el("option", { value: "", text: "Nothing" }),
@@ -92,7 +92,7 @@ function addForm(columns, cards, models) {
       name, prompt, schedule_kind: "card", status,
       depends_on: waitSelect.value ? [waitSelect.value] : [], endpoint_id: modelSelect.value || null,
     }) });
-    toast(status === "ready" ? "Card added; JARVIS will pick it up" : "Card added to the backlog", "success");
+    toast(status === "ready" ? "Card added; Kairos will pick it up" : "Card added to the backlog", "success");
     await renderBoard(columns.parentElement);
   };
   form.append(

@@ -159,7 +159,7 @@ export function openBrowser(initialUrl) {
       // Scripts and same-origin are needed for real sites to function at
       // all, but allow-same-origin is safe here precisely because the frame
       // is cross-origin to the app: the browser's own origin rules keep it
-      // away from JARVIS. allow-top-navigation is deliberately absent, so a
+      // away from Kairos. allow-top-navigation is deliberately absent, so a
       // framed page cannot navigate the app out from under the user.
       sandbox: 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox',
     });

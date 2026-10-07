@@ -84,7 +84,7 @@ export function isSpeechOutputSupported() {
 // rather than silently offering a choice that cannot be honoured.
 const VOICE_KEY = 'jarvis:speech-voice';
 
-// Names Windows and Chromium use for the UK voices, most JARVIS-like first.
+// Names Windows and Chromium use for the UK voices, most Kairos-like first.
 // Matched on substring because the exposed name varies by source: SAPI reports
 // "Microsoft George Desktop" where OneCore reports "Microsoft George".
 const BRITISH_MALE = ['ryan', 'george', 'oliver', 'thomas', 'daniel', 'arthur'];

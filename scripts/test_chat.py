@@ -2367,7 +2367,7 @@ class McpOAuthTests(unittest.TestCase):
         app_.include_router(integrations_routes.router)
         page = TestClient(app_).get("/api/integrations/oauth/callback", params={"state": "made-up", "code": "x"})
         self.assertEqual(page.status_code, 400, "answered without any login, and turned away")
-        self.assertIn("not one JARVIS is waiting for", page.text)
+        self.assertIn("not one Kairos is waiting for", page.text)
 
         async def refused():
             started = await mcp_oauth.start_sign_in(self.item["id"], self.REDIRECT)

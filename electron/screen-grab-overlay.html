@@ -7,9 +7,10 @@
   * { box-sizing:border-box; }
   body { margin:0; overflow:hidden; cursor:crosshair; user-select:none; }
   #screen { width:100vw; height:100vh; object-fit:fill; pointer-events:none; }
-  #shade { position:fixed; inset:0; background:rgba(0,0,0,.28); pointer-events:none; }
-  #selection { display:none; position:fixed; border:2px solid #a5caff; box-shadow:0 0 0 9999px rgba(0,0,0,.34); pointer-events:none; }
-  #hint { position:fixed; top:18px; left:50%; transform:translateX(-50%); color:white; background:#152030e8; padding:10px 16px; border-radius:9px; font:14px system-ui; pointer-events:none; }
+  /* Kairos: a bistre shade over the screen, a gold selection edge. */
+  #shade { position:fixed; inset:0; background:rgba(36,26,20,.28); pointer-events:none; }
+  #selection { display:none; position:fixed; border:2px solid #D9B260; box-shadow:0 0 0 9999px rgba(36,26,20,.34); pointer-events:none; }
+  #hint { position:fixed; top:18px; left:50%; transform:translateX(-50%); color:#F3EADB; background:#2A1F18eb; padding:10px 16px; border-radius:999px; font:14px "Segoe UI", system-ui, sans-serif; pointer-events:none; }
 </style>
 <img id="screen" alt="">
 <div id="shade"></div>

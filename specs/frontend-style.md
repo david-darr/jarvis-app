@@ -1,12 +1,12 @@
 # Frontend Style
 
-Last updated: 2026-09-15
+Last updated: 2026-10-06
 
 ## Direction
 
-Quiet intelligence: near-black surfaces, generous space, clear hierarchy, restrained violet focus, and expressive color reserved for the core and vault. No tactical-HUD brackets, neon outlines, glass-card stacks, or whole-app recoloring in Developer Mode.
+Kairos uses ink and gold on parchment: warm light grounds, clear hierarchy, soft shadows, and a single gilded hairline on featured surfaces. The ring's point is the only gilded part of the mark. The default is light; a person may still choose a dark custom base in Appearance. No tactical-HUD brackets, neon outlines, glowing dark-first surfaces, or whole-app recoloring in Developer Mode.
 
-References: Linear's workspace structure; Monopo's light typography and negative space; Capy/Claude/ChatGPT's calm conversation surfaces; Spell UI's restrained motion; Dala's colored triangular particles; [Lab01](https://lab01.dev/)'s UI experiments as a reference for compact controls and deliberate transitions. The liquid-metal cue informs the composer's subtle silver sheen, not a full metallic theme.
+The brand package's `BRAND.md` defines the mark, palette and type. Its ceiling-painting reference supplies the cloud-ring sky; the UI uses the sky on Home, onboarding and the splash. Jost carries body and controls; Cormorant Garamond Italic is reserved for display headlines and the tagline. Both fonts are self-hosted.
 
 The chat-focused pass draws on [Zeron](https://github.com/zeronsh/zeron): minimal navigation, restrained header controls, soft user bubbles, and an uncluttered conversation canvas. [Libraries.dev](https://libraries.dev/) informs the border beam; [Obsidian UI](https://www.obsidianui.dev/) informs quiet hover/selection feedback. These are visual references, not copied application code or added React dependencies. Local development changes remain pending David's visual review.
 
@@ -18,21 +18,20 @@ The renderer is native JavaScript, not React. Views build DOM with `el()` and ac
 
 ### Tokens
 
-- `--bg: #101113`: workspace background.
-- `--bg-panel: #17181b`, `--bg-panel-solid: #1c1d21`, `--surface-2: #222328`: solid surface layers.
-- `--border`, `--border-strong`: neutral white at 8% and 17% opacity.
-- `--text: #eeedf0`, `--text-dim: #b0afb8`, `--text-faint: #92919c`: text hierarchy.
-- `--accent: #b3a7f5`, `--accent-dim`: restrained focus, links, selection.
-- `--danger`, `--success`: meaningful error/destructive and healthy states, paired with labels.
+- `static/css/kairos-theme.css` holds the `--k-*` brand palette and local font faces; `style.css` maps working tokens onto it.
+- `--bg` is parchment `#F3EADB`; `--bg-panel-solid` is surface `#FBF6EE`; `--surface-2` is warm hover `#EDE2D0`.
+- `--text` is bistre `#3A2A20`, with dim and faint text tokens; the app's faint, accent and success shades are deepened where needed to keep AA contrast on every ground.
+- `--accent: #815E1E` is readable gold for links, focus and active states. `--point` is raw gold `#B8893B`, reserved for the mark and non-text details. `--hairline` is the gilded 1px frame.
+- `--border`, `--border-strong`, `--ink-rgb` and `--shade-rgb` derive warm lines, washes and shadows; `--danger`, `--success`, `--warn` have readable status colors.
 - `--radius: 12px`, `--sidebar-width: 204px`, `--chat-column: 780px`.
 - `--shadow-elevated`, `--shadow-lifted`: reserved for floating menus/modals.
 
-Dark mode only. New themes should override tokens, not rewrite components. Typography uses Inter when locally available, then Segoe UI/system sans; no required remote fonts.
+The default is Kairos parchment. Color, Image and Flow derive the same working tokens for a chosen base; there is no separate approved dark brand theme. New themes override tokens, not components. No remote fonts.
 
 ### Primitives and layout
 
 - `.glass`: legacy name for a solid, subtly bordered panel. No backdrop blur or decorative corners. `.bracket` remains a compatibility class for existing/custom views.
-- `.btn`, `.btn.primary`, `.btn.quiet`, `.btn.danger`: neutral secondary, light primary, text action, destructive action. Use real buttons with accessible names.
+- `.btn`, `.btn.primary`, `.btn.quiet`, `.btn.danger`: hairline-outline secondary, ink-filled primary, text action, destructive action. Use real buttons with accessible names.
 - `.card`, `.title`, `.meta`, `.card-row`: shared surfaces and rows.
 - `.view-constrained`, `.view-header`: consistent content width and heading. Chat and Calendar have specialized layouts.
 - `.disclosure-panel`: native details/summary for secondary creation and connection forms. Main content comes first.
@@ -54,13 +53,13 @@ The header's panel toggle collapses the desktop sidebar from `--sidebar-width: 2
 
 ## Home
 
-An editorial hero pairs the conversation action with a particle core. A summary strip and two-column workspace expose conversations, open notes, enabled automations, the next seven days, projects, models, recent activity, and connected systems. On phones these stack in normal flow.
+One full-width Home card holds the Overview header, serif tagline, conversation action, next task and quiet cloud-ring sky. A faint gradient keeps the copy legible over the sky. The sky drifts slightly; a small gold point moves only while work runs, warns on attention and dims offline. Pause stops movement, and the control is hidden when system reduced motion is active. A summary strip below the card and a two-column workspace expose conversations, open notes, enabled automations, the next seven days, projects, models, recent activity, and connected systems. On phones these stack in normal flow.
 
 Summary requests are read-only; missing data gets an unavailable state, not a fabricated zero. Home links use `jarvis:navigate` with a real session/project/Library section when applicable. Date-only calendar entries are local days. Clear countdown and refresh timers when leaving the view.
 
 ## Chat and motion
 
-A new chat contains only the centered composer and a quiet header. No welcome artwork, headline, or starter chips. The first message moves the same live composer beneath a centered reading column with soft user bubbles and unboxed assistant responses. Its attachment strip, model controls, and keyboard hint travel together; no cloned input or draft-resetting remount. Layout changes use a 380ms position animation, skipped under reduced motion. A ResizeObserver keeps the Latest button above a growing composer and is disconnected on unmount.
+A new chat contains only the centered composer and a quiet header. The default Chat canvas uses the same cloud-ring sky as Home under a warm parchment wash; Color, Image and Flow keep their chosen backgrounds. No welcome artwork, headline, or starter chips. The first message moves the same live composer beneath a centered reading column with soft user bubbles and unboxed assistant responses. Its attachment strip, model controls, and keyboard hint travel together; no cloned input or draft-resetting remount. Layout changes use a 380ms position animation, skipped under reduced motion. A ResizeObserver keeps the Latest button above a growing composer and is disconnected on unmount.
 
 Chat history is independently collapsible with the header's history button. Desktop starts tucked away unless the user saved an expanded preference under `jarvis:chat-history-collapsed`; this does not change the global sidebar preference. Its 236px panel transitions to zero width over 260ms. Hidden history is inert and excluded from keyboard navigation. At 768px and below, the same button opens the history drawer with a close action, Escape dismissal, bounded keyboard focus, and focus restoration. New chat clears the current draft and returns to the centered landing without creating a stored session. Opening an existing empty session also centers the composer. Choosing a model or sending the first message can create a session; both preserve staged attachments and the draft until send.
 
@@ -77,7 +76,7 @@ Chat history is independently collapsible with the header's history button. Desk
 - Preview/download routes require authentication and check that the file belongs to the selected session, including older Markdown-linked files. The new publish endpoint accepts files only within that session's workspace, excludes hidden paths, and caps files at 25 MB. Claude's existing save-file tool and Codex's `save_generated_file --path` command register real files, never invented URLs.
 - Session model changes, transcript mutations, and connection-setting changes are rejected while a turn is active. Changing endpoints starts a fresh provider connection and replays saved conversation text as needed; selecting an explicit model within Codex retains its thread. Returning to CLI defaults may require transcript replay into a fresh thread.
 - Each chat has a Mode control in its main or side composer. Base keeps the current permission behavior and is the default for new chats and forks. An admin may select Auto to approve that chat's permission requests, including requests made after the model reads outside content; the choice is shown beside the composer and is saved with the chat. Changing modes waits for an active turn to finish. Codex Auto launches with native approval prompts and its workspace sandbox disabled; returning to Base starts a fresh Codex thread with its original workspace sandbox. The mode does not change other chats, global grants, disabled tools, or admin-only tool access. A chat opened by a non-admin runs in Base even if an admin previously selected Auto.
-- A failed Chat turn shows its error and offers configured alternatives. The person chooses a model explicitly; JARVIS does not switch providers during a running turn. An empty failed reply can be removed and retried through a fresh provider connection with its saved attachments and references. Partial text or recorded tool activity stays in the transcript, and switching models applies to the next message. Name a rate limit when the provider exposes it.
+- A failed Chat turn shows its error and offers configured alternatives. The person chooses a model explicitly; Kairos does not switch providers during a running turn. An empty failed reply can be removed and retried through a fresh provider connection with its saved attachments and references. Partial text or recorded tool activity stays in the transcript, and switching models applies to the next message. Name a rate limit when the provider exposes it.
 - A right-edge timeline rail appears when a chat has at least eight saved user messages and enough content to scroll, on viewports wider than 1100px. It shows each user turn up to 16, then samples roughly 16 turns while keeping the first and last; marker positions follow the message positions in the full transcript. A marker jumps to its message, and the active marker follows reading position. The header's Summary button opens a popup that generates a concise summary of saved chat text on demand with the selected model. Cache that text per session, label it stale after new messages, and let the person update it. Summarizing never changes the live conversation context. Images and files without saved text are identified as unavailable to the summary. Claude and API summaries run without tools; Codex summaries use a detached ephemeral read-only CLI run in an empty working directory because its CLI cannot disable native tools.
 
 Styles live in `static/css/chat.css` and reuse the shared tokens. Preview panels close and release PDF workers when switching sessions or leaving Chat. Escape closes the panel and restores focus. On small screens the preview fills the Chat area.
@@ -92,13 +91,13 @@ Implementation references: [Codex CLI flags](https://learn.chatgpt.com/docs/deve
 
 The `.border-beam` composer implements the requested Libraries.dev-style border effect natively, without adding a React wrapper to this non-React app. A masked conic gradient animates a registered CSS angle around the border at 0.4 opacity, rising to 0.7 on focus. It must not intercept input or clip the model menu. It pauses while the document is hidden; reduced-motion makes it static. This is not the border-beam npm package and does not expose its React props.
 
-`core3d.js` renders locally batched triangular particles with Three.js. It reacts to actual in-flight conversations and system status, supports pause, respects reduced motion/visibility, and disposes GPU resources on unmount. A static fallback covers unavailable WebGL.
+`kairosSky.js` mounts the Home sky and small status point with no Three.js dependency. It follows work and system status, supports pause and reduced motion, and removes its scene on unmount.
 
 The vault uses colored note triangles, folder circles, faint edges, and selective labels. Search and Browse vault provide keyboard-accessible alternatives to canvas interaction. It fits while settling, yields camera control when explored, and stops its simulation when settled. Preserve drag, zoom, browse, read, and edit behavior.
 
 ## Development copy
 
-A named instance (`npm run start:dev`, electron/instance.js) labels itself everywhere a person could mistake it for the real app: a DEV badge beside the sidebar brand (`.instance-badge`, accent outline, no fill), the window and tray named "JARVIS (dev)", the page title, and the sign-in card heading. The backend reports the name as `instance` on `/api/auth/status`; the real app reports an empty string and shows none of this.
+A named instance (`npm run start:dev`, electron/instance.js) labels itself everywhere a person could mistake it for the real app: a DEV badge beside the sidebar brand (`.instance-badge`, accent outline, no fill), the window and tray named "Kairos (dev)", the page title, and the sign-in card heading. The backend reports the name as `instance` on `/api/auth/status`; the real app reports an empty string and shows none of this. Both editions keep their existing `%APPDATA%\JARVIS` and `%APPDATA%\JARVIS-dev` data folders despite the display rename.
 
 ## Tasks: run history
 
@@ -112,7 +111,7 @@ Durable work (roadmap phase 4, 2026-10-06):
   - "delivered to <channel>";
   - "didn't go through yet; trying again at <time> (attempt n)";
   - "failed for a day and was given up", with **Send again**;
-  - "JARVIS closed while sending; it may not have arrived", with **Send again**.
+  - "Kairos closed while sending; it may not have arrived", with **Send again**.
 
   The last-run line repeats a failure in red.
 
@@ -164,13 +163,13 @@ Run `electron/node_modules/electron/dist/electron.exe scripts/ui-smoke.cjs` for 
 
 ## Website and GitHub imagery
 
-`docs/index.html`, `docs/style.css`, and `docs/site.js` are the static public website, with no build step or external font/runtime dependency. Match the application's neutral surfaces, light primary buttons, quiet typography, subtle borders, and motion preferences. Monospace is limited to short section labels. Preserve the download, source, and installation links; do not imply the development UI is already in the packaged release.
+`docs/index.html`, `docs/style.css`, and `docs/site.js` are the static public website, with no build step or external font/runtime dependency. Match the Kairos parchment, bistre, ink-filled pill buttons, wordmark, local fonts, sky and motion preferences. Monospace is limited to short section labels. Preserve the download, source, and installation links; do not imply the development UI is already in the packaged release. The site screenshots come from isolated synthetic `ui-smoke` captures, never personal data.
 
 The five-button preview switches between Home, New chat, Conversation, Vault, and the collapsed sidebar. Use real buttons with a pressed state, keep the image's alternative text and full-size link synchronized, and keep the default screenshot usable without JavaScript. Maintain mobile navigation, keyboard focus, a skip link, image dimensions, and reduced-motion behavior.
 
 ## Appearance (Settings > Personal > Appearance)
 
-Four background modes: Original, Color, Image, Flow. Every setting is a local-device preference, stored per signed-in username in localStorage, with an uploaded image held as a Blob in IndexedDB. Nothing is uploaded and no server setting exists; the panel says so, because "appearance" reading as an account-level setting would be misleading.
+Four background modes: Kairos, Color, Image, Flow. Kairos is parchment. Flow warms a light custom base toward bistre and gold and keeps dark custom bases usable. The preview shows the tagline. Every setting is a local-device preference, stored per signed-in username in localStorage, with an uploaded image held as a Blob in IndexedDB. The `jarvis:` keys and `jarvis-appearance` database stay for existing preferences. Nothing is uploaded and no server setting exists; the panel says so, because "appearance" reading as an account-level setting would be misleading.
 
 The sidebar is always the chosen colour darkened by 18%, and foreground colours flip for light backgrounds so text stays readable against either. Content panels keep solid backgrounds regardless of mode: a shader or photo behind body text is not worth the legibility. Image mode accepts PNG/JPEG/WebP only, up to 12 MB and 40 megapixels, normalised to 2560px on the longest edge and decoded through `createImageBitmap` into a canvas, never assigned as an image URL, so the CSP stays unwidened.
 

@@ -1,4 +1,4 @@
-"""Send-only connectors: places JARVIS posts task results and agent
+"""Send-only connectors: places Kairos posts task results and agent
 notifications to, through an incoming-webhook URL or a push service. No
 bot app to set up, and nothing to receive. References: Hermes
 plugins/platforms/ntfy, teams, google_chat, feishu, dingtalk, wecom (MIT)."""
@@ -37,7 +37,7 @@ class Ntfy(_SendOnly):
     )
 
     async def send(self, conversation: str, text: str) -> None:
-        headers = {"Title": "JARVIS"}
+        headers = {"Title": "Kairos"}
         if self.setting("token"):
             headers["Authorization"] = f"Bearer {self.setting('token')}"
         async with self.http(headers=headers) as api:

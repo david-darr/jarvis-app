@@ -64,7 +64,7 @@ jobs:
           set -euo pipefail
           # Absolute paths throughout: the checks below cd into the backend
           # directory, which would break a relative interpreter path.
-          APP="$PWD/dist/mac-arm64/JARVIS.app"
+          APP="$PWD/dist/mac-arm64/Kairos.app"
           BACKEND="$APP/Contents/Resources/backend"
           PY="$BACKEND/runtime/bin/python3"
 
@@ -103,7 +103,7 @@ jobs:
         # which only happens if main.js gets all the way through createWindow().
         run: |
           set -uo pipefail
-          APP="$PWD/dist/mac-arm64/JARVIS.app/Contents/MacOS/JARVIS"
+          APP="$PWD/dist/mac-arm64/Kairos.app/Contents/MacOS/Kairos"
           LOG="$RUNNER_TEMP/launch.log"
 
           test -x "$APP" || { echo "FAIL: no executable at $APP"; exit 1; }

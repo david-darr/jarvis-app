@@ -1,6 +1,6 @@
 """Bounded, read-only retrieval for an explicitly opted-in Swarm company.
 
-This is retrieval augmentation over JARVIS's existing memory APIs. Those
+This is retrieval augmentation over Kairos's existing memory APIs. Those
 APIs are keyword based today; this module deliberately does not call them
 semantic search. The two-step search/read shape keeps whole vaults, chats and
 documents out of every worker prompt and gives a later vector index one stable
@@ -95,7 +95,7 @@ class SwarmMemory:
             if "project" in self.sources and "library" not in self.sources:
                 project = projects.get_project(self.project_id) if self.project_id else None
                 if not project or identifier not in (project.get("document_ids") or []):
-                    raise ValueError("Document is outside this company's JARVIS Project")
+                    raise ValueError("Document is outside this company's Kairos Project")
             text = document.get("content") or ""
             return text[:MAX_READ] + ("...[truncated]" if len(text) > MAX_READ else "")
         if kind == "project" and "project" in self.sources and identifier == self.project_id:

@@ -1,5 +1,5 @@
 """Settings > Channels > Connectors (core/connectors). Managing connectors
-is admin-only: a connector can let messages reach JARVIS and its agents.
+is admin-only: a connector can let messages reach Kairos and its agents.
 The webhook endpoint is public by necessity and trusts nothing until the
 platform's own signature has been verified (core/connectors/platforms)."""
 from typing import Optional
@@ -25,7 +25,7 @@ class ConnectorBody(BaseModel):
 
 
 class TestBody(BaseModel):
-    text: str = "Test message from JARVIS."
+    text: str = "Test message from Kairos."
 
 
 def _kind(kind: str):

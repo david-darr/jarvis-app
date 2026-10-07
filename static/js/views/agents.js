@@ -10,7 +10,8 @@ import { mountAgentChat } from "../agentChat.js";
 // Teams (phase 5, 2026-10-05) are Swarm companies, shown here through
 // views/swarm.js in its embedded mode; Swarm has no tab of its own any more.
 
-const COLORS = ["#b3a7f5", "#7dd3c0", "#f0b37e", "#e88f8f", "#8fb8e8", "#c9d67a"];
+// The colors the backend accepts (services/agent_service.py COLORS).
+const COLORS = ["#d9b260", "#b9d2e3", "#e8c39e", "#d99a92", "#b5c7a5", "#cdbfd9"];
 const STATUS = { idle: "Idle", working: "Working", needs_you: "Needs you", off: "Off", capped: "Done for today" };
 const POLL_MS = 10000;
 

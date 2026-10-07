@@ -1,7 +1,7 @@
 import { api, el, toast } from "../api.js";
 import { ICONS } from "../icons.js";
 
-// Browse what JARVIS can use. Skill content and live MCP tool schemas stay
+// Browse what Kairos can use. Skill content and live MCP tool schemas stay
 // behind their own read/describe calls; this view only loads catalog metadata.
 export async function render(container) {
   container.innerHTML = "";
@@ -41,7 +41,7 @@ export async function render(container) {
   const installReview = el("div", { class: "tool-store-review" });
   remoteInstall.append(
     el("summary", { text: "Install a single-file skill from GitHub" }),
-    el("p", { class: "meta", text: "Paste a public SKILL.md file link. JARVIS scans it before adding it; a flagged skill may need your review. Companion files are not imported." }),
+    el("p", { class: "meta", text: "Paste a public SKILL.md file link. Kairos scans it before adding it; a flagged skill may need your review. Companion files are not imported." }),
     el("div", { class: "tool-store-form-row" }, [sourceInput, installButton]),
     installStatus, installReview,
   );
@@ -60,7 +60,7 @@ export async function render(container) {
   serverAuth.addEventListener("change", () => { serverKey.hidden = serverAuth.value !== "key"; });
   customServer.append(
     el("summary", { text: "Add a custom MCP server" }),
-    el("p", { class: "meta", text: "Connect a third-party HTTP MCP endpoint. Its tools still use JARVIS's permission prompts and are selected per chat." }),
+    el("p", { class: "meta", text: "Connect a third-party HTTP MCP endpoint. Its tools still use Kairos's permission prompts and are selected per chat." }),
     el("div", { class: "tool-store-form-row" }, [serverName, serverUrl, serverAuth, serverKey, serverButton]),
     serverStatus,
     el("button", { type: "button", class: "btn quiet", text: "Advanced connection settings", onclick: () => navigate("settings", { section: "integrations" }) }),
@@ -321,7 +321,7 @@ export async function render(container) {
     const origin = item.curation?.origin || "";
     const sourceLabel = origin.startsWith("https://raw.githubusercontent.com/")
       ? el("a", { href: origin, target: "_blank", rel: "noopener", text: "GitHub source" })
-      : el("span", { class: "meta", text: source === "bundled" ? "Built into JARVIS" : source === "imported" ? "Imported skill" : "Local skill" });
+      : el("span", { class: "meta", text: source === "bundled" ? "Built into Kairos" : source === "imported" ? "Imported skill" : "Local skill" });
     return el("article", { class: "tool-store-card" }, [
       el("div", { class: "tool-store-card-top" }, [
         el("span", { class: "tool-store-mark" }, [svg(ICONS.brain)]),
