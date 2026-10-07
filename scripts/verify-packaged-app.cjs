@@ -237,7 +237,7 @@ function checkProfile(profile, stage) {
 
   // 5. Back it up with the packaged code, restore into a fresh profile.
   const zip = path.join(old, 'backup.zip');
-  packagedPython(['-c', `from core import backup; backup.make_backup(${JSON.stringify(zip)})`],
+  packagedPython(['-c', `import sys; sys.path.insert(0, '.'); from core import backup; backup.make_backup(${JSON.stringify(zip)})`],
                  { JARVIS_DATA_DIR: path.join(old, 'data') });
   const fresh = newProfile();
   fs.mkdirSync(path.join(fresh, 'data', '.restore'), { recursive: true });
