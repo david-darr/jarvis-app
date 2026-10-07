@@ -1,4 +1,5 @@
 import { api, el, toast } from "./api.js";
+import { toggleRunTimeline } from "./runTimeline.js";
 
 // Run history for scheduled tasks and work-board cards (the Tasks tab). The
 // records come from services/task_service.py. Runs recorded before
@@ -80,7 +81,14 @@ function runRow(run, deliveryLabel) {
     ]),
     ...[deliveryRow(run, deliveryLabel)].filter(Boolean),
     el("div", { class: `run-text${run.error ? " is-error" : ""}`, text: run.error || run.output || "(no output)" }),
+    ...(run.run_id ? [stepsEl(run.run_id)] : []),
   ]);
+}
+
+// What the model did in this run, step by step (roadmap phase 8).
+function stepsEl(runId) {
+  const host = el("div", { class: "run-timeline-host" });
+  return el("div", {}, [el("button", { class: "btn quiet run-steps", text: "Steps", onclick: () => toggleRunTimeline(runId, host) }), host]);
 }
 
 // Newest first, the latest ten until "Show all". Each row opens to its output.

@@ -4,12 +4,15 @@ admin_wipe routes). All admin-gated: this surface can read health details
 across every domain and destroy data globally.
 """
 import os
+import shutil
+import time
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
+from starlette.background import BackgroundTask
 
-from core import custom_tabs, events, logs as log_files, model_endpoints, settings as settings_store, system_admin, task_scheduler
+from core import backup, custom_tabs, events, logs as log_files, model_endpoints, settings as settings_store, system_admin, task_scheduler
 from core.channels import discord_channel
 from core.constants import DATA_DIR
 from core.middleware import require_admin, require_user
@@ -162,6 +165,51 @@ async def delete_custom_tab(slug: str, user: str = Depends(require_admin)) -> di
     core.custom_tabs.delete()'s docstring for the "still needs a restart to
     fully unmount any of its own API routes" caveat."""
     return custom_tabs.delete(slug)
+
+
+# Back up everything and restore it (roadmap phase 8, core/backup.py). The
+# JSON export below stays: it is portable between machines and versions.
+@router.get("/backup/full")
+async def full_backup(include_keys: bool = False, user: str = Depends(require_admin)) -> FileResponse:
+    """The whole data folder as one zip. Saved passwords and keys only when
+    asked for: a backup carrying them is as sensitive as they are."""
+    import asyncio
+    import tempfile
+    folder = tempfile.mkdtemp(prefix="jarvis-full-backup-")
+    stamp = time.strftime("%Y-%m-%d-%H%M")
+    path = os.path.join(folder, f"jarvis-backup-{stamp}{'-with-keys' if include_keys else ''}.zip")
+    await asyncio.to_thread(backup.make_backup, path, include_keys)
+    return FileResponse(path, filename=os.path.basename(path), media_type="application/zip",
+                        background=BackgroundTask(shutil.rmtree, folder, True))
+
+
+@router.get("/backup/restore")
+async def restore_status(user: str = Depends(require_admin)) -> dict:
+    return {"pending": backup.pending_restore(), "last": backup.last_restore()}
+
+
+@router.post("/backup/restore")
+async def stage_restore(file: UploadFile, user: str = Depends(require_admin)) -> dict:
+    """Check an uploaded backup and swap it in at the next start; the
+    current data is kept as a safety copy then."""
+    import asyncio
+    import tempfile
+    folder = tempfile.mkdtemp(prefix="jarvis-restore-upload-")
+    try:
+        path = os.path.join(folder, "backup.zip")
+        with open(path, "wb") as target:
+            shutil.copyfileobj(file.file, target)
+        manifest = await asyncio.to_thread(backup.stage_restore, path)
+    except backup.BackupRefused as e:
+        raise HTTPException(status_code=400, detail=f"Not restored: {e}.")
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+    return {"ok": True, "pending": manifest}
+
+
+@router.delete("/backup/restore")
+async def cancel_restore(user: str = Depends(require_admin)) -> dict:
+    return {"ok": backup.cancel_restore()}
 
 
 @router.get("/backup/export")

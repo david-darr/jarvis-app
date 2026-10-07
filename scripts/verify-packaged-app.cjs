@@ -1,4 +1,6 @@
-// Launches the PACKAGED Windows app and proves it actually opens.
+// Launches the PACKAGED Windows app and proves it actually opens - and,
+// since roadmap phase 8 (2026-10-06), that it upgrades old data, restarts,
+// starts with no internet, and restores a backup.
 //
 // Written after 1.9.0 shipped broken: electron/browser.js was missing from
 // electron-builder's `files` allowlist, so the packaged main process died on
@@ -13,6 +15,21 @@
 // dist/win-unpacked (the real packaged tree, asar included) rather than the
 // dev checkout, because the entire class of bug being guarded against is
 // "works from source, missing from the package".
+//
+// Stages, each in a throwaway profile (--user-data-dir):
+//   1. first start      an empty profile reaches its own new backend
+//   2. upgrade          an old-format profile (scripts/legacy_profile.py: a
+//                       v3 session store with chats, a task cut off by an
+//                       older build, an unreadable skill) starts, upgrades,
+//                       keeps every chat, and does not rerun the task
+//   3. restart          the same profile stops and starts again; nothing
+//                       reruns and nothing upgrades twice
+//   4. offline          the same profile starts with every outbound
+//                       connection pointed at a dead proxy
+//   5. restore          the packaged runtime backs that profile up
+//                       (core/backup.py); a fresh profile restores it at
+//                       start and holds the same chats
+// The first stage alone (the original check) runs with --first-start-only.
 
 const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
@@ -23,9 +40,12 @@ const os = require('node:os');
 const root = path.resolve(__dirname, '..');
 const appExe = path.join(root, 'dist', 'win-unpacked', 'JARVIS.exe');
 const asar = path.join(root, 'dist', 'win-unpacked', 'resources', 'app.asar');
-const runtimeExe = path.join(root, 'dist', 'win-unpacked', 'resources', 'backend', 'runtime', 'python.exe');
+const backendDir = path.join(root, 'dist', 'win-unpacked', 'resources', 'backend');
+const runtimeExe = path.join(backendDir, 'runtime', 'python.exe');
+const legacyScript = path.join(root, 'scripts', 'legacy_profile.py');
 const PORT = 8420;
 const BACKSLASH = String.fromCharCode(92);
+const FIRST_ONLY = process.argv.includes('--first-start-only');
 
 function fail(msg) { throw new Error(msg); }
 
@@ -63,35 +83,100 @@ function bundledBackends(realRuntime) {
 }
 
 let child = null;
-let tempUserData = null;
+const profiles = [];
 let realRuntime = null;
 let baseline = new Set();
-let cleaned = false;
-function cleanup() {
-  if (cleaned) return;
-  cleaned = true;
-  if (child && child.pid) {
-    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  }
-  // The shell can exit before cleanup (close-to-tray). Only new processes
-  // running THIS package's exact bundled runtime are eligible for fallback.
+
+function newProfile() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-packaged-verify-'));
+  profiles.push(dir);
+  return dir;
+}
+
+// Stop the app this verifier started: its shell, and only new processes
+// running THIS package's exact bundled runtime (the shell can exit first,
+// close-to-tray).
+function stopApp() {
+  if (child && child.pid) spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
   if (realRuntime && child) {
     try {
       for (const pid of bundledBackends(realRuntime)) {
         if (!baseline.has(pid)) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
       }
-    } catch (e) { console.error('cleanup: ' + e.message); }
+    } catch (e) { console.error('stop: ' + e.message); }
   }
-  if (tempUserData) {
-    const tempRoot = fs.realpathSync(os.tmpdir()) + path.sep;
-    const owned = fs.realpathSync(tempUserData);
+  child = null;
+}
+
+let cleaned = false;
+function cleanup() {
+  if (cleaned) return;
+  cleaned = true;
+  stopApp();
+  const tempRoot = fs.realpathSync(os.tmpdir()) + path.sep;
+  for (const dir of profiles) {
+    if (!fs.existsSync(dir)) continue;
+    const owned = fs.realpathSync(dir);
     if (!owned.startsWith(tempRoot) || !path.basename(owned).startsWith('jarvis-packaged-verify-')) {
-      fail('refusing to remove a user-data directory outside the verifier temp root');
+      console.error('refusing to remove a user-data directory outside the verifier temp root: ' + owned);
+      continue;
     }
-    fs.rmSync(tempUserData, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 }
 process.on('exit', cleanup);
+
+// Start the packaged app on a profile and wait for its own new backend.
+async function launch(profile, label, { args = [], env: extra = {} } = {}) {
+  await requireFreePort();
+  const logPath = path.join(profile, `packaged-${label}.log`);
+  const log = fs.openSync(logPath, 'a');
+  const env = { ...process.env, ELECTRON_ENABLE_LOGGING: '1', ...extra };
+  delete env.JARVIS_BACKEND_URL; // An inherited override would bypass the packaged backend.
+  child = spawn(appExe, ['--user-data-dir=' + profile, ...args], { stdio: ['ignore', log, log], env });
+  fs.closeSync(log);
+  const deadline = Date.now() + 180000;
+  let healthy = false;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) break;
+    try {
+      const res = await fetch('http://127.0.0.1:' + PORT + '/api/health');
+      if (res.ok) { healthy = true; break; }
+    } catch (e) { /* not up yet */ }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  const output = fs.readFileSync(logPath, 'utf8');
+  if (output.trim()) console.log(`--- app output (${label}) ---\n` + output.trim());
+  // Startup failures in Electron's main process are otherwise SILENT.
+  if (/UnhandledPromiseRejection|Cannot find module|\[startup\]|\[tray\] unavailable/.test(output)) {
+    fail(`${label}: the app reported a startup error (see output above)`);
+  }
+  if (!healthy) fail(`${label}: the packaged app never reached its own backend`);
+  const owner = listenerPid();
+  const found = bundledBackends(realRuntime);
+  if (!owner || baseline.has(owner) || !found.has(owner)) {
+    fail(`${label}: health responded, but the listener is not a new backend from this package (listener PID ${owner}, bundled backend PIDs ${[...found]}, runtime ${realRuntime})`);
+  }
+  // Let the backend finish its startup work (recovery, upgrades, first
+  // scheduler pass) before it is stopped and inspected.
+  await new Promise((r) => setTimeout(r, 20000));
+  stopApp();
+  await new Promise((r) => setTimeout(r, 1500));
+  await requireFreePort();
+}
+
+// Run the packaged runtime; JSON out when asked.
+function packagedPython(args, env = {}) {
+  const result = spawnSync(runtimeExe, args, { cwd: backendDir, encoding: 'utf8', env: { ...process.env, ...env } });
+  if (result.status !== 0) fail(`packaged runtime failed: ${args.join(' ')}\n${result.stdout}\n${result.stderr}`);
+  return result.stdout.trim();
+}
+
+function checkProfile(profile, stage) {
+  const out = spawnSync(runtimeExe, [legacyScript, 'check', path.join(profile, 'data'), stage], { encoding: 'utf8' });
+  console.log(`${stage}: ${out.stdout.trim()}`);
+  if (out.status !== 0) fail(`${stage}: ${out.stderr.trim() || 'the profile check failed (see above)'}`);
+}
 
 (async () => {
   await requireFreePort();
@@ -118,45 +203,49 @@ process.on('exit', cleanup);
   console.log('packaged modules OK (main.js requires: ' + (required.join(', ') || 'none') + ')');
 
   baseline = bundledBackends(realRuntime);
-  tempUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-packaged-verify-'));
-  const logPath = path.join(tempUserData, 'packaged.log');
-  const log = fs.openSync(logPath, 'a');
-  const env = { ...process.env, ELECTRON_ENABLE_LOGGING: '1' };
-  delete env.JARVIS_BACKEND_URL; // An inherited override would bypass the packaged backend.
-  child = spawn(appExe, ['--user-data-dir=' + tempUserData], {
-    stdio: ['ignore', log, log], env,
-  });
-  fs.closeSync(log);
 
-  const deadline = Date.now() + 180000;
-  let healthy = false;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) break;
-    try {
-      const res = await fetch('http://127.0.0.1:' + PORT + '/api/health');
-      if (res.ok) { healthy = true; break; }
-    } catch (e) { /* not up yet */ }
-    await new Promise((r) => setTimeout(r, 2000));
-  }
-  const output = fs.readFileSync(logPath, 'utf8');
-  if (output.trim()) console.log('--- app output ---\n' + output.trim());
-  // Startup failures in Electron's main process are otherwise SILENT.
-  if (/UnhandledPromiseRejection|Cannot find module|\[startup\]|\[tray\] unavailable/.test(output)) {
-    fail('the app reported a startup error (see output above)');
-  }
-  if (!healthy) fail('the packaged app never reached its own backend');
-  const owner = listenerPid();
-  const found = bundledBackends(realRuntime);
-  if (!owner || baseline.has(owner) || !found.has(owner)) {
-    fail(`health responded, but the listener is not a new backend from this package (listener PID ${owner}, bundled backend PIDs ${[...found]}, runtime ${realRuntime})`);
-  }
-  const dataDir = path.join(tempUserData, 'data');
+  // 1. First start.
+  const empty = newProfile();
+  await launch(empty, 'first-start');
+  const dataDir = path.join(empty, 'data');
   if (!fs.existsSync(dataDir) || fs.readdirSync(dataDir).length === 0) {
     fail('--user-data-dir did not place backend data in the temporary profile');
   }
-  cleanup();
-  await requireFreePort();
-  console.log('PASS: packaged app launched its own backend with isolated user data');
+  console.log('PASS 1/5: packaged app launched its own backend with isolated user data');
+  if (FIRST_ONLY) return;
+
+  // 2. Upgrade an old profile.
+  const old = newProfile();
+  packagedPython([legacyScript, 'make', path.join(old, 'data')]);
+  await launch(old, 'upgrade');
+  checkProfile(old, 'upgraded');
+  console.log('PASS 2/5: an old-format profile upgraded with every chat kept and nothing rerun');
+
+  // 3. Restart it.
+  await launch(old, 'restart');
+  checkProfile(old, 'restarted');
+  console.log('PASS 3/5: restarted with nothing rerun and nothing upgraded twice');
+
+  // 4. Offline: Python's HTTP clients follow these variables; Chromium the flag.
+  const dead = 'http://127.0.0.1:9';
+  await launch(old, 'offline', {
+    args: ['--proxy-server=' + dead],
+    env: { HTTP_PROXY: dead, HTTPS_PROXY: dead, ALL_PROXY: dead, NO_PROXY: '127.0.0.1,localhost' },
+  });
+  checkProfile(old, 'restarted');
+  console.log('PASS 4/5: started and served with no internet');
+
+  // 5. Back it up with the packaged code, restore into a fresh profile.
+  const zip = path.join(old, 'backup.zip');
+  packagedPython(['-c', `from core import backup; backup.make_backup(${JSON.stringify(zip)})`],
+                 { JARVIS_DATA_DIR: path.join(old, 'data') });
+  const fresh = newProfile();
+  fs.mkdirSync(path.join(fresh, 'data', '.restore'), { recursive: true });
+  fs.copyFileSync(zip, path.join(fresh, 'data', '.restore', 'pending.zip'));
+  await launch(fresh, 'restore');
+  checkProfile(fresh, 'restored');
+  console.log('PASS 5/5: a backup made by the package restored at start into a fresh profile');
+  console.log('PASS: packaged app first start, upgrade, restart, offline and restore');
 })().catch((error) => {
   console.error('FAIL: ' + error.message);
   process.exitCode = 1;

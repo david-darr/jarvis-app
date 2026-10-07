@@ -7,6 +7,12 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+# A backup chosen in Settings is swapped in here, before any module below
+# reads the data folder (core/backup.py, roadmap phase 8). Most services load
+# their files when imported.
+from core import backup as _backup
+_RESTORED = _backup.apply_pending_restore()
+
 from core.constants import STATIC_DIR
 from core.middleware import SecurityHeadersMiddleware
 from core import custom_tabs, image_gen, remote_access, task_scheduler, vault_sync
@@ -44,6 +50,7 @@ from routes import (
     trigger_routes,
     hook_routes,
     tool_routes,
+    run_routes,
 )
 from core import llamacpp_engine
 from services import chat_service, skills_service, swarm_service
@@ -106,6 +113,13 @@ async def lifespan(_app: FastAPI):
     # 2026-09-03: the app reported "no priorities" while the connected vault
     # was full of them). See core/vault_sync.py.
     vault_sync.sync_on_startup()
+    if _RESTORED:  # a backup swapped in before the imports (core/backup.py)
+        from core import events
+        if _RESTORED.get("ok"):
+            events.emit("backup.restored", f"Restored from a backup; the data before it is kept at {_RESTORED['safety_copy']}.")
+        else:
+            events.emit("backup.restore_failed", f"Restoring a backup failed and nothing changed: {_RESTORED.get('error')}",
+                        level="error")
     # Bundled skills (build-custom-tab, humanizer) copied into the user's
     # skills folder on first run — data/ isn't packaged, so they can only
     # arrive from skill_templates/. Per-slug once-only; see the function.
@@ -179,6 +193,7 @@ app.include_router(connector_routes.router)
 app.include_router(trigger_routes.router)
 app.include_router(hook_routes.router)
 app.include_router(tool_routes.router)
+app.include_router(run_routes.router)
 
 # Developer Mode (David's ask 2026-09-01) — the only app.py edit a custom
 # tab ever needs. Every routes/tab_*.py found here gets mounted; adding a

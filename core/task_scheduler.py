@@ -106,12 +106,13 @@ async def complete(brain, prompt: str, task: dict, surface: str) -> str:
     that was stopped or failed still counts what it used (2026-10-06)."""
     endpoint_id = task_endpoint_id(task)
     tally = runs.Tally()
+    context = runs.RunContext(surface, endpoint_id=endpoint_id, task_id=task.get("id"), agent_id=task.get("agent_id"),
+                              model=getattr(brain, "model", None))
+    # The task's run record names this run, so its history opens the run's
+    # timeline (roadmap phase 8).
+    task_service.note_run(task.get("id"), context.run_id)
     try:
-        outcome = await runs.complete(brain, prompt, runs.RunContext(surface, endpoint_id=endpoint_id,
-                                                                     task_id=task.get("id"),
-                                                                     agent_id=task.get("agent_id"),
-                                                                     model=getattr(brain, "model", None)),
-                                      tally=tally)
+        outcome = await runs.complete(brain, prompt, context, tally=tally)
     finally:
         if endpoint_id and tally.usage is not None:
             try:

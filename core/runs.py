@@ -12,7 +12,9 @@ whatever runs it - Claude Code, Codex, a local or API model, or Swarm:
   for every run: nothing claims a confirmed stop, or complete usage, without
   evidence.
 - record(): each run's row in the session store's `runs` table (roadmap
-  phase 3, 2026-10-05) - what ran, for whom, how it ended, what it used.
+  phase 3, 2026-10-05) - what ran, for whom, how it ended, what it used - and
+  its timeline in `run_events` (roadmap phase 8, 2026-10-06): each tool
+  started and finished, quota readings, checkpoints, and how it ended.
 
 An adapter (each chat brain) has events(prompt) and cancel(). A run that
 fails raises; a run that finished ends with one RESULT event. The adapters'
@@ -39,6 +41,10 @@ logger = logging.getLogger(__name__)
 # show and diagnose, never a whole file.
 CLIP_LIMIT = 2000
 META_LIMIT = 2000
+# A run's kept timeline (phase 8): at most this many steps, each detail
+# clipped to TIMELINE_CLIP characters.
+TIMELINE_LIMIT = 200
+TIMELINE_CLIP = 300
 
 
 class EventKind(StrEnum):
@@ -65,6 +71,17 @@ class RunEvent:
 def clip(value, limit: int = CLIP_LIMIT) -> str:
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
     return text if len(text) <= limit else text[:limit] + "…"
+
+
+def clip_ends(value, limit: int) -> str:
+    """Both ends of a long value: a shell command's interesting part is often
+    its tail (found 2026-10-06: Codex runs JARVIS's tools as a command whose
+    first 300 characters are two long folder paths)."""
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    if len(text) <= limit:
+        return text
+    head = limit * 2 // 3
+    return text[:head] + " … " + text[-(limit - head):]
 
 
 def event(kind: EventKind, provider_meta: Optional[dict] = None, **data) -> RunEvent:
@@ -311,19 +328,42 @@ class RunOutcome:
 
 @dataclass
 class Tally:
-    """What a run has produced so far, as its events go by."""
+    """What a run has produced so far, as its events go by - and its
+    timeline: the steps worth seeing later (phase 8), at most
+    TIMELINE_LIMIT, the last one saying when more were left out."""
     parts: list = field(default_factory=list)
     usages: list = field(default_factory=list)
     tool_calls: int = 0
     finished: Optional[RunEvent] = None
+    timeline: list = field(default_factory=list)
+    _tools: dict = field(default_factory=dict)
+    dropped: int = 0
+
+    def step(self, kind: str, name: Optional[str] = None, ok: Optional[bool] = None, detail="",
+             seconds: Optional[float] = None) -> None:
+        if len(self.timeline) >= TIMELINE_LIMIT:
+            self.dropped += 1
+            return
+        self.timeline.append({"at": time.time(), "kind": kind, "name": name, "ok": ok,
+                              "detail": clip_ends(detail, TIMELINE_CLIP) if detail else "", "seconds": seconds})
 
     def add(self, item: RunEvent) -> None:
         if item.kind is EventKind.TEXT:
             self.parts.append(item.data["text"])
         elif item.kind is EventKind.USAGE:
             self.usages.append(item.data["usage"])
+        elif item.kind is EventKind.TOOL_STARTED:
+            self._tools[item.data.get("id")] = (item.data.get("name"), time.time())
+            self.step("tool_started", item.data.get("name"), detail=item.data.get("input") or "")
         elif item.kind is EventKind.TOOL_FINISHED:
             self.tool_calls += 1
+            name, began = self._tools.pop(item.data.get("id"), (None, None))
+            self.step("tool_finished", name, bool(item.data.get("ok")), item.data.get("output") or "",
+                      round(time.time() - began, 2) if began else None)
+        elif item.kind is EventKind.QUOTA:
+            self.step("quota", item.data.get("bucket"), detail=item.data)
+        elif item.kind is EventKind.CHECKPOINT:
+            self.step("checkpoint", detail=item.data)
         elif item.kind is EventKind.RESULT:
             self.finished = item
 
@@ -341,6 +381,15 @@ def record(context: RunContext, tally: Tally, outcome: str, stop: Optional[StopR
     """The run's row in the session store (core/session_manager_store.py
     `runs`). outcome: finished, failed or stopped. Never fails the run."""
     usage = tally.usage
+    timeline = list(tally.timeline)
+    if tally.dropped:
+        timeline.append({"at": time.time(), "kind": "truncated", "name": None, "ok": None,
+                         "detail": f"{tally.dropped} more steps were not kept", "seconds": None})
+    ended = {"stopped": ("stopped", None if stop is None else stop.confirmed, stop.how if stop else ""),
+             "failed": ("failed", False, detail)}.get(outcome)
+    if ended:
+        timeline.append({"at": time.time(), "kind": ended[0], "name": None, "ok": ended[1],
+                         "detail": clip(ended[2] or "", TIMELINE_CLIP), "seconds": None})
     try:
         from core import session_manager_store
         session_manager_store.record_run({
@@ -352,7 +401,7 @@ def record(context: RunContext, tally: Tally, outcome: str, stop: Optional[StopR
             "tool_calls": tally.tool_calls, "total_tokens": usage.total_tokens if usage else None,
             "cache_read_tokens": usage.cache_read_tokens if usage else None,
             "usage_complete": int(tally.usage_complete), "detail": (detail or "")[:500],
-        })
+        }, timeline)
     except Exception:
         logger.exception("could not record run %s", context.run_id)
 

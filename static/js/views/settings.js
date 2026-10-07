@@ -3,6 +3,7 @@ import { suppressBrowser, releaseBrowser } from "../browserPane.js";
 import { renderSpeechPanel } from "./speechPanel.js";
 import { renderAppearancePanel } from './appearancePanel.js';
 import { renderChannelsPanel } from "./settingsChannels.js";
+import { runSummary, surfaceLabel, toggleRunTimeline } from "../runTimeline.js";
 import { renderHooksPanel } from "./settingsHooks.js";
 import { pageHeader, group, row, field, toggle, pill, note, empty, badge, hueFor } from "../settingsKit.js";
 
@@ -63,6 +64,7 @@ const NAV_ICONS = {
   users: I('<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.7-3.5 3.3-5.5 6.5-5.5s5.8 2 6.5 5.5M16 4.5a3.5 3.5 0 010 7M18 14.5c2 .7 3.2 2.5 3.5 5.5"/>'),
   system: I('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
   logs: I('<path d="M6 3h9l5 5v13H6V3z"/><path d="M9 12h7M9 16h7M9 8h3"/>'),
+  runs: I('<circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><path d="M5 8v8"/><path d="M10 6h10M10 12h10M10 18h10"/>'),
   "sandbox-changes": I('<path d="M8 6l-5 6 5 6M16 6l5 6-5 6"/>'),
   "file-checkpoints": I('<path d="M3 12a9 9 0 109-9 9 9 0 00-6.4 2.6L3 8"/><path d="M3 3v5h5M12 8v4l3 2"/>'),
   "custom-tabs": I('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v5"/>'),
@@ -136,6 +138,9 @@ const SECTION_GROUPS = [
       { id: "logs", label: "Logs", render: renderLogsPanel,
         description: "What JARVIS has been doing. Errors keeps only warnings and errors; Desktop is the app window itself. Pick a chat to see only its turns.",
         keywords: ["log", "logs", "errors", "debug", "troubleshoot", "crash", "backend", "desktop", "warnings"] },
+      { id: "runs", label: "Runs", render: renderRunsPanel,
+        description: "Every model run: chat turns, tasks, cards, goals, helpers and agents. Open one to see what it did, step by step. Failed and stopped runs are one filter away.",
+        keywords: ["run", "runs", "timeline", "steps", "failed", "stopped", "tools", "trace", "what happened"] },
       { id: "sandbox-changes", label: "Sandbox changes", render: renderSandboxChangesPanel,
         description: "Code changes a model made in the sandbox, waiting for you. Applying writes them only if none of those files changed since; it does not commit. Unapplied changes expire after 7 days.",
         keywords: ["sandbox", "run_code", "diff", "change set", "apply", "review", "patch", "code changes"] },
@@ -1452,6 +1457,52 @@ async function renderSystemPanel(body, status, page) {
     URL.revokeObjectURL(url);
   };
 
+  // Back up everything and restore it (roadmap phase 8, core/backup.py).
+  const restoreState = await api("/api/system/backup/restore").catch(() => ({}));
+  const withKeys = toggle({ label: "Include saved passwords and keys" });
+  const fullBackupLink = () => {
+    const a = el("a", { href: `/api/system/backup/full?include_keys=${withKeys.checked ? "true" : "false"}`, download: "" });
+    document.body.appendChild(a); a.click(); a.remove();
+    toast("Preparing the backup; it downloads when ready", "success");
+  };
+  const restoreInput = el("input", { type: "file", accept: ".zip,application/zip", hidden: true });
+  const restoreMsg = el("span", { class: "meta" });
+  restoreInput.addEventListener("change", async () => {
+    const file = restoreInput.files[0];
+    restoreInput.value = "";
+    if (!file) return;
+    const ok = await confirmDialog({ title: "Restore this backup?",
+      message: "At the next start, JARVIS replaces its data with this backup. Your current data is kept first as a safety copy in the data folder. Your vault is not touched.",
+      confirmLabel: "Restore at next start" });
+    if (!ok) return;
+    restoreMsg.textContent = "Checking the backup…";
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const res = await fetch("/api/system/backup/restore", { method: "POST", body: form });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : `HTTP ${res.status}`);
+      toast("Backup ready: restart JARVIS to finish restoring", "success");
+      await renderSystemPanel(body, status, page);
+    } catch (e) { restoreMsg.textContent = e.message; }
+  });
+  const when = (seconds) => new Date(seconds * 1000).toLocaleString([], { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  const restoreRows = [];
+  if (restoreState.pending) {
+    restoreRows.push(row({ title: "A restore is waiting", cls: "backup-pending",
+      description: `The backup from ${when(restoreState.pending.created_at)}${restoreState.pending.includes_keys ? " (with keys)" : ""} replaces the current data when JARVIS next starts.`,
+      control: el("button", { class: "btn quiet", text: "Cancel", onclick: async () => {
+        await api("/api/system/backup/restore", { method: "DELETE" });
+        await renderSystemPanel(body, status, page);
+      } }) }));
+  }
+  if (restoreState.last) {
+    const last = restoreState.last;
+    restoreRows.push(row({ title: last.ok ? "Last restore" : "Last restore failed", cls: last.ok ? "backup-last" : "backup-last is-error",
+      description: last.ok ? `Restored ${when(last.at)}. The data from before it is kept at ${last.safety_copy}.`
+        : `${when(last.at)}: ${last.error}. Nothing was changed.` }));
+  }
+
   // A genuine two-step confirmation: this wipes a whole kind of data
   // globally, for every user.
   const wipe = (kind) => el("button", { class: "btn danger", text: `Wipe ${kind}`, onclick: async () => {
@@ -1470,9 +1521,17 @@ async function renderSystemPanel(body, status, page) {
     group({ title: "Diagnostics" }, facts.map(([label, value]) => row({ title: label,
       control: el("span", { class: "set-row-value", text: String(value) }) }))),
     group({ title: "Backup" }, [
-      row({ title: "Export a backup", description: "Settings, notes and skills as one JSON file.", control: el("button", { class: "btn", text: "Export", onclick: exportBackup }) }),
-      row({ title: "Import a backup", description: "Restores from a file made with Export.", control: [backupMsg, importInput,
-        el("button", { class: "btn", text: "Import…", onclick: () => importInput.click() })] }),
+      row({ title: "Back up everything", cls: "backup-full",
+        description: "Chats, agents, tasks, triggers, connections, skills and settings as one zip. Your vault is not included: it is your own folder. Saved passwords and keys stay out unless you include them, and a backup with them is as private as the passwords themselves.",
+        control: [el("label", { class: "set-inline-switch" }, [el("span", { class: "meta", text: "Keys" }), withKeys]),
+          el("button", { class: "btn", text: "Back up", onclick: fullBackupLink })] }),
+      row({ title: "Restore from a backup", cls: "backup-restore",
+        description: "Replaces JARVIS's data with a backup at the next start, keeping the current data as a safety copy first.",
+        control: [restoreMsg, restoreInput, el("button", { class: "btn", text: "Restore…", onclick: () => restoreInput.click() })] }),
+      ...restoreRows,
+      row({ title: "Export settings, notes and skills", description: "A small JSON file that works on another computer or version.", control: el("button", { class: "btn quiet", text: "Export", onclick: exportBackup }) }),
+      row({ title: "Import settings, notes and skills", description: "From a file made with Export.", control: [backupMsg, importInput,
+        el("button", { class: "btn quiet", text: "Import…", onclick: () => importInput.click() })] }),
     ]),
     group({ title: "Danger zone", description: "Permanent, with no undo.", cls: "set-danger" },
       ["chats", "notes", "tasks", "skills"].map((kind) => row({ title: `All ${kind}`, description: `Erase every ${kind.slice(0, -1)} for every user.`, control: wipe(kind) }))),
@@ -1576,6 +1635,39 @@ async function renderLogsPanel(body) {
   follow.addEventListener("click", load);
   let searchDelay = null;
   searchInput.addEventListener("input", () => { clearTimeout(searchDelay); searchDelay = setTimeout(load, 300); });
+  await load();
+}
+
+// -- Admin: Runs (roadmap phase 8, 2026-10-06; routes/run_routes.py) --------
+async function renderRunsPanel(body) {
+  const outcome = customSelect({ class: "runs-outcome" }, [
+    el("option", { value: "", text: "Every run" }), el("option", { value: "failed", text: "Failed" }),
+    el("option", { value: "stopped", text: "Stopped" }), el("option", { value: "finished", text: "Finished" }),
+  ]);
+  const list = el("div", { class: "runs-list" });
+  const load = async () => {
+    list.replaceChildren(el("div", { class: "meta", text: "Loading…" }));
+    let found;
+    try { found = await api(`/api/runs?limit=100${outcome.value ? `&outcome=${outcome.value}` : ""}`); }
+    catch (problem) { list.replaceChildren(el("div", { class: "meta", text: problem.message })); return; }
+    if (!found.length) { list.replaceChildren(empty(outcome.value ? `No ${outcome.value} runs` : "No runs yet")); return; }
+    list.replaceChildren(...found.map((run) => {
+      const host = el("div", { class: "run-timeline-host" });
+      const open = el("button", { class: "btn quiet", text: "Steps", onclick: () => toggleRunTimeline(run.id, host) });
+      const when = new Date(run.started_at * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      return el("div", { class: "run-item", "data-run": run.id }, [
+        el("div", { class: "run-item-head" }, [
+          el("span", { class: `run-outcome run-${run.outcome === "finished" ? "succeeded" : run.outcome}`, text: run.outcome }),
+          el("span", { class: "run-item-title", text: `${surfaceLabel(run.surface)}${run.label ? `: ${run.label}` : ""}` }),
+          el("span", { class: "meta", text: `${when} · ${runSummary(run)}` }),
+          open,
+        ]),
+        host,
+      ]);
+    }));
+  };
+  outcome.addEventListener("change", load);
+  body.replaceChildren(el("div", { class: "set-toolbar" }, [outcome]), list);
   await load();
 }
 

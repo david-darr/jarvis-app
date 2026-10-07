@@ -310,3 +310,8 @@ def results_text(batch_id: Optional[str], ctx) -> str:
 
 def batch(batch_id: str) -> list[dict]:
     return _rows("batch_id = ?", (batch_id,))
+
+
+def batch_rows_for_run(run_id: str) -> list[dict]:
+    """The helpers a run handed work to (its timeline, roadmap phase 8)."""
+    return _rows("parent_run_id = ?", (run_id,))

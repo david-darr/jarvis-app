@@ -113,6 +113,23 @@ function fixture(url) {
   // The rest of Settings (redesign 2026-10-05), so every page can be opened.
   if (route === "/api/remote/status") return { installed: true, logged_in: true, firewall_ok: false, auth_ready: false, has_any_users: false,
     running_now: false, hostname: "workstation.tail1234.ts.net", port: 8443, url: null };
+  // Roadmap phase 8: run timelines and full backup.
+  if (route === "/api/runs") return [
+    { id: "r1", surface: "chat", label: "Plan the launch", model: "claude-opus", outcome: "finished", started_at: now - 600, ended_at: now - 560,
+      total_tokens: 18240, tool_calls: 2, session_id: "s1" },
+    { id: "r2", surface: "card", label: "Draft the newsletter", model: "Local model", outcome: "failed", started_at: now - 300, ended_at: now - 290,
+      total_tokens: null, tool_calls: 1, task_id: "c4", detail: "RuntimeError: model down" }];
+  if (route === "/api/runs/r2") return { id: "r2", surface: "card", label: "Draft the newsletter", outcome: "failed", detail: "RuntimeError: model down",
+    parent: null, children: [], helpers: [{ id: "h1", goal: "Find sources", status: "done", tokens: 7000, error: null }],
+    task_run: { outcome: "failed", delivered: null, delivery: null },
+    steps: [
+      { at: now - 299, kind: "tool_started", name: "search_vault", ok: null, detail: '{"query": "newsletter"}', seconds: null },
+      { at: now - 298, kind: "tool_finished", name: "search_vault", ok: true, detail: "3 notes found", seconds: 0.8 },
+      { at: now - 291, kind: "tool_started", name: "create_note", ok: null, detail: '{"title": "Draft"}', seconds: null },
+      { at: now - 290, kind: "tool_finished", name: "create_note", ok: false, detail: "Tool error: vault is read-only", seconds: 0.2 },
+      { at: now - 290, kind: "failed", name: null, ok: false, detail: "RuntimeError: model down", seconds: null }] };
+  if (route === "/api/system/backup/restore") return { pending: null,
+    last: { ok: true, at: now - 86400, safety_copy: "C:\\Users\\Alex\\AppData\\Roaming\\JARVIS\\data\\.restore\\before-restore-20261005-101500" } };
   if (route === "/api/system/diagnostics") return { vault_exists: true, vault_dir: "C:\\Users\\Alex\\Documents\\Vault", sessions_count: 12, notes_count: 40,
     tasks_count: 3, skills_count: 5, model_endpoints_count: 3, data_dir_bytes: 524288, discord_configured: false };
   if (route === "/api/permissions") return { rules: [
@@ -621,6 +638,20 @@ app.whenReady().then(async () => {
       assert.deepEqual(await overflow(), [], label + " logs overflow");
       await capture(label + "-logs");
       // -- MCP catalog (Hermes track 2026-09-23): one-step add only where no sign-in is needed.
+      // Roadmap phase 8: the Runs list opens a failed run step by step.
+      await js("document.querySelector('[data-section=runs]').click()");
+      await waitFor("document.querySelectorAll('.run-item').length === 2");
+      assert.ok(await js("document.querySelector('[data-run=r2]').textContent.includes('Card: Draft the newsletter')"), label + " a run says what it was");
+      await js("document.querySelector('[data-run=r2] .run-item-head .btn').click()");
+      await waitFor("document.querySelectorAll('[data-run=r2] .run-step').length === 5");
+      assert.ok(await js("document.querySelector('[data-run=r2] .run-step.is-error').textContent.includes('create_note (failed)')"), label + " a failed tool is marked");
+      assert.ok(await js("document.querySelector('[data-run=r2] .run-timeline').textContent.includes('Helpers: done')"), label + " what hangs off the run");
+      assert.deepEqual(await overflow(), [], label + " runs overflow");
+      await capture(label + "-runs-steps");
+      await js("document.querySelector('[data-section=system]').click()");
+      await waitFor("!!document.querySelector('.backup-full')");
+      assert.ok(await js("document.querySelector('.backup-last').textContent.includes('before-restore-')"), label + " the last restore names its safety copy");
+      await capture(label + "-settings-backup");
       await js("document.querySelector('[data-section=integrations]').click()");
       await waitFor("!!document.querySelector('.mcp-catalog')");
       await js("document.querySelector('.mcp-catalog').open = true");
@@ -735,7 +766,7 @@ app.whenReady().then(async () => {
       for (const id of await js("[...document.querySelectorAll('.settings-nav-item')].map(i => i.dataset.section)")) {
         await js(`document.querySelector('[data-section="${id}"]').click()`);
         await waitFor(`document.querySelector('.set-page')?.dataset.page === '${id}' && document.querySelector('#settings-content .set-title')?.textContent === document.querySelector('[data-section="${id}"]').textContent
-          && !!document.querySelector('#settings-content .set-body').querySelector('.set-row, .set-empty, .appearance-panel, .log-entry, .logs-status, .sandbox-change')`);
+          && !!document.querySelector('#settings-content .set-body').querySelector('.set-row, .set-empty, .appearance-panel, .log-entry, .logs-status, .sandbox-change, .run-item')`);
         assert.deepEqual(await overflow(), [], `${label} ${id} overflow`);
         await capture(`${label}-settings-${id}`);
       }

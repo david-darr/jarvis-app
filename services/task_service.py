@@ -363,6 +363,7 @@ class TaskService:
         started = task.pop("run_started_at", None)
         due_at = task.pop("run_for", None)
         source = task.pop("run_source", None)
+        run_id = task.pop("run_id", None)
         late = None
         if due_at and started:
             try:
@@ -389,6 +390,8 @@ class TaskService:
             # reads its state from there. Records from before 2026-10-06
             # have only `delivered`.
             "delivery_id": delivery_id,
+            # The model run that did it (core/runs.py), for its timeline.
+            "run_id": run_id,
             # What started it (schedule, manual, trigger, answer), the time
             # it was scheduled for, and how many seconds late it began when
             # that was more than LATE_SECONDS.
@@ -416,6 +419,14 @@ class TaskService:
         self._advance(task)
         self._save_tasks()
         return task
+
+    def note_run(self, task_id: Optional[str], run_id: str) -> None:
+        """The model run doing this task's current run (core/runs.py), kept
+        on its run record so the history can open the run's timeline. Not
+        saved by itself: the record that carries it saves the task."""
+        task = self._tasks.get(task_id) if task_id else None
+        if task is not None:
+            task["run_id"] = run_id
 
     def mark_started(self, task_id: str, source: str = "manual") -> None:
         """A run outside the schedule begins (Run now, a trigger, an answer).

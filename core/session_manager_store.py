@@ -71,6 +71,12 @@ Helpers (schema v6, roadmap phase 5, 2026-10-06)
 so a result outlives the turn that asked for it and a restart. A deleted chat
 takes its helpers with it.
 
+Run timelines (schema v7, roadmap phase 8, 2026-10-06)
+-------------------------------------------------------
+`run_events` keeps each run's steps (core/runs.py Tally): tools started and
+finished, quota readings, checkpoints and how it ended, at most
+runs.TIMELINE_LIMIT per run. They go when their run goes.
+
 Upgrades
 --------
 Before an older database is upgraded, it is copied whole with SQLite's backup
@@ -101,7 +107,7 @@ LEGACY_INDEX_FILE = os.path.join(DATA_DIR, "sessions_index.json")
 LEGACY_CHANNEL_FILE = os.path.join(DATA_DIR, "channel_sessions.json")
 LEGACY_BACKUP_DIR = os.path.join(DATA_DIR, "sessions.pre-sqlite-backup")
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 RUNS_KEPT = 5000
 
 # meta key written as the import's last step; see _legacy_import_done().
@@ -240,6 +246,20 @@ CREATE TABLE IF NOT EXISTS helpers (
 
 CREATE INDEX IF NOT EXISTS idx_helpers_batch ON helpers (batch_id);
 CREATE INDEX IF NOT EXISTS idx_helpers_parent ON helpers (parent, created_at);
+
+-- A run's timeline (schema v7, core/runs.py): kind is tool_started,
+-- tool_finished, quota, checkpoint, stopped, failed or truncated.
+CREATE TABLE IF NOT EXISTS run_events (
+    run_id  TEXT NOT NULL,
+    seq     INTEGER NOT NULL,
+    at      REAL NOT NULL,
+    kind    TEXT NOT NULL,
+    name    TEXT,
+    ok      INTEGER,
+    detail  TEXT,
+    seconds REAL,
+    PRIMARY KEY (run_id, seq)
+);
 """
 
 _conn: Optional[sqlite3.Connection] = None
@@ -347,8 +367,8 @@ def _upgrade_schema(conn: sqlite3.Connection) -> None:
                 conn.execute("ALTER TABLE sessions ADD COLUMN agent_id TEXT")
             conn.execute("UPDATE sessions SET agent_id = json_extract(doc, '$.agent_id')")
 
-    # v4 adds only the runs table, v5 only the deliveries table and v6 only
-    # the helpers table, all created by _SCHEMA above.
+    # v4 adds only the runs table, v5 only the deliveries table, v6 only the
+    # helpers table and v7 only run_events, all created by _SCHEMA above.
 
     with conn:
         conn.execute(
@@ -624,6 +644,8 @@ def delete_session(session_id: str) -> None:
         with conn:
             conn.execute("DELETE FROM messages_fts WHERE session_id = ?", (session_id,))
             conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            conn.execute("DELETE FROM run_events WHERE run_id IN (SELECT id FROM runs WHERE session_id = ?)",
+                         (session_id,))
             conn.execute("DELETE FROM runs WHERE session_id = ?", (session_id,))
             conn.execute("DELETE FROM helpers WHERE parent = ?", (f"chat:{session_id}",))
             # messages goes via ON DELETE CASCADE; channel mappings are left
@@ -641,6 +663,7 @@ def delete_all_sessions() -> None:
             conn.execute("DELETE FROM messages")
             conn.execute("DELETE FROM sessions")
             conn.execute("DELETE FROM channel_sessions")
+            conn.execute("DELETE FROM run_events WHERE run_id IN (SELECT id FROM runs WHERE session_id IS NOT NULL)")
             conn.execute("DELETE FROM runs WHERE session_id IS NOT NULL")
             conn.execute("DELETE FROM helpers WHERE parent LIKE 'chat:%'")
 
@@ -652,17 +675,50 @@ _RUN_COLUMNS = ("id", "parent_id", "surface", "session_id", "agent_id", "task_id
                 "cache_read_tokens", "usage_complete", "detail")
 
 
-def record_run(run: dict) -> None:
-    """Save one finished run (core/runs.py record), keeping the newest
-    RUNS_KEPT."""
+def record_run(run: dict, timeline: Optional[list] = None) -> None:
+    """Save one finished run (core/runs.py record) and its timeline, keeping
+    the newest RUNS_KEPT runs; an older run's timeline goes with it."""
     with _LOCK:
         conn = _connect()
         with conn:
             conn.execute(f"INSERT OR REPLACE INTO runs ({', '.join(_RUN_COLUMNS)}) "
                          f"VALUES ({', '.join('?' for _ in _RUN_COLUMNS)})",
                          tuple(run.get(c) for c in _RUN_COLUMNS))
-            conn.execute("DELETE FROM runs WHERE id IN (SELECT id FROM runs ORDER BY started_at DESC "
-                         "LIMIT -1 OFFSET ?)", (RUNS_KEPT,))
+            conn.execute("DELETE FROM run_events WHERE run_id = ?", (run["id"],))
+            conn.executemany("INSERT INTO run_events (run_id, seq, at, kind, name, ok, detail, seconds) "
+                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                             [(run["id"], n, e["at"], e["kind"], e.get("name"),
+                               None if e.get("ok") is None else int(bool(e["ok"])), e.get("detail") or "",
+                               e.get("seconds")) for n, e in enumerate(timeline or [])])
+            old = [r["id"] for r in conn.execute("SELECT id FROM runs ORDER BY started_at DESC LIMIT -1 OFFSET ?",
+                                                 (RUNS_KEPT,))]
+            if old:
+                marks = ", ".join("?" for _ in old)
+                conn.execute(f"DELETE FROM run_events WHERE run_id IN ({marks})", old)
+                conn.execute(f"DELETE FROM runs WHERE id IN ({marks})", old)
+
+
+def run_events(run_id: str) -> list[dict]:
+    with _LOCK:
+        rows = _connect().execute("SELECT at, kind, name, ok, detail, seconds FROM run_events WHERE run_id = ? "
+                                  "ORDER BY seq", (run_id,)).fetchall()
+    return [{**dict(r), "ok": None if r["ok"] is None else bool(r["ok"])} for r in rows]
+
+
+def find_runs(session_id: Optional[str] = None, task_id: Optional[str] = None, agent_id: Optional[str] = None,
+              outcome: Optional[str] = None, parent_id: Optional[str] = None, limit: int = 100) -> list[dict]:
+    """Newest first, filtered by any of chat, task, agent, outcome, parent."""
+    where, params = [], []
+    for column, value in (("session_id", session_id), ("task_id", task_id), ("agent_id", agent_id),
+                          ("outcome", outcome), ("parent_id", parent_id)):
+        if value:
+            where.append(f"{column} = ?")
+            params.append(value)
+    clause = f"WHERE {' AND '.join(where)}" if where else ""
+    with _LOCK:
+        rows = _connect().execute(f"SELECT * FROM runs {clause} ORDER BY started_at DESC LIMIT ?",
+                                  (*params, max(1, min(limit, 500)))).fetchall()
+    return [dict(r) for r in rows]
 
 
 def list_runs(session_id: Optional[str] = None, limit: int = 50) -> list[dict]:

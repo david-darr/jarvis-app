@@ -1745,6 +1745,20 @@ button.dashboard-row:hover { background: rgba(255,255,255,.035); }
   .agent-chat-delete { opacity: 1; }
 }
 
+/* Run timelines, roadmap phase 8 (static/js/runTimeline.js). */
+.runs-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.run-item { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.run-item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
+.run-item-title { font-weight: 600; overflow-wrap: anywhere; }
+.run-item-head .btn { margin-left: auto; padding: 2px 10px; font-size: 11px; }
+.run-timeline { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; font-size: 11.5px; }
+.run-step { display: flex; flex-wrap: wrap; gap: 8px; padding: 3px 0; border-top: 1px solid var(--border); min-width: 0; }
+.run-step-time { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.run-step.is-error .run-step-what { color: var(--danger); }
+.run-step-detail { flex-basis: 100%; color: var(--text-dim); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 120px; overflow: auto; }
+.run-link { overflow-wrap: anywhere; }
+.run-steps { margin-top: 4px; padding: 1px 8px; font-size: 11px; }
+
 /* Tool Store, roadmap phase 6: MCP server health, held tools, unreadable skills. */
 .tool-store-health { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0;
   font-size: 11.5px; color: var(--text-dim); }

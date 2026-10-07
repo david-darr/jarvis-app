@@ -796,7 +796,9 @@ class AppWiringTests(unittest.IsolatedAsyncioTestCase):
                  "discord_channel": Mock(start=AsyncMock(), stop=AsyncMock()),
                  "connector_hub": Mock(start_all=AsyncMock(), stop_all=AsyncMock()),
                  "remote_access": Mock(start_if_enabled=AsyncMock(), stop=AsyncMock()),
-                 "chat_service": Mock(shutdown=AsyncMock())}
+                 "chat_service": Mock(shutdown=AsyncMock()),
+                 # A backup restored before the imports (core/backup.py); none here.
+                 "_RESTORED": None}
         exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec"), scope)
         application = FastAPI()
         with self.assertRaisesRegex(RuntimeError, "fixture failure"):
