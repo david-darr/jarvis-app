@@ -297,7 +297,18 @@ function fixture(url) {
 }
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
-  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src 'self' https:");
+  // The site (docs/) may read GitHub's public release data; nothing else leaves.
+  const site = url.pathname.startsWith("/docs/") || url.pathname.startsWith("/kairos/");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src 'self' https:" + (site ? "; connect-src 'self' https://api.github.com" : ""));
+  if (url.pathname === "/__github-latest") {
+    // Stands in for api.github.com/repos/david-darr/kairos/releases/latest.
+    res.setHeader("Content-Type", "application/json"); res.setHeader("Access-Control-Allow-Origin", "*");
+    res.end(JSON.stringify({ tag_name: "v2.0.0", assets: [
+      { name: "Kairos-Setup-2.0.0.exe", size: 405922807, browser_download_url: "https://github.com/david-darr/kairos/releases/download/v2.0.0/Kairos-Setup-2.0.0.exe" },
+      { name: "Kairos-Setup-2.0.0.exe.blockmap", size: 431000, browser_download_url: "https://github.com/david-darr/kairos/releases/download/v2.0.0/Kairos-Setup-2.0.0.exe.blockmap" },
+      { name: "Kairos-2.0.0-arm64.dmg", size: 398000000, browser_download_url: "https://github.com/david-darr/kairos/releases/download/v2.0.0/Kairos-2.0.0-arm64.dmg" }] }));
+    return;
+  }
   if (url.pathname.startsWith("/api/")) {
     if (url.pathname === "/api/sessions" && sessionDelay) await delay(sessionDelay);
     res.setHeader("Content-Type", "application/json");
@@ -311,10 +322,13 @@ const server = http.createServer(async (req, res) => {
     catch (error) { errors.push(error.message); res.writeHead(404); res.end('{"detail":"Missing fixture"}'); }
     return;
   }
-  const file = path.resolve(root, url.pathname === "/" ? "static/index.html" : url.pathname === "/docs/" ? "docs/index.html" : "." + decodeURIComponent(url.pathname));
+  // /kairos/ is the site's address on GitHub Pages (404.html uses it).
+  const pathname = url.pathname.startsWith("/kairos/") ? "/docs/" + url.pathname.slice("/kairos/".length) : url.pathname;
+  const file = path.resolve(root, pathname === "/" ? "static/index.html" : pathname === "/docs/" ? "docs/index.html" : "." + decodeURIComponent(pathname));
   if (!["static", "docs"].some(dir => file.startsWith(path.join(root, dir) + path.sep))) { res.writeHead(404); res.end(); return; }
   try {
-    const mime = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".png": "image/png", ".svg": "image/svg+xml" };
+    const mime = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".png": "image/png", ".svg": "image/svg+xml",
+      ".webp": "image/webp", ".jpg": "image/jpeg", ".woff2": "font/woff2" };
     res.setHeader("Content-Type", mime[path.extname(file)] || "application/octet-stream");
     res.setHeader("Cache-Control", "no-store");
     res.end(fs.readFileSync(file));
@@ -327,7 +341,13 @@ app.whenReady().then(async () => {
   fs.mkdirSync(output, { recursive: true });
   await new Promise(r => server.listen(0, "127.0.0.1", r));
   const base = "http://127.0.0.1:" + server.address().port;
-  session.defaultSession.webRequest.onBeforeRequest((details, cb) => cb({ cancel: !details.url.startsWith(base + "/") }));
+  const outside = [];
+  session.defaultSession.webRequest.onBeforeRequest((details, cb) => {
+    if (details.url.startsWith(base + "/")) return cb({});
+    outside.push(details.url);
+    if (details.url === "https://api.github.com/repos/david-darr/kairos/releases/latest") return cb({ redirectURL: base + "/__github-latest" });
+    cb({ cancel: true });
+  });
   const win = new BrowserWindow({ width: 1440, height: 900, show: false, useContentSize: true, webPreferences: { offscreen: true, contextIsolation: true, nodeIntegration: false } });
   win.webContents.on("console-message", (details) => { if (details.level === 'error') errors.push(details.message); });
   const js = async (code) => {
@@ -1038,6 +1058,19 @@ app.whenReady().then(async () => {
       await js("Promise.all([...document.images].map(image => { image.loading = 'eager'; return image.decode(); }))");
       await js("window.scrollTo({top:0,behavior:'instant'})");
       await waitFor("document.querySelector('#preview-image')?.complete");
+      // The hero halftone draws live (docs/dither.js); its pre-rendered fallback is styled underneath.
+      await waitFor("document.querySelector('.hero-art').classList.contains('is-dithered') && !!document.querySelector('.hero-art canvas')");
+      assert.ok(await js("(() => { const d = document.createElement('div'); d.className = 'hero-art'; document.body.append(d); const v = getComputedStyle(d).backgroundImage; d.remove(); return v.includes('hero-dither.webp'); })()"), label + " halftone fallback styled");
+      assert.ok(await js("fetch('img/hero-dither.webp').then(r => r.ok)"), label + " halftone fallback exists");
+      const drawMs = Number(await js("document.querySelector('.hero-art').dataset.drawMs"));
+      console.log(`${label} halftone draw: ${drawMs} ms`);
+      assert.ok(drawMs < 400, label + " halftone draws in under 400 ms (" + drawMs + ")");
+      // The latest release's files and version reach the download buttons.
+      await waitFor("document.getElementById('release-line').textContent.includes('Version 2.0.0')");
+      assert.ok(await js("document.querySelector('[data-asset=\\'.exe\\']').href.endsWith('Kairos-Setup-2.0.0.exe')"), label + " Windows asset link");
+      assert.ok(await js("document.querySelector('[data-asset=\\'.dmg\\']').href.endsWith('Kairos-2.0.0-arm64.dmg')"), label + " macOS asset link");
+      assert.ok(await js("document.getElementById('primary-download').textContent.startsWith('Download for Windows') && document.getElementById('primary-download').href.endsWith('.exe')"), label + " primary download matches this system");
+      assert.ok(await js("document.querySelector('.download-card[data-platform=windows]').classList.contains('recommended')"), label + " this system's card is marked");
       assert.ok(await js("document.documentElement.scrollWidth <= innerWidth"), label + " website fits");
       const anchors = await js("[...document.querySelectorAll('a[href^=\"#\"]')].every(a => document.querySelector(a.getAttribute('href')))");
       assert.ok(anchors, "Website anchors resolve");
@@ -1049,22 +1082,40 @@ app.whenReady().then(async () => {
       }
       await js("document.querySelector('.preview-switcher').scrollIntoView({behavior:'instant'})");
       await capture(label + "-website-preview");
-      for (const section of ["features","tour","install"]) {
+      if (label === "mobile") {
+        assert.ok(await js("getComputedStyle(document.querySelector('.menu-button')).display !== 'none' && getComputedStyle(document.querySelector('.nav-links')).display === 'none'"), "phone menu starts closed");
+        await js("document.querySelector('.menu-button').click()");
+        assert.ok(await js("document.querySelector('.site-nav').classList.contains('open') && getComputedStyle(document.querySelector('.nav-links')).display === 'flex' && document.querySelector('.menu-button').getAttribute('aria-expanded') === 'true'"), "phone menu opens");
+        await capture(label + "-website-menu");
+        await js("document.querySelector('.nav-links a[href=\\'#faq\\']').click()");
+        assert.ok(await js("!document.querySelector('.site-nav').classList.contains('open')"), "choosing a link closes the phone menu");
+      }
+      await js("document.querySelector('#faq details').open = true");
+      assert.ok(await js("document.querySelector('#faq details').open && document.querySelector('#faq details p').offsetHeight > 0"), label + " FAQ opens");
+      for (const section of ["idea","features","everything","tour","principles","download","faq","closing"]) {
         await js("document.querySelector('#" + section + "').scrollIntoView({behavior:'instant'})");
         await delay(100);
         await capture(label + "-website-" + section);
       }
+      await js("window.scrollTo({top: document.body.scrollHeight, behavior: 'instant'})");
+      await delay(100);
+      await capture(label + "-website-footer");
       await js("document.querySelector('.install-note').open = true");
       assert.ok(await js("document.documentElement.scrollWidth <= innerWidth"));
       assert.ok(await js("[...document.images].every(i => i.complete && i.naturalWidth > 0)"), "Every website image loads");
     }
+    await win.loadURL(base + "/kairos/404.html");
+    await waitFor("document.querySelector('.not-found h1')?.textContent === 'Not the right time.'");
+    assert.ok(await js("[...document.images].every(i => i.complete && i.naturalWidth > 0) && getComputedStyle(document.body).fontFamily.includes('Jost')"), "404 page styled");
+    await capture("website-404");
+    assert.deepEqual([...new Set(outside.filter(u => !u.startsWith("https://api.github.com/repos/david-darr/kairos/releases/latest")))], [], "No outside requests but GitHub's release data");
     assert.deepEqual(errors, [], "Website renderer errors");
     await win.webContents.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
     assert.equal(await js("getComputedStyle(document.documentElement).scrollBehavior"), "auto");
     assert.equal(await js("getComputedStyle(document.querySelector('.button')).transitionDuration"), "0s");
     console.log("PASS: app desktop/mobile and icon rail, persistence/keyboard/tooltips, reduced motion, vault/chat/Settings, empty/error states, website layouts/links/images/previews.");
     console.log("Screenshots: " + output);
-    fs.writeFileSync(path.join(output, "result.json"), JSON.stringify({ passed: true, checks: ["10 tabs desktop/mobile", "52px icon rail layout and animation", "sidebar persistence, keyboard, tooltips, mobile override", "vault search/read", "Settings and usable mobile forms", "Home chat link and model menu", "beam/core reduced motion", "centered new-chat composer", "independent history persistence, draft retention and mobile focus", "new-chat landing does not write data", "mocked note completion", "delayed navigation", "10 empty views and unavailable status", "website desktop/mobile layouts, anchors, images, five preview states and reduced motion"], docImagesUpdated: updateDocImages, errors, writes }, null, 2));
+    fs.writeFileSync(path.join(output, "result.json"), JSON.stringify({ passed: true, checks: ["10 tabs desktop/mobile", "52px icon rail layout and animation", "sidebar persistence, keyboard, tooltips, mobile override", "vault search/read", "Settings and usable mobile forms", "Home chat link and model menu", "beam/core reduced motion", "centered new-chat composer", "independent history persistence, draft retention and mobile focus", "new-chat landing does not write data", "mocked note completion", "delayed navigation", "10 empty views and unavailable status", "website desktop/mobile layouts, anchors, images, five preview states, live halftone and fallback, release-driven downloads, phone menu, FAQ, 404 and reduced motion"], docImagesUpdated: updateDocImages, errors, writes }, null, 2));
   } catch (error) {
     await capture("failure").catch(() => {});
     fs.writeFileSync(path.join(output, "result.json"), JSON.stringify({ passed: false, failure: error.stack, actual: error.actual, expected: error.expected, errors }, null, 2));

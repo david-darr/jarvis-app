@@ -4,104 +4,285 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
-<title>Kairos | Your models. Your memory. Your workspace.</title>
-<meta name="description" content="A focused, self-hosted AI workspace. Connect your models, bring your knowledge together, and give recurring work a rhythm. Free and open source.">
+<meta name="theme-color" content="#F3EADB">
+<title>Kairos | Not more time. The right time.</title>
+<meta name="description" content="Kairos is a free, open-source AI workspace that runs on your own computer. Chat with the models you choose, keep a memory you own, and let agents work on schedule.">
+<link rel="canonical" href="https://david-darr.github.io/kairos/">
+<link rel="icon" type="image/svg+xml" href="img/favicon.svg">
 <link rel="icon" type="image/png" href="img/favicon.png">
+<link rel="preload" href="fonts/Jost-Variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="Kairos">
 <meta property="og:url" content="https://david-darr.github.io/kairos/">
-<meta property="og:title" content="Kairos | Your models. Your memory.">
-<meta property="og:description" content="A focused AI workspace, on your own machine. Free and open source.">
-<meta property="og:image" content="https://david-darr.github.io/kairos/img/home.png">
-<meta property="og:image:alt" content="Kairos Home dashboard with a quiet sky panel, recent conversations, and upcoming work. Demo data.">
+<meta property="og:title" content="Kairos | Not more time. The right time.">
+<meta property="og:description" content="A free, open-source AI workspace on your own computer. Your models, your memory, your agents.">
+<meta property="og:image" content="https://david-darr.github.io/kairos/img/og.jpg">
+<meta property="og:image:alt" content="The Kairos wordmark and tagline over a painted sky with the winged figure of Kairos.">
 <meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Kairos","applicationCategory":"ProductivityApplication","operatingSystem":"Windows 10, Windows 11, macOS (Apple Silicon)","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"license":"https://opensource.org/licenses/MIT","url":"https://david-darr.github.io/kairos/","codeRepository":"https://github.com/david-darr/kairos"}</script>
+<script src="dither.js" defer></script>
 <script src="site.js" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
+
 <nav class="site-nav" aria-label="Main navigation"><div class="wrap nav-inner">
-  <a class="brand" href="#main" aria-label="Kairos home"><img src="img/kairos-wordmark.svg" width="132" height="28" alt="Kairos"></a>
-  <div class="nav-links">
-    <a href="#features">Workspace</a><a href="#tour">A closer look</a><a href="#install">Get started</a>
+  <a class="brand" href="#top" aria-label="Kairos home"><img src="img/kairos-wordmark.svg" width="132" height="23" alt="Kairos"></a>
+  <button class="menu-button" type="button" aria-expanded="false" aria-controls="nav-links"><span class="menu-icon" aria-hidden="true"></span><span class="sr-only">Menu</span></button>
+  <div class="nav-links" id="nav-links">
+    <a href="#features">Features</a>
+    <a href="#everything">Everything</a>
+    <a href="#tour">Tour</a>
+    <a href="#download">Download</a>
+    <a href="#faq">FAQ</a>
+    <a href="https://github.com/david-darr/kairos">GitHub <span aria-hidden="true">↗</span></a>
   </div>
-  <a class="nav-github" href="https://github.com/david-darr/kairos">GitHub <span aria-hidden="true">↗</span></a>
+  <a class="button primary nav-cta" href="#download">Download</a>
 </div></nav>
+
 <main id="main">
-<header class="hero wrap">
-  <p class="eyebrow"><span class="status-dot"></span> Open source. Yours by design.</p>
-  <h1>Not more time.<br><span>The right time.</span></h1>
-  <p class="hero-description">Your conversations, knowledge, and next steps.<br class="desktop-break"> One focused AI workspace, running on your own machine.</p>
-  <div class="actions">
-    <a class="button primary" href="https://github.com/david-darr/kairos/releases/latest">Download Kairos <span aria-hidden="true">↓</span></a>
-    <a class="button secondary" href="https://github.com/david-darr/kairos">Explore the source <span aria-hidden="true">↗</span></a>
+<header class="hero" id="top">
+  <div class="hero-art" aria-hidden="true"></div>
+  <div class="wrap hero-inner">
+    <p class="eyebrow">Free and open source <span aria-hidden="true">·</span> Windows and macOS</p>
+    <h1>Not more time. <span>The right time.</span></h1>
+    <p class="hero-description">Kairos is a private AI workspace on your own computer. Chat with the models you choose, keep a memory you own, and let agents work while you get on with your day.</p>
+    <div class="actions">
+      <a class="button primary" id="primary-download" href="https://github.com/david-darr/kairos/releases/latest">Download Kairos <span aria-hidden="true">↓</span></a>
+      <a class="button secondary" href="https://github.com/david-darr/kairos">Explore the source <span aria-hidden="true">↗</span></a>
+    </div>
+    <p class="release-line" id="release-line">Windows 10 and 11 · macOS on Apple Silicon · MIT license</p>
   </div>
-  <p class="download-note">Windows &amp; macOS · Free under the MIT license</p>
-  <div class="preview-switcher" role="group" aria-label="Preview the workspace">
-    <button type="button" class="preview-button active" data-preview="home" aria-pressed="true">Overview</button>
-    <button type="button" class="preview-button" data-preview="chat-new" aria-pressed="false">New chat</button>
-    <button type="button" class="preview-button" data-preview="chat" aria-pressed="false">Conversation</button>
-    <button type="button" class="preview-button" data-preview="vault" aria-pressed="false">Knowledge</button>
-    <button type="button" class="preview-button" data-preview="sidebar-collapsed" aria-pressed="false">Icon rail</button>
+  <div class="wrap">
+    <div class="preview-switcher" role="group" aria-label="Preview the workspace">
+      <button type="button" class="preview-button active" data-preview="home" aria-pressed="true">Home</button>
+      <button type="button" class="preview-button" data-preview="chat-new" aria-pressed="false">New chat</button>
+      <button type="button" class="preview-button" data-preview="chat" aria-pressed="false">Conversation</button>
+      <button type="button" class="preview-button" data-preview="vault" aria-pressed="false">Knowledge</button>
+      <button type="button" class="preview-button" data-preview="sidebar-collapsed" aria-pressed="false">Icon rail</button>
+    </div>
+    <figure class="product-preview">
+      <a id="preview-link" href="img/home.png" aria-label="Open the full-size preview">
+        <img id="preview-image" src="img/home.png" width="1440" height="900" fetchpriority="high" alt="Kairos Home with a quiet sky card, recent conversations and upcoming work. Demo data.">
+      </a>
+      <figcaption><span id="preview-caption">The opening is now.</span><span>Sample data · Select to enlarge</span></figcaption>
+    </figure>
   </div>
-  <figure class="product-preview">
-    <a id="preview-link" href="img/home.png" aria-label="Open full-size workspace preview">
-      <img id="preview-image" src="img/home.png" width="1440" height="900" fetchpriority="high" alt="Kairos Home with a quiet sky panel, recent conversations, and upcoming work. Demo data.">
-    </a>
-    <figcaption><span id="preview-caption">Your day, in focus.</span><span>Development preview · Sample data · Tap to enlarge</span></figcaption>
-  </figure>
 </header>
 
-<section class="principles wrap" aria-label="Built around ownership">
-  <div><span class="section-number">01 / MODELS</span><h2>Choose your intelligence.</h2><p>Claude, Codex, local models, or an API endpoint. You decide what powers each conversation.</p></div>
-  <div><span class="section-number">02 / MEMORY</span><h2>Keep your knowledge.</h2><p>A vault of plain Markdown files. Read it, edit it, back it up. It stays useful outside Kairos.</p></div>
-  <div><span class="section-number">03 / CONTROL</span><h2>Make it your own.</h2><p>A self-hosted workspace with your files on your machine. Connect only the services you need.</p></div>
+<section class="idea wrap" id="idea" aria-labelledby="idea-title">
+  <div>
+    <p class="eyebrow" id="idea-title">The name</p>
+    <p class="idea-text">The Greeks had two words for time. <em>Chronos</em> is the measured kind: hours, sprints, the calendar. <span>Kairos is the other kind, the opportune moment, the narrow opening when action works. Kairos the app is built for that: it keeps the hours of work running in the background, so you can be present for the moments that matter.</span></p>
+  </div>
+  <figure class="idea-figure"><img src="img/kairos-figure.webp" width="960" height="1200" loading="lazy" alt="Painted figure of Kairos, winged, with a forelock, balancing a scale on the edge of a blade."></figure>
 </section>
 
-<section class="section wrap" id="features">
-  <div class="section-heading"><p class="eyebrow">A little less scattered</p><h2>Your work, connected.</h2><p>From the first thought to the next thing on your calendar.</p></div>
+<section class="section wrap" id="features" aria-labelledby="features-title">
+  <div class="section-heading"><p class="eyebrow">What it does</p><h2 id="features-title">One workspace. <span>Every model, all your memory.</span></h2></div>
   <div class="feature-grid">
-    <article class="feature"><span class="feature-mark" aria-hidden="true">01</span><h3>A place to think</h3><p>Focused conversations, file attachments, folder-scoped workspaces, and shared project context.</p></article>
-    <article class="feature"><span class="feature-mark" aria-hidden="true">02</span><h3>A home for your knowledge</h3><p>Keep references in Library. Search your vault, explore its connections, and open a note without losing the thread.</p></article>
-    <article class="feature"><span class="feature-mark" aria-hidden="true">03</span><h3>The shape of your day</h3><p>Notes, calendar events, and upcoming work in one place. Due-dated notes appear on your calendar, too.</p></article>
-    <article class="feature"><span class="feature-mark" aria-hidden="true">04</span><h3>A rhythm for recurring work</h3><p>Schedule a prompt or choose a built-in routine. Review the output here or deliver it to a connected channel.</p></article>
-    <article class="feature"><span class="feature-mark" aria-hidden="true">05</span><h3>Room to grow</h3><p>Import reusable skills, connect email and calendars, and extend your workspace with custom tabs.</p></article>
-    <article class="feature"><span class="feature-mark" aria-hidden="true">06</span><h3>Close, even when you're away</h3><p>Optional Tailscale access brings the workspace to your phone, with HTTPS and a required login.</p></article>
+    <article class="feature featured">
+      <span class="feature-mark" aria-hidden="true">01</span>
+      <h3>Chat with any model</h3>
+      <p>Claude, Codex, local models through Ollama or the built-in engine, or any OpenAI-compatible API. Choose the model and its reasoning level for each conversation, and watch a meter of how full the context is.</p>
+      <img src="img/feature-models.webp" width="1200" height="750" loading="lazy" alt="Settings listing connected models. Demo data.">
+    </article>
+    <article class="feature">
+      <span class="feature-mark" aria-hidden="true">02</span>
+      <h3>A memory you own</h3>
+      <p>Your knowledge is a vault of plain Markdown files. Search it, browse it as a linked map, and edit it in Kairos or any other tool. It stays useful without the app.</p>
+      <img src="img/feature-vault.webp" width="1200" height="750" loading="lazy" alt="The vault shown as a map of linked notes and folders. Demo data.">
+    </article>
+    <article class="feature">
+      <span class="feature-mark" aria-hidden="true">03</span>
+      <h3>Agents that remember</h3>
+      <p>Named agents with their own role, goals and memory. They work through a board of cards, ask you when they need a decision, and can team up on bigger jobs.</p>
+      <img src="img/feature-agents.webp" width="1200" height="750" loading="lazy" alt="The Agents page with two agents and their status. Demo data.">
+    </article>
+    <article class="feature">
+      <span class="feature-mark" aria-hidden="true">04</span>
+      <h3>Work on a schedule</h3>
+      <p>Scheduled prompts and built-in routines like a daily brief. Each runs once, can be stopped, and delivers its result here or to a connected channel.</p>
+      <img src="img/feature-tasks.webp" width="1200" height="750" loading="lazy" alt="Scheduled tasks and the automation library. Demo data.">
+    </article>
+    <article class="feature">
+      <span class="feature-mark" aria-hidden="true">05</span>
+      <h3>Every run, step by step</h3>
+      <p>Open any chat, task or agent run and see what it did: each tool it called, how long it took, what failed and how it ended.</p>
+      <img src="img/feature-runs.webp" width="1200" height="750" loading="lazy" alt="A run opened to its timeline of tool calls. Demo data.">
+    </article>
+    <article class="feature">
+      <span class="feature-mark" aria-hidden="true">06</span>
+      <h3>Back up everything</h3>
+      <p>One file holds your chats, notes, agents and settings. Restore it on any machine, with a safety copy of what was there. Saved passwords stay out unless you choose.</p>
+      <img src="img/feature-backup.webp" width="1200" height="750" loading="lazy" alt="Backup settings with full backup and restore. Demo data.">
+    </article>
   </div>
 </section>
 
-<section class="section wrap" id="tour">
-  <div class="section-heading"><p class="eyebrow">A closer look</p><h2>Useful detail.<br>Without the noise.</h2></div>
+<section class="section everything-section" id="everything" aria-labelledby="everything-title"><div class="wrap">
+  <div class="section-heading"><p class="eyebrow">Everything in Kairos</p><h2 id="everything-title">The whole toolkit. <span>Nothing to bolt on.</span></h2></div>
+  <div class="everything-grid">
+    <div class="capability">
+      <h3>Conversation</h3>
+      <ul>
+        <li>Claude, Codex, local and API models, chosen per chat</li>
+        <li>Attachments, folder-scoped workspaces and projects</li>
+        <li>@ references to files, notes and other chats</li>
+        <li>Previews for documents, spreadsheets, slides, PDFs and code</li>
+        <li>A side browser, sandboxed from the app</li>
+        <li>Screen capture straight into a chat (Windows)</li>
+        <li>Voice input and spoken replies</li>
+        <li>Up to three read-only helpers working in parallel</li>
+        <li>Find in chat, summaries and a terminal-style view</li>
+      </ul>
+    </div>
+    <div class="capability">
+      <h3>Knowledge and your day</h3>
+      <ul>
+        <li>A Markdown vault with search and a linked map</li>
+        <li>Notes and priorities, kept in sync with the vault</li>
+        <li>Library for documents and chat files</li>
+        <li>Calendar with CalDAV and iCal sync</li>
+        <li>Email through IMAP and SMTP</li>
+        <li>Google Workspace sign-in</li>
+        <li>A Home dashboard of what's next</li>
+      </ul>
+    </div>
+    <div class="capability">
+      <h3>Agents and automation</h3>
+      <ul>
+        <li>Persistent agents with memory, goals and an inbox</li>
+        <li>Agent teams that divide up larger work</li>
+        <li>Scheduled tasks and built-in routines</li>
+        <li>Webhook triggers that start work from outside</li>
+        <li>Lifecycle hooks on tools, replies and runs</li>
+        <li>Run timelines for every chat, task and agent</li>
+      </ul>
+    </div>
+    <div class="capability">
+      <h3>Tools and skills</h3>
+      <ul>
+        <li>Tool Store for reusable skills</li>
+        <li>A catalog of MCP tool servers, with sign-in</li>
+        <li>Health checks, and new tools held until you approve them</li>
+        <li>Cookbook to download and run local models</li>
+        <li>Custom tabs you build in Developer Mode</li>
+      </ul>
+    </div>
+    <div class="capability">
+      <h3>Channels and access</h3>
+      <ul>
+        <li>Talk to Kairos and its agents from Discord</li>
+        <li>Telegram, Slack, Signal, Matrix, Mattermost, IRC, iMessage, email and ntfy connectors</li>
+        <li>Remote access from your phone over Tailscale, with HTTPS and a login</li>
+        <li>A usage notch for your Claude and Codex limits (Windows)</li>
+      </ul>
+    </div>
+    <div class="capability">
+      <h3>Safety and control</h3>
+      <ul>
+        <li>App-wide permissions, asked once and remembered</li>
+        <li>Code runs in a sandbox, and you review its changes</li>
+        <li>Agents and tasks kept to their own folders</li>
+        <li>File checkpoints with rollback</li>
+        <li>Saved passwords encrypted on your machine</li>
+        <li>Optional accounts with two-factor sign-in</li>
+        <li>Logs, full backup and restore</li>
+        <li>Updates itself on Windows</li>
+      </ul>
+    </div>
+  </div>
+</div></section>
+
+<section class="section wrap" id="tour" aria-labelledby="tour-title">
+  <div class="section-heading"><p class="eyebrow">A closer look</p><h2 id="tour-title">Useful detail. <span>Without the noise.</span></h2></div>
   <div class="tour">
     <article class="tour-row">
-      <div class="tour-copy"><span class="section-number">CONVERSATION</span><h3>Just a place to start.</h3><p>A new chat starts with one centered composer. Send a thought and it settles beneath the conversation. Keep history open, or tuck it away alongside the slim icon rail.</p><p class="detail">Pick the model and its reasoning level per conversation, see how full the context is getting, and preview generated files right in the chat, including spreadsheets, documents and slides. Open a web page beside the conversation without leaving the app.</p></div>
-      <a class="screenshot" href="img/chat.png"><img src="img/chat.png" width="1440" height="900" loading="lazy" alt="Kairos conversation with its floating composer and model controls. Demo data."></a>
+      <div class="tour-copy"><span class="section-number">Conversation</span><h3>Just a place to start.</h3><p>A new chat starts with one centered composer. Send a thought and it settles beneath the conversation. Keep history open, or tuck it away beside the slim icon rail.</p><p class="detail">Pick the model and its reasoning level per conversation, and preview generated files right in the chat. Open a web page beside the conversation without leaving the app.</p></div>
+      <a class="screenshot" href="img/chat.png"><img src="img/chat.png" width="1440" height="900" loading="lazy" alt="A Kairos conversation with its floating composer and model controls. Demo data."></a>
     </article>
     <article class="tour-row reverse">
-      <div class="tour-copy"><span class="section-number">KNOWLEDGE</span><h3>See how ideas connect.</h3><p>Your vault becomes a constellation of notes and folders. Search for a thought, explore its neighbors, or browse the files directly.</p><p class="detail">Your memory is still plain Markdown. The view is simply another way into it.</p></div>
-      <a class="screenshot" href="img/vault.png"><img src="img/vault.png" width="1440" height="900" loading="lazy" alt="Vault graph with colored note triangles and connected folders. Demo data."></a>
+      <div class="tour-copy"><span class="section-number">Knowledge</span><h3>See how ideas connect.</h3><p>Your vault becomes a map of notes and folders. Search for a thought, explore its neighbours, or browse the files directly.</p><p class="detail">Your memory is still plain Markdown. The map is just another way in.</p></div>
+      <a class="screenshot" href="img/vault.png"><img src="img/vault.png" width="1440" height="900" loading="lazy" alt="The vault map with linked notes and folders. Demo data."></a>
     </article>
     <article class="tour-row">
-      <div class="tour-copy"><span class="section-number">AUTOMATIONS</span><h3>Give your day a head start.</h3><p>A morning brief. A review of your priorities. A prompt you want to run every week. Set the schedule, then see what happened.</p><p class="detail">Real run history and delivery status, alongside the controls that matter.</p></div>
+      <div class="tour-copy"><span class="section-number">Automation</span><h3>Give your day a head start.</h3><p>A morning brief. A weekly review. A prompt you want run every Friday. Set the schedule, then see exactly what happened.</p><p class="detail">Real run history and delivery status, beside the controls that matter.</p></div>
       <a class="screenshot" href="img/tasks.png"><img src="img/tasks.png" width="1440" height="900" loading="lazy" alt="Scheduled tasks and the automation library. Demo data."></a>
     </article>
     <article class="tour-row reverse">
-      <div class="tour-copy"><span class="section-number">YOUR SETUP</span><h3>Bring what works for you.</h3><p>Connect Claude or Codex, a local model server, or an OpenAI-compatible provider. Pick the model inside each conversation.</p><p class="detail">No model is included by default. Provider accounts, usage, and hardware requirements are yours to choose.</p></div>
-      <a class="screenshot" href="img/settings.png"><img src="img/settings.png" width="1440" height="900" loading="lazy" alt="Settings for connecting model endpoints. Empty example fields, no credentials."></a>
+      <div class="tour-copy"><span class="section-number">Your setup</span><h3>Bring what works for you.</h3><p>Connect Claude or Codex, a local model server, or an OpenAI-compatible provider, then choose the model inside each conversation.</p><p class="detail">No model is included by default. Accounts, usage and hardware are yours to choose.</p></div>
+      <a class="screenshot" href="img/settings.png"><img src="img/settings.png" width="1440" height="900" loading="lazy" alt="Settings for connecting models. Empty example fields, no credentials."></a>
     </article>
   </div>
 </section>
 
-<section class="section install-section" id="install"><div class="wrap">
-  <div class="section-heading"><p class="eyebrow">Make yourself at home</p><h2>Your workspace starts here.</h2><p>The desktop app includes its Python runtime.<br>No separate Python installation needed.</p></div>
+<section class="principles-band" id="principles" aria-labelledby="principles-title"><div class="wrap">
+  <h2 class="sr-only" id="principles-title">Built on ownership</h2>
+  <div class="principles">
+    <div><span class="section-number">01 · Models</span><h3>Choose your intelligence.</h3><p>Claude, Codex, local models or any API. You decide what powers each conversation, and you can change your mind.</p></div>
+    <div><span class="section-number">02 · Memory</span><h3>Keep your knowledge.</h3><p>A folder of Markdown files. Read it, edit it, back it up. It stays yours if you ever leave.</p></div>
+    <div><span class="section-number">03 · Control</span><h3>Run it on your machine.</h3><p>Your data stays on your computer. Connect only the services you want, and see every run.</p></div>
+  </div>
+</div></section>
+
+<section class="section wrap" id="download" aria-labelledby="download-title">
+  <div class="section-heading center"><p class="eyebrow">Download</p><h2 id="download-title">Your workspace starts here.</h2><p>The app includes its own Python runtime. Nothing else to install.</p></div>
+  <div class="download-grid">
+    <article class="download-card" data-platform="windows">
+      <h3>Windows</h3><p class="meta">Windows 10 and 11</p>
+      <p>A standard installer. Kairos keeps itself up to date.</p>
+      <a class="button primary" data-asset=".exe" href="https://github.com/david-darr/kairos/releases/latest">Download for Windows <span aria-hidden="true">↓</span></a>
+      <p class="file" data-file=".exe">Kairos-Setup.exe</p>
+    </article>
+    <article class="download-card" data-platform="mac">
+      <h3>macOS</h3><p class="meta">Apple Silicon</p>
+      <p>Open the disk image and drag Kairos to Applications. Updates are installed the same way.</p>
+      <a class="button primary" data-asset=".dmg" href="https://github.com/david-darr/kairos/releases/latest">Download for macOS <span aria-hidden="true">↓</span></a>
+      <p class="file" data-file=".dmg">Kairos-arm64.dmg</p>
+    </article>
+    <article class="download-card">
+      <h3>From source</h3><p class="meta">Windows, macOS or Linux</p>
+      <p>Clone the repository and run the backend with Python. For developers and anyone who wants to read every line.</p>
+      <a class="button secondary" href="https://github.com/david-darr/kairos#developing">Build from source <span aria-hidden="true">↗</span></a>
+      <p class="file">github.com/david-darr/kairos</p>
+    </article>
+  </div>
   <ol class="steps">
-    <li><h3>Install Kairos</h3><p>Choose Windows or macOS on Apple Silicon from the latest release.</p></li>
-    <li><h3>Choose your vault</h3><p>Start fresh or point Kairos at the Markdown knowledge you already keep.</p></li>
-    <li><h3>Connect a model</h3><p>Add your preferred model in Settings, then start a conversation.</p></li>
+    <li><h3>Install Kairos</h3><p>Run the installer for your system.</p></li>
+    <li><h3>Choose your vault</h3><p>Start fresh, or point Kairos at the Markdown notes you already keep.</p></li>
+    <li><h3>Connect a model</h3><p>Add a model in Settings, then start a conversation.</p></li>
   </ol>
-  <div class="actions"><a class="button primary" href="https://github.com/david-darr/kairos/releases/latest">Get the latest release <span aria-hidden="true">↗</span></a><a class="button secondary" href="https://github.com/david-darr/kairos#developing">Build from source</a></div>
-  <details class="install-note"><summary>Before you install</summary><p>Builds are not code-signed yet. Windows SmartScreen and macOS Gatekeeper may require you to approve the app. The macOS build supports Apple Silicon, not Intel Macs. Screenshots show the development UI with demo data; the latest packaged release may differ.</p><p>The workspace runs locally. When you choose a cloud model or connect an external service, relevant data is sent to that provider.</p></details>
+  <details class="install-note"><summary>Before you install</summary><p>The installers aren't code-signed yet, so Windows SmartScreen and macOS Gatekeeper may ask you to approve the app the first time. The Mac build runs on Apple Silicon, not Intel Macs. Screenshots use demo data.</p><p>Kairos runs on your computer. When you choose a cloud model or connect an outside service, the data that request needs goes to that provider.</p></details>
+</section>
+
+<section class="section faq-section" id="faq" aria-labelledby="faq-title"><div class="wrap">
+  <div class="section-heading center"><p class="eyebrow">Questions</p><h2 id="faq-title">Good to know.</h2></div>
+  <div class="faq">
+    <details><summary>Is Kairos free?</summary><p>Yes. Kairos is free and open source under the MIT license. Models you connect may have their own costs: a Claude or Codex subscription, or an API account. Local models cost nothing to run.</p></details>
+    <details><summary>Where does my data live?</summary><p>On your computer. Chats, settings and agents are in your app data folder, and your memory is a folder of Markdown files you choose. Nothing is sent anywhere unless you connect a cloud model or an outside service.</p></details>
+    <details><summary>Which models work?</summary><p>Claude through Claude Code, Codex through the Codex CLI, local models through Ollama or the built-in engine, and any OpenAI-compatible API. You can switch per conversation.</p></details>
+    <details><summary>Does it update itself?</summary><p>On Windows, yes: updates download in the background and install when you quit. On macOS, download the new version from this page and replace the app.</p></details>
+    <details><summary>Can I reach it from my phone?</summary><p>Yes, through Tailscale, set up in Settings. It's never exposed to the public internet: it serves HTTPS on your private network and requires a login.</p></details>
+    <details><summary>Can I back up and move my data?</summary><p>Yes. Settings has a full backup that captures everything in one file, and a restore that keeps a safety copy of what it replaces.</p></details>
+    <details><summary>What happened to JARVIS?</summary><p>JARVIS is now Kairos. The update keeps your install, your chats and your settings exactly where they were. On a Mac, after installing Kairos you can delete the old JARVIS app.</p></details>
+  </div>
+</div></section>
+
+<section class="closing" id="closing" aria-labelledby="closing-title"><div class="wrap">
+  <img class="closing-mark" src="img/kairos-icon.svg" width="56" height="56" alt="">
+  <h2 id="closing-title">The opening is now.</h2>
+  <div class="actions"><a class="button primary" href="#download">Download Kairos <span aria-hidden="true">↓</span></a><a class="button secondary" href="https://github.com/david-darr/kairos">Star on GitHub <span aria-hidden="true">↗</span></a></div>
 </div></section>
 </main>
-<footer class="wrap"><a class="brand" href="#main" aria-label="Kairos home"><img src="img/kairos-wordmark.svg" width="132" height="28" alt="Kairos"></a><p>Your machine. Your models. Your memory.</p><a href="https://github.com/david-darr/kairos">Open source on GitHub ↗</a></footer>
+
+<footer class="site-footer"><div class="wrap footer-grid">
+  <div class="footer-brand"><a class="brand" href="#top" aria-label="Kairos home"><img src="img/kairos-wordmark.svg" width="132" height="23" alt="Kairos"></a><p>Not more time. The right time.</p></div>
+  <div><h2>Product</h2><a href="#features">Features</a><a href="#everything">Everything</a><a href="#tour">Tour</a><a href="#download">Download</a></div>
+  <div><h2>Project</h2><a href="https://github.com/david-darr/kairos">Source on GitHub</a><a href="https://github.com/david-darr/kairos/releases">Releases</a><a href="https://github.com/david-darr/kairos/issues">Report an issue</a></div>
+  <div><h2>Help</h2><a href="#faq">FAQ</a><a href="https://github.com/david-darr/kairos#readme">README</a><a href="https://github.com/david-darr/kairos/blob/master/LICENSE">MIT license</a></div>
+  <p class="footer-fine">© 2026 David Darr. Free and open source under the MIT license.</p>
+</div></footer>
 </body>
 </html>
