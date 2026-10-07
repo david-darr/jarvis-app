@@ -4,7 +4,7 @@ An open-source, self-hosted AI workspace and agent harness. Everything runs on y
 
 This is the real product (v2). [jarvis-starter-kit](https://github.com/david-darr/jarvis-starter-kit) is the earlier clone-and-wizard v1, kept as a separate working reference.
 
-**[Website](https://david-darr.github.io/jarvis-app/)** · **[Download the latest release](https://github.com/david-darr/jarvis-app/releases/latest)**
+**[Website](https://david-darr.github.io/kairos/)** · **[Download the latest release](https://github.com/david-darr/kairos/releases/latest)**
 
 ![Kairos Home dashboard with its ring mark and connected workspace](docs/img/home.png)
 
@@ -50,8 +50,8 @@ The same workspace, with more room for your content. Demo data shown.
 
 | Platform | Download |
 |---|---|
-| Windows 10/11 | `Kairos-Setup-<version>.exe` on the [latest release](https://github.com/david-darr/jarvis-app/releases/latest) |
-| macOS (Apple Silicon) | `Kairos-<version>-arm64.dmg` on the [latest release](https://github.com/david-darr/jarvis-app/releases/latest) |
+| Windows 10/11 | `Kairos-Setup-<version>.exe` on the [latest release](https://github.com/david-darr/kairos/releases/latest) |
+| macOS (Apple Silicon) | `Kairos-<version>-arm64.dmg` on the [latest release](https://github.com/david-darr/kairos/releases/latest) |
 
 Download it, run it, open Kairos. **Nothing else needs to be installed** — a complete Python runtime with every dependency ships inside the app, so it works on a machine that has never had Python on it.
 
