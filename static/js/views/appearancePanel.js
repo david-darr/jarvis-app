@@ -1,7 +1,15 @@
 import { el } from '../api.js';
 import { group, row, toggle } from '../settingsKit.js';
 import { getAppearance, updateAppearance, setAppearanceImage, removeAppearanceImage,
-  resetAppearance, setAppearancePreview } from '../appearance.js';
+  resetAppearance, setAppearancePreview, halftoneSource, setHalftoneImage, removeHalftoneImage, setHalftoneFocus } from '../appearance.js';
+
+// The three halftone slots (Build spec, 2026-10-08): Home's banner and the
+// chat's two scenes. Each is optional - an empty slot keeps the Kairos picture.
+const HALFTONE_SLOTS = [
+  ['home', 'Home', "Your dashboard's banner."],
+  ['figure', 'New chat', 'The chat scene before any messages.'],
+  ['sky', 'Conversation', 'The chat scene once a chat has messages.'],
+];
 
 export function renderAppearancePanel(content, _status, page) {
   const root = el('section', { class: 'appearance-panel' });
@@ -52,8 +60,45 @@ export function renderAppearancePanel(content, _status, page) {
   // have their own background.
   const halftone = toggle({ label: 'Halftone backgrounds', onChange: (on) => { updateAppearance({ halftone: on }); sync(); } });
   halftone.id = 'appearance-halftone';
+  // Custom halftone pictures (Build spec, 2026-10-08): one optional picture
+  // per slot, stored device-local the same way as the Image background.
+  // Clicking the thumbnail sets where it's anchored when cropped to the card.
+  function halftoneCard(slot, title, description) {
+    const thumb = el('img', { class: 'appearance-halftone-thumb', alt: '' });
+    const focusBtn = el('button', { type: 'button', class: 'appearance-halftone-thumb-btn', 'aria-label': `Set the focus point for ${title}` }, [thumb]);
+    focusBtn.addEventListener('click', (event) => {
+      const box = focusBtn.getBoundingClientRect();
+      setHalftoneFocus(slot, (event.clientX - box.left) / box.width, (event.clientY - box.top) / box.height);
+      sync();
+    });
+    const upload = el('input', { type: 'file', id: `appearance-halftone-${slot}`, accept: 'image/png,image/jpeg,image/webp' });
+    const uploadLabel = el('label', { for: upload.id, class: 'btn quiet', text: 'Replace' });
+    const reset = el('button', { type: 'button', class: 'btn quiet', text: 'Reset', onclick: async () => {
+      try { await removeHalftoneImage(slot); sync(); } catch { status.textContent = 'Picture could not be removed. Try again.'; }
+    } });
+    upload.addEventListener('change', async () => {
+      const file = upload.files[0]; if (!file) return;
+      upload.disabled = true; status.textContent = 'Preparing your picture…';
+      try { await setHalftoneImage(slot, file); sync(); }
+      catch (error) { status.textContent = error.message; }
+      finally { upload.disabled = false; upload.value = ''; }
+    });
+    const card = el('div', { class: 'appearance-halftone-card' }, [
+      focusBtn,
+      el('div', { class: 'appearance-halftone-card-body' }, [
+        el('strong', { text: title }), el('p', { class: 'meta', text: description }),
+        el('div', { class: 'appearance-halftone-card-actions' }, [
+          el('span', { class: 'appearance-halftone-replace' }, [uploadLabel, upload]), reset,
+        ]),
+      ]),
+    ]);
+    return { card, thumb, reset };
+  }
+  const halftoneCards = Object.fromEntries(HALFTONE_SLOTS.map(([slot, title, description]) => [slot, halftoneCard(slot, title, description)]));
   const halftoneSection = el('div', { class: 'appearance-halftone-setting' }, [
     group({}, [row({ title: 'Halftone backgrounds', description: "Home's card and the chat's figure and sky, drawn in dots, with the transitions between them. In Color they're two-tone in your colors.", control: halftone })]),
+    el('div', { class: 'appearance-halftone-grid' }, HALFTONE_SLOTS.map(([slot]) => halftoneCards[slot].card)),
+    el('p', { class: 'meta', text: 'Replace any scene with your own picture. PNG, JPEG or WebP · Up to 12 MB · Stored only on this device.' }),
   ]);
 
   const controls = new Map();
@@ -186,6 +231,12 @@ export function renderAppearancePanel(content, _status, page) {
     for (const [style, button] of styleButtons) button.setAttribute('aria-pressed', String(style === value.chatStyle));
     palette.hidden = value.mode === 'default'; imageOptions.hidden = value.mode !== 'image'; shaderOptions.hidden = value.mode !== 'shader';
     halftoneSection.hidden = !['default', 'color'].includes(value.mode); halftone.checked = value.halftone;
+    for (const [slot, { thumb, reset }] of Object.entries(halftoneCards)) {
+      const info = value.halftoneSlots[slot];
+      thumb.src = halftoneSource(slot);
+      thumb.style.objectPosition = `${(info.focusX * 100).toFixed(2)}% ${(info.focusY * 100).toFixed(2)}%`;
+      reset.hidden = !info.hasImage;
+    }
     color.value = value.color; hex.textContent = value.color.toUpperCase();
     for (const button of swatches.children) button.setAttribute('aria-pressed', String(button.dataset.color === value.color));
     for (const [key, control] of controls) {

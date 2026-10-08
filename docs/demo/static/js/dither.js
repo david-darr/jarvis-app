@@ -36,17 +36,21 @@ export function dissolveCells(ctx, c, ms, cancelled = () => false) {
 }
 
 const images = new Map();
-// Loads (once) an image to draw from.
-export function loadDitherImage(src) {
-  if (!images.has(src)) {
-    images.set(src, new Promise((resolve, reject) => {
+// Loads (once) an image to draw from: a static path, or a custom halftone
+// picture's object URL (appearance.js). `version` goes into the cache key so
+// a replaced picture (appearance.js's halftoneVersion) always redraws rather
+// than serving what an older object URL happened to load.
+export function loadDitherImage(src, version = 0) {
+  const key = src + '#' + version;
+  if (!images.has(key)) {
+    images.set(key, new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => resolve(img);
-      img.onerror = () => { images.delete(src); reject(new Error("Couldn't load " + src)); };
+      img.onerror = () => { images.delete(key); reject(new Error("Couldn't load " + src)); };
       img.src = src;
     }));
   }
-  return images.get(src);
+  return images.get(key);
 }
 
 function sampler(w, h) {
@@ -150,7 +154,7 @@ export function mountDither(el, src, opts = {}) {
   }
 
   const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { try { draw(); } catch (_) { /* the plain image stays */ } settle(); }); };
-  loadDitherImage(src).then((loaded) => {
+  loadDitherImage(src, opts.version || 0).then((loaded) => {
     if (stopped) return;
     img = loaded;
     // Drawn now, not on the next frame: while a view transition is setting

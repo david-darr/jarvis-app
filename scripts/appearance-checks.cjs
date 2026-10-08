@@ -30,6 +30,123 @@ module.exports = async function checkAppearance({ js, win, waitFor, capture, bas
   })()`);
   assert.ok(contrast >= 4.5, 'Light sidebar text stays readable');
   await capture('appearance-light');
+
+  // Custom halftone pictures (Build spec, 2026-10-08): Home, New chat
+  // (figure) and Conversation (sky) each take an optional picture, stored
+  // and validated the same way as the Image background.
+  // A corner-to-corner gradient, not a flat fill: cropping a different region
+  // (the focus point) has to change what's sampled on either axis, so a
+  // focus change is visible regardless of which way the banner is cropped.
+  const halftoneFile = (color, bytes) => bytes
+    ? `new File([new Uint8Array(${bytes})], 'big.png', { type: 'image/png' })`
+    : `await (async () => {
+        const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+        const ctx = c.getContext('2d');
+        const g = ctx.createLinearGradient(0, 0, 64, 64);
+        g.addColorStop(0, '${color}'); g.addColorStop(1, '#111111');
+        ctx.fillStyle = g; ctx.fillRect(0, 0, 64, 64);
+        return new File([await new Promise(r => c.toBlob(r, 'image/png'))], 'halftone.png', { type: 'image/png' });
+      })()`;
+  const halftoneCardSel = slot => `document.querySelector('#appearance-halftone-${slot}').closest('.appearance-halftone-card')`;
+  const halftoneResetSel = slot => `${halftoneCardSel(slot)}.querySelector('.appearance-halftone-card-actions > button')`;
+  const halftoneThumbSrc = (slot) => js(`${halftoneCardSel(slot)}.querySelector('img').src`);
+  // Waits on the thumbnail's object URL actually changing, not just "Reset
+  // is visible": a slot replaced a second time already has Reset showing,
+  // and halftoneRevision moves the instant the call starts (so it can tell
+  // a stale load from a current one) rather than once it has landed - either
+  // alone would let the assertion run before the new picture is truly saved.
+  const setHalftoneSlot = async (slot, color) => {
+    const before = await halftoneThumbSrc(slot);
+    await js(`(async () => {
+      const file = ${halftoneFile(color)};
+      const transfer = new DataTransfer(); transfer.items.add(file);
+      const input = document.querySelector('#appearance-halftone-${slot}');
+      input.files = transfer.files; input.dispatchEvent(new Event('change'));
+    })()`);
+    await waitFor(`!${halftoneResetSel(slot)}.hidden`);
+    await waitFor(`${halftoneCardSel(slot)}.querySelector('img').src !== ${JSON.stringify(before)}`);
+  };
+  const bannerPixels = () => js("document.querySelector('.dashboard-core canvas:not(.dither-cover)').toDataURL()");
+  const waitForBannerChange = async (before) => {
+    for (let i = 0; i < 40; i++) { const now = await bannerPixels(); if (now !== before) return now; await delay(50); }
+    throw new Error('Home banner did not redraw');
+  };
+  await setHalftoneSlot('home', '#2f6cc2');
+  assert.ok(await js(`${halftoneCardSel('home')}.querySelector('img').src.startsWith('blob:')`), 'Home thumbnail shows the custom picture');
+  await waitFor("document.querySelector('.dashboard-core')?.dataset.halftoneSrc?.startsWith('blob:')");
+  const customBanner = await waitForBannerChange('');
+  // Clicking the thumbnail moves the focus point (default centre) and the banner redraws from it.
+  assert.deepEqual(await js("import('/static/js/appearance.js').then(m => m.halftoneFocus('home'))"), { x: .5, y: .5 });
+  await js(`{ const btn = ${halftoneCardSel('home')}.querySelector('.appearance-halftone-thumb-btn'), box = btn.getBoundingClientRect();
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: box.left + box.width * 0.1, clientY: box.top + box.height * 0.9 })); }`);
+  const focusedBanner = await waitForBannerChange(customBanner);
+  const movedFocus = await js("import('/static/js/appearance.js').then(m => m.halftoneFocus('home'))");
+  assert.ok(movedFocus.x < 0.3 && movedFocus.y > 0.7, 'Focus moves to where the thumbnail was clicked');
+  // Reset restores the Kairos default picture.
+  await js(`${halftoneResetSel('home')}.click()`);
+  await waitFor(`${halftoneResetSel('home')}.hidden`);
+  assert.ok(await js("!document.querySelector('.dashboard-core').dataset.halftoneSrc.startsWith('blob:')"), 'Reset restores the default picture');
+  await waitForBannerChange(focusedBanner);
+  // Wrong type and over-size pictures are refused; the saved picture is untouched.
+  await setHalftoneSlot('home', '#2f6cc2');
+  assert.match(await js("import('/static/js/appearance.js').then(m=>m.setHalftoneImage('home', new File(['<svg/>'],'bad.svg',{type:'image/svg+xml'}))).then(()=>'',e=>e.message)"), /PNG/);
+  assert.match(await js(`import('/static/js/appearance.js').then(m=>m.setHalftoneImage('home', ${halftoneFile(null, 13 * 1024 * 1024)})).then(()=>'',e=>e.message)`), /12 MB/);
+  assert.equal(await js("import('/static/js/appearance.js').then(m=>m.getAppearance().halftoneSlots.home.hasImage)"), true, 'A rejected picture leaves the saved one in place');
+  await js(`${halftoneResetSel('home')}.click()`);
+  await waitFor(`${halftoneResetSel('home')}.hidden`);
+
+  // New chat and Conversation each draw their own custom picture (a direct
+  // module check: the full chat UI is exercised elsewhere in ui-smoke.cjs).
+  // The same picture in both skips the cross-dissolve between them. (Each
+  // slot keeps its own object URL even when the bytes match, so "the same
+  // picture" is judged by content - halftoneSharedChatPicture's hash - not
+  // by comparing the two URL strings, which would never be equal.)
+  const chatBackdropCheck = () => js(`(async () => {
+    const mod = await import('/static/js/chatBackdrop.js');
+    const host = document.createElement('div'); host.style.width = '300px'; host.style.height = '200px'; document.body.append(host);
+    const backdrop = mod.mountChatBackdrop(host);
+    await backdrop.show('figure'); await backdrop.ready;
+    const figureIsBlob = host.querySelector('.chat-backdrop').dataset.halftoneSrc.startsWith('blob:');
+    const landed = backdrop.show('sky', { animate: true });
+    await new Promise(r => setTimeout(r, 60));
+    const dissolving = host.querySelector('.chat-backdrop').classList.contains('is-dissolving');
+    await landed;
+    const skyIsBlob = host.querySelector('.chat-backdrop').dataset.halftoneSrc.startsWith('blob:');
+    backdrop.dispose(); host.remove();
+    return { figureIsBlob, skyIsBlob, dissolving };
+  })()`);
+  await setHalftoneSlot('figure', '#c2452f');
+  await setHalftoneSlot('sky', '#3f9f5f');
+  assert.deepEqual(await chatBackdropCheck(), { figureIsBlob: true, skyIsBlob: true, dissolving: true },
+    'New chat and Conversation draw their own pictures and dissolve between different ones');
+  // The identical picture in both slots: uploaded from the one File object,
+  // so the two slots are guaranteed the same bytes (appearance.js hashes the
+  // original upload, not its downsampled copy, since re-encoding the same
+  // picture twice isn't guaranteed to produce identical bytes).
+  await js(`(async () => { window.__halftoneShared = ${halftoneFile('#c2452f')}; })()`);
+  const setHalftoneSlotFromWindowFile = async (slot) => {
+    const before = await halftoneThumbSrc(slot);
+    await js(`(async () => {
+      const transfer = new DataTransfer(); transfer.items.add(window.__halftoneShared);
+      const input = document.querySelector('#appearance-halftone-${slot}');
+      input.files = transfer.files; input.dispatchEvent(new Event('change'));
+    })()`);
+    await waitFor(`!${halftoneResetSel(slot)}.hidden`);
+    await waitFor(`${halftoneCardSel(slot)}.querySelector('img').src !== ${JSON.stringify(before)}`);
+  };
+  await setHalftoneSlotFromWindowFile('figure');
+  await setHalftoneSlotFromWindowFile('sky');
+  assert.equal(await js("import('/static/js/appearance.js').then(m=>m.halftoneSharedChatPicture())"), true, 'The same picture in both chat slots is recognised');
+  assert.deepEqual(await chatBackdropCheck(), { figureIsBlob: true, skyIsBlob: true, dissolving: false },
+    'The same picture in both chat slots skips the dissolve');
+  await js(`${halftoneResetSel('figure')}.click(); ${halftoneResetSel('sky')}.click();`);
+  await waitFor(`${halftoneResetSel('figure')}.hidden && ${halftoneResetSel('sky')}.hidden`);
+  await capture('appearance-halftone-slots');
+  // The phone-width capture of these cards happens at the very end of this
+  // file instead of here: resizing the real window and back disturbs its
+  // coordinates for the CDP mouse drag further down, so every other size
+  // change in this file already waits until after that drag is done.
+
   await set({ mode: 'shader', color: '#f3eadb', motion: false });
   await capture('appearance-flow-parchment');
   await set({ mode: 'shader', color: '#23302e', motion: false });
@@ -187,5 +304,11 @@ module.exports = async function checkAppearance({ js, win, waitFor, capture, bas
   await win.loadURL(base);
   await waitFor("document.querySelectorAll('.dashboard-stat').length===4");
   assert.equal((await state()).hasImage, false, 'Reset removes persisted image');
+  // The halftone slot cards at phone width (mode is back to Kairos default,
+  // which shows them): the window is already narrow here, with nothing left
+  // that depends on real screen coordinates (the CDP mouse drag is done).
+  await open();
+  assert.ok(await js("document.querySelector('.appearance-panel').scrollWidth<=document.querySelector('.appearance-panel').clientWidth"), 'Halftone slot cards fit a phone');
+  await capture('mobile-appearance-halftone-slots');
   win.setContentSize(1440, 900); await delay(350);
 };

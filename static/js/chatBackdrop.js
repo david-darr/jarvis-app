@@ -6,24 +6,34 @@
 // drawn once per size and kept between visits to the tab (drawing the whole
 // area takes 100-200 ms).
 import { ditherCell, dissolveCells, drawDither, loadDitherImage } from "./dither.js";
-import { halftonePalette } from "./appearance.js";
+import { halftonePalette, halftoneSource, halftoneFocus, halftoneVersion, halftoneSharedChatPicture } from "./appearance.js";
 
+// Each scene's cell size and its built-in anchor - used until a custom
+// picture (appearance.js's halftone slots) brings its own, centred by default.
 const SCENES = {
-  figure: { src: "/static/img/home-figure.webp", opts: { cell: 4, focusX: 0.7, focusY: 0.4 } },
-  sky: { src: "/static/img/kairos-sky.jpg", opts: { cell: 4 } },
+  figure: { cell: 4, defaultFocus: { x: 0.7, y: 0.4 } },
+  sky: { cell: 4, defaultFocus: { x: 0.5, y: 0.5 } },
 };
 const DISSOLVE_MS = 700;
-const cache = new Map();  // "scene WxH" -> canvas; the newest few only
+const cache = new Map();  // "scene WxH ..." -> canvas; the newest few only
 const CACHE_LIMIT = 4;
+
+function sceneFocus(name) { return halftoneFocus(name) || SCENES[name].defaultFocus; }
+// The picture's source, version and focus as one string: changes whenever a
+// halftone slot is replaced, reset or re-anchored (appearance.js), so both
+// the canvas cache and the "is this still showing the same picture" check
+// below redraw instead of serving something stale.
+function sourceKey(name) { const focus = sceneFocus(name); return `${halftoneSource(name)} ${halftoneVersion(name)} ${focus.x},${focus.y}`; }
 
 async function sceneCanvas(name, W, H) {
   const palette = halftonePalette();
-  const key = `${name} ${W}x${H} ${JSON.stringify(palette)}`;
+  const key = `${name} ${W}x${H} ${JSON.stringify(palette)} ${sourceKey(name)}`;
   if (cache.has(key)) { const hit = cache.get(key); cache.delete(key); cache.set(key, hit); return hit; }
   const scene = SCENES[name];
-  const img = await loadDitherImage(scene.src);
+  const focus = sceneFocus(name);
+  const img = await loadDitherImage(halftoneSource(name), halftoneVersion(name));
   const canvas = document.createElement("canvas");
-  const ms = drawDither(canvas, img, W, H, { ...scene.opts, palette });
+  const ms = drawDither(canvas, img, W, H, { cell: scene.cell, focusX: focus.x, focusY: focus.y, palette });
   canvas.dataset.drawMs = String(Math.round(ms));
   cache.set(key, canvas);
   while (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
@@ -55,11 +65,15 @@ export function mountChatBackdrop(host) {
   const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // Shows `name`; dissolves into it from the current scene when `animate`.
+  // Figure and sky holding the same custom picture (appearance.js) skip the
+  // dissolve too: there's nothing to reveal, it's the same picture underneath.
   async function show(name, { animate = false } = {}) {
     if (disposed || (name === scene && size)) return;
     const from = scene;
     scene = name;
     el.dataset.scene = name;
+    el.dataset.halftoneSrc = halftoneSource(name);  // read by scripts/ui-smoke.cjs
+    shownKey = sourceKey(name);
     const token = ++run;
     // Hidden (another appearance has its own background): nothing to draw
     // until it shows, when the resize observer below draws it.
@@ -70,10 +84,11 @@ export function mountChatBackdrop(host) {
     if (disposed || token !== run) return;
     size = `${W}x${H}`;
     el.dataset.drawMs = target.dataset.drawMs;  // read by scripts/ui-smoke.cjs
-    if (!animate || !from || reduced()) { copy(over, target); markReady(); prepareOther(name, W, H); return; }
+    const samePicture = from && from !== name && halftoneSharedChatPicture();
+    if (!animate || !from || reduced() || samePicture) { copy(over, target); markReady(); prepareOther(name, W, H); return; }
     copy(under, target);
     el.classList.add("is-dissolving");
-    await dissolveCells(over.getContext("2d"), ditherCell(SCENES[name].opts.cell), DISSOLVE_MS, () => disposed || token !== run);
+    await dissolveCells(over.getContext("2d"), ditherCell(SCENES[name].cell), DISSOLVE_MS, () => disposed || token !== run);
     el.classList.remove("is-dissolving");
     if (!disposed && token === run) copy(over, target);
   }
@@ -97,12 +112,15 @@ export function mountChatBackdrop(host) {
   });
   observer.observe(el);
   // A new appearance redraws the scene on show in its colors (or the
-  // painting's), without a dissolve.
+  // painting's) or picture (a halftone slot replaced, reset or re-anchored),
+  // without a dissolve.
   let paletteKey = JSON.stringify(halftonePalette());
+  let shownKey = scene ? sourceKey(scene) : "";
   const onAppearance = () => {
-    const next = JSON.stringify(halftonePalette());
-    if (next === paletteKey) return;
-    paletteKey = next;
+    const nextPalette = JSON.stringify(halftonePalette());
+    const nextShown = scene ? sourceKey(scene) : "";
+    if (nextPalette === paletteKey && nextShown === shownKey) return;
+    paletteKey = nextPalette; shownKey = nextShown;
     if (scene) { const name = scene; scene = null; size = ""; show(name); }
   };
   document.addEventListener("kairos:appearance", onAppearance);
