@@ -5,7 +5,7 @@
 //   data scripts/ui-smoke.cjs tests against), keeping changes in memory,
 // - plays a short scripted reply when a chat message is sent,
 // - stands in for the Swarm event stream, which has nothing to say here,
-// - shows computer use: a sample frame in the live view, Take over and Stop,
+// - shows computer use: a sample frame, Take over, recording and skill review,
 //   and a chat that "opens a website" when asked to.
 // Nothing leaves the visitor's browser and no model is ever called.
 (function () {
@@ -74,18 +74,9 @@
     }
     let body = {};
     try { if (typeof rawBody === "string") body = JSON.parse(rawBody); } catch (_) { /* not JSON */ }
-    const computerAction = path.match(/^\/api\/computer\/([^/]+)\/(takeover|handback|stop)$/);
-    if (computerAction) {
-      const owner = decodeURIComponent(computerAction[1]);
-      state.takenOwners ||= []; state.stoppedOwners ||= [];
-      if (computerAction[2] === "takeover" && !state.takenOwners.includes(owner)) state.takenOwners.push(owner);
-      if (computerAction[2] === "handback") state.takenOwners = state.takenOwners.filter((item) => item !== owner);
-      if (computerAction[2] === "stop") state.stoppedOwners.push(owner);
-      return json({ ok: true });
-    }
     if (path === "/api/settings/computer-use") { state.computerUse = body; return json({ ok: true }); }
     const updated = mutate(path, method, body);
-    if (updated) return json(updated);
+    if (updated) { const { _status = 200, ...payload } = updated; return json(payload, _status); }
     if (path === "/api/sessions" && method === "POST") {
       const id = "demo" + store.nextId++;
       const now = Date.now() / 1000;

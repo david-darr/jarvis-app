@@ -2,8 +2,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from core.auth import auth_manager
 from core.middleware import require_admin, require_user
-from services import remote_skill_source, skill_curator, skills_service
+from services import remote_skill_source, skill_curator, skill_recorder, skills_service
+from services.agent_service import agent_service
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
 
@@ -31,6 +33,16 @@ class InstallSkillUrlRequest(BaseModel):
     url: str
     confirmed: bool = False
     expected_sha256: str | None = None
+
+
+class RecordingDraftRequest(BaseModel):
+    steps: list[dict]
+    agent_name: str | None = None
+
+
+class RecordedSkillRequest(CreateSkillRequest):
+    confirmed: bool = False
+    mention_agent_id: str | None = None
 
 
 @router.get("")
@@ -91,6 +103,44 @@ async def install_skill_url(body: InstallSkillUrlRequest, user: str = Depends(re
         raise HTTPException(status_code=400, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/recording-draft")
+async def recording_draft(body: RecordingDraftRequest, user: str = Depends(require_user)) -> dict:
+    if len(body.steps) > 200:
+        raise HTTPException(422, "a recording holds at most 200 steps")
+    steps = skill_recorder.normalize_steps(body.steps)
+    result = skill_recorder.draft(steps, agent_name=body.agent_name)
+    return {**result, "steps": steps, "labels": [skill_recorder.step_text(step) for step in steps],
+            "content": skills_service._render(result["description"], result["body"])}
+
+
+@router.post("/from-recording")
+async def from_recording(body: RecordedSkillRequest, user: str = Depends(require_user)) -> dict:
+    agent = None
+    if body.mention_agent_id:
+        if not auth_manager.is_admin(user):
+            raise HTTPException(403, "admin privileges required to edit an agent")
+        agent = agent_service.get(body.mention_agent_id)
+        if not agent:
+            raise HTTPException(404, "agent not found")
+    try:
+        result = skills_service.import_skill("SKILL.md", skills_service._render(body.description, body.body),
+            name=body.name, confirmed=body.confirmed, source=skill_curator.RECORDED,
+            origin="computer demonstration", replace=False)
+    except skill_curator.SkillImportRefused as e:
+        raise HTTPException(409, detail={"message": "Review this recording's scan before saving.",
+            "needs_confirmation": e.needs_confirmation, "report": e.report, "findings": e.findings}) from None
+    except FileExistsError:
+        raise HTTPException(409, "A skill with this name already exists. Choose another name.") from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    if agent:
+        instructions = (agent.get("instructions") or "").rstrip()
+        line = f"Use the '{result['slug']}' skill for the task demonstrated on the computer."
+        if line not in instructions.splitlines():
+            agent_service.update(agent["id"], instructions=instructions + ("\n" if instructions else "") + line)
+    return {**result, "curation": skill_curator.describe(result["slug"])}
 
 
 @router.get("/{slug}")

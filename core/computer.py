@@ -30,6 +30,7 @@ REPLY_LIMIT = 32 * 1024 * 1024
 # control on this computer, lighter while they only watch, and never more
 # than WATCH_FPS for a Remote Access viewer (about 8 Mbit/s at 10).
 WATCH_FPS, CONTROL_FPS = 10, 30
+RECORDING_LIMIT = 200
 PROFILES = Path(DATA_DIR) / "computer" / "profiles"
 # These commitments belong to the person even when an agent or chat runs in Auto.
 PERSON_ACTION_WORDS = re.compile(
@@ -42,6 +43,11 @@ REACTION_WORDS = re.compile(
     r"\b(?:like|unlike|follow|unfollow|upvote|downvote|react|favou?rite|star|heart)\b", re.I)
 DELETE_WORDS = re.compile(r"\b(?:delete|remove)\b", re.I)
 PRIVATE_FIELDS = {"current-password", "new-password", "one-time-code"}
+# The driver's source arrives as the first stdin line, not on the command
+# line: Windows caps a command line at 32,767 characters, and the driver
+# passed that in phase 3 ("The filename or extension is too long").
+BOOTSTRAP = ("import json, sys; exec(compile(json.loads(sys.stdin.readline())['driver'], "
+             "'<kairos-computer-driver>', 'exec'), {'__name__': '__main__'})")
 DELETE_CHOICES = [{"id": "once", "label": "Allow once", "behavior": "allow", "scope": "once"},
                   {"id": "reject", "label": "Reject", "behavior": "deny", "scope": "once"}]
 
@@ -76,6 +82,9 @@ class Computer:
     watchers: int = 0
     local_watchers: int = 0
     cast_fps: int = 0
+    recording: bool = False
+    recording_id: str | None = None
+    steps: list[dict] = field(default_factory=list)
 
 
 class ComputerManager:
@@ -89,7 +98,8 @@ class ComputerManager:
 
     def running(self) -> list[dict]:
         return [{"owner": c.owner, "url": c.url, "title": c.title, "last_action": c.last_action_at,
-                 "taken_over": c.taken_over, "waiting_model": c.waiting_model, "desktop": c.desktop}
+                 "taken_over": c.taken_over, "waiting_model": c.waiting_model, "desktop": c.desktop,
+                 "recording": c.recording}
                 for c in self._computers.values()]
 
     def screenshot(self, owner: str) -> bytes | None:
@@ -149,7 +159,7 @@ class ComputerManager:
                 "-e", "HOME=/profile", "-e", "PYTHONDONTWRITEBYTECODE=1",
                 "-e", f"KAIROS_COMPUTER_PROXY={sandbox_egress.PROXY_URL}",
                 "-e", f"KAIROS_COMPUTER_DESKTOP={int(desktop)}",
-                image, "python3", "-u", "-c", SOURCE]
+                image, "python3", "-u", "-c", BOOTSTRAP]
         try:
             # A reply carries a whole screenshot on one line, far past asyncio's
             # 64 KiB default line limit.
@@ -158,6 +168,7 @@ class ComputerManager:
                                               limit=REPLY_LIMIT)
         except (FileNotFoundError, OSError) as e:
             raise sandbox.SandboxUnavailable(f"Docker did not start: {e}") from e
+        proc.stdin.write((json.dumps({"driver": SOURCE}) + "\n").encode())
         c = Computer(owner, proc, name, desktop=desktop, last_action=self.clock())
         c.stderr_task = asyncio.create_task(self._drain_stderr(proc))
         c.reader_task = asyncio.create_task(self._read(c))
@@ -170,6 +181,11 @@ class ComputerManager:
                 try:
                     message = json.loads(line)
                 except ValueError:
+                    continue
+                if message.get("event") == "step":
+                    if (c.taken_over and c.recording and message.get("recording_id") == c.recording_id
+                            and len(c.steps) < RECORDING_LIMIT and isinstance(message.get("step"), dict)):
+                        c.steps.append(message["step"])
                     continue
                 if message.get("event") == "frame":
                     try:
@@ -184,6 +200,8 @@ class ComputerManager:
                 if waiter and not waiter.done():
                     waiter.set_result(message)
         finally:
+            c.recording, c.recording_id = False, None
+            c.steps.clear()
             for waiter in c.pending.values():
                 if not waiter.done():
                     waiter.set_exception(sandbox.SandboxUnavailable("the contained computer stopped"))
@@ -204,7 +222,7 @@ class ComputerManager:
             return self._computers[owner]
 
     async def _command(self, c: Computer, action: str, **kwargs) -> dict:
-        if action.startswith("watch_"):
+        if action.startswith(("watch_", "record_")):
             return await self._send(c, action, **kwargs)
         async with c.lock:
             return await self._send(c, action, **kwargs)
@@ -237,10 +255,11 @@ class ComputerManager:
         self._closed[owner] = (self.clock() + IDLE_SECONDS, {
             "owner": owner, "url": c.url, "title": c.title, "last_action": c.last_action_at,
             "closed_at": time.time(), "taken_over": False, "waiting_model": False,
-            "desktop": c.desktop,
+            "desktop": c.desktop, "recording": False,
             "image": base64.b64encode(image).decode() if image else "",
         })
         c.taken_over = False
+        self._discard_recording(c)
         c.handback.set()
         try:
             c.proc.stdin.close()
@@ -506,18 +525,64 @@ class ComputerManager:
         if not c:
             return False
         c.taken_over = False
+        self._discard_recording(c)
         c.handback.set()
         c.last_action = self.clock()
         c.last_action_at = time.time()
         self._rate_soon(c)
         return True
 
+    def _discard_recording(self, c: Computer) -> None:
+        ident, c.recording_id = c.recording_id, None
+        c.recording = False
+        c.steps.clear()
+        if ident and self._computers.get(c.owner) is c:
+            async def discard():
+                try:
+                    await self._command(c, "record_stop", recording_id=ident)
+                except (ValueError, sandbox.SandboxUnavailable):
+                    pass
+            asyncio.get_running_loop().create_task(discard())
+
+    async def start_recording(self, owner: str) -> None:
+        c = self._computers.get(owner)
+        if not c or not c.taken_over:
+            raise ValueError("take over the computer before recording")
+        async with c.lock:
+            if not c.taken_over or self._computers.get(owner) is not c:
+                raise ValueError("take over the computer before recording")
+            if c.recording:
+                raise ValueError("recording is already on")
+            c.steps.clear()
+            c.recording, c.recording_id = True, uuid.uuid4().hex
+            try:
+                await self._command(c, "record_start", recording_id=c.recording_id)
+            except Exception:
+                self._discard_recording(c)
+                raise
+
+    async def stop_recording(self, owner: str) -> list[dict]:
+        c = self._computers.get(owner)
+        if not c or not c.taken_over or not c.recording:
+            raise ValueError("there is no recording to review")
+        async with c.lock:
+            if not c.taken_over or not c.recording:
+                raise ValueError("there is no recording to review")
+            await self._command(c, "record_stop", recording_id=c.recording_id)
+            steps = c.steps[:]
+            c.recording, c.recording_id = False, None
+            c.steps.clear()
+            return steps
+
     async def person_input(self, owner: str, kind: str, values: dict) -> None:
         """Forward human input without model inspection, tool output or audit."""
         c = self._computers.get(owner)
         if not c or not c.taken_over:
             raise ValueError("take over the computer first")
-        reply = await self._command(c, "desktop_input", kind=kind, person=True, **values) if c.desktop else await self._command(c, "person_" + kind, **values)
+        async with c.lock:
+            if not c.taken_over or self._computers.get(owner) is not c:
+                raise ValueError("take over the computer first")
+            reply = await self._send(c, "desktop_input", kind=kind, person=True, recording_id=c.recording_id, **values) if c.desktop else await self._send(c, "person_" + kind, recording_id=c.recording_id, **values)
         c.url, c.title = reply.get("url") or c.url, reply.get("title") or c.title
         if reply.get("screenshot"):
             c.screenshot = base64.b64decode(reply["screenshot"])
@@ -539,7 +604,7 @@ class ComputerManager:
         if self._computers.get(owner) is not c:
             return None
         return {"owner": owner, "url": c.url, "title": c.title, "last_action": c.last_action_at,
-                "desktop": c.desktop,
+                "desktop": c.desktop, "recording": c.recording,
                 "taken_over": c.taken_over, "waiting_model": c.waiting_model,
                 "image": base64.b64encode(c.frame_jpeg).decode() if c.frame_jpeg else ""}
 
@@ -585,7 +650,7 @@ class ComputerManager:
             if c.frame_jpeg and self._computers.get(owner) is c:
                 last_image = time.monotonic()
                 yield {"owner": owner, "url": c.url, "title": c.title, "last_action": c.last_action_at,
-                       "desktop": c.desktop,
+                       "desktop": c.desktop, "recording": c.recording,
                        "taken_over": c.taken_over, "waiting_model": c.waiting_model,
                        "image": base64.b64encode(c.frame_jpeg).decode()}
             while self._computers.get(owner) is c:
@@ -606,7 +671,7 @@ class ComputerManager:
                         if self._computers.get(owner) is not c:
                             return
                 state = {"owner": owner, "url": c.url, "title": c.title, "last_action": c.last_action_at,
-                         "desktop": c.desktop,
+                         "desktop": c.desktop, "recording": c.recording,
                          "taken_over": c.taken_over, "waiting_model": c.waiting_model}
                 if c.frame_seq != sent and c.frame_jpeg:
                     sent = c.frame_seq

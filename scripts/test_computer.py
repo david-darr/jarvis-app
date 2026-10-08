@@ -18,7 +18,7 @@ import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 environment = Path(__file__).resolve().parents[1] / (".computer-test-" + uuid.uuid4().hex[:12])
@@ -49,6 +49,9 @@ class FakeInput:
     async def drain(self):
         for line in self.buffer.splitlines():
             cmd = json.loads(line)
+            if "driver" in cmd:  # the driver's source, sent before any command
+                self.proc.driver_source = cmd["driver"]
+                continue
             self.proc.calls.append(cmd)
             reply = self.proc.reply(cmd)
             self.proc.stdout.feed_data((json.dumps(reply) + "\n").encode())
@@ -108,6 +111,67 @@ class DriverDesktopTests(unittest.IsolatedAsyncioTestCase):
         namespace = {"asyncio": asyncio, "re": re}
         exec(compile(ast.Module(body=functions, type_ignores=[]), "desktop driver functions", "exec"), namespace)
         return namespace
+
+    def test_driver_recording_redacts_private_fields_and_opaque_frames(self):
+        driver = self.driver({"recorded_input"})
+        for info in ({"tag": "input", "type": "password"}, {"autocomplete": "current-password"},
+                     {"autocomplete": "new-password"}, {"autocomplete": "one-time-code"},
+                     {"autocomplete": "cc-number"}, {"opaque_frame": True}):
+            for kind, values in (("type", {"text": "secret-value"}), ("key", {"key": "secret-value"})):
+                result = driver["recorded_input"](kind, values, {**info, "label": "secret-value", "signals": ["secret-value"]},
+                    "https://example.com/", {"class": "Chromium", "title": "Example"})
+                self.assertTrue(result["private"])
+                self.assertNotIn("text", result)
+                self.assertNotIn("key", result)
+                self.assertNotIn("secret-value", json.dumps(result))
+                self.assertEqual(result["label"], "(private field: entered by the person)")
+
+    def test_driver_records_labels_and_window_relative_coordinates(self):
+        driver = self.driver({"recorded_input", "desktop_app"})
+        labeled = driver["recorded_input"]("click", {"x": 14, "y": 22},
+            {"label": "More information", "tag": "a", "role": "link", "type": ""}, "https://example.com/")
+        self.assertEqual(labeled["element"]["label"], "More information")
+        self.assertNotIn("x", labeled)
+        native = driver["recorded_input"]("click", {"x": 14, "y": 22}, {}, "https://example.com/",
+            {"class": "Mousepad", "title": "Untitled"})
+        self.assertEqual((native["x"], native["y"]), (14, 22))
+        self.assertEqual(driver["desktop_app"](native["window"]), "editor")
+        self.assertIsNone(driver["desktop_app"]({"class": "Terminal", "title": "sh"}))
+
+    async def test_person_recording_inspects_and_emits_before_typing(self):
+        for opaque in (False, True):
+            driver = self.driver({"main", "browser_launch_options", "recorded_input"})
+            timeline = []
+            info = {"tag": "input", "type": "password", "label": "Password"}
+            class Handle:
+                def as_element(self): return self
+                async def evaluate(self, script):
+                    return ("iframe" if opaque else "input") if "tagName" in script else info
+                async def content_frame(self): return None
+            frame = SimpleNamespace(evaluate_handle=AsyncMock(return_value=Handle()))
+            keyboard = SimpleNamespace(insert_text=AsyncMock(side_effect=lambda text: timeline.append({"typed": text})))
+            page = SimpleNamespace(url="https://example.com/", title=AsyncMock(return_value="Example"), on=Mock(),
+                main_frame=frame, keyboard=keyboard)
+            context = SimpleNamespace(pages=[page], add_init_script=AsyncMock(), close=AsyncMock(), on=Mock())
+            class Playwright:
+                async def __aenter__(self):
+                    return SimpleNamespace(chromium=SimpleNamespace(launch_persistent_context=AsyncMock(return_value=context)))
+                async def __aexit__(self, *args): pass
+            commands = [{"id": 1, "action": "record_start", "recording_id": "record"},
+                        {"id": 2, "action": "person_type", "text": "never-leave-container", "recording_id": "record"},
+                        {"id": 3, "action": "done"}]
+            driver.update(DESKTOP=False, PROXY="proxy", DOTS="private script", ELEMENT="inspect",
+                MAX_FRAME_DEPTH=5, MAX_FPS=30, time=__import__("time"), json=json,
+                sys=SimpleNamespace(stdin=io.StringIO("".join(json.dumps(cmd) + "\n" for cmd in commands))),
+                async_playwright=Playwright, emit=timeline.append)
+            await driver["main"]()
+            steps = [event["step"] for event in timeline if event.get("event") == "step"]
+            self.assertEqual(steps[0]["kind"], "open")
+            self.assertTrue(steps[1]["private"])
+            self.assertNotIn("never-leave-container", json.dumps(steps))
+            entered = next(index for index, event in enumerate(timeline) if "typed" in event)
+            recorded = next(index for index, event in enumerate(timeline) if event.get("step", {}).get("private"))
+            self.assertLess(recorded, entered)
 
     def test_libreoffice_seed_uses_installed_product_version(self):
         driver = self.driver({"seed_libreoffice"})
@@ -203,8 +267,8 @@ class DriverDesktopTests(unittest.IsolatedAsyncioTestCase):
         class Playwright:
             async def __aenter__(self): return SimpleNamespace(chromium=SimpleNamespace(launch_persistent_context=launch))
             async def __aexit__(self, *args): pass
-        page = SimpleNamespace(url="about:blank", title=AsyncMock(return_value=""))
-        context = SimpleNamespace(pages=[page], add_init_script=AsyncMock(), close=AsyncMock())
+        page = SimpleNamespace(url="about:blank", title=AsyncMock(return_value=""), on=Mock())
+        context = SimpleNamespace(pages=[page], add_init_script=AsyncMock(), close=AsyncMock(), on=Mock())
         launch = AsyncMock(return_value=context)
         commands = [{"id": 1, "action": "launch", "app": "sh"}, {"id": 2, "action": "window_at", "x": 10, "y": 20},
                     {"id": 3, "action": "done"}]
@@ -346,6 +410,58 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             await self.open()
         return self.manager._computers["chat:s1"]
 
+    async def push_steps(self, steps, ident=None):
+        c = self.manager._computers["chat:s1"]
+        for step in steps:
+            self.procs[-1].stdout.feed_data((json.dumps({"event": "step", "recording_id": ident or c.recording_id,
+                "step": step}) + "\n").encode())
+        await self.manager._command(c, "state")
+
+    async def test_recording_requires_takeover_and_explicit_start(self):
+        await self.open()
+        with self.assertRaisesRegex(ValueError, "take over"):
+            await self.manager.start_recording("chat:s1")
+        self.manager.takeover("chat:s1")
+        await self.push_steps([{"kind": "click"}], "not-started")
+        self.assertEqual(self.manager._computers["chat:s1"].steps, [])
+        await self.manager.start_recording("chat:s1")
+        self.assertTrue(self.manager.running()[0]["recording"])
+        self.assertTrue((await self.manager.frame("chat:s1"))["recording"])
+        await self.manager.person_input("chat:s1", "type", {"text": "kairos"})
+        self.assertEqual(self.procs[-1].calls[-1]["recording_id"], self.manager._computers["chat:s1"].recording_id)
+        await self.push_steps([{"kind": "type", "text": "kairos"}])
+        self.assertEqual(await self.manager.stop_recording("chat:s1"), [{"kind": "type", "text": "kairos"}])
+        self.assertFalse(self.manager.running()[0]["recording"])
+        self.assertEqual(self.manager._computers["chat:s1"].steps, [])
+        with self.assertRaisesRegex(ValueError, "no recording"):
+            await self.manager.stop_recording("chat:s1")
+
+    async def test_recording_cap_and_late_events_are_ignored(self):
+        await self.open()
+        self.manager.takeover("chat:s1")
+        await self.manager.start_recording("chat:s1")
+        ident = self.manager._computers["chat:s1"].recording_id
+        await self.push_steps([{"kind": "key", "key": str(i)} for i in range(250)])
+        self.assertEqual(len(await self.manager.stop_recording("chat:s1")), 200)
+        await self.manager.start_recording("chat:s1")
+        await self.push_steps([{"kind": "type", "text": "from an old recording"}], ident)
+        self.assertEqual(await self.manager.stop_recording("chat:s1"), [])
+
+    async def test_recording_discarded_on_handback_stop_and_close(self):
+        for end in ("handback", "stop", "close"):
+            await self.open()
+            c = self.manager._computers["chat:s1"]
+            self.manager.takeover("chat:s1")
+            await self.manager.start_recording("chat:s1")
+            await self.push_steps([{"kind": "type", "text": "discard me"}])
+            if end == "handback": self.manager.hand_back("chat:s1")
+            elif end == "stop": await self.manager.stop("chat:s1")
+            else: await self.manager.close_all()
+            self.assertFalse(c.recording)
+            self.assertEqual(c.steps, [])
+            self.assertIsNone(c.recording_id)
+            if end == "handback": await self.manager.stop("chat:s1")
+
     async def test_desktop_mode_is_fixed_at_start_and_reports_hardening(self):
         await self.desktop()
         self.assertTrue(self.manager.running()[0]["desktop"])
@@ -447,6 +563,13 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         result = await self.manager.act("chat:s1", "screenshot", {}, self.ctx)
         self.assertIn("Not opened", result["text"])
         self.assertFalse(any(cmd["action"] == "desktop_screenshot" for cmd in self.procs[0].calls[count:]))
+
+    async def test_driver_source_goes_over_stdin_not_the_command_line(self):
+        # Windows caps a command line at 32,767 characters; the driver passed that.
+        await self.open()
+        self.assertLess(sum(len(str(part)) + 1 for part in self.argv[0]), 4000)
+        self.assertEqual(self.procs[0].driver_source, computer.SOURCE)
+        self.assertNotIn(computer.SOURCE, self.argv[0])
 
     async def test_protocol_taint_read_and_done(self):
         result = await self.open()
@@ -826,6 +949,26 @@ class RouteTests(unittest.TestCase):
         audit.assert_not_called()
         self.assertNotIn(secret, str(response.json()))
         self.assertNotIn(secret, str(logs.mock_calls))
+
+    def test_record_routes_share_takeover_access_and_require_control(self):
+        with patch.object(computer.manager, "start_recording", new=AsyncMock()) as start, \
+             patch.object(computer.manager, "stop_recording", new=AsyncMock(return_value=[{"kind": "click"}])):
+            for action in ("start", "stop"):
+                for owner in ("chat:b", "agent:c"):
+                    self.assertEqual(self.client.post(f"/api/computer/{owner}/record/{action}").status_code, 403)
+            start.assert_not_awaited()
+            self.assertEqual(self.client.post("/api/computer/chat:a/record/start").status_code, 200)
+            self.assertEqual(self.client.post("/api/computer/chat:a/record/stop").json(),
+                             {"steps": [{"kind": "click"}], "owner": "chat:a"})
+            with patch.object(computer_routes.auth_manager, "is_admin", return_value=True), \
+                 patch.object(agent_service, "get", return_value={"id": "c", "name": "Scout"}):
+                result = self.client.post("/api/computer/agent:c/record/stop").json()
+                self.assertEqual(result["agent_id"], "c")
+                self.assertEqual(result["agent_name"], "Scout")
+        with patch.object(computer.manager, "start_recording", new=AsyncMock(side_effect=ValueError("take over first"))):
+            self.assertEqual(self.client.post("/api/computer/chat:a/record/start").status_code, 409)
+        with patch.object(computer.manager, "is_running", return_value=False):
+            self.assertEqual(self.client.post("/api/computer/chat:a/record/start").status_code, 404)
 
     def test_last_frame_access_and_absence(self):
         with patch.object(computer_routes.computer.manager, "last", return_value={"owner": "chat:a", "image": "jpeg", "closed_at": 1}):

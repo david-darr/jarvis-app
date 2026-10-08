@@ -5,7 +5,7 @@ host. Stdout carries only JSON lines: a reply to each numbered command, and,
 while someone watches the live view, `{"event": "frame"}` lines from
 Chromium's screencast (pushed as the page changes, at the rate the host sets:
 10 a second, 30 while the person has control on this computer).
-Commands run one at a time, except watch_start/watch_rate/watch_stop, which are
+Commands run one at a time, except watch_* and record_*, which are
 answered at once so the live view never waits behind a page load.
 """
 from core.computer_image import DESKTOP_APPS
@@ -48,31 +48,67 @@ async def xdo(*args, optional=False):
     return out.decode(errors='replace').strip() if proc.returncode == 0 else ''
 
 def xclass(ident):
-    # Noble's xdotool predates getwindowclassname; use the same X11 property.
+    """(class, window) for the window's application. The window under the
+    pointer is usually Openbox's frame around the app, whose client window
+    (the one with WM_CLASS) is a child, so search down the frame first; an
+    unnamed inner window is handled by walking up. Noble's xdotool predates
+    getwindowclassname, so this reads the X11 property directly."""
     import ctypes
     class ClassHint(ctypes.Structure):
         _fields_ = [('name', ctypes.c_void_p), ('cls', ctypes.c_void_p)]
     lib = ctypes.CDLL('libX11.so.6')
     lib.XOpenDisplay.argtypes = [ctypes.c_char_p]; lib.XOpenDisplay.restype = ctypes.c_void_p
     lib.XGetClassHint.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ClassHint)]
+    lib.XQueryTree.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
+                               ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_uint)]
     lib.XFree.argtypes = [ctypes.c_void_p]
     lib.XCloseDisplay.argtypes = [ctypes.c_void_p]
     display = lib.XOpenDisplay(b':99')
     if not display: raise ValueError('the desktop display is unavailable')
-    hint = ClassHint()
-    try:
-        if not lib.XGetClassHint(display, int(ident), hint): return ''
-        return ctypes.string_at(hint.cls).decode(errors='replace') if hint.cls else ''
-    finally:
+    def class_of(window):
+        hint = ClassHint()
+        found = ''
+        if lib.XGetClassHint(display, window, ctypes.byref(hint)):
+            found = ctypes.string_at(hint.cls).decode(errors='replace') if hint.cls else ''
         if hint.name: lib.XFree(hint.name)
         if hint.cls: lib.XFree(hint.cls)
+        return found
+
+    def tree(window):
+        root, parent, children, count = ctypes.c_ulong(), ctypes.c_ulong(), ctypes.c_void_p(), ctypes.c_uint()
+        if not lib.XQueryTree(display, window, ctypes.byref(root), ctypes.byref(parent), ctypes.byref(children), ctypes.byref(count)):
+            return None, None, []
+        kids = [ctypes.cast(children, ctypes.POINTER(ctypes.c_ulong))[i] for i in range(count.value)] if children.value else []
+        if children.value: lib.XFree(children)
+        return root.value, parent.value, kids
+
+    try:
+        start = int(ident)
+        found = class_of(start)
+        if found: return found, str(start)
+        # Down: the frame's client, breadth first, a few levels deep.
+        level = [start]
+        for _ in range(4):
+            level = [kid for window in level for kid in tree(window)[2]]
+            for window in level:
+                found = class_of(window)
+                if found: return found, str(window)
+        # Up: an unnamed inner window's named ancestor.
+        window = start
+        for _ in range(12):
+            root, parent, _kids = tree(window)
+            if not parent or parent == root: break
+            window = parent
+            found = class_of(window)
+            if found: return found, str(window)
+        return '', str(ident)
+    finally:
         lib.XCloseDisplay(display)
 
 async def window_info(ident):
     if not ident or ident == '0': raise ValueError('could not identify the desktop window')
-    cls = await xdo('getwindowclassname', ident, optional=True)
-    if not cls: cls = xclass(ident)
-    return {'id': ident, 'class': cls, 'title': await xdo('getwindowname', ident, optional=True)}
+    cls, owner = xclass(ident)
+    return {'id': owner, 'class': cls, 'title': await xdo('getwindowname', owner, optional=True)}
 
 def point(cmd):
     # These bounds are for the display; web actions use page coordinates.
@@ -81,11 +117,18 @@ def point(cmd):
         raise ValueError('choose a point in the desktop frame')
     return x, y
 
+async def mouse_location():
+    return dict(line.split('=', 1) for line in (await xdo('getmouselocation', '--shell')).splitlines() if '=' in line)
+
 async def window_at(cmd):
+    location = await mouse_location()
     if cmd.get('x') is not None or cmd.get('y') is not None:
         x, y = point(cmd)
-        await xdo('mousemove', '--sync', x, y)
-    location = dict(line.split('=', 1) for line in (await xdo('getmouselocation', '--shell')).splitlines() if '=' in line)
+        # `mousemove --sync` waits for the pointer to move, so it hangs when the
+        # pointer is already there (a recorded click inspects, then clicks).
+        if (location.get('X'), location.get('Y')) != (str(x), str(y)):
+            await xdo('mousemove', '--sync', x, y)
+            location = await mouse_location()
     return await window_info(location.get('WINDOW'))
 
 async def focused_window():
@@ -216,6 +259,34 @@ submit: a.matches('button:not([type]),button[type=submit],input[type=submit],inp
 signals:labels, form_submits:submitControls.map(n => ({label:(signals(n)[0] || '').slice(0,160), signals:signals(n)})),
 form:!!f, href:a.href||''};}"""
 
+def recorded_input(kind, values, info, url, window=None):
+    step = {'kind': kind, 'url': url}
+    if window: step['window'] = window
+    autocomplete = info.get('autocomplete') or ''
+    private = (info.get('opaque_frame') or info.get('tag') == 'input' and info.get('type') == 'password'
+        or autocomplete in ('current-password', 'new-password', 'one-time-code') or autocomplete.startswith('cc-'))
+    if private:
+        step.update(private=True, label='(private field: entered by the person)',
+            field='opaque frame' if info.get('opaque_frame') else 'password' if info.get('type') == 'password' or
+            autocomplete in ('current-password', 'new-password')
+            else 'one-time code' if autocomplete == 'one-time-code' else 'payment details')
+        return step
+    step['element'] = {key: info[key] for key in ('label', 'role', 'tag', 'type', 'signals', 'form_submits') if key in info}
+    for key in ('text', 'key', 'dx', 'dy'):
+        if key in values: step[key] = values[key]
+    if kind == 'click' and not info.get('label'):
+        step.update({key: values[key] for key in ('x', 'y') if key in values})
+    return step
+
+def desktop_app(window):
+    klass, title = window.get('class', '').lower(), window.get('title', '').lower()
+    for name, app in (('pcmanfm', 'files'), ('mousepad', 'editor'), ('atril', 'pdf'), ('ristretto', 'images')):
+        if name in klass: return app
+    if 'libreoffice' in klass:
+        for app in ('writer', 'calc', 'impress'):
+            if app in klass or app in title: return app
+    return None
+
 async def main():
     if DESKTOP: await start_desktop()
     async with async_playwright() as p:
@@ -223,6 +294,62 @@ async def main():
         await context.add_init_script(script=DOTS)
         page = context.pages[0] if context.pages else await context.new_page()
         refs = {}
+        recording = {'id': None, 'task': None, 'windows': set()}
+        def step_event(step, ident):
+            if ident and recording['id'] == ident:
+                emit({'event': 'step', 'recording_id': ident, 'step': step})
+        def navigation(frame):
+            if frame is frame.page.main_frame:
+                step_event({'kind': 'open', 'url': frame.url}, recording['id'])
+        def observe(tab):
+            tab.on('framenavigated', navigation)
+        for tab in context.pages: observe(tab)
+        context.on('page', observe)
+        async def desktop_launches(ident):
+            while recording['id'] == ident:
+                for wid in (await xdo('search', '--onlyvisible', '--class', '.', optional=True)).splitlines():
+                    if wid in recording['windows']: continue
+                    try:
+                        info = await window_info(wid)
+                    except ValueError:
+                        continue
+                    if not info['class']: continue
+                    recording['windows'].add(wid)
+                    app = desktop_app(info)
+                    if app: step_event({'kind': 'launch', 'app': app, 'window': info}, ident)
+                await asyncio.sleep(0.25)
+        async def record_input(cmd, kind):
+            nonlocal page
+            ident = cmd.get('recording_id')
+            if not ident or ident != recording['id']: return
+            window, values, info = None, cmd, {}
+            try:
+                if DESKTOP:
+                    window = await (window_at(cmd) if kind in ('click', 'scroll') else focused_window())
+                    geometry = await xdo('getwindowgeometry', '--shell', window['id'])
+                    geometry = dict(line.split('=', 1) for line in geometry.splitlines() if '=' in line)
+                    window = {key: window[key] for key in ('class', 'title')}
+                    if kind == 'click':
+                        values = {**cmd, 'x': cmd['x'] - int(geometry['X']), 'y': cmd['y'] - int(geometry['Y'])}
+                    if browser_window(window):
+                        # The person can change tabs or focus the address bar directly.
+                        focused_pages = [tab for tab in context.pages if await tab.evaluate(
+                            "document.visibilityState === 'visible'" if kind == 'click' else 'document.hasFocus()')]
+                        if not focused_pages: info = {'opaque_frame': True}
+                        else:
+                            page = focused_pages[-1]
+                            if kind == 'click':
+                                bounds = await page.evaluate('({x:screenX+(outerWidth-innerWidth)/2,y:screenY+outerHeight-innerHeight})')
+                                info = await inspect({'x': cmd['x'] - bounds['x'], 'y': cmd['y'] - bounds['y']})
+                                if not info: info = {'opaque_frame': True}
+                            else: info = await inspect_focused()
+                    elif not window['class']:
+                        info = {'opaque_frame': True}
+                else:
+                    info = await (inspect(cmd) if kind == 'click' else inspect_focused())
+            except Exception:
+                info = {'opaque_frame': True}
+            step_event(recorded_input(kind, values, info, page.url, window), ident)
         cast = {'session': None, 'page': None, 'sent': 0.0, 'watching': False, 'gap': 0.1, 'task': None}
         async def capture_loop():
             while cast['watching']:
@@ -347,7 +474,9 @@ async def main():
                 if not DESKTOP: raise ValueError('the agent desktop is off')
                 if action == 'window_at': return {'window': await window_at(cmd)}
                 if action == 'focused_window': return {'window': await focused_window()}
-                if action == 'desktop_input': await desktop_input(cmd)
+                if action == 'desktop_input':
+                    if cmd.get('person'): await record_input(cmd, cmd['kind'])
+                    await desktop_input(cmd)
                 elif action == 'launch':
                     app = cmd.get('app')
                     if app not in APPS: raise ValueError('choose files, editor, pdf, images, writer, calc or impress')
@@ -383,6 +512,7 @@ async def main():
                            or autocomplete.startswith('cc-'))
                 if private and (action == 'type' or action == 'key' and cmd.get('key','').lower() not in ('tab','shift+tab','escape')):
                     raise ValueError('private fields need the person to take over')
+            if action.startswith('person_'): await record_input(cmd, action.removeprefix('person_'))
             if action == 'person_click': await page.mouse.click(cmd['x'], cmd['y'])
             elif action == 'person_type': await page.keyboard.insert_text(cmd['text'])
             elif action == 'person_key': await page.keyboard.press(cmd['key'])
@@ -459,6 +589,27 @@ async def main():
                 emit({'id':cmd['id'], 'ok':True})
             except Exception as e:
                 emit({'id':cmd['id'], 'error':str(e)})
+        async def record(cmd):
+            try:
+                ident = cmd.get('recording_id')
+                if cmd['action'] == 'record_start':
+                    recording['id'] = ident
+                    if recording['task']:
+                        recording['task'].cancel()
+                        await asyncio.gather(recording['task'], return_exceptions=True)
+                    if DESKTOP:
+                        recording['windows'] = set((await xdo('search', '--onlyvisible', '--class', '.', optional=True)).splitlines())
+                        recording['task'] = asyncio.create_task(desktop_launches(ident))
+                    step_event({'kind': 'open', 'url': page.url}, ident)
+                elif recording['id'] == ident:
+                    recording['id'] = None
+                    if recording['task']:
+                        recording['task'].cancel()
+                        await asyncio.gather(recording['task'], return_exceptions=True)
+                        recording['task'] = None
+                emit({'id': cmd['id'], 'ok': True})
+            except Exception as e:
+                emit({'id': cmd['id'], 'error': str(e)})
         queue = asyncio.Queue()
         async def worker():
             while (cmd := await queue.get()) is not None:
@@ -474,6 +625,8 @@ async def main():
                 continue
             if cmd.get('action') in ('watch_start', 'watch_rate', 'watch_stop'):
                 asyncio.ensure_future(watch(cmd))
+            elif cmd.get('action') in ('record_start', 'record_stop'):
+                await record(cmd)
             else:
                 await queue.put(cmd)
             if working.done(): break
@@ -481,6 +634,10 @@ async def main():
             await queue.put(None)
             await working
         cast['watching'] = False
+        recording['id'] = None
+        if recording['task']:
+            recording['task'].cancel()
+            await asyncio.gather(recording['task'], return_exceptions=True)
         await stop_cast()
 
 asyncio.run(main())

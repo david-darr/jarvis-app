@@ -136,6 +136,32 @@ async def handback(owner: str, user: str = Depends(require_user)) -> dict:
     return {"ok": True}
 
 
+@router.post("/{owner}/record/start")
+async def record_start(owner: str, user: str = Depends(require_user)) -> dict:
+    _access(owner, user)
+    _running(owner)
+    try:
+        await computer.manager.start_recording(owner)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from None
+    return {"ok": True, "recording": True}
+
+
+@router.post("/{owner}/record/stop")
+async def record_stop(owner: str, user: str = Depends(require_user)) -> dict:
+    _access(owner, user)
+    _running(owner)
+    try:
+        steps = await computer.manager.stop_recording(owner)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from None
+    result = {"steps": steps, "owner": owner}
+    if owner.startswith("agent:"):
+        agent = agent_service.get(owner[6:])
+        result.update(agent_id=agent["id"], agent_name=agent["name"])
+    return result
+
+
 class PersonInput(BaseModel):
     kind: Literal["click", "type", "key", "scroll"]
     x: int | None = None

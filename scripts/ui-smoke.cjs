@@ -73,17 +73,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method !== "GET") {
       let body = ""; for await (const chunk of req) body += chunk;
       writes.push({ path: url.pathname, method: req.method, body });
-      const action = url.pathname.match(/^\/api\/computer\/([^/]+)\/(takeover|handback|stop)$/);
-      if (action) {
-        const owner = decodeURIComponent(action[1]);
-        demoState.takenOwners ||= []; demoState.stoppedOwners ||= [];
-        if (action[2] === 'takeover' && !demoState.takenOwners.includes(owner)) demoState.takenOwners.push(owner);
-        if (action[2] === 'handback') demoState.takenOwners = demoState.takenOwners.filter(item => item !== owner);
-        if (action[2] === 'stop') demoState.stoppedOwners.push(owner);
-      }
       if (url.pathname === '/api/settings/computer-use') demoState.computerUse = JSON.parse(body);
       let parsed = {}; try { parsed = JSON.parse(body); } catch {}
       const updated = mutate(url.pathname, req.method, parsed);
+      if (updated?._status) res.statusCode = updated._status;
       if (url.pathname === "/api/chat/stream") {
         res.setHeader("Content-Type", "text/event-stream");
         res.end('data: {"chunk":"Tab build request received."}\n\ndata: {"done":true}\n\n'); return;
@@ -251,6 +244,10 @@ app.whenReady().then(async () => {
           await js("document.querySelector('.computer-actions button:nth-child(1)').click()");
           await waitFor("document.querySelector('.computer-state')?.textContent.includes('You have control')");
           await capture(label + '-chat-computer-takeover');
+          await js("document.querySelector('.computer-record').click()");
+          await waitFor("!!document.querySelector('.computer-panel.is-recording .computer-recording-indicator:not([hidden])')");
+          assert.equal(await js("document.querySelector('.computer-recording-indicator').textContent"), 'Recording');
+          await capture(label + '-computer-recording');
           await js("{ const f=document.querySelector('.computer-frame'), r=f.getBoundingClientRect(); f.dispatchEvent(new MouseEvent('click', { bubbles:true, clientX:r.left+r.width/2, clientY:r.top+r.height/2 })); }");
           await waitFor("document.querySelector('.computer-state')?.textContent.includes('model is waiting')");
           // The click's request is asynchronous; wait for it. Chromium truncates
@@ -261,6 +258,22 @@ app.whenReady().then(async () => {
           const sent = JSON.parse((writes.find(centreClick) || { body: '{}' }).body);
           assert.ok(Math.abs(sent.x - 640) <= 3 && Math.abs(sent.y - 400) <= 3,
             `${label} computer click maps to page coordinates (sent ${sent.x},${sent.y})`);
+          await js("for (const key of 'kairos') document.querySelector('.computer-stage').dispatchEvent(new KeyboardEvent('keydown', {key, bubbles:true, cancelable:true}))");
+          for (let i = 0; i < 40 && !writes.some(w => w.path.endsWith('/input') && JSON.parse(w.body).text === 's'); i++) await delay(50);
+          await js("document.querySelector('.computer-record').click()");
+          await waitFor("document.querySelector('.recording-review [aria-label=\"SKILL.md preview\"]')?.value.includes(\"kairos\")");
+          await js("document.querySelector('.recording-review .recording-check input').click()");
+          await waitFor("document.querySelector('.recording-review textarea')?.value.includes('(ask each time)')");
+          await capture(label + '-recording-review');
+          await js("{ const preview=document.querySelector('.recording-review textarea'); preview.value += '\\nOpen an ngrok link in the computer.\\n'; preview.dispatchEvent(new Event('input')); }");
+          await js("[...document.querySelectorAll('.recording-review button')].find(b => b.textContent === 'Save').click()");
+          await waitFor("[...document.querySelectorAll('.recording-review button')].some(b => b.textContent === 'Save anyway')");
+          await capture(label + '-recording-caution');
+          await js("[...document.querySelectorAll('.recording-review button')].find(b => b.textContent === 'Save anyway').click()");
+          await waitFor("!document.querySelector('.recording-review')");
+          const recordingSave = writes.find(w => w.path === '/api/skills/from-recording');
+          assert.ok(recordingSave && JSON.parse(recordingSave.body).body.includes('(ask each time)'), label + ' recorded skill saves through import');
+          assert.ok(writes.some(w => w.path === '/api/skills/from-recording' && JSON.parse(w.body).confirmed === true), label + ' caution requires explicit confirmation');
           await js("document.querySelector('.computer-actions button:nth-child(2)').click()");
           await waitFor("document.querySelector('.computer-state')?.textContent === 'Computer closed'");
           assert.ok(await js("document.querySelector('.computer-frame')?.naturalWidth > 0"), label + ' last frame remains after close');
@@ -272,6 +285,7 @@ app.whenReady().then(async () => {
           // "nothing was written" checks and the next pass start clean.
           writes.splice(chatComputerStart);
           demoState.stoppedOwners = []; demoState.takenOwners = [];
+          demoState.recordingOwners = []; demoState.recordedSteps = {}; demoState.recordedSkills = [];
           demoState.computerTurn = false; demoState.moreComputerActions = false;
         }
         if (tab === "home") {
@@ -345,11 +359,18 @@ app.whenReady().then(async () => {
           await js("[...document.querySelectorAll('.agent-inbox-question button')].find(b => b.textContent === 'Open computer').click()");
           await waitFor("document.querySelector('.agent-work-host:not([hidden]) .computer-state')?.textContent.includes('You have control')");
           await capture(label + '-agent-computer-takeover');
+          await js("document.querySelector('.agent-computer-section .computer-record').click()");
+          await waitFor("!!document.querySelector('.agent-computer-section .is-recording')");
+          await js("document.querySelector('.agent-computer-section .computer-record').click()");
+          await waitFor("document.querySelector('.recording-review')?.textContent.includes(\"Mention in Scout's instructions\")");
+          await capture(label + '-agent-recording-review');
+          await js("[...document.querySelectorAll('.recording-review button')].find(b => b.textContent === 'Discard').click()");
           await js("document.querySelector('.agent-computer-section .computer-actions button:first-child').click()");
           for (let i = 0; i < 40 && !writes.slice(agentComputerStart).some(w => w.path.endsWith('/handback')); i++) await delay(50);
           assert.ok(writes.slice(agentComputerStart).some(w => w.path === '/api/computer/agent%3Aa1/handback'), label + ' Hand back calls the computer route');
           writes.splice(agentComputerStart);
           demoState.stoppedOwners = []; demoState.takenOwners = [];
+          demoState.recordingOwners = []; demoState.recordedSteps = {};
           await navigate('agents');
         }
         if (tab === "tool-store" && !demoState.empty) {

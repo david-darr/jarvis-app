@@ -160,6 +160,7 @@ const SOURCE_LABELS = {
   bundled: "Bundled with Kairos",
   user: "Written in Kairos",
   imported: "Imported",
+  recorded: "Recorded on the computer",
   unknown: "Origin unknown (created before curation)",
 };
 

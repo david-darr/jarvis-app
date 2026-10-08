@@ -261,7 +261,7 @@ def update_skill(slug: str, description: str, body: str) -> dict:
 
 def import_skill(filename: str, raw_content: str, confirmed: bool = False, *,
                  name: str | None = None, origin: str | None = None,
-                 replace: bool = True) -> dict:
+                 replace: bool = True, source: str = "imported") -> dict:
     """Import local file text or a fetched community SKILL.md.
 
     Local imports may replace an existing skill; URL installs set replace=False
@@ -276,6 +276,8 @@ def import_skill(filename: str, raw_content: str, confirmed: bool = False, *,
     overrides a dangerous verdict.
     """
     from services import skill_curator
+    if source not in (skill_curator.IMPORTED, skill_curator.RECORDED):
+        raise ValueError("imports must have an untrusted source")
     name = name or os.path.splitext(os.path.basename(filename))[0]
     parsed = _parse(raw_content)
     slug = _slugify(name)
@@ -285,7 +287,7 @@ def import_skill(filename: str, raw_content: str, confirmed: bool = False, *,
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w" if replace else "x", encoding="utf-8") as f:
         f.write(rendered)
-    skill_curator.record(slug, skill_curator.IMPORTED, origin=origin or os.path.basename(filename))
+    skill_curator.record(slug, source, origin=origin or os.path.basename(filename))
     return {"slug": slug, "description": parsed["description"], "body": parsed["body"],
             "scan": scan["verdict"]}
 

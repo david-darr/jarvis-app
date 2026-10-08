@@ -309,6 +309,23 @@
 .computer-stage:focus-visible { outline: 2px solid var(--accent); }
 .computer-panel.is-taken-over .computer-stage { cursor: crosshair; }
 .computer-frame { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; }
+.computer-recording-indicator { color: var(--danger); font-size: 12px; font-weight: 600; }
+.computer-recording-indicator::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 6px;
+  border-radius: 50%; background: var(--danger); }
+.computer-panel.is-recording .computer-stage { border-color: var(--danger); }
+.recording-review { width: 720px; max-height: 90dvh; gap: 12px; background: var(--bg-panel-solid); }
+.recording-review h4, .recording-review p { margin: 0; }
+.recording-review-body { overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 14px; }
+.recording-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.recording-field input, .recording-field textarea { width: 100%; box-sizing: border-box; }
+.recording-field textarea { resize: vertical; min-height: 180px; font-family: var(--font-mono); }
+.recording-steps { margin: 0; padding-left: 24px; font-size: 12px; }
+.recording-steps li { margin-bottom: 10px; overflow-wrap: anywhere; }
+.recording-step-row { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
+.recording-step-row .btn { flex-shrink: 0; }
+.recording-check { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-top: 5px; }
+.recording-scan pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+@media (max-width: 680px) { .recording-review { padding: 16px; max-width: calc(100vw - 24px); } }
 .agent-computer-section { margin-bottom: 12px; }
 .agent-computer-section > .title { margin-bottom: 10px; }
 .chat-computer-toggle svg { width: 16px; height: 16px; }

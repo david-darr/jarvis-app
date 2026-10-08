@@ -382,6 +382,54 @@ class BrowseTests(unittest.TestCase):
 class ComputerLiveTests(unittest.TestCase):
     """The long-lived browser uses the same sealed network as browse."""
 
+    def test_recording_labels_and_private_text_stays_in_container(self):
+        from core import computer, permissions
+        from core.computer_driver import SOURCE
+        # example.com has no password field. Set content inside the driver after
+        # opening it, so privacy is checked without a secret on a public site.
+        fixture = SOURCE.replace("            if action == 'state':", """            if action == 'recording_fixture':
+                await page.set_content('<a href="#details">More information</a><label for="search">Search</label><input id="search"><label for="password">Password</label><input id="password" type="password">')
+                return {'url': page.url, 'title': await page.title()}
+            if action == 'recording_target':
+                box = await page.locator(cmd['selector']).bounding_box()
+                x, y = box['x'] + box['width']/2, box['y'] + box['height']/2
+                if DESKTOP:
+                    origin = await page.evaluate('({x:screenX+(outerWidth-innerWidth)/2,y:screenY+outerHeight-innerHeight})')
+                    x, y = x + origin['x'], y + origin['y']
+                return {'x': int(x), 'y': int(y)}
+            if action == 'state':""", 1)
+
+        async def check():
+            manager = computer.ComputerManager()
+            owner = "chat:live-recording"
+            ctx = tool_registry.ToolContext(session_id="live-recording", is_admin=True)
+            try:
+                with patch("core.computer.SOURCE", fixture), \
+                     patch("core.computer.permissions.decide", return_value=permissions.Decision("allow")):
+                    await manager.act(owner, "open", {"url": "https://example.com/"}, ctx)
+                    c = manager._computers[owner]
+                    await manager._command(c, "recording_fixture")
+                    manager.takeover(owner)
+                    await manager.start_recording(owner)
+                    for selector in ("a", "#search", "#password"):
+                        target = await manager._command(c, "recording_target", selector=selector)
+                        await manager.person_input(owner, "click", {key: target[key] for key in ("x", "y")})
+                        if selector != "a":
+                            await manager.person_input(owner, "type", {"text": "private-live-secret" if selector == "#password" else "kairos"})
+                        await asyncio.sleep(0.1)
+                    steps = await manager.stop_recording(owner)
+                    clicks = [step for step in steps if step["kind"] == "click"]
+                    self.assertTrue(any(step.get("element", {}).get("label") == "More information" for step in clicks), steps)
+                    self.assertTrue(any(step.get("text") == "kairos" for step in steps), steps)
+                    private = [step for step in steps if step.get("private") and step["kind"] == "type"]
+                    self.assertTrue(private, steps)
+                    self.assertTrue(all("text" not in step for step in private))
+                    self.assertNotIn("private-live-secret", __import__("json").dumps(steps))
+                    self.assertFalse(any("screenshot" in step or "image" in step for step in steps))
+            finally:
+                await manager.close_all()
+        asyncio.run(check())
+
     def test_container_seal_and_filtered_egress(self):
         from core import computer
         async def check():
@@ -489,7 +537,9 @@ class DesktopLiveTests(ComputerLiveTests):
                         capture_output=True, text=True, timeout=10)
                     self.assertEqual(display.returncode, 0, display.stderr)
                     self.assertEqual(display.stdout.strip(), "1280 800")
-                    await manager.act(owner, "launch", {"app": "editor"}, ctx)
+                    manager.takeover(owner)
+                    await manager.start_recording(owner)
+                    await manager._command(c, "launch", app="editor")
                     for _ in range(100):
                         window = (await manager._command(c, "focused_window"))["window"]
                         if "mousepad" in window["class"].lower(): break
@@ -500,7 +550,7 @@ class DesktopLiveTests(ComputerLiveTests):
                                         for item in windows["windows"]))
                     for kind, values in (("type", {"text": "Kairos desktop document"}), ("key", {"key": "Control+s"}),
                                          ("type", {"text": "/profile/Documents/desktop-check.txt"}), ("key", {"key": "Enter"})):
-                        await manager._command(c, "desktop_input", kind=kind, person=True, **values)
+                        await manager.person_input(owner, kind, values)
                         await asyncio.sleep(0.3)
                     for _ in range(50):
                         saved = subprocess.run(["docker", "exec", c.name, "cat", "/profile/Documents/desktop-check.txt"],
@@ -509,6 +559,11 @@ class DesktopLiveTests(ComputerLiveTests):
                         await asyncio.sleep(0.1)
                     self.assertEqual(saved.returncode, 0, saved.stderr)
                     self.assertEqual(saved.stdout.strip(), "Kairos desktop document")
+                    steps = await manager.stop_recording(owner)
+                    self.assertTrue(any(step.get("kind") == "launch" and step.get("app") == "editor" for step in steps))
+                    self.assertTrue(any(step.get("text") == "Kairos desktop document" and
+                                        "mousepad" in step.get("window", {}).get("class", "").lower() for step in steps))
+                    manager.hand_back(owner)
                     await manager.act(owner, "launch", {"app": "calc"}, ctx)
                     for _ in range(100):
                         windows = (await manager._command(c, "windows"))["windows"]

@@ -503,7 +503,8 @@ export async function render(container) {
     const origin = item.curation?.origin || "";
     const sourceLabel = origin.startsWith("https://raw.githubusercontent.com/")
       ? el("a", { href: origin, target: "_blank", rel: "noopener", text: "GitHub source" })
-      : el("span", { class: "meta", text: source === "bundled" ? "Built into Kairos" : source === "imported" ? "Imported skill" : "Local skill" });
+      : el("span", { class: "meta", text: source === "bundled" ? "Built into Kairos" : source === "imported" ? "Imported skill"
+        : source === "recorded" ? "Recorded skill" : "Local skill" });
     return el("article", { class: "tool-store-card" }, [
       el("div", { class: "tool-store-card-top" }, [
         el("span", { class: "tool-store-mark" }, [svg(ICONS.brain)]),

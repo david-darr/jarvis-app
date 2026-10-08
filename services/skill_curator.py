@@ -6,7 +6,8 @@ JARVIS's policy around it, following Hermes's trust table:
 
   - bundled (ships with the app) and user (written in the app) are trusted
     and not scanned, as Hermes treats its own "builtin" skills;
-  - imported (from a file) is a community source: a "dangerous" verdict is
+  - imported (from a file) and recorded (from a computer demonstration) are
+    community sources: a "dangerous" verdict is
     refused outright, a "caution" verdict needs the user's explicit OK;
   - a skill with no record (created before curation existed and not a
     bundled one) is treated as imported and scanned once.
@@ -33,11 +34,11 @@ from services import skill_linter, skills_guard, skills_service
 
 logger = logging.getLogger(__name__)
 
-BUNDLED, USER, IMPORTED, UNKNOWN = "bundled", "user", "imported", "unknown"
-_SCANNED_SOURCES = (IMPORTED, UNKNOWN)
+BUNDLED, USER, IMPORTED, RECORDED, UNKNOWN = "bundled", "user", "imported", "recorded", "unknown"
+_SCANNED_SOURCES = (IMPORTED, RECORDED, UNKNOWN)
 # Hermes's source ids: "official" resolves to its builtin trust level, anything
 # else that is not a trusted repo resolves to "community".
-_GUARD_SOURCE = {IMPORTED: "community", UNKNOWN: "community"}
+_GUARD_SOURCE = {IMPORTED: "community", RECORDED: "community", UNKNOWN: "community"}
 
 _LOCK = threading.RLock()
 

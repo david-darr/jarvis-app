@@ -1,5 +1,6 @@
 // One view for chat and agent computers. The stream exists only while mounted.
 import { api, el, toast } from './api.js';
+import { openRecordingReview } from './recordingReview.js';
 
 export function mountComputerPanel(host, owner, initial = {}, { onClose, takeOver = false } = {}) {
   const endpoint = `/api/computer/${encodeURIComponent(owner)}`;
@@ -9,6 +10,8 @@ export function mountComputerPanel(host, owner, initial = {}, { onClose, takeOve
   let closed = !!initial.closed_at;
   let stream = null;
   let retry = null;
+  let recording = !!initial.recording;
+  let review = null;
   const title = el('div', { class: 'computer-title', text: initial.title || 'Contained computer' });
   const url = el('div', { class: 'computer-url', text: initial.url || 'about:blank' });
   const time = el('div', { class: 'meta computer-time' });
@@ -18,8 +21,10 @@ export function mountComputerPanel(host, owner, initial = {}, { onClose, takeOve
     'aria-label': 'Contained computer. Take over to use the keyboard.' }, [frame]);
   const stop = el('button', { type: 'button', class: 'btn danger', text: 'Stop' });
   const toggle = el('button', { type: 'button', class: 'btn', text: control ? 'Hand back' : 'Take over' });
+  const record = el('button', { type: 'button', class: 'btn computer-record', text: 'Record', hidden: !control });
+  const recordingState = el('span', { class: 'computer-recording-indicator', role: 'status', text: 'Recording', hidden: !recording });
   const root = el('section', { class: 'computer-panel' }, [
-    el('div', { class: 'computer-panel-head' }, [title, el('div', { class: 'computer-actions' }, [toggle, stop])]),
+    el('div', { class: 'computer-panel-head' }, [title, el('div', { class: 'computer-actions' }, [toggle, stop, record, recordingState])]),
     url, time, state, stage,
   ]);
   host.replaceChildren(root);
@@ -33,7 +38,13 @@ export function mountComputerPanel(host, owner, initial = {}, { onClose, takeOve
     if (info.last_action) time.textContent = `Last action ${new Date(info.last_action * 1000).toLocaleTimeString()}`;
     if (info.taken_over != null) control = !!info.taken_over;
     if (info.desktop != null) desktop = !!info.desktop;
+    if (info.recording != null) recording = !!info.recording;
     if (closed) control = false;
+    if (closed || !control) { recording = false; review?.dispose(); review = null; }
+    root.classList.toggle('is-recording', recording);
+    recordingState.hidden = !recording;
+    record.hidden = !control || closed;
+    record.textContent = recording ? 'Stop recording' : 'Record';
     root.classList.toggle('is-taken-over', control);
     toggle.textContent = control ? 'Hand back' : 'Take over';
     state.textContent = closed ? 'Computer closed' : control ? (info.waiting_model ? 'You have control. The model is waiting.' : 'You have control.')
@@ -68,7 +79,14 @@ export function mountComputerPanel(host, owner, initial = {}, { onClose, takeOve
   }
   connect();
 
-  const send = (kind, values) => api(`${endpoint}/input`, { method: 'POST', body: JSON.stringify({ kind, ...values }) });
+  // One input at a time, in order: sent all at once, quick typing can arrive
+  // shuffled ("kairos" became "kaiors"). A failed input doesn't stop the queue.
+  let inputs = Promise.resolve();
+  const send = (kind, values) => {
+    const sent = inputs.then(() => api(`${endpoint}/input`, { method: 'POST', body: JSON.stringify({ kind, ...values }) }));
+    inputs = sent.catch(() => {});
+    return sent;
+  };
   stage.addEventListener('click', async event => {
     if (!control || !frame.src) return;
     stage.focus();
@@ -115,9 +133,31 @@ export function mountComputerPanel(host, owner, initial = {}, { onClose, takeOve
     try { await api(`${endpoint}/stop`, { method: 'POST' }); stream?.close(); closed = true; render({}); await retainLast(); }
     catch { stop.disabled = false; }
   };
+  record.onclick = async () => {
+    record.disabled = true;
+    try {
+      if (recording) {
+        const result = await api(`${endpoint}/record/stop`, { method: 'POST' });
+        render({ recording: false });
+        review?.dispose();
+        if (active && control && !closed) review = openRecordingReview(result);
+      } else {
+        review?.dispose(); review = null;
+        await api(`${endpoint}/record/start`, { method: 'POST' });
+        if (!active || !control || closed) {
+          await api(`${endpoint}/record/stop`, { method: 'POST' }).catch(() => {});
+          return;
+        }
+        render({ recording: true });
+        stage.focus();
+      }
+    } finally { record.disabled = false; }
+  };
   if (takeOver && !control && !closed) toggle.click();
 
   function dispose() {
+    if (recording) api(`${endpoint}/record/stop`, { method: 'POST' }).catch(() => {});
+    review?.dispose(); review = null;
     active = false;
     stream?.close();
     clearTimeout(retry);
