@@ -4,7 +4,7 @@
 :root:not([data-appearance='default'])[data-appearance] #sidebar,
 :root:not([data-appearance='default'])[data-appearance] #chat-sessions,
 :root:not([data-appearance='default'])[data-appearance] .settings-nav { background: var(--sidebar-bg); --text: var(--sidebar-text); --text-dim: var(--sidebar-muted); --text-faint: var(--sidebar-muted); --accent: var(--sidebar-accent); color: var(--text); }
-:root:not([data-appearance='default'])[data-appearance] .chat-input-bar { background: var(--glass-sheen), var(--bg-panel-solid); }
+:root:not([data-appearance='default'])[data-appearance] .chat-input-bar { background: var(--bg-panel-solid); }
 :root:not([data-appearance='default'])[data-appearance] .msg.user .msg-body,
 :root:not([data-appearance='default'])[data-appearance] .nav-item.active,
 :root:not([data-appearance='default'])[data-appearance] .settings-nav-item.active,

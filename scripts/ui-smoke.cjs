@@ -67,8 +67,9 @@ app.whenReady().then(async () => {
   await new Promise(r => server.listen(0, "127.0.0.1", r));
   const base = "http://127.0.0.1:" + server.address().port;
   const outside = [];
+  const docsOnDisk = require("node:url").pathToFileURL(path.join(root, "docs")).href + "/";  // the demo opened from disk
   session.defaultSession.webRequest.onBeforeRequest((details, cb) => {
-    if (details.url.startsWith(base + "/")) return cb({});
+    if (details.url.startsWith(base + "/") || details.url.startsWith(docsOnDisk)) return cb({});
     outside.push(details.url);
     if (details.url === "https://api.github.com/repos/david-darr/kairos/releases/latest") return cb({ redirectURL: base + "/__github-latest" });
     cb({ cancel: true });
@@ -91,6 +92,8 @@ app.whenReady().then(async () => {
   const navigate = async (tab, options = {}) => {
     await js("import('/static/js/app.js').then(m => m.switchTab(" + JSON.stringify(tab) + "," + JSON.stringify(options) + "))");
     await delay(100);
+    // Home to Chat animates (a view transition); captures wait for it to end.
+    await waitFor("!document.documentElement.classList.contains('tab-transition')");
   };
   const overflow = async () => js(`Array.from(document.querySelectorAll('#view-content, #view-content .view-constrained, .chat-input-bar, .settings-content, .cal-left')).filter(e => e.clientWidth > 0 && e.scrollWidth > e.clientWidth + 2).map(e => ({class: e.className, width:e.clientWidth, scroll:e.scrollWidth}))`);
   try {
@@ -161,10 +164,13 @@ app.whenReady().then(async () => {
       for (const tab of ["home", "chat", "notes", "library", "calendar", "tasks", "email", "tool-store", "agents", "cookbook", "school"]) {
         await navigate(tab);
         if (tab === "chat") {
-          assert.ok(await js("getComputedStyle(document.querySelector('.chat-layout')).backgroundImage.includes('kairos-sky.jpg')"), label + " default Chat uses the Kairos sky");
+          // A new chat lands on the halftone figure (static/js/chatBackdrop.js).
+          await waitFor("document.querySelector('.chat-backdrop')?.dataset.scene === 'figure' && document.querySelector('.chat-backdrop').dataset.drawMs !== undefined");
+          assert.ok(await js("document.querySelector('.chat-backdrop').clientWidth > 0"), label + " default Chat draws the halftone background");
         }
         if (tab === "home") {
           await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
+          assert.ok(await js("document.querySelector('.dashboard-content').classList.contains('is-filled') && getComputedStyle(document.querySelector('.dashboard-section-body')).animationName === 'home-fill'"), label + " Home's first fill animates in");
           await waitFor("document.querySelectorAll('.dashboard-model-usage').length > 0");
           // Only the local model carries a usage label, and it is tokens
           // spent, never a "% used" figure that reads like a quota.
@@ -604,6 +610,9 @@ app.whenReady().then(async () => {
         await js("document.querySelector('.settings-mobile-back').click()");
       } else {
         await waitFor("!!document.querySelector('.modal-backdrop:not(.hidden) .settings-window')");
+        // Dialogs rise in and fade out: the scrim's display waits for its fade.
+        assert.ok(await js("(() => { const b = getComputedStyle(document.querySelector('.settings-window').parentElement); return b.transitionProperty.includes('display') && b.transitionBehavior.includes('allow-discrete') && getComputedStyle(document.querySelector('.settings-window')).transitionProperty.includes('transform'); })()"), label + " dialogs animate in and out");
+        assert.equal(await js("getComputedStyle(document.querySelector('.set-page')).animationName"), "set-page-in", label + " Settings pages fade in");
         await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
         await waitFor("!!document.querySelector('.modal-backdrop.hidden .settings-window')");
         await js("document.querySelector('.sidebar-settings-btn').click()");
@@ -705,6 +714,58 @@ app.whenReady().then(async () => {
     await capture("desktop-model-menu");
     const menuFits = await js("(() => {const r=document.querySelector('#model-picker-menu').getBoundingClientRect(); return r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight})()");
     assert.ok(menuFits, "Model menu fits viewport");
+    // Every popup shares one flat surface (no sheen), and the composer's
+    // menus open fully above it rather than over its text box.
+    const popupLook = "(m => { const s = getComputedStyle(m); const r = m.getBoundingClientRect(); const c = document.querySelector('.chat-input-bar').getBoundingClientRect(); return s.backgroundImage === 'none' && s.borderRadius === '14px' && r.bottom <= c.top; })";
+    assert.ok(await js(popupLook + "(document.querySelector('#model-picker-menu'))"), "Model menu: shared popup look, above the composer");
+    await js("document.body.click(); document.querySelector('#overflow-plus-btn').click()");
+    assert.ok(await js(popupLook + "(document.querySelector('#overflow-menu'))"), "+ menu: shared popup look, above the composer");
+    await capture("desktop-plus-menu");
+    await js("document.body.click()");
+    // Native <select>s (the composer's Mode here) open the app's own menu,
+    // above the composer, not the system's list; Escape closes it.
+    await js("document.getElementById('chat-permission-mode').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))");
+    assert.ok(await js("(() => { const m = document.querySelector('.custom-select-menu'); const c = document.querySelector('.chat-input-bar').getBoundingClientRect(); return !!m && m.querySelectorAll('.custom-select-item').length === document.getElementById('chat-permission-mode').options.length && m.querySelector('.custom-select-item.active') && m.getBoundingClientRect().bottom <= c.top; })()"), "Mode opens the app's menu above the composer");
+    await capture("desktop-mode-menu");
+    await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
+    assert.ok(await js("!document.querySelector('.custom-select-menu')"), "Escape closes the Mode menu");
+    // The halftone background: the sky behind a chat with messages, the figure
+    // behind a new one; Home to Chat runs a view transition (app.js).
+    assert.equal(await js("document.querySelector('.chat-backdrop').dataset.scene"), "sky", "A chat with messages shows the halftone sky");
+    await navigate("home");
+    await delay(600);
+    await js("window.__viewTransitions = 0; window.__startViewTransition = document.startViewTransition; document.startViewTransition = function (cb) { window.__viewTransitions++; return window.__startViewTransition.call(document, cb); }; true");
+    await navigate("chat");
+    await waitFor("document.querySelector('.chat-backdrop')?.dataset.scene === 'figure' && Number(document.querySelector('.chat-backdrop').dataset.drawMs) >= 0 && !document.documentElement.classList.contains('tab-transition')");
+    assert.equal(await js("window.__viewTransitions"), 1, "Home to Chat runs a view transition");
+    const backdropMs = Number(await js("document.querySelector('.chat-backdrop').dataset.drawMs"));
+    console.log(`chat halftone draw: ${backdropMs} ms`);
+    assert.ok(backdropMs < 400, "The chat halftone draws in under 400 ms (" + backdropMs + ")");
+    await capture("desktop-chat-new-halftone");
+    const forming = await js(`import('/static/js/chatContent.js').then(async (m) => {
+      const text = 'Here:\\n\\n\\\`\\\`\\\`js\\nlet a = 1\\n\\\`\\\`\\\`\\n\\n| a | b |\\n|---|---|\\n| 1 | 2 |';
+      const live = document.createElement('div');
+      m.renderMessageBody(live, text, 's1', true, { live: true });
+      const first = [...live.querySelectorAll('.chat-code-block, .chat-table-wrap')].map(n => n.classList.contains('is-forming'));
+      await new Promise(r => setTimeout(r, 300));
+      m.renderMessageBody(live, text + ' more', 's1', true, { live: true });
+      const resumed = parseInt(live.querySelector('.chat-code-block').style.animationDelay, 10);
+      await new Promise(r => setTimeout(r, 700));
+      m.renderMessageBody(live, text + ' done', 's1', true, { live: false });
+      const settled = !live.querySelector('.is-forming');
+      const history = document.createElement('div');
+      m.renderMessageBody(history, text, 's1', true);
+      m.renderMessageBody(history, text, 's1', true, { live: true });
+      return JSON.stringify({ first, resumed, settled, history: !history.querySelector('.is-forming') });
+    })`);
+    const formed = JSON.parse(forming);
+    assert.deepEqual(formed.first, [true, true], "Code and tables form in mid-reply");
+    assert.ok(formed.resumed <= -250, "A re-render resumes the forming animation (" + formed.resumed + ")");
+    assert.ok(formed.settled, "Formed blocks settle");
+    assert.ok(formed.history, "History never animates");
+    await navigate("home");
+    assert.equal(await js("window.__viewTransitions"), 2, "Chat to Home runs a view transition");
+    await waitFor("document.querySelector('.dashboard-core')?.classList.contains('is-dithered')");
     await navigate("chat");
     assert.equal(await js("getComputedStyle(document.querySelector('.border-beam'),'::before').animationName"), "border-orbit");
     await js("document.querySelector('.border-beam').dataset.active='false'");
@@ -713,6 +774,11 @@ app.whenReady().then(async () => {
     await win.webContents.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
     assert.equal(await js("getComputedStyle(document.querySelector('.border-beam'),'::before').animationName"), "none");
     assert.ok(await js("parseFloat(getComputedStyle(document.querySelector('#sidebar')).transitionDuration) < .01"), "Reduced motion disables the rail transition");
+    const transitionsBefore = await js("window.__viewTransitions");
+    await navigate("home");
+    await navigate("chat");
+    assert.equal(await js("window.__viewTransitions"), transitionsBefore, "Reduced motion skips the Home and Chat transitions");
+    await js("document.startViewTransition = window.__startViewTransition; true");
     await navigate("home");
     await waitFor("document.querySelector('.dashboard-core')?.classList.contains('is-dithered')");
     await capture("desktop-reduced-motion");
@@ -804,6 +870,15 @@ app.whenReady().then(async () => {
       await waitFor("document.querySelector('.hero-art').classList.contains('is-dithered') && !!document.querySelector('.hero-art canvas')");
       assert.ok(await js("(() => { const d = document.createElement('div'); d.className = 'hero-art'; document.body.append(d); const v = getComputedStyle(d).backgroundImage; d.remove(); return v.includes('hero-dither.webp'); })()"), label + " halftone fallback styled");
       assert.ok(await js("fetch('img/hero-dither.webp').then(r => r.ok)"), label + " halftone fallback exists");
+      await waitFor("!document.querySelector('.hero-art .dither-cover')");
+      // Sections flow in with the scroll (scroll-driven animations, CSS only):
+      // below the window a card is still faint, centred it is settled.
+      assert.ok(await js("(() => { const f = getComputedStyle(document.querySelector('.feature')); return f.animationName === 'flow-in' && String(f.animationTimeline).includes('view'); })()"), label + " sections flow in with the scroll");
+      assert.ok(await js("Number(getComputedStyle(document.querySelector('.download-card')).opacity) < .5"), label + " a section below the window is still faint");
+      await js("document.querySelector('.feature').scrollIntoView({ block: 'center', behavior: 'instant' })");
+      await waitFor("Number(getComputedStyle(document.querySelector('.feature')).opacity) > .97");
+      assert.ok(await js("getComputedStyle(document.querySelector('.faq details'), '::details-content').transitionProperty.includes('block-size')"), label + " FAQ answers open smoothly");
+      await js("window.scrollTo(0, 0)");
       const drawMs = Number(await js("document.querySelector('.hero-art').dataset.drawMs"));
       console.log(`${label} halftone draw: ${drawMs} ms`);
       assert.ok(drawMs < 400, label + " halftone draws in under 400 ms (" + drawMs + ")");
@@ -817,11 +892,11 @@ app.whenReady().then(async () => {
       const anchors = await js("[...document.querySelectorAll('a[href^=\"#\"]')].every(a => document.querySelector(a.getAttribute('href')))");
       assert.ok(anchors, "Website anchors resolve");
       await capture(label + "-website");
-      // The live demo (docs/demo): the real interface on sample data, answered by its service worker.
+      // The live demo (docs/demo): the real interface on sample data, answered in the page by demo/shim.js.
       const inDemo = (code) => js("(() => { const d = document.getElementById('demo-frame').contentDocument; return " + code + "; })()");
       const waitDemo = async (code, what) => {
         for (let i = 0; i < 200; i++) { try { if (await inDemo(code)) return; } catch (_) { /* the frame is between pages */ } await delay(100); }
-        const seen = await js("(() => { const f = document.getElementById('demo-frame'); const d = f.contentDocument; return JSON.stringify({ src: f.src, url: d && d.location.href, ready: d && d.readyState, controlled: !!(f.contentWindow.navigator.serviceWorker && f.contentWindow.navigator.serviceWorker.controller), nav: d && d.querySelectorAll('.nav-item').length, body: d && d.body && d.body.innerHTML.slice(0, 200) }); })()").catch((e) => String(e));
+        const seen = await js("(() => { const f = document.getElementById('demo-frame'); const d = f.contentDocument; return JSON.stringify({ src: f.src, url: d && d.location.href, ready: d && d.readyState, nav: d && d.querySelectorAll('.nav-item').length, body: d && d.body && d.body.innerHTML.slice(0, 200) }); })()").catch((e) => String(e));
         throw new Error("Demo timed out: " + what + " " + seen);
       };
       await js("document.getElementById('demo').scrollIntoView({block:'center',behavior:'instant'})");
@@ -838,6 +913,7 @@ app.whenReady().then(async () => {
       await waitDemo("!!d.getElementById('chat-input')", "the demo composer");
       await inDemo("(() => { const i = d.getElementById('chat-input'); i.value = 'What can you do?'; i.dispatchEvent(new Event('input', { bubbles: true })); d.getElementById('chat-send').click(); return true; })()");
       await waitDemo("[...d.querySelectorAll('.msg.assistant')].some(m => m.textContent.includes('Demo reply') && m.textContent.includes('download Kairos'))", "the demo's scripted reply");
+      await waitDemo("d.querySelector('.chat-backdrop').dataset.scene === 'sky' && !d.querySelector('.chat-backdrop').classList.contains('is-dissolving')", "the background turns to the sky after the first message");
       await capture(label + "-website-demo");
       if (label === "mobile") {
         assert.ok(await js("getComputedStyle(document.querySelector('.menu-button')).display !== 'none' && getComputedStyle(document.querySelector('.nav-links')).display === 'none'"), "phone menu starts closed");
@@ -860,6 +936,15 @@ app.whenReady().then(async () => {
       await js("document.querySelector('.install-note').open = true");
       assert.ok(await js("document.documentElement.scrollWidth <= innerWidth"));
       assert.ok(await js("[...document.images].every(i => i.complete && i.naturalWidth > 0)"), "Every website image loads");
+      // Each feature image is shown whole: drawn in its file's own shape (so
+      // nothing is zoomed or cropped) and entirely inside its card.
+      const featureImages = await js(`[...document.querySelectorAll('.feature img')].map(i => { const r = i.getBoundingClientRect(), c = i.closest('.feature').getBoundingClientRect();
+        return { src: i.getAttribute('src'), drawn: r.width / r.height, file: i.naturalWidth / i.naturalHeight, inside: r.left >= c.left && r.right <= c.right && r.bottom <= c.bottom }; })`);
+      assert.equal(featureImages.length, 6, label + " six feature images");
+      for (const image of featureImages) {
+        assert.ok(Math.abs(image.drawn - image.file) < 0.02, `${label} ${image.src} is drawn whole (drawn ${image.drawn.toFixed(2)}, file ${image.file.toFixed(2)})`);
+        assert.ok(image.inside, `${label} ${image.src} sits inside its card`);
+      }
     }
     await win.loadURL(base + "/kairos/404.html");
     await waitFor("document.querySelector('.not-found h1')?.textContent === 'Not the right time.'");
@@ -870,9 +955,21 @@ app.whenReady().then(async () => {
     await win.webContents.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
     assert.equal(await js("getComputedStyle(document.documentElement).scrollBehavior"), "auto");
     assert.equal(await js("getComputedStyle(document.querySelector('.button')).transitionDuration"), "0s");
+    // The demo also runs straight from disk (someone opening docs/ locally),
+    // where browsers allow no service worker or module scripts. From disk the
+    // browser refuses the fonts and logo masks; that noise isn't kept.
+    const errorsBefore = errors.length;
+    await win.loadURL(docsOnDisk + "demo/index.html");
+    await waitFor("document.querySelectorAll('.nav-item[data-tab]').length >= 10 && !!document.querySelector('.dashboard-core')");
+    await js("document.querySelector('.nav-item[data-tab=chat]').click()");
+    await waitFor("!!document.getElementById('chat-input')");
+    await js("(() => { const i = document.getElementById('chat-input'); i.value = 'Hello'; i.dispatchEvent(new Event('input', { bubbles: true })); document.getElementById('chat-send').click(); return true; })()");
+    for (let i = 0; i < 100 && !(await js("[...document.querySelectorAll('.msg.assistant')].some(m => m.textContent.includes('Demo reply'))")); i++) await delay(100);
+    assert.ok(await js("[...document.querySelectorAll('.msg.assistant')].some(m => m.textContent.includes('Demo reply'))"), "The demo runs from disk");
+    errors.length = errorsBefore;
     console.log("PASS: app desktop/mobile and icon rail, persistence/keyboard/tooltips, reduced motion, vault/chat/Settings, empty/error states, website layouts/links/images/previews.");
     console.log("Screenshots: " + output);
-    fs.writeFileSync(path.join(output, "result.json"), JSON.stringify({ passed: true, checks: ["10 tabs desktop/mobile", "52px icon rail layout and animation", "sidebar persistence, keyboard, tooltips, mobile override", "vault search/read", "Settings and usable mobile forms", "Home chat link and model menu", "beam/core reduced motion", "centered new-chat composer", "independent history persistence, draft retention and mobile focus", "new-chat landing does not write data", "mocked note completion", "delayed navigation", "10 empty views and unavailable status", "website desktop/mobile layouts, anchors, images, five preview states, live halftone and fallback, release-driven downloads, phone menu, FAQ, 404 and reduced motion"], docImagesUpdated: updateDocImages, errors, writes }, null, 2));
+    fs.writeFileSync(path.join(output, "result.json"), JSON.stringify({ passed: true, checks: ["10 tabs desktop/mobile", "52px icon rail layout and animation", "sidebar persistence, keyboard, tooltips, mobile override", "vault search/read", "Settings and usable mobile forms", "Home chat link and model menu", "beam/core reduced motion", "centered new-chat composer", "independent history persistence, draft retention and mobile focus", "new-chat landing does not write data", "mocked note completion", "delayed navigation", "10 empty views and unavailable status", "website desktop/mobile layouts, anchors, images, five preview states, live halftone and fallback, release-driven downloads, phone menu, FAQ, 404 and reduced motion", "site demo from disk"], docImagesUpdated: updateDocImages, errors, writes }, null, 2));
   } catch (error) {
     await capture("failure").catch(() => {});
     fs.writeFileSync(path.join(output, "result.json"), JSON.stringify({ passed: false, failure: error.stack, actual: error.actual, expected: error.expected, errors }, null, 2));

@@ -1,6 +1,6 @@
 import { ICONS } from "./icons.js";
 import { WORDMARK } from "./brand.js";
-import { api } from "./api.js";
+import { api, useAppMenusForSelects } from "./api.js";
 import * as onboarding from "./onboarding.js";
 import * as auth from "./auth.js";
 import * as commandPalette from "./commandPalette.js";
@@ -65,7 +65,37 @@ let activeUnmount = null; // set by a view's render() if it needs teardown (e.g.
 let view = document.getElementById("view-content");
 let navigationVersion = 0;
 
-export async function switchTab(tabId, options = {}) {
+// Home and Chat (David, 2026-10-07): Home's halftone card grows into the
+// chat background, and shrinks back into the card on the way home, through
+// the browser's view transitions. Both are named `kairos-backdrop` only
+// while it runs (style.css, :root.tab-transition). The new screen is
+// captured once the arriving view has drawn its halftone (and the chat has
+// opened any chat it was asked for), or after 800 ms at most.
+export function switchTab(tabId, options = {}) {
+  const homeAndChat = (activeTab === "home" && tabId === "chat") || (activeTab === "chat" && tabId === "home");
+  if (!homeAndChat || !document.startViewTransition || matchMedia("(prefers-reduced-motion: reduce)").matches
+      || document.documentElement.dataset.appearance !== "default") {
+    return performSwitch(tabId, options);
+  }
+  let landed;
+  const ready = new Promise((resolve) => { landed = resolve; });
+  const root = document.documentElement;
+  root.classList.add("tab-transition");
+  return new Promise((resolve) => {
+    const transition = document.startViewTransition(() => {
+      const run = performSwitch(tabId, { ...options, transitionReady: landed });
+      run.then(resolve, resolve);
+      // Not `run`: a view can finish rendering before its halftone is drawn.
+      return Promise.race([ready, new Promise((r) => setTimeout(r, 800))]);
+    });
+    // A transition is skipped when another starts (a second click mid-way);
+    // the switch itself still happens, so that's not an error.
+    transition.ready.catch(() => {});
+    transition.finished.finally(() => root.classList.remove("tab-transition"));
+  });
+}
+
+async function performSwitch(tabId, options = {}) {
   const version = ++navigationVersion;
   // The side browser's chrome lives in the Chat view's DOM, but in the
   // desktop app the page itself is a NATIVE view owned by the main process.
@@ -493,4 +523,5 @@ async function startApp() {
   await switchTab("home");
 }
 
+useAppMenusForSelects();
 boot();

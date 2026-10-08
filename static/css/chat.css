@@ -123,9 +123,7 @@
 .chat-input-top:has(.chat-reference-chips) #chat-input { flex-basis: 100%; }
 .chat-reference-picker {
   position: absolute; left: 0; right: 0; bottom: calc(100% + 14px); z-index: 60;
-  max-height: min(350px, 42vh); overflow-y: auto; padding: 6px;
-  background: var(--bg-panel-solid); border: 1px solid var(--border-strong);
-  border-radius: 13px; box-shadow: var(--shadow-elevated);
+  max-height: min(350px, 42vh); overflow-y: auto;
 }
 .chat-reference-picker[hidden] { display: none; }
 .chat-reference-option {
@@ -155,7 +153,7 @@
 }
 .chat-reference-chip button:hover { color: var(--text); }
 .model-picker-btn { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-picker-item { width: 100%; text-align: left; font: inherit; background: none; border: 0; color: var(--text); }
+.model-picker-item { width: 100%; text-align: left; font: inherit; background: none; border: 0; }
 .model-version-form { padding: 12px; display: grid; gap: 10px; }
 .model-version-form label { font-size: 12px; font-weight: 550; }
 .model-version-form input { width: 100%; min-width: 0; }
@@ -184,7 +182,10 @@
 .model-effort-btn:hover { border-color: var(--border-strong); color: var(--text); }
 .model-effort-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
 .model-custom-details { border-top: 1px solid var(--border); }
-.model-custom-details summary { padding: 8px 10px; font-size: 12px; color: var(--text-dim); cursor: pointer; }
+.model-custom-details summary { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; list-style: none; }
+.model-custom-details summary::-webkit-details-marker { display: none; }
+.model-custom-details summary::before { content: "\203A"; width: 10px; font-size: 15px; line-height: 1; transition: transform .15s ease; }
+.model-custom-details[open] summary::before { transform: rotate(90deg); }
 .model-custom-details summary:hover { color: var(--text); }
 
 /* -- context meter ------------------------------------------------------ */
@@ -297,6 +298,33 @@
 @media (max-width: 1100px) { .artifact-panel { position: absolute; inset: 0 0 0 auto; width: min(620px, 85%); z-index: 30; box-shadow: var(--shadow-elevated); } .chat-layout { position: relative; } }
 @media (max-width: 680px) { .artifact-panel { width: 100%; inset: 0; } .chat-prose { font-size: 14px; } .chat-input-bar .model-picker-btn { max-width: 105px; font-size: 10px; padding-inline: 4px; } .chat-input-right { gap: 4px; } .artifact-header { padding: 16px; } .msg-actions { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .artifact-panel { animation: none; } .artifact-card { transition: none; } }
+
+/* -- live replies form in (David, 2026-10-07) ------------------------------
+   A message sent or received just now rises in. A file card, code block or
+   table that appears mid-reply forms in halftone: a 4 px dot screen whose
+   dots grow from nothing until they merge, while a solid edge sweeps down
+   from the top, like a print developing (chatContent.js formBlocks). A mask
+   reads only alpha, so its colour is just currentColor. */
+.msg-enter { animation: msg-enter 260ms cubic-bezier(.22, 1, .36, 1) both; }
+@keyframes msg-enter { from { opacity: 0; transform: translateY(8px); } }
+@property --form-dot { syntax: '<length>'; inherits: false; initial-value: 3px; }
+@property --form-edge { syntax: '<percentage>'; inherits: false; initial-value: 130%; }
+.is-forming {
+  -webkit-mask-image: linear-gradient(currentColor calc(var(--form-edge) - 30%), transparent var(--form-edge)),
+    radial-gradient(circle, currentColor var(--form-dot), transparent calc(var(--form-dot) + .6px));
+  mask-image: linear-gradient(currentColor calc(var(--form-edge) - 30%), transparent var(--form-edge)),
+    radial-gradient(circle, currentColor var(--form-dot), transparent calc(var(--form-dot) + .6px));
+  -webkit-mask-size: 100% 100%, 4px 4px; mask-size: 100% 100%, 4px 4px;
+  animation: form-dots 900ms linear both;
+}
+/* Most of the time is spent as a visible dot screen; the dots only merge,
+   and the solid edge only reaches the bottom, near the end. */
+@keyframes form-dots {
+  0% { --form-dot: 0px; --form-edge: -30%; transform: translateY(4px); }
+  65% { --form-dot: 1.5px; --form-edge: 45%; transform: none; }
+  100% { --form-dot: 3px; --form-edge: 130%; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .msg-enter, .is-forming { animation: none; -webkit-mask-image: none; mask-image: none; } }
 
 /* -- stopped turn (David's ask 2026-09-15, voice work's foundation) ------ */
 /* Deliberately not styled like a failure: stopping is a normal outcome, and
@@ -447,7 +475,7 @@
 
 /* Find in chat (static/js/chatFind.js, 2026-09-25). */
 .chat-find { position: absolute; top: 60px; right: 18px; z-index: 6; display: flex; align-items: center; gap: 4px;
-  padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--glass-sheen), var(--bg-panel-solid);
+  padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg-panel-solid);
   box-shadow: var(--shadow-elevated); max-width: calc(100% - 36px); }
 .chat-find[hidden] { display: none; }
 .chat-find-input { width: 200px; min-width: 0; font-size: 12.5px; padding: 4px 8px; }

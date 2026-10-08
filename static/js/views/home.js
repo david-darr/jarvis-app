@@ -66,12 +66,27 @@ function eventDate(value) {
   return new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? value + "T00:00:00" : value);
 }
 
+// Counts a stat's number up from zero over 600 ms, easing out.
+function countUp(node) {
+  const target = Number(node.textContent);
+  if (!Number.isFinite(target) || target <= 0) return;
+  const started = performance.now();
+  const step = (now) => {
+    if (!node.isConnected) return;
+    const t = Math.min(1, (now - started) / 600);
+    node.textContent = String(Math.round(target * (1 - (1 - t) ** 3)));
+    if (t < 1) requestAnimationFrame(step);
+  };
+  node.textContent = "0";
+  requestAnimationFrame(step);
+}
+
 // Return cleanup synchronously: navigating away during a pending request
 // releases the scene immediately. Home reads cheap summary APIs only.
-export function render(container) {
+export function render(container, tabId, options = {}) {
   container.replaceChildren();
   container.classList.add("dashboard");
-  let disposed = false, refreshing = false, systemStatus = null, nextTask = null;
+  let disposed = false, refreshing = false, systemStatus = null, nextTask = null, filled = false;
   const statusLabel = el("span", { text: "Checking system" });
   const statusDot = el("span", { class: "status-dot" });
   // The banner: the Kairos figure as halftone (BRAND.md 6.8), still, with
@@ -103,7 +118,8 @@ export function render(container) {
   const models = section("Your models", "Manage ↗", "settings");
   content.append(hero, stats, el("div", { class: "dashboard-grid" }, [chats.panel, schedule.panel, projects.panel, models.panel, activity.panel, system.panel]));
   container.appendChild(content);
-  const disposeBanner = mountDither(banner, "/static/img/home-figure.webp", { cell: 4, fade: [0.86, 1.0], focusX: 0.7, focusY: 0.4 });
+  // Chat to Home (app.js switchTab) waits for the banner before animating into it.
+  const disposeBanner = mountDither(banner, "/static/img/home-figure.webp", { cell: 4, fade: [0.86, 1.0], focusX: 0.7, focusY: 0.4, onReady: options.transitionReady });
   for (const item of [chats, schedule, projects, activity, system, models]) {
     item.body.append(el("div", { class: "skeleton skeleton-line" }), el("div", { class: "skeleton skeleton-line" }));
   }
@@ -171,6 +187,14 @@ export function render(container) {
       ["Discord", status.discord_connected_bots.length ? status.discord_connected_bots.length + " connected" : "Not connected", status.discord_connected_bots.length ? "ok" : "warn"],
       ["Model endpoints", status.model_endpoint_count + " configured", status.model_endpoint_count ? "ok" : "warn"],
     ]) system.body.append(el("div", { class: "dashboard-system-row" }, [el("span", { class: "status-dot " + state }), el("span", { text: label }), el("span", { class: "meta", text: detail })]));
+    // The first fill arrives with a little motion (David, 2026-10-07): the
+    // panels' contents fade in one after another (style.css .is-filled) and
+    // the four numbers count up. The 30-second refreshes change in place.
+    if (!filled) {
+      filled = true;
+      content.classList.add("is-filled");
+      if (!matchMedia("(prefers-reduced-motion: reduce)").matches) stats.querySelectorAll(".dashboard-stat-value").forEach(countUp);
+    }
   }
   refresh();
   const refreshTimer = setInterval(() => { if (!document.hidden) refresh(); }, 30000);

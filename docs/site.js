@@ -2,13 +2,17 @@
 // buttons that match the visitor's system and the latest release. Everything
 // degrades to plain links when scripts or the network are unavailable. The
 // live demo (docs/demo) runs on its own in its frame.
-// The halftone renderer is the app's own (static/js/dither.js), from the demo's copy.
-import { mountDither } from "./demo/static/js/dither.js";
+// A plain script, not a module, so the page still works opened from disk,
+// where browsers refuse module scripts.
 const REPO = "david-darr/kairos";
 
 // -- hero halftone ----------------------------------------------------------
+// The renderer is the app's own (static/js/dither.js), from the demo's copy.
+// Where it can't load (from disk), the pre-rendered halftone stays.
 const art = document.querySelector(".hero-art");
-if (art) mountDither(art, "img/hero-figure.webp", { cell: 4, fade: [0.72, 1.0], focusX: 0.5, focusY: 0.35 });
+if (art) import("./demo/static/js/dither.js")
+  .then(({ mountDither }) => mountDither(art, "img/hero-figure.webp", { cell: 4, focusX: 0.62, focusY: 1, develop: 900 }))
+  .catch(() => {});
 
 // -- navigation ----------------------------------------------------------
 const nav = document.querySelector(".site-nav");

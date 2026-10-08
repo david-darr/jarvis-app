@@ -180,18 +180,141 @@ export function emptyState({ icon, title, hint, actionLabel, onAction }) {
   return node;
 }
 
-// Custom dropdown, drop-in replacement for el("select", attrs, optionEls).
-// Real bug found live 2026-09-01 (David sent a screenshot): a native
-// <select>'s open option-list is OS/Chromium-native chrome that CSS can't
-// reliably restyle — `color-scheme: dark` on :root (added earlier believing
-// it fixed this) does NOT make Electron's popup honor the app's dark theme,
-// proven by the screenshot showing a plain white list. Every other custom
-// menu in the app (.model-picker-menu, .overflow-menu) is a real styled DOM
-// node instead of relying on native chrome, so this does the same: reads
-// value/text/selected/disabled off the same <option> elements callers
+// One option menu for every dropdown in the app: customSelect()'s, and every
+// native <select>'s (useAppMenusForSelects below). A native <select>'s open
+// list is drawn by the operating system, which CSS can't restyle (David,
+// 2026-09-01 and 2026-10-07: a plain white Windows list), so the list is a
+// real styled node instead. It lives on <body> with `fixed` coordinates from
+// the control's rect, so no ancestor's stacking context or overflow can clip
+// it, and it exists only while open.
+let openMenu = null;
+
+export function closeOptionMenu() {
+  if (!openMenu) return;
+  const { menu, cleanup } = openMenu;
+  openMenu = null;
+  cleanup();
+  menu.remove();
+}
+
+// items: [{ value, text, selected, disabled } | { heading }]
+export function openOptionMenu(anchor, items, onPick) {
+  closeOptionMenu();
+  const menu = el("div", { class: "custom-select-menu", role: "listbox" });
+  for (const item of items) {
+    if (item.heading !== undefined) { menu.append(el("div", { class: "custom-select-heading", text: item.heading })); continue; }
+    const row = el("button", {
+      type: "button", role: "option", "aria-selected": String(!!item.selected),
+      class: "custom-select-item" + (item.selected ? " active" : "") + (item.disabled ? " disabled" : ""),
+      text: item.text,
+    });
+    if (item.disabled) row.disabled = true;
+    // Focus goes back to the control without a keyboard ring after a click.
+    else row.addEventListener("click", (e) => { e.stopPropagation(); closeOptionMenu(); anchor.focus?.({ focusVisible: false }); onPick(item.value); });
+    menu.append(row);
+  }
+  document.body.append(menu);
+
+  // Below the control, or above it when there is more room there, never
+  // taller than the space on that side (2026-10-05: a long list near the
+  // bottom of Settings ran off the window). From the chat composer it opens
+  // above the whole composer, like its other menus.
+  const GAP = 6, MARGIN = 12, MAX = 260;
+  const rect = anchor.getBoundingClientRect();
+  const composer = anchor.closest(".chat-input-bar")?.getBoundingClientRect();
+  const top = composer ? composer.top - 2 : rect.top;
+  const below = window.innerHeight - rect.bottom - GAP - MARGIN;
+  const above = top - GAP - MARGIN;
+  const up = composer ? true : below < Math.min(MAX, menu.scrollHeight) && above > below;
+  menu.style.maxHeight = `${Math.max(120, Math.min(MAX, up ? above : below))}px`;
+  const width = Math.max(rect.width, 160);
+  menu.style.width = `${width}px`;
+  menu.style.left = `${Math.max(MARGIN, Math.min(rect.left, window.innerWidth - width - MARGIN))}px`;
+  menu.style.top = up ? "" : `${rect.bottom + GAP}px`;
+  menu.style.bottom = up ? `${window.innerHeight - top + GAP}px` : "";
+  (menu.querySelector(".custom-select-item.active") || menu.querySelector(".custom-select-item:not(.disabled)"))?.scrollIntoView({ block: "nearest" });
+
+  const rows = () => [...menu.querySelectorAll(".custom-select-item:not(.disabled)")];
+  const onKey = (e) => {
+    // Capture phase, so Escape closes this menu and not also the Settings
+    // window or dialog behind it.
+    if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); closeOptionMenu(); anchor.focus?.(); return; }
+    if (e.key === "Tab") { closeOptionMenu(); return; }
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const list = rows();
+    if (!list.length) return;
+    const at = list.indexOf(document.activeElement);
+    const start = at < 0 ? list.findIndex((r) => r.classList.contains("active")) : at;
+    const next = e.key === "ArrowDown" ? Math.min(list.length - 1, start + 1) : Math.max(0, start < 0 ? 0 : start - 1);
+    list[next].focus();
+  };
+  const onClick = (e) => { if (!menu.contains(e.target) && !anchor.contains(e.target)) closeOptionMenu(); };
+  // Scrolling the page moves the control out from under a fixed menu, so it
+  // closes, but not when the scroll is the menu's own list (2026-10-05: the
+  // 18-platform list in Settings closed the moment it was scrolled).
+  const onScroll = (e) => { if (!menu.contains(e.target)) closeOptionMenu(); };
+  document.addEventListener("keydown", onKey, true);
+  document.addEventListener("click", onClick, true);
+  window.addEventListener("scroll", onScroll, true);
+  window.addEventListener("resize", closeOptionMenu);
+  openMenu = { menu, anchor, cleanup: () => {
+    document.removeEventListener("keydown", onKey, true);
+    document.removeEventListener("click", onClick, true);
+    window.removeEventListener("scroll", onScroll, true);
+    window.removeEventListener("resize", closeOptionMenu);
+  } };
+  return menu;
+}
+
+const isOpenFor = (anchor) => openMenu?.anchor === anchor;
+
+// Every native <select> opens the app's menu instead of the system's list.
+// The <select> stays the real control: its look, value, form name and
+// "change" events are unchanged; only the list it opens is replaced, read
+// fresh from its options each time, so lists filled in later just work.
+// Phones keep their own picker, which suits touch better. Called once at
+// startup; it covers selects added later too, custom tabs included.
+export function useAppMenusForSelects() {
+  if (window.matchMedia?.("(pointer: coarse)").matches) return;
+  const usable = (t) => t instanceof HTMLSelectElement && !t.multiple && t.size <= 1 && !t.disabled;
+  const option = (o) => ({ value: o.value, text: o.label || o.textContent, selected: o.selected, disabled: o.disabled, hidden: o.hidden });
+  const open = (select) => {
+    if (isOpenFor(select)) { closeOptionMenu(); return; }
+    const items = [];
+    for (const child of select.children) {
+      if (child instanceof HTMLOptGroupElement) items.push({ heading: child.label }, ...[...child.children].map(option));
+      else if (child instanceof HTMLOptionElement) items.push(option(child));
+    }
+    openOptionMenu(select, items.filter((i) => !i.hidden), (value) => {
+      if (select.value === value) return;
+      select.value = value;
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  };
+  document.addEventListener("mousedown", (e) => {
+    if (e.button !== 0 || !usable(e.target)) return;
+    e.preventDefault();  // stops the system list from opening
+    e.target.focus({ focusVisible: false });
+    open(e.target);
+  }, true);
+  // The keys that would open the system list open this one; plain arrow
+  // keys still step through the options in place, as before.
+  document.addEventListener("keydown", (e) => {
+    if (!usable(e.target)) return;
+    if (e.key === "Enter" || e.key === " " || e.key === "F4" || (e.altKey && (e.key === "ArrowDown" || e.key === "ArrowUp"))) {
+      e.preventDefault();
+      open(e.target);
+    }
+  }, true);
+}
+
+// Custom dropdown, drop-in replacement for el("select", attrs, optionEls):
+// reads value/text/selected/disabled off the same <option> elements callers
 // already build, and exposes a compatible-enough surface (.value getter/
 // setter, .disabled, real "change" events) that no call site needs a
-// different shape, just el("select", ...) swapped for customSelect(...).
+// different shape. Its list is the shared option menu above.
 export function customSelect(attrs = {}, optionEls = []) {
   const opts = [].concat(optionEls).filter(Boolean).map((o) => ({
     value: o.getAttribute("value") ?? "",
@@ -201,20 +324,9 @@ export function customSelect(attrs = {}, optionEls = []) {
   }));
   let current = (opts.find((o) => o.initiallySelected) || opts[0] || { value: "" }).value;
 
-  const btn = el("button", { type: "button", class: "custom-select-btn" });
+  const btn = el("button", { type: "button", class: "custom-select-btn", "aria-haspopup": "listbox" });
   const label = el("span", { class: "custom-select-label" });
   btn.append(label, el("span", { class: "custom-select-chevron" }));
-  // Menu is appended to <body> (not wrap) and positioned with `fixed`
-  // coordinates computed from the button's real rect on open — a real bug
-  // found live 2026-09-01 (David sent a screenshot): an `absolute`-positioned
-  // menu nested inside the wrap can only paint above elements in its own
-  // stacking context, and a `.glass.bracket.card` sibling further down the
-  // page creates its own stacking context (backdrop-filter), so it painted
-  // over the menu regardless of z-index. Anchoring to body sidesteps every
-  // ancestor's stacking context and overflow:hidden/auto clipping for good,
-  // not just for this one card layout.
-  const menu = el("div", { class: "custom-select-menu hidden" });
-  document.body.appendChild(menu);
   const wrap = el("div", { class: "custom-select" });
   wrap.append(btn);
 
@@ -229,79 +341,16 @@ export function customSelect(attrs = {}, optionEls = []) {
     const match = opts.find((o) => o.value === current);
     label.textContent = match ? match.text : "";
   }
-  function closeMenu() { menu.classList.add("hidden"); }
-  // Opens below the button, or above it when there is more room there, and
-  // never taller than the space on that side (found 2026-10-05: near the
-  // bottom of Settings a long list ran off the window).
-  const MENU_GAP = 6, MENU_MARGIN = 12, MENU_MAX = 260;
-  function positionMenu() {
-    const rect = btn.getBoundingClientRect();
-    const below = window.innerHeight - rect.bottom - MENU_GAP - MENU_MARGIN;
-    const above = rect.top - MENU_GAP - MENU_MARGIN;
-    const up = below < Math.min(MENU_MAX, menu.scrollHeight) && above > below;
-    menu.style.maxHeight = `${Math.max(120, Math.min(MENU_MAX, up ? above : below))}px`;
-    menu.style.left = `${rect.left}px`;
-    menu.style.width = `${rect.width}px`;
-    menu.style.top = up ? "" : `${rect.bottom + MENU_GAP}px`;
-    menu.style.bottom = up ? `${window.innerHeight - rect.top + MENU_GAP}px` : "";
-  }
-  function openMenu() {
-    document.querySelectorAll(".custom-select-menu").forEach((m) => m.classList.add("hidden"));
-    menu.innerHTML = "";
-    for (const o of opts) {
-      const item = el("button", {
-        type: "button",
-        class: "custom-select-item" + (o.value === current ? " active" : "") + (o.disabled ? " disabled" : ""),
-        text: o.text,
-      });
-      if (!o.disabled) {
-        item.addEventListener("click", (e) => {
-          e.stopPropagation();
-          current = o.value;
-          syncLabel();
-          closeMenu();
-          wrap.dispatchEvent(new Event("change"));
-        });
-      }
-      menu.appendChild(item);
-    }
-    menu.classList.remove("hidden");
-    positionMenu();
-    menu.querySelector(".custom-select-item.active")?.scrollIntoView({ block: "nearest" });
-  }
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     if (wrap.disabled) return;
-    if (menu.classList.contains("hidden")) openMenu(); else closeMenu();
+    if (isOpenFor(btn)) { closeOptionMenu(); return; }
+    openOptionMenu(btn, opts.map((o) => ({ value: o.value, text: o.text, disabled: o.disabled, selected: o.value === current })), (value) => {
+      current = value;
+      syncLabel();
+      wrap.dispatchEvent(new Event("change"));
+    });
   });
-  document.addEventListener("click", closeMenu);
-  // Scrolling the page moves the button out from under a fixed menu, so it
-  // closes - but not when the scroll is the menu's own list (found
-  // 2026-10-05: the 18-platform list in Settings closed the moment it was
-  // scrolled, so most platforms could not be picked).
-  window.addEventListener("scroll", (event) => { if (!menu.contains(event.target)) closeMenu(); }, true);
-  window.addEventListener("resize", closeMenu);
-  // The menu is a detached body child, not a DOM descendant of wrap — clean
-  // it up when wrap itself is removed (e.g. a Discord bot card re-rendered
-  // after Save/Remove), otherwise it'd leak a hidden menu node per rebuild.
-  //
-  // `hasBeenMounted` is the whole point: "wrap isn't in the document" is true
-  // for a select that's been REMOVED, but equally true for one that hasn't
-  // been INSERTED yet — and every view here builds its form first and appends
-  // the container last. Without this guard the observer fired on an unrelated
-  // body mutation, deleted the menu of a select that was still being built,
-  // and disconnected. The button then opened a node that was no longer in the
-  // document, so the dropdown looked dead: it clicked, and nothing appeared.
-  // (David, 2026-09-04: the Tasks tab's Schedule dropdown — 6 selects on the
-  // page, 1 surviving menu.)
-  let hasBeenMounted = false;
-  const cleanupObserver = new MutationObserver(() => {
-    if (wrap.isConnected) { hasBeenMounted = true; return; }
-    if (!hasBeenMounted) return; // built, not yet inserted — not garbage
-    menu.remove();
-    cleanupObserver.disconnect();
-  });
-  cleanupObserver.observe(document.body, { childList: true, subtree: true });
 
   Object.defineProperty(wrap, "value", {
     get() { return current; },

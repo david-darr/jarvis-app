@@ -62,10 +62,17 @@ async function refresh(list, focusTarget) {
     const checkbox = el("input", { type: "checkbox", "aria-label": "Complete: " + note.text });
     checkbox.checked = note.completed;
     checkbox.addEventListener("change", async () => {
+      // The strike draws (or clears) at once; the list reloads after it has
+      // played, so the change is seen rather than snapped (style.css .note-title).
+      title.classList.remove("is-settled");
+      title.classList.toggle("is-done", checkbox.checked);
+      const played = new Promise((resolve) => setTimeout(resolve, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 320));
       await api(`/api/notes/${note.id}`, { method: "PATCH", body: JSON.stringify({ completed: checkbox.checked }) });
+      await played;
       await refresh(list, focusTarget);
     });
 
+    const title = el("div", { class: "title note-title" + (note.completed ? " is-done is-settled" : ""), text: note.text });
     const dueText = note.due_date ? new Date(note.due_date).toLocaleString() : null;
     const delBtn = iconButton(ICONS.trash, "Delete note", async () => {
       const ok = await confirmDialog({
@@ -84,7 +91,7 @@ async function refresh(list, focusTarget) {
         el("div", { class: "card-row", style: "gap:10px;" }, [
           checkbox,
           el("div", {}, [
-            el("div", { class: "title", style: note.completed ? "text-decoration:line-through;opacity:0.5;" : "", text: note.text }),
+            title,
             dueText ? el("div", { class: "meta", text: `Due ${dueText}` }) : null,
           ]),
         ]),

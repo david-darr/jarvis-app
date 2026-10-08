@@ -32,7 +32,8 @@
 
 /* -- page ----------------------------------------------------------------- */
 .settings-content { padding: 0; }
-.set-page { max-width: 760px; margin: 0 auto; padding: 28px 36px 64px; }
+.set-page { max-width: 760px; margin: 0 auto; padding: 28px 36px 64px; animation: set-page-in 140ms ease-out; }
+@keyframes set-page-in { from { opacity: 0; } }
 .set-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
 .set-header-text { min-width: 0; }
 .set-title { margin: 0; font-size: 20px; font-weight: 550; letter-spacing: -.02em; color: var(--text); }
