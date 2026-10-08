@@ -16,8 +16,9 @@ let unavailable = false;
 const demoState = { empty: false };
 let sessionDelay = 0;
 const writes = [];
+const reads = [];
 const now = Date.now() / 1000;
-const { fixture, mutate } = require("../demo/fixtures.js")({ now, state: demoState });
+const { fixture, mutate, media } = require("../demo/fixtures.js")({ now, state: demoState });
 const computerImage = fs.readFileSync(path.join(root, 'static', 'img', 'computer-fixture.jpg')).toString('base64');
 demoState.computerImage = computerImage;
 const errors = [];
@@ -36,6 +37,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (url.pathname.startsWith("/api/")) {
+    if (req.method === 'GET') reads.push({ path: url.pathname, query: Object.fromEntries(url.searchParams) });
     if (url.pathname === '/api/chat/stream' && req.method === 'POST' && demoState.computerTurn) {
       let body = ''; for await (const chunk of req) body += chunk;
       writes.push({ path: url.pathname, method: req.method, body });
@@ -68,6 +70,8 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (url.pathname === "/api/sessions" && sessionDelay) await delay(sessionDelay);
+    const file = req.method === 'GET' && media(url);
+    if (file) { res.setHeader('Content-Type', file.type); res.end(file.base64 ? Buffer.from(file.base64, 'base64') : file.body); return; }
     res.setHeader("Content-Type", "application/json");
     if (unavailable && url.pathname === "/api/system/status") { res.writeHead(503); res.end('{"detail":"Unavailable"}'); return; }
     if (req.method !== "GET") {
@@ -95,8 +99,10 @@ const server = http.createServer(async (req, res) => {
     pathname === "/" ? "static/index.html" : "." + decodeURIComponent(pathname) + (pathname.endsWith("/") ? "index.html" : ""));
   if (!tabFile && !["static", "docs"].some(dir => file.startsWith(path.join(root, dir) + path.sep))) { res.writeHead(404); res.end(); return; }
   try {
-    const mime = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".png": "image/png", ".svg": "image/svg+xml",
-      ".webp": "image/webp", ".jpg": "image/jpeg", ".woff2": "font/woff2" };
+    // .mjs and .wasm for the PDF viewer (pdf.js): a module script served as
+    // octet-stream is refused, so the viewer would never fetch its file.
+    const mime = { ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".html": "text/html", ".png": "image/png",
+      ".svg": "image/svg+xml", ".webp": "image/webp", ".jpg": "image/jpeg", ".woff2": "font/woff2", ".wasm": "application/wasm" };
     res.setHeader("Content-Type", mime[path.extname(file)] || "application/octet-stream");
     res.setHeader("Cache-Control", "no-store");
     res.end(fs.readFileSync(file));
@@ -438,9 +444,10 @@ app.whenReady().then(async () => {
           await js("[...document.querySelectorAll('.cal-day-panel .card')].find(c=>c.textContent.includes('Review the course project')).querySelector('input[type=checkbox]').click()");
           await waitFor(`[...document.querySelectorAll('.cal-day-panel .card')].find(c=>c.textContent.includes('Review the course project'))?.querySelector('input').checked === ${!wasChecked}`);
           // The PATCH goes out just after the box ticks; poll for it.
-          for (let i = 0; i < 80 && !writes.some(w => w.path === "/api/tab-school/assignments/a1" && w.method === "PATCH"); i++) await delay(50);
-          assert.ok(writes.some(w => w.path === "/api/tab-school/assignments/a1" && w.method === "PATCH"), label + " Calendar PATCHes the tab toggle URL");
+          for (let i = 0; i < 80 && !writes.slice(calendarWrites).some(w => w.path === "/api/tab-school/assignments/a1" && w.method === "PATCH"); i++) await delay(50);
+          assert.ok(writes.slice(calendarWrites).some(w => w.path === "/api/tab-school/assignments/a1" && w.method === "PATCH"), label + " Calendar PATCHes the tab toggle URL");
           writes.splice(calendarWrites);
+          await require('./google-workspace-checks.cjs')({ js, waitFor, capture, navigate, overflow, reads, writes, label });
         }
         if (tab === "tasks" && !demoState.empty) {
           // The work board (Hermes track 2026-09-23): cards sit in their

@@ -51,6 +51,18 @@ class FormActionRequest(BaseModel):
     published: bool | None = None
 
 
+class CalendarSettingsRequest(BaseModel):
+    calendar_ids: list[str]
+
+
+class CalendarActionRequest(BaseModel):
+    action: Literal["create", "update", "delete", "quick_add"]
+    calendar_id: str = "primary"
+    event_id: str | None = None
+    event: dict | None = None
+    text: str | None = None
+
+
 async def _run(coroutine):
     try:
         return await coroutine
@@ -98,8 +110,26 @@ async def callback(state: str = "", code: str | None = None, error: str | None =
 
 @router.get("/drive/files")
 async def files(q: str = "", parent: str | None = None, kind: str = "all", trashed: bool = False,
-                page_token: str | None = None, user: str = Depends(require_admin)) -> dict:
-    return await _run(google.list_files(query=q, parent=parent, kind=kind, trashed=trashed, page_token=page_token))
+                page_token: str | None = None, section: str = "all", user: str = Depends(require_admin)) -> dict:
+    return await _run(google.list_files(query=q, parent=parent, kind=kind, trashed=trashed, page_token=page_token, section=section))
+
+
+@router.get("/drive/storage")
+async def storage(user: str = Depends(require_admin)) -> dict:
+    return await _run(google.drive_storage())
+
+
+@router.get("/drive/files/{file_id}/thumbnail")
+async def thumbnail(file_id: str, user: str = Depends(require_admin)) -> Response:
+    content, mime = await _run(google.file_thumbnail(file_id))
+    return Response(content, media_type=mime, headers={"Cache-Control": "private, max-age=60", "X-Content-Type-Options": "nosniff"})
+
+
+@router.get("/drive/files/{file_id}/preview")
+async def preview(file_id: str, user: str = Depends(require_admin)) -> Response:
+    content, mime = await _run(google.file_preview(file_id))
+    return Response(content, media_type=mime, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+                    "Content-Security-Policy": "default-src 'none'; sandbox"})
 
 
 @router.get("/drive/files/{file_id}")
@@ -161,3 +191,26 @@ async def form(file_id: str, responses: bool = False, page_token: str | None = N
 @router.post("/forms/action")
 async def form_action(body: FormActionRequest, user: str = Depends(require_admin)) -> dict:
     return await _run(google.form_action(**body.model_dump()))
+
+
+@router.get("/calendar/calendars")
+async def calendars(user: str = Depends(require_admin)) -> list[dict]:
+    return await _run(google.calendar_list())
+
+
+@router.patch("/calendar/settings")
+async def calendar_settings(body: CalendarSettingsRequest, user: str = Depends(require_admin)) -> dict:
+    try:
+        return google.calendar_settings(body.calendar_ids)
+    except google.GoogleError as problem:
+        raise HTTPException(problem.status, str(problem)) from problem
+
+
+@router.get("/calendar/events")
+async def calendar_events(start: str, end: str, calendar_ids: str = "primary", user: str = Depends(require_admin)) -> list[dict]:
+    return await _run(google.calendar_events([ident for ident in calendar_ids.split(",") if ident], start, end))
+
+
+@router.post("/calendar/action")
+async def calendar_action(body: CalendarActionRequest, user: str = Depends(require_admin)) -> dict:
+    return await _run(google.calendar_action(**body.model_dump()))

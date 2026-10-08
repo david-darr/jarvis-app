@@ -13,6 +13,7 @@ READS = {
     "drive": {"list", "info", "permissions", "revisions"},
     "sheets": {"get", "values"},
     "forms": {"get", "responses"},
+    "calendar": {"list_calendars", "list_events"},
 }
 
 
@@ -21,7 +22,7 @@ async def execute(area: str, args: dict, ctx: ToolContext) -> str:
         return "Google Workspace is available only in admin chats."
     action = args.get("action")
     allowed = READS.get(area, set()) | {"drive": google_drive_actions, "sheets": google_sheet_actions,
-                                       "forms": google_form_actions}.get(area, frozenset())
+                                       "forms": google_form_actions, "calendar": google_calendar_actions}.get(area, frozenset())
     if action not in allowed:
         return "Unknown Google Workspace action."
     if action not in READS.get(area, set()):
@@ -75,6 +76,15 @@ async def execute(area: str, args: dict, ctx: ToolContext) -> str:
                                               requests=args.get("requests"), published=args.get("published"))
         else:
             return "Unknown Google Forms action."
+    elif area == "calendar":
+        if action == "list_calendars":
+            result = await google.calendar_list()
+        elif action == "list_events":
+            result = await google.calendar_events(args.get("calendar_ids") or [args.get("calendar_id") or "primary"],
+                                                   args.get("start") or "", args.get("end") or "")
+        else:
+            result = await google.calendar_action(action, calendar_id=args.get("calendar_id") or "primary",
+                                                  event_id=args.get("event_id"), event=args.get("event"), text=args.get("text"))
     else:
         return "Unknown Google Workspace area."
     if action in READS[area] and ctx.turn_taint:
@@ -86,3 +96,4 @@ async def execute(area: str, args: dict, ctx: ToolContext) -> str:
 google_drive_actions = frozenset({"create_folder", "rename", "move", "copy", "trash", "restore", "star", "unstar", "delete", "permissions", "share", "update_permission", "revoke", "revisions", "upload"})
 google_sheet_actions = frozenset({"create", "update", "append", "clear", "batch"})
 google_form_actions = frozenset({"create", "batch", "publish"})
+google_calendar_actions = frozenset({"create", "update", "delete", "quick_add"})

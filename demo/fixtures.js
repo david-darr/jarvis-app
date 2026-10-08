@@ -35,6 +35,53 @@
     { id: "tab-a1", title: "Review the course project", start: future(4), source: "tab", source_label: "School",
       toggle_url: "/api/tab-school/assignments/a1", completed: false },
   ];
+  const dayString = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+  const afterTomorrow = new Date(tomorrow); afterTomorrow.setDate(afterTomorrow.getDate() + 2);
+  const googleStart = new Date(); googleStart.setHours(Math.min(22, googleStart.getHours() + 1), 0, 0, 0);
+  const googleEnd = new Date(googleStart); googleEnd.setHours(googleEnd.getHours() + 1);
+  const googleCalendars = [
+    { id: 'demo@example.com', name: 'Personal', primary: true, color: '#815e1e', time_zone: 'America/New_York', access_role: 'owner', selected: true },
+    { id: 'team@group.calendar.google.com', name: 'Team', color: '#667654', time_zone: 'America/New_York', access_role: 'writer', selected: true },
+  ];
+  const googleEvents = [
+    { id: 'g-timed', title: 'Google project review', start: googleStart.toISOString(), end: googleEnd.toISOString(), all_day: false, source: 'google', calendar_id: googleCalendars[0].id,
+      calendar_name: 'Personal', calendar_color: googleCalendars[0].color, time_zone: 'America/New_York', editable: true },
+    { id: 'g-all-day', title: 'Google planning days', start: dayString(new Date()), end: dayString(afterTomorrow), all_day: true, source: 'google',
+      calendar_id: googleCalendars[1].id, calendar_name: 'Team', calendar_color: googleCalendars[1].color, time_zone: 'America/New_York', editable: true },
+  ];
+  const googleFiles = [
+    ['folder', 'Project files', 'folder'], ['doc', 'Project brief', 'document'], ['slides', 'Workspace presentation', 'presentation'],
+    ['sheet', 'Project budget', 'spreadsheet'], ['form', 'Feedback form', 'form'], ['pdf', 'Reference.pdf', 'application/pdf'],
+    ['image', 'Workspace.png', 'image/png'], ['text', 'example.py', 'text/plain'],
+  ].map(([id, name, type]) => ({ id: `drive-${id}`, name, mimeType: type.includes('/') ? type : `application/vnd.google-apps.${type}`,
+    modifiedTime: future(-24), parents: ['root'], starred: id === 'doc', shared: id === 'slides', trashed: false,
+    thumbnailLink: id === 'folder' ? null : 'https://lh3.googleusercontent.com/synthetic', webViewLink: `https://drive.google.com/file/d/drive-${id}/view` }));
+  googleFiles.push({ id: 'drive-trash', name: 'Old brief', mimeType: 'text/plain', parents: ['root'], trashed: true });
+  googleFiles.push({ id: 'drive-child', name: 'Folder notes.txt', mimeType: 'text/plain', parents: ['drive-folder'], trashed: false });
+
+  function pdfFixture() {
+    const text = 'BT /F1 18 Tf 50 740 Td (Kairos Google Drive preview) Tj ET';
+    const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', `<< /Length ${text.length} >>\nstream\n${text}\nendstream`];
+    let body = '%PDF-1.4\n', offsets = [0];
+    objects.forEach((object, index) => { offsets.push(body.length); body += `${index + 1} 0 obj\n${object}\nendobj\n`; });
+    const xref = body.length;
+    body += `xref\n0 6\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+    return body;
+  }
+
+  // Binary and HTML responses are shared by the smoke server and demo shim too.
+  function media(url) {
+    const match = url.pathname.match(/^\/api\/google\/drive\/files\/(drive-[a-z]+)\/(thumbnail|preview)$/);
+    if (!match) return null;
+    if (match[2] === 'thumbnail' || match[1] === 'drive-image') return { type: 'image/png',
+      base64: 'iVBORw0KGgoAAAANSUhEUgAAAGAAAABICAIAAACGBWc0AAAA2ElEQVR42u3asQ2CQBiGYc9YW1k7BLGnYAEGcDwHcAEKemKc4WponIAJrsFwd5rn60m4N/93LxyEJb4Pks4RAoAAAggggAD615y2XXa+XH9xtZ85miAVAwgggAACSL57DkqlvTV57nucXiZIxQACyCZd695pggACCCCABKDcmh+ej1Ir6fq7CVKx+hK2/f7is48ABBDN76V2EwQQzdO8igFE83W9ze+kfxMEEM3TvIoBRPMO7VVMaJ7mVQwgmndor2I0T/MmCCCAaN6hvYrRPM0LQAABBFDRrM/eP1D8DsTqAAAAAElFTkSuQmCC' };
+    if (['drive-slides', 'drive-pdf'].includes(match[1])) return { type: 'application/pdf', body: pdfFixture() };
+    if (match[1] === 'drive-doc') return { type: 'text/html', body: '<!doctype html><h1>Project brief</h1><p>A calm workspace for the work that matters.</p><h2>Next steps</h2><ul><li>Review the plan</li><li>Collect feedback</li></ul>' };
+    return { type: 'text/plain', body: '# Workspace example\nfocus = "the work that matters"\nprint(focus)\n' };
+  }
   const tabs = [
     { slug: "school", name: "School", description: "Courses and assignments", blurb: "Keep track of schoolwork",
       detail: "Connect Canvas or a course calendar.", reads: "Reads the Canvas courses or calendar feed you connect",
@@ -63,6 +110,31 @@
     return { name: 'example-com-click', description, body, steps, labels, content: `---\ndescription: ${description}\n---\n\n${body}` };
   }
   function mutate(route, method, body = {}) {
+    if (route === '/api/google/calendar/settings' && method === 'PATCH') { state.googleCalendarIds = body.calendar_ids; return body; }
+    if (route === '/api/google/oauth/start') { state.googleCalendarMissing = false; return { url: 'https://accounts.google.com/o/oauth2/v2/auth' }; }
+    if (route === '/api/google/calendar/action') {
+      const index = googleEvents.findIndex(e => e.id === body.event_id && e.calendar_id === body.calendar_id);
+      if (body.action === 'delete') { if (index >= 0) googleEvents.splice(index, 1); return { deleted: true }; }
+      const calendar = googleCalendars.find(c => c.id === body.calendar_id) || googleCalendars[0];
+      const event = body.event || {};
+      const item = { id: body.event_id || `g-created-${googleEvents.length}`, title: event.summary || body.text, start: event.start?.date || event.start?.dateTime,
+        end: event.end?.date || event.end?.dateTime, all_day: Boolean(event.start?.date), source: 'google', calendar_id: calendar.id,
+        calendar_name: calendar.name, calendar_color: calendar.color, time_zone: event.start?.timeZone || calendar.time_zone, editable: true };
+      if (index >= 0) Object.assign(googleEvents[index], item); else googleEvents.push(item);
+      return item;
+    }
+    if (route === '/api/google/drive/action') {
+      const file = googleFiles.find(f => f.id === body.file_id);
+      if (body.action === 'permissions') return { permissions: [{ id: 'permission-demo', type: 'user', emailAddress: 'reviewer@example.com', role: 'reader' }] };
+      if (body.action === 'revisions') return { revisions: [{ modifiedTime: future(-24) }] };
+      if (file) {
+        if (body.action === 'star' || body.action === 'unstar') file.starred = body.action === 'star';
+        if (body.action === 'trash' || body.action === 'restore') file.trashed = body.action === 'trash';
+        if (body.action === 'rename') file.name = body.name;
+        if (body.action === 'move') file.parents = [body.parent];
+      }
+      return file || { ok: true };
+    }
     const computer = route.match(/^\/api\/computer\/([^/]+)\/(takeover|handback|stop|input|record\/start|record\/stop)$/);
     if (computer && method === 'POST') {
       const owner = decodeURIComponent(computer[1]);
@@ -281,7 +353,26 @@
     if (route === "/api/projects") return list(projects);
     if (route.startsWith("/api/projects/")) return projects[0];
     if (route === "/api/notes") return list(url.searchParams.get("include_completed") === "false" ? notes.filter(n => !n.completed) : notes);
-    if (route === "/api/calendar/events") return list(events);
+    if (route === '/api/google/status') return { configured: true, connected: true, email: 'demo@example.com', client_id: 'demo.apps.googleusercontent.com',
+      calendar_connected: !state.googleCalendarMissing, granted_scopes: state.googleCalendarMissing ? [] : ['https://www.googleapis.com/auth/calendar'], calendar_ids: state.googleCalendarIds ?? null };
+    if (route === '/api/google/calendar/calendars') return googleCalendars;
+    if (route === '/api/google/calendar/events') return list(googleEvents);
+    if (route === '/api/google/drive/storage') return { storageQuota: { usage: '2147483648', limit: '16106127360' } };
+    if (route === '/api/google/drive/files') {
+      const section = url.searchParams.get('section'), parent = url.searchParams.get('parent'), q = url.searchParams.get('q')?.toLowerCase();
+      const kind = url.searchParams.get('kind');
+      return { files: list(googleFiles.filter(f => Boolean(f.trashed) === (section === 'trash')
+        && (!q || f.name.toLowerCase().includes(q)) && (!parent || f.parents.includes(parent))
+        && (parent || q || section !== 'my_drive' || f.parents.includes('root'))
+        && (parent || section !== 'shared' || f.shared) && (parent || section !== 'starred' || f.starred)
+        && (!kind || kind === 'all' || f.mimeType.endsWith(`.${{ sheet: 'spreadsheet', form: 'form', folder: 'folder' }[kind]}`)))) };
+    }
+    if (route.startsWith('/api/google/drive/files/')) return googleFiles.find(file => file.id === route.split('/')[5]);
+    if (route.startsWith('/api/google/sheets/')) return url.searchParams.has('cell_range') ? { values: [['Item', 'Budget'], ['Research', '1200'], ['Design', '800']] }
+      : { spreadsheetId: 'drive-sheet', sheets: [{ properties: { sheetId: 0, title: 'Budget', gridProperties: { rowCount: 100, columnCount: 12 } } }] };
+    if (route.startsWith('/api/google/forms/')) return url.searchParams.get('responses') === 'true' ? { responses: [] }
+      : { info: { title: 'Feedback form' }, items: [{ title: 'What would you improve?', questionItem: { question: { textQuestion: { paragraph: true } } } }] };
+    if (route === "/api/calendar/events") return list([...events, ...googleEvents.filter(e => !state.googleCalendarMissing && (state.googleCalendarIds == null || state.googleCalendarIds.includes(e.calendar_id)))]);
     if (route === "/api/calendar/events/archived") return [];
     if (route === "/api/tasks") return list(tasks);
     // Webhook triggers (2026-10-05): one waiting for approval, one runs straight away.
@@ -431,5 +522,5 @@
       { id: "context7", name: "Context7", description: "Up-to-date library documentation.", auth: "none", url: "https://mcp.context7.com/mcp", docs: null, added: true }];
     throw new Error("No fixture for " + route);
   }
-  return { fixture, mutate, data: { models, sessions, projects, notes, events, tasks, runs, agentsFixture, agentInbox, docs } };
+  return { fixture, mutate, media, data: { models, sessions, projects, notes, events, googleEvents, googleFiles, tasks, runs, agentsFixture, agentInbox, docs } };
 });

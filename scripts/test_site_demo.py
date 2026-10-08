@@ -44,8 +44,10 @@ class SiteDemoTests(unittest.TestCase):
         self.assertFalse((REPO / "docs" / "demo" / "sw.js").exists())
         self.assertIn('src="demo/index.html"', (REPO / "docs" / "index.html").read_text(encoding="utf-8"))
 
-    def test_the_pdf_viewer_is_left_out(self):
-        self.assertFalse((REPO / "docs" / "demo" / "static" / "js" / "vendor" / "pdf.worker.mjs").exists())
+    def test_the_demo_ships_the_same_local_pdf_viewer_and_worker(self):
+        for name in ("pdf.mjs", "pdf.worker.mjs"):
+            self.assertTrue((REPO / "docs" / "demo" / "static" / "js" / "vendor" / name).exists())
+        self.assertIn('./static/js/vendor/pdf.mjs', (REPO / "docs" / "demo" / "app.js").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

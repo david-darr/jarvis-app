@@ -9,8 +9,8 @@ scripts/ui-smoke.cjs). It has to run anywhere the site is opened: on GitHub
 Pages, in a sandboxed preview, and straight from disk. So it uses no service
 worker, and the app's modules are bundled by esbuild into one plain script
 (app.js), since browsers won't load module scripts from file://. The app's
-absolute /static/ paths are made relative for the same reason. The PDF viewer
-is left out (it loads only when a PDF is opened).
+absolute /static/ paths are made relative for the same reason. PDF previews
+load the same local viewer and worker as the app, only when a PDF is opened.
 
 docs/demo/manifest.json records the hash of every source and every built
 file, so --check (run by scripts/test_site_demo.py) catches a demo built from
@@ -29,9 +29,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 STATIC, DEMO, OUT = REPO / "static", REPO / "demo", REPO / "docs" / "demo"
-LEFT_OUT = ("js/vendor/pdf.mjs", "js/vendor/pdf.worker.mjs", "js/vendor/pdf-assets/", "usage-overlay.html", "css/usage-overlay.css")
-# The only module copied as a file: the site's hero (docs/site.js) imports it.
-KEPT_JS = ("js/dither.js",)
+LEFT_OUT = ("usage-overlay.html", "css/usage-overlay.css")
+# The hero and the lazy PDF viewer/worker keep their own module files.
+KEPT_JS = ("js/dither.js", "js/vendor/pdf.mjs", "js/vendor/pdf.worker.mjs")
 DEMO_STYLE = """<style>
   .demo-badge { position: fixed; z-index: 10200; right: 14px; bottom: 14px; padding: 6px 12px; border-radius: 999px;
     background: #2A1F18; color: #F3EADB; font: 500 11px/1.4 Jost, "Segoe UI", sans-serif; pointer-events: none; opacity: .92; }
@@ -131,6 +131,7 @@ def bundle(target):
     finally:
         shutil.rmtree(stage)
     code = target.read_text(encoding="utf-8")
+    code = code.replace('./vendor/pdf.mjs', './static/js/vendor/pdf.mjs')
     # Stylesheet CSS variables resolve against static/css/, not the page.
     code = code.replace("url('/static/", "url('${new URL(\"static/\",document.baseURI).href}")
     target.write_text(re.sub(r"""(["'`(])/static/""", r"\1static/", code), encoding="utf-8")
@@ -142,7 +143,7 @@ def build():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True)
     for name, path in files.items():
-        if (name.startswith("static/js/") and name[len("static/"):] not in KEPT_JS
+        if (name.startswith("static/js/") and path.suffix in (".js", ".mjs") and name[len("static/"):] not in KEPT_JS
                 or name.startswith("scripts/") or name == "static/index.html"
                 or name.startswith("tabs/") and path.name != "view.css"):
             continue  # bundled into app.js, rewritten as the demo's index.html, or not part of the site

@@ -1365,7 +1365,7 @@ input[type="checkbox"]:checked::after { border-color: var(--text); }
 .google-toolbar select { min-width: 100px; }
 .google-trash-toggle { display: inline-flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 11px; }
 .google-breadcrumbs { min-height: 28px; }
-.google-browser { display: grid; grid-template-columns: minmax(240px, 360px) minmax(0, 1fr); min-height: 540px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-panel); overflow: hidden; }
+.google-browser { display: grid; grid-template-columns: 175px minmax(0, 1fr); min-height: 540px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-panel); overflow: hidden; }
 .google-file-list { min-width: 0; max-height: 70vh; overflow: auto; padding: 8px; border-right: 1px solid var(--border); }
 .google-file-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px; border: 0; border-radius: 8px; background: none; color: var(--text); text-align: left; cursor: pointer; }
 .google-file-row:hover, .google-file-row:focus-visible { background: var(--accent-dim); outline: none; }
@@ -1997,4 +1997,84 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
   .tool-store-toolbar { align-items: stretch; }
   .tool-store-search { flex-basis: 100%; }
   .tool-store-grid { grid-template-columns: 1fr; }
+}
+
+/* Drive keeps navigation, files and the reader together at every width. */
+.google-rail { display: flex; flex-direction: column; gap: 6px; padding: 14px; border-right: 1px solid var(--border); min-width: 0; }
+.google-section { text-align: left; }
+.google-section[aria-current='true'] { background: var(--accent-dim); color: var(--accent); }
+.google-storage { padding: 18px 4px; margin-top: auto; }
+.google-main { min-width: 0; padding: 14px; }
+.google-toolbar .btn[aria-pressed='true'], .cal-nav .btn[aria-pressed='true'] { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+.google-content { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.google-content:has(.google-detail:not([hidden])) { grid-template-columns: minmax(0, 1fr) minmax(280px, 40%); }
+.google-files { min-width: 0; }
+.google-main .google-file-list { border: 0; max-height: none; position: relative; }
+.google-file-open { display: flex; align-items: center; gap: 12px; background: none; border: 0; color: var(--text); text-align: left; cursor: pointer; min-width: 0; flex: 1; padding: 0; }
+.google-file-row.selected { background: var(--accent-dim); outline: 1px solid var(--accent); }
+.google-thumbnail { position: relative; display: grid; place-items: center; flex: none; width: 52px; height: 44px; overflow: hidden; border-radius: 8px; background: var(--surface-2); }
+.google-thumbnail img { position: absolute; width: 100%; height: 100%; object-fit: cover; }
+.google-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+.google-grid .google-file-row { align-items: flex-start; border: 1px solid var(--border); background: var(--bg-panel-solid); }
+.google-grid .google-file-open { flex-direction: column; align-items: stretch; }
+.google-grid .google-thumbnail { width: 100%; height: 116px; }
+.google-grid .google-file-copy { width: 100%; }
+.google-new-menu { position: relative; margin-bottom: 16px; }
+.google-new-actions { display: grid; gap: 6px; margin-top: 8px; }
+.google-new-menu summary { cursor: pointer; list-style: none; }
+.google-new-menu summary::-webkit-details-marker { display: none; }  /* the default disclosure arrow */
+.google-selection-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px; background: var(--surface-2); border-radius: var(--radius); }
+.google-selection-toolbar[hidden], .google-detail[hidden] { display: none; }
+.google-context-menu { position: absolute; z-index: 3; inset: 12px 12px auto auto; display: grid; width: 190px; max-width: 90%; padding: 10px; gap: 4px; background: var(--bg-panel-solid); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-elevated); }
+.google-main .google-detail { border: 1px solid var(--border); border-radius: var(--radius); max-height: 75vh; overflow: auto; padding: 16px; }
+.google-drop-active { outline: 2px solid var(--accent); }
+.google-viewer { min-height: 240px; }
+.google-reader { width: 100%; height: 60vh; border: 1px solid var(--border); background: var(--bg-panel-solid); }
+.google-viewer img { max-width: 100%; max-height: 60vh; object-fit: contain; }
+.google-text-preview { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+@media (max-width: 1100px) {
+  .google-content:has(.google-detail:not([hidden])) { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .google-rail { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--border); }
+  .google-storage { margin: 0; padding: 8px; }
+  .google-new-menu { margin: 0; }
+  .google-main { padding: 10px; }
+  .google-content:has(.google-detail:not([hidden])) { grid-template-columns: minmax(0, 1fr); }
+  .google-main .google-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .google-grid .google-file-row { padding: 6px; gap: 4px; }
+  .google-grid .google-thumbnail { height: 90px; }
+  .google-main .google-detail { padding: 12px; max-height: none; }
+}
+
+.cal-calendar-list { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 12px; }
+.cal-calendar-choice { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; border-left: 4px solid var(--border); padding-left: 8px; }
+.cal-google-event { border-left: 4px solid var(--calendar-color); }
+.cal-event-pill.cal-google-event { color: var(--text); background: var(--surface-2); }
+.cal-nav { flex-wrap: wrap; }
+.cal-event-dialog { width: min(620px, calc(100vw - 24px)); max-height: calc(100vh - 32px); overflow: auto; }
+.cal-event-dialog .form-grid { align-items: start; }
+.cal-event-dialog .field { min-width: 0; }
+.cal-event-dialog input, .cal-event-dialog select, .cal-event-dialog textarea { width: 100%; min-width: 0; }
+/* A real checkbox: the form's text-input sizing otherwise squashes it into a bar. */
+.cal-event-dialog .cal-checkbox-label input { width: 16px; height: 16px; min-height: 0; padding: 0; flex: none; accent-color: var(--accent); }
+.cal-event-dialog .row-actions { position: static; display: flex; justify-content: flex-end; opacity: 1; margin-top: 12px; }
+.cal-week-grid { display: block; max-height: 580px; overflow: auto; }
+.cal-week-header, .cal-week-timeline { display: grid; grid-template-columns: 48px repeat(7, minmax(78px, 1fr)); min-width: 620px; }
+.cal-week-header { position: sticky; top: 0; z-index: 2; background: var(--bg-panel-solid); border-bottom: 1px solid var(--border); }
+.cal-week-header > span { font-size: 10px; padding: 8px 2px; }
+.cal-week-heading { min-width: 0; padding: 4px; border-left: 1px solid var(--border); }
+.cal-week-heading .btn { padding: 6px 2px; width: 100%; }
+.cal-week-heading .cal-event-pill { display: block; width: 100%; text-align: left; color: var(--text); background: var(--surface-2); cursor: pointer; }
+.cal-week-timeline { height: 1008px; }
+.cal-week-hours, .cal-week-day { position: relative; }
+.cal-week-hours span { position: absolute; font-size: 10px; color: var(--text-dim); }
+.cal-week-day { border-left: 1px solid var(--border); background: repeating-linear-gradient(to bottom, transparent 0, transparent 41px, var(--border) 41px, var(--border) 42px); }
+.cal-week-event { position: absolute; overflow: hidden; text-align: left; font: inherit; font-size: 11px; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 5px; padding: 3px; cursor: pointer; }
+.cal-week-event.cal-google-event { border-left-color: var(--calendar-color); }
+.cal-today-line { position: absolute; left: 0; right: 0; border-top: 2px solid var(--danger); pointer-events: none; z-index: 1; }
+@media (max-width: 760px) {
+  .cal-event-dialog .form-grid { display: grid; grid-template-columns: 1fr; }
+  .cal-event-dialog .field-grow { grid-column: auto; }
+  .cal-week-grid { max-height: 520px; }
 }

@@ -10,7 +10,7 @@
 // Nothing leaves the visitor's browser and no model is ever called.
 (function () {
   const state = { empty: false };
-  const { fixture, data, mutate } = window.kairosFixtures({ state, demo: true });
+  const { fixture, data, mutate, media } = window.kairosFixtures({ state, demo: true });
   const store = { sessions: {}, nextId: 1 };  // chats started in the demo
   const realFetch = window.fetch.bind(window);
 
@@ -67,6 +67,9 @@
   async function api(url, method, rawBody) {
     const path = url.pathname;
     if (method === "GET") {
+      const file = media(url);
+      if (file) return new Response(file.base64 ? Uint8Array.from(atob(file.base64), c => c.charCodeAt(0)) : file.body,
+        { headers: { 'Content-Type': file.type } });
       const sessionMatch = path.match(/^\/api\/sessions\/([^/]+)$/);
       if (sessionMatch && store.sessions[sessionMatch[1]]) return json(store.sessions[sessionMatch[1]]);
       if (path.match(/^\/api\/sessions\/([^/]+)\/context$/) && store.sessions[path.split("/")[3]]) return json({ available: false });

@@ -356,8 +356,23 @@ async def _list_tasks(args, ctx):
 )
 
 async def _list_upcoming_events(args, ctx):
-    events = memory_tools.list_upcoming_events()
-    return "\n".join(f"- [{e['id']}] {e['title']} ({e['start']})" for e in events) or "Nothing upcoming in the next 14 days."
+    from core import google_workspace as google
+    events = list(memory_tools.list_upcoming_events())
+    warning = ""
+    if ctx.is_admin:
+        from datetime import datetime, timedelta, timezone
+        if google.status()["calendar_connected"]:
+            if ctx.turn_taint:
+                ctx.turn_taint.mark("Google Calendar content")
+            start = datetime.now(timezone.utc)
+            try:
+                events += await google.selected_calendar_events(start.isoformat(), (start + timedelta(days=14)).isoformat())
+            except google.GoogleError as problem:
+                warning = f"\nGoogle Calendar unavailable: {problem}"
+    events.sort(key=google.calendar_event_time)
+    return ("\n".join(f"- [{e['id']}] {e['title']} ({e['start']})" +
+                       (f" [Google calendar: {e['calendar_id']}]" if e.get("source") == "google" else "")
+                       for e in events) or "Nothing upcoming in the next 14 days.") + warning
 
 
 @register(
@@ -916,6 +931,17 @@ async def _google_sheets(args, ctx):
 async def _google_forms(args, ctx):
     from core.google_chat_tools import execute
     return await execute("forms", args, ctx)
+
+
+@register("google_calendar", "Read and change live Google Calendar events. Actions: list_calendars, list_events (start/end ISO range), create, update, delete, quick_add. Event start/end use dateTime with offset or date (all-day end exclusive). Connect Google in Library first.",
+          _object({"action": _str(), "calendar_id": _str("Defaults to primary"),
+                   "calendar_ids": {"type": "array", "items": {"type": "string"}},
+                   "event_id": _str(), "start": _str(), "end": _str(), "text": _str("Quick add description"),
+                   "event": {"type": "object", "description": "Google event fields: summary, start, end, description, location"}}, ("action",)),
+          admin_only=True, effect=EXTERNAL)
+async def _google_calendar(args, ctx):
+    from core.google_chat_tools import execute
+    return await execute("calendar", args, ctx)
 
 
 # -- helpers: short-lived read-only jobs (core/helpers.py, roadmap phase 5) ------

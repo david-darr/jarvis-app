@@ -88,6 +88,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             response.headers["X-Frame-Options"] = "SAMEORIGIN"
             response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'self'; sandbox"
             response.headers["Cache-Control"] = "no-store"
+        elif re.fullmatch(r"/api/google/drive/files/[A-Za-z0-9_-]+/(preview|thumbnail|download)", path):
+            # Google content must keep its sandbox even after the app headers.
+            response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
         elif path.startswith(("/generated-files/", "/generated-images/")):
             # Legacy links still work, but generated HTML/SVG must never run
             # with the app's origin (including when opened in a new tab).

@@ -1,3 +1,4 @@
+import { renderPDF } from './pdfViewer.js';
 import { api, el, toast, confirmDialog } from './api.js';
 
 const BASE = '/api/google';
@@ -5,6 +6,8 @@ const MIME = {
   folder: 'application/vnd.google-apps.folder',
   sheet: 'application/vnd.google-apps.spreadsheet',
   form: 'application/vnd.google-apps.form',
+  doc: 'application/vnd.google-apps.document',
+  slides: 'application/vnd.google-apps.presentation',
 };
 const kindOf = file => Object.entries(MIME).find(([, mime]) => mime === file.mimeType)?.[0] || 'file';
 const action = (path, body) => api(`${BASE}${path}`, { method: 'POST', body: JSON.stringify(body) });
@@ -23,6 +26,7 @@ export async function renderGoogleWorkspace(container, header, tabs) {
       ? 'Only an admin can connect and manage a Google account.' : 'Google Workspace is unavailable right now.' }));
     return;
   }
+  if (!body.isConnected) return;
   if (!status.configured || !status.connected) { renderConnection(body, status, () => renderGoogleWorkspace(container, header, tabs)); return; }
   renderDrive(body, status, () => renderGoogleWorkspace(container, header, tabs));
 }
@@ -35,7 +39,7 @@ function renderConnection(host, status, refresh) {
     placeholder: 'Google OAuth Desktop client ID', 'aria-label': 'Google OAuth Desktop client ID' });
   const secret = el('input', { type: 'password', placeholder: 'Client secret, if provided',
     'aria-label': 'Google OAuth client secret' });
-  const note = el('p', { class: 'meta', text: 'Create a Desktop OAuth client in Google Cloud with Drive, Sheets, and Forms APIs enabled. Add your Google account as a test user if the consent app is in Testing. Sign in on the computer running Kairos; connected files are then available from other devices.' });
+  const note = el('p', { class: 'meta', text: 'Create a Desktop OAuth client in Google Cloud with Drive, Sheets, Forms, and Calendar APIs enabled. Add your Google account as a test user if the consent app is in Testing. Sign in on the computer running Kairos; connected files are then available from other devices.' });
   const save = button('Save client ID', async () => {
     await action('/client', { client_id: client.value.trim(), client_secret: secret.value });
     toast('Google client saved', 'success');
@@ -71,121 +75,227 @@ function renderConnection(host, status, refresh) {
 
 function renderDrive(host, status, refreshAll) {
   host.replaceChildren();
-  const state = { parent: null, trail: [], kind: 'all', query: '', trashed: false, page: null, selected: null };
-  const search = el('input', { type: 'search', placeholder: 'Search Google Drive', 'aria-label': 'Search Google Drive' });
+  const state = { parent: null, trail: [], kind: 'all', query: '', section: 'my_drive', page: null,
+    selected: null, files: [], selection: new Set(), layout: 'grid', selectionAnchor: null };
+  const sections = [['my_drive', 'My Drive'], ['shared', 'Shared with me'], ['starred', 'Starred'], ['recent', 'Recent'], ['trash', 'Trash']];
+  const rail = el('nav', { class: 'google-rail', 'aria-label': 'Drive sections' });
+  const storage = el('div', { class: 'meta google-storage', text: 'Loading storage…' });
+  const search = el('input', { type: 'search', placeholder: 'Search in Drive', 'aria-label': 'Search in Drive' });
   const kind = el('select', { 'aria-label': 'File type' }, [
     ...[['all', 'All files'], ['folder', 'Folders'], ['sheet', 'Sheets'], ['form', 'Forms']]
       .map(([value, label]) => el('option', { value, text: label })),
   ]);
-  const trash = el('input', { type: 'checkbox' });
-  const list = el('div', { class: 'google-file-list' });
-  const detail = el('div', { class: 'google-detail' });
-  const breadcrumbs = el('div', { class: 'google-breadcrumbs' });
+  const list = el('div', { class: 'google-file-list google-grid', role: 'group', 'aria-label': 'Drive files' });
+  const detail = el('aside', { class: 'google-detail', 'aria-label': 'File details', hidden: true });
+  const breadcrumbs = el('div', { class: 'google-breadcrumbs', 'aria-label': 'Drive breadcrumbs' });
   const statusLine = el('div', { class: 'meta', role: 'status' });
-  let listGeneration = 0;
-  const more = button('Load more', () => load(true));
-  more.hidden = true;
-  const uploadInput = el('input', { type: 'file', hidden: true });
-  const toolbar = el('div', { class: 'google-toolbar' }, [
-    search, kind, el('label', { class: 'google-trash-toggle' }, [trash, el('span', { text: 'Trash' })]),
-    button('Refresh', () => load()),
-    button('Upload', () => uploadInput.click()), uploadInput,
+  const selectionBar = el('div', { class: 'google-selection-toolbar', hidden: true });
+  const main = el('div', { class: 'google-main' });
+  let listGeneration = 0, detailGeneration = 0, previewController = null;
+  // Detached views release PDF workers and pending previews too.
+  const observer = new MutationObserver(() => {
+    if (!host.isConnected) { previewController?.abort(); observer.disconnect(); }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  const more = button('Load more', () => load(true)); more.hidden = true;
+  const uploadInput = el('input', { type: 'file', multiple: true, hidden: true });
+  const newMenu = el('details', { class: 'google-new-menu' }, [el('summary', { class: 'btn primary', text: '+ New' })]);
+  newMenu.append(el('div', { class: 'google-new-actions' }, [
     button('New folder', async () => {
+      detail.hidden = false;
       const name = await inlinePrompt(detail, 'New folder name');
       if (name) await driveAction({ action: 'create_folder', name, parent: state.parent });
     }),
-    button('New Sheet', async () => {
-      const title = await inlinePrompt(detail, 'Spreadsheet title');
-      if (title) {
-        const created = await action('/sheets/action', { action: 'create', title });
-        if (state.parent && created.spreadsheetId) await action('/drive/action', { action: 'move', file_id: created.spreadsheetId, parent: state.parent });
+    button('Upload files', () => uploadInput.click()),
+    ...[['Sheet', '/sheets/action', 'spreadsheetId'], ['Form', '/forms/action', 'formId']].map(([label, path, key]) =>
+      button(`New ${label.toLowerCase()}`, async () => {
+        detail.hidden = false;
+        const title = await inlinePrompt(detail, `${label} title`);
+        if (!title) return;
+        const created = await action(path, { action: 'create', title });
+        if (state.parent && created[key]) await action('/drive/action', { action: 'move', file_id: created[key], parent: state.parent });
         await load();
-      }
-    }),
-    button('New Form', async () => {
-      const title = await inlinePrompt(detail, 'Form title');
-      if (title) {
-        const created = await action('/forms/action', { action: 'create', title });
-        if (state.parent && created.formId) await action('/drive/action', { action: 'move', file_id: created.formId, parent: state.parent });
-        await load();
-      }
-    }),
-  ]);
+      })),
+  ]));
+  rail.append(newMenu, uploadInput);
+  for (const [id, label] of sections) rail.append(button(label, () => {
+    state.section = id; state.parent = null; state.trail = []; state.query = ''; search.value = ''; load();
+  }, 'btn quiet google-section'));
+  rail.append(storage);
+  const gridButton = button('Grid', () => setLayout('grid'));
+  const listButton = button('List', () => setLayout('list'));
+  function setLayout(layout) {
+    state.layout = layout; list.classList.toggle('google-grid', layout === 'grid');
+    gridButton.setAttribute('aria-pressed', String(layout === 'grid'));
+    listButton.setAttribute('aria-pressed', String(layout === 'list'));
+  }
+  setLayout('grid');
   const disconnect = button('Disconnect', async () => {
-    const yes = await confirmDialog({ title: 'Disconnect Google?', message: 'Kairos will forget this account’s tokens. Files stay in Google Drive.', confirmLabel: 'Disconnect' });
-    if (yes) { await api(`${BASE}/connection`, { method: 'DELETE' }); refreshAll(); }
+    if (await confirmDialog({ title: 'Disconnect Google?', message: 'Kairos will forget the account tokens. Files stay in Google Drive.', confirmLabel: 'Disconnect' })) {
+      await api(`${BASE}/connection`, { method: 'DELETE' }); refreshAll();
+    }
   }, 'btn quiet');
-  host.append(
-    el('div', { class: 'google-account-line' }, [
-      el('div', {}, [el('strong', { text: status.email || 'Google account' }),
-        el('div', { class: 'meta', text: 'Drive · Sheets · Forms' })]), disconnect,
-    ]), toolbar, breadcrumbs, statusLine,
-    el('div', { class: 'google-browser' }, [list, detail]), more,
-  );
+  main.append(el('div', { class: 'google-toolbar' }, [search, kind, gridButton, listButton, button('Refresh', () => load())]),
+    breadcrumbs, selectionBar, statusLine,
+    el('div', { class: 'google-content' }, [el('div', { class: 'google-files' }, [list, more]), detail]));
+  host.append(el('div', { class: 'google-account-line' }, [el('strong', { text: status.email || 'Google account' }), disconnect]),
+    el('div', { class: 'google-browser' }, [rail, main]));
+  api(`${BASE}/drive/storage`).then(result => {
+    const quota = result.storageQuota || {};
+    const gb = value => `${(Number(value || 0) / 1024 ** 3).toFixed(1)} GB`;
+    storage.textContent = `${gb(quota.usage)} used${quota.limit ? ` of ${gb(quota.limit)}` : ''}`;
+  }).catch(() => { storage.textContent = 'Storage unavailable'; });
   search.addEventListener('input', () => { state.query = search.value.trim(); state.parent = null; state.trail = []; schedule(); });
   kind.addEventListener('change', () => { state.kind = kind.value; load(); });
-  trash.addEventListener('change', () => { state.trashed = trash.checked; load(); });
   uploadInput.addEventListener('change', async () => {
-    const file = uploadInput.files?.[0]; uploadInput.value = '';
-    if (!file) return;
-    const data = new FormData(); data.append('file', file); if (state.parent) data.append('parent', state.parent);
-    const response = await fetch(`${BASE}/drive/upload`, { method: 'POST', body: data });
-    if (!response.ok) { const payload = await response.json().catch(() => ({})); toast(payload.detail || 'Upload failed', 'error'); return; }
-    toast(`${file.name} uploaded`, 'success'); await load();
+    const files = [...uploadInput.files]; uploadInput.value = ''; await uploadFiles(files);
   });
+  host.addEventListener('dragover', event => { event.preventDefault(); host.classList.add('google-drop-active'); });
+  host.addEventListener('dragleave', event => { if (!host.contains(event.relatedTarget)) host.classList.remove('google-drop-active'); });
+  host.addEventListener('drop', async event => {
+    event.preventDefault(); host.classList.remove('google-drop-active');
+    try { await uploadFiles([...event.dataTransfer.files]); } catch (error) { toast(error.message, 'error'); }
+  });
+  async function uploadFiles(files) {
+    for (const file of files) {
+      if (file.size > 25 * 1024 * 1024) throw new Error('Choose files under 25 MB');
+      const data = new FormData(); data.append('file', file); if (state.parent) data.append('parent', state.parent);
+      const response = await fetch(`${BASE}/drive/upload`, { method: 'POST', body: data });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || 'Upload failed');
+      toast(`${file.name} uploaded`, 'success');
+    }
+    await load();
+  }
   let timer;
   function schedule() { clearTimeout(timer); timer = setTimeout(() => load(), 250); }
   async function driveAction(body) { const result = await action('/drive/action', body); await load(); return result; }
   function openFolder(file) {
-    state.trail.push({ id: file.id, name: file.name }); state.parent = file.id; state.query = ''; search.value = '';
-    load();
+    state.trail.push({ id: file.id, name: file.name }); state.parent = file.id; state.query = ''; search.value = ''; load();
   }
   function drawBreadcrumbs() {
-    breadcrumbs.replaceChildren(button('All files', () => { state.parent = null; state.trail = []; load(); }, 'btn quiet'));
-    state.trail.forEach((item, index) => breadcrumbs.append(
-      el('span', { class: 'meta', text: '›' }),
-      button(item.name, () => { state.trail = state.trail.slice(0, index + 1); state.parent = item.id; load(); }, 'btn quiet'),
-    ));
+    breadcrumbs.replaceChildren(button(sections.find(([id]) => id === state.section)[1], () => {
+      state.parent = null; state.trail = []; load();
+    }, 'btn quiet'));
+    state.trail.forEach((item, index) => breadcrumbs.append(el('span', { class: 'meta', text: '›' }),
+      button(item.name, () => { state.trail = state.trail.slice(0, index + 1); state.parent = item.id; load(); }, 'btn quiet')));
+    rail.querySelectorAll('.google-section').forEach((node, index) => node.setAttribute('aria-current', String(sections[index][0] === state.section)));
+  }
+  async function batch(operation) {
+    const files = state.files.filter(file => state.selection.has(file.id));
+    let parent;
+    if (operation === 'move') { detail.hidden = false; parent = await folderPicker(detail); if (!parent) return; }
+    if (operation === 'trash' && !await confirmDialog({ title: 'Move selected files to trash?', message: `${files.length} files`, confirmLabel: 'Move to trash' })) return;
+    for (const file of files) await action('/drive/action', { action: operation, file_id: file.id, ...(parent ? { parent } : {}) });
+    await load();
+  }
+  function drawSelection() {
+    selectionBar.hidden = !state.selection.size;
+    selectionBar.replaceChildren(el('strong', { text: `${state.selection.size} selected` }),
+      button('Clear selection', () => { state.selection.clear(); drawSelection(); }),
+      ...['move', 'copy', 'star', state.section === 'trash' ? 'restore' : 'trash'].map(op => button(op[0].toUpperCase() + op.slice(1), () => batch(op))));
+    list.querySelectorAll('.google-file-row').forEach(row => {
+      const selected = state.selection.has(row.dataset.fileId);
+      row.classList.toggle('selected', selected); row.querySelector('input').checked = selected;
+    });
+  }
+  function selectFile(file, checked, range = false) {
+    const current = state.files.findIndex(item => item.id === file.id);
+    const anchor = state.files.findIndex(item => item.id === state.selectionAnchor);
+    const files = range && anchor >= 0 ? state.files.slice(Math.min(current, anchor), Math.max(current, anchor) + 1) : [file];
+    for (const item of files) checked ? state.selection.add(item.id) : state.selection.delete(item.id);
+    state.selectionAnchor = file.id; drawSelection();
+  }
+  async function openFile(file) {
+    if (kindOf(file) === 'folder') return openFolder(file);
+    await showDetail(file, true);
+  }
+  function contextMenu(event, file) {
+    event.preventDefault();
+    list.querySelector('.google-context-menu')?.remove();
+    const menu = el('div', { class: 'google-context-menu', role: 'menu', 'aria-label': `${file.name} actions` });
+    const run = fn => async () => { menu.remove(); await fn(); };
+    menu.append(button('Open', run(() => openFile(file))),
+      ...['Rename', 'Move', 'Copy', file.starred ? 'Unstar' : 'Star', 'Share'].map(label => button(label, run(async () => {
+        await showDetail(file);
+        if (label === 'Share') { const panel = detail.querySelector('details'); panel.open = true; }
+        else [...detail.querySelectorAll('.google-actions button')].find(node => node.textContent === label)?.click();
+      }))),
+      el('a', { class: 'btn', href: `${BASE}/drive/files/${encodeURIComponent(file.id)}/download`, text: 'Download' }),
+      button(file.trashed ? 'Restore' : 'Move to trash', run(async () => {
+        if (file.trashed || await confirmDialog({ title: 'Move to trash?', message: file.name, confirmLabel: 'Move to trash' }))
+          await driveAction({ file_id: file.id, action: file.trashed ? 'restore' : 'trash' });
+      })), button('Close menu', () => menu.remove(), 'btn quiet'));
+    list.append(menu); menu.querySelector('button').focus();
+    const bounds = list.getBoundingClientRect();
+    menu.style.left = `${Math.max(0, Math.min(event.clientX - bounds.left, list.clientWidth - 200))}px`;
+    menu.style.top = `${Math.max(0, event.clientY - bounds.top + list.scrollTop)}px`; menu.style.right = 'auto';
+    menu.addEventListener('keydown', e => { if (e.key === 'Escape') menu.remove(); });
+  }
+  function drawFiles() {
+    list.replaceChildren();
+    for (const file of state.files) {
+      const type = kindOf(file);
+      const checkbox = el('input', { type: 'checkbox', 'aria-label': `Select ${file.name}` });
+      const row = el('div', { class: 'google-file-row', 'data-file-id': file.id });
+      const open = button(file.name, event => {
+        if (event.ctrlKey || event.metaKey || event.shiftKey) {
+          selectFile(file, event.shiftKey || !state.selection.has(file.id), event.shiftKey);
+        } else if (matchMedia('(pointer: coarse)').matches) return openFile(file);
+        else return showDetail(file);
+      }, 'google-file-open');
+      const thumbnail = el('div', { class: 'google-thumbnail' }, [el('span', { class: 'google-type', text: type.toUpperCase() })]);
+      if (file.thumbnailLink && type !== 'folder') {
+        const img = el('img', { src: `${BASE}/drive/files/${encodeURIComponent(file.id)}/thumbnail`, alt: '', loading: 'lazy' });
+        img.onerror = () => img.remove(); thumbnail.append(img);
+      }
+      open.replaceChildren(thumbnail, el('span', { class: 'google-file-copy' }, [el('strong', { text: file.name }),
+        el('small', { text: [type, file.modifiedTime && new Date(file.modifiedTime).toLocaleDateString()].filter(Boolean).join(' · ') })]));
+      open.addEventListener('dblclick', () => openFile(file).catch(error => toast(error.message, 'error')));
+      open.addEventListener('keydown', event => {
+        if (event.key === 'Enter') { event.preventDefault(); openFile(file).catch(error => toast(error.message, 'error')); }
+      });
+      checkbox.addEventListener('click', event => selectFile(file, checkbox.checked, event.shiftKey));
+      row.addEventListener('contextmenu', event => contextMenu(event, file));
+      row.append(checkbox, open); list.append(row);
+    }
+    if (!state.files.length) list.append(el('div', { class: 'library-empty', text: 'No matching Google files.' }));
+    drawSelection();
   }
   async function load(append = false) {
     const generation = ++listGeneration;
-    const params = new URLSearchParams({ q: state.query, kind: state.kind, trashed: String(state.trashed) });
+    const params = new URLSearchParams({ q: state.query, kind: state.kind, section: state.section });
     if (state.parent) params.set('parent', state.parent);
     if (append && state.page) params.set('page_token', state.page);
     statusLine.textContent = 'Loading Drive…';
     try {
       const result = await api(`${BASE}/drive/files?${params}`);
       if (generation !== listGeneration || !host.isConnected) return;
-      if (!append) list.replaceChildren();
-      state.page = result.nextPageToken || null;
-      more.hidden = !state.page;
-      for (const file of result.files || []) {
-        const type = kindOf(file);
-        const row = button(file.name, () => type === 'folder' ? openFolder(file) : showDetail(file), 'google-file-row');
-        row.replaceChildren(
-          el('span', { class: `google-type google-type-${type}`, text: type === 'file' ? 'FILE' : type.toUpperCase() }),
-          el('span', { class: 'google-file-copy' }, [el('strong', { text: file.name }),
-            el('small', { text: [type, file.modifiedTime && new Date(file.modifiedTime).toLocaleDateString()].filter(Boolean).join(' · ') })]),
-          el('span', { class: 'library-row-arrow', text: '→' }),
-        );
-        list.append(row);
-      }
-      if (!list.childElementCount) list.append(el('div', { class: 'library-empty', text: 'No matching Google files.' }));
+      state.files = append ? [...state.files, ...(result.files || [])] : (result.files || []);
+      state.selection.clear(); state.selectionAnchor = null; state.page = result.nextPageToken || null; more.hidden = !state.page;
+      drawFiles(); drawBreadcrumbs();
       statusLine.textContent = result.incompleteSearch ? 'Google returned a partial result. Narrow the search.' : '';
-      drawBreadcrumbs();
     } catch (error) { statusLine.textContent = `Could not load Drive: ${error.message}`; }
   }
-  async function showDetail(file) {
-    state.selected = file;
+  async function showDetail(file, preview = false) {
+    const generation = ++detailGeneration;
+    previewController?.abort(); previewController = new AbortController();
+    const controller = previewController;
+    detail.hidden = false; state.selected = file;
     detail.replaceChildren();
+    if (preview && matchMedia('(pointer: coarse)').matches) detail.scrollIntoView({ block: 'start' });
     const type = kindOf(file);
     const head = el('div', { class: 'google-detail-head' }, [
       el('div', {}, [el('div', { class: 'meta', text: type.toUpperCase() }), el('h3', { text: file.name })]),
+      button('Close details', () => { detail.hidden = true; controller.abort(); }, 'btn quiet'),
       file.webViewLink ? el('a', { class: 'btn', href: file.webViewLink, target: '_blank', rel: 'noopener noreferrer', text: 'Open in Google ↗' }) : null,
     ]);
     const actions = el('div', { class: 'google-actions' });
-    const apply = async (body) => { await driveAction({ file_id: file.id, ...body }); detail.replaceChildren(); };
-    actions.append(
+    const apply = async (body) => {
+      await driveAction({ file_id: file.id, ...body }); controller.abort(); detail.replaceChildren(); detail.hidden = true;
+    };
+    // filter(Boolean): append() would write a skipped (null) button as the text "null".
+    actions.append(...[
+      button('Open', () => openFile(file)),
       button('Rename', async () => { const name = await inlinePrompt(detail, 'New name', file.name); if (name) await apply({ action: 'rename', name }); }),
       button('Move', async () => { const parent = await folderPicker(detail); if (parent) await apply({ action: 'move', parent }); }),
       button('Copy', async () => apply({ action: 'copy', name: `${file.name} copy` })),
@@ -197,12 +307,14 @@ function renderDrive(host, status, refreshAll) {
       file.trashed ? button('Delete forever', async () => {
         if (await confirmDialog({ title: 'Delete permanently?', message: `${file.name} cannot be restored.`, confirmLabel: 'Delete forever' })) await apply({ action: 'delete' });
       }, 'btn danger') : null,
-    );
-    if (type === 'file' || type === 'sheet') actions.append(el('a', { class: 'btn', href: `${BASE}/drive/files/${encodeURIComponent(file.id)}/download`, text: 'Download' }));
+    ].filter(Boolean));
+    if (['file', 'sheet', 'doc', 'slides'].includes(type)) actions.append(el('a', { class: 'btn', href: `${BASE}/drive/files/${encodeURIComponent(file.id)}/download`, text: 'Download' }));
     const extras = el('div', { class: 'google-detail-extra' });
     detail.append(head, actions, extras);
     if (type === 'sheet') await sheetEditor(extras, file);
     if (type === 'form') await formEditor(extras, file);
+    if (preview && !['sheet', 'form', 'folder'].includes(type)) await fileViewer(extras, actions, file, controller);
+    if (generation !== detailGeneration || controller.signal.aborted) return;
     const permissions = el('details', { class: 'disclosure-panel' }, [el('summary', { text: 'Sharing and permissions' })]);
     permissions.addEventListener('toggle', () => { if (permissions.open && permissions.childElementCount === 1) sharing(permissions, file); });
     const revisions = el('details', { class: 'disclosure-panel' }, [el('summary', { text: 'Revisions' })]);
@@ -215,6 +327,38 @@ function renderDrive(host, status, refreshAll) {
     detail.append(permissions, revisions);
   }
   load();
+}
+
+async function fileViewer(host, actions, file, controller) {
+  const url = `${BASE}/drive/files/${encodeURIComponent(file.id)}/preview`;
+  host.classList.add('google-viewer');
+  host.textContent = 'Loading preview…';
+  try {
+    if (file.mimeType === MIME.slides || file.mimeType === 'application/pdf') {
+      await renderPDF(host, actions, url, file.name, controller);
+      return;
+    }
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || 'Preview unavailable');
+    if (!host.isConnected || controller.signal.aborted) return;
+    const mime = response.headers.get('content-type') || '';
+    if (mime.startsWith('image/')) {
+      host.replaceChildren(el('img', { src: url, alt: file.name }));
+    } else if (mime.startsWith('text/html')) {
+      const text = await response.text();
+      if (controller.signal.aborted) return;
+      const frame = el('iframe', { sandbox: '', title: file.name, class: 'google-reader', referrerpolicy: 'no-referrer' });
+      const theme = getComputedStyle(document.documentElement);
+      const ink = theme.getPropertyValue('--text').trim(), paper = theme.getPropertyValue('--bg-panel-solid').trim();
+      frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><style>body{margin:24px;font-family:system-ui;line-height:1.6;color:${ink};background:${paper}}table{border-collapse:collapse}td,th{border:1px solid currentColor;padding:8px}pre{white-space:pre-wrap}</style>${text}`;
+      host.replaceChildren(el('div', { class: 'meta', text: 'Read-only preview. Open in Google to edit.' }), frame);
+    } else {
+      const text = await response.text();
+      if (!controller.signal.aborted) host.replaceChildren(el('pre', { class: 'google-text-preview', text }));
+    }
+  } catch (error) {
+    if (error.name !== 'AbortError' && host.isConnected) host.textContent = error.message;
+  }
 }
 
 function inlinePrompt(host, label, initial = '') {

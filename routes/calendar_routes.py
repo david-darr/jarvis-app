@@ -1,10 +1,13 @@
 """Calendar CRUD + range listing (merges real events with due-dated Notes)."""
 from typing import Optional
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from core.middleware import require_user
+from core.auth import auth_manager
+from core import google_workspace as google
 from services.calendar_service import calendar_service
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
@@ -34,6 +37,11 @@ async def list_events(start: str = Query(...), end: str = Query(...), user: str 
     events = calendar_service.list_range(start, end)
     from core import tab_hooks
     events += await tab_hooks.calendar_items(user, start, end)
+    if auth_manager.is_admin(user):
+        try:
+            events += await google.selected_calendar_events(start, end)
+        except google.GoogleError as problem:
+            logging.getLogger(__name__).warning("Google Calendar range unavailable: %s", problem)
     return events
 
 

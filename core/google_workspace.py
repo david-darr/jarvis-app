@@ -14,7 +14,10 @@ import os
 import re
 import secrets
 import time
-from urllib.parse import quote, urlencode
+from copy import deepcopy
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit
 
 import httpx
 
@@ -31,18 +34,24 @@ HOSTS = {
     "upload": "https://www.googleapis.com/upload/drive/v3",
     "sheets": "https://sheets.googleapis.com/v4",
     "forms": "https://forms.googleapis.com/v1",
+    "thumbnail": "https://lh3.googleusercontent.com",
+    "calendar": "https://www.googleapis.com/calendar/v3",
 }
+CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
 SCOPES = (
     "openid", "email",
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/forms.body",
     "https://www.googleapis.com/auth/forms.responses.readonly",
+    CALENDAR_SCOPE,
 )
-FILE_FIELDS = "nextPageToken,incompleteSearch,files(id,name,mimeType,size,parents,modifiedTime,webViewLink,description,starred,trashed,driveId,capabilities,owners,shared)"
+FILE_FIELDS = "nextPageToken,incompleteSearch,files(id,name,mimeType,size,parents,modifiedTime,webViewLink,description,starred,trashed,driveId,capabilities,owners,shared,thumbnailLink)"
 MAX_DOWNLOAD = 25 * 1024 * 1024
 _pending: dict[str, tuple[str, float]] = {}
 _refresh_lock = asyncio.Lock()
+_calendar_cache: dict[tuple, tuple[float, list[dict]]] = {}
+_calendar_generation = 0
 
 
 class GoogleError(Exception):
@@ -70,7 +79,10 @@ def status() -> dict:
     return {"configured": bool(data.get("client_id")),
             "connected": bool(data.get("refresh_token")),
             "email": data.get("email"),
-            "client_id": data.get("client_id") or ""}
+            "client_id": data.get("client_id") or "",
+            "granted_scopes": data.get("granted_scopes") or [],
+            "calendar_connected": bool(data.get("refresh_token") and CALENDAR_SCOPE in (data.get("granted_scopes") or [])),
+            "calendar_ids": data.get("calendar_ids")}
 
 
 def configure(client_id: str, client_secret: str = "") -> dict:
@@ -79,6 +91,9 @@ def configure(client_id: str, client_secret: str = "") -> dict:
         raise GoogleError("Enter a Google OAuth Desktop client ID")
     data = _load()
     if data.get("client_id") != client_id:
+        invalidate_calendar()
+        data.pop("granted_scopes", None)
+        data.pop("calendar_ids", None)
         data.pop("refresh_token", None)
         data.pop("access_token", None)
         data.pop("email", None)
@@ -92,9 +107,10 @@ def configure(client_id: str, client_secret: str = "") -> dict:
 
 def disconnect() -> dict:
     data = _load()
-    for key in ("refresh_token", "access_token", "expires_at", "email"):
+    for key in ("refresh_token", "access_token", "expires_at", "email", "granted_scopes", "calendar_ids"):
         data.pop(key, None)
     _save(data)
+    invalidate_calendar()
     return status()
 
 
@@ -147,7 +163,9 @@ async def finish_sign_in(state: str, code: str | None, redirect_uri: str, error:
     data["access_token"] = encrypt(access) if access else None
     data["expires_at"] = time.time() + int(tokens.get("expires_in") or 3600)
     data["email"] = email
+    data["granted_scopes"] = str(tokens.get("scope") or "").split()
     _save(data)
+    invalidate_calendar()
     return email or "Google account"
 
 
@@ -172,14 +190,21 @@ async def _token(force: bool = False) -> str:
             raise GoogleError("Google did not return an access token", 502)
         data["access_token"] = encrypt(access)
         data["expires_at"] = time.time() + int(tokens.get("expires_in") or 3600)
+        if "scope" in tokens:
+            data["granted_scopes"] = tokens["scope"].split()
         _save(data)
         return access
 
 
 async def request(api: str, method: str, path: str, *, params: dict | None = None,
                   body: dict | None = None, content: bytes | None = None,
-                  content_type: str | None = None) -> dict | bytes:
-    if api not in HOSTS or not path.startswith("/") or "//" in path or ".." in path:
+                  content_type: str | None = None, raw: bool = False) -> dict | bytes:
+    decoded = path
+    for _ in range(3):
+        decoded = unquote(decoded)
+    if (api not in HOSTS or not path.startswith("/") or "//" in decoded or ".." in decoded
+            or re.search(r"%[0-9a-fA-F]{2}", decoded)
+            or "\\" in decoded or any(ord(c) < 32 for c in decoded)):
         raise GoogleError("Invalid Google API request")
     url = HOSTS[api] + path
     for retry in range(2):
@@ -192,21 +217,32 @@ async def request(api: str, method: str, path: str, *, params: dict | None = Non
                                             content=content, headers=headers)
         if response.status_code == 401 and retry == 0:
             continue
+        if response.is_redirect:
+            raise GoogleError("Google API redirects are not allowed", 502)
         if response.status_code >= 400:
             try:
                 detail = response.json().get("error", {}).get("message") or response.text[:250]
             except (ValueError, AttributeError):
                 detail = response.text[:250]
             raise GoogleError(f"Google API: {detail}", response.status_code)
-        if response.headers.get("content-type", "").startswith("application/json"):
+        if not raw and response.headers.get("content-type", "").startswith("application/json"):
             return response.json()
         return response.content
     raise GoogleError("Google authorization expired; reconnect the account", 401)
 
 
 async def list_files(*, query: str = "", parent: str | None = None, kind: str = "all",
-                     trashed: bool = False, page_token: str | None = None) -> dict:
+                     trashed: bool = False, page_token: str | None = None, section: str = "all") -> dict:
+    if section not in ("all", "my_drive", "shared", "starred", "recent", "trash"):
+        raise GoogleError("Unknown Drive section")
+    trashed = trashed or section == "trash"
     terms = [f"trashed = {'true' if trashed else 'false'}"]
+    if section == "shared" and not parent:
+        terms.append("sharedWithMe = true")
+    elif section == "starred" and not parent:
+        terms.append("starred = true")
+    elif section == "my_drive" and not parent and not query:
+        terms.append("'root' in parents")
     if parent:
         terms.append(f"'{_id(parent)}' in parents")
     if kind in ("sheet", "form", "folder"):
@@ -218,7 +254,8 @@ async def list_files(*, query: str = "", parent: str | None = None, kind: str = 
         safe = query[:100].replace("\\", "\\\\").replace("'", "\\'")
         terms.append(f"name contains '{safe}'")
     params = {"q": " and ".join(terms), "pageSize": 100, "fields": FILE_FIELDS,
-              "orderBy": "folder,name", "supportsAllDrives": "true", "includeItemsFromAllDrives": "true"}
+              "orderBy": "viewedByMeTime desc" if section == "recent" else "folder,name",
+              "supportsAllDrives": "true", "includeItemsFromAllDrives": "true"}
     if page_token:
         params["pageToken"] = page_token
     return await request("drive", "GET", "/files", params=params)
@@ -235,12 +272,63 @@ async def file_content(file_id: str, export_mime: str | None = None) -> bytes:
     params = {"mimeType": export_mime} if export_mime else {"alt": "media", "supportsAllDrives": "true"}
     if export_mime:
         path += "/export"
-    content = await request("drive", "GET", path, params=params)
+    content = await request("drive", "GET", path, params=params, raw=True)
     if not isinstance(content, bytes):
         raise GoogleError("Google returned no file content", 502)
     if len(content) > MAX_DOWNLOAD:
         raise GoogleError("This file is larger than Kairos's 25 MB download limit", 413)
     return content
+
+
+async def drive_storage() -> dict:
+    return await request("drive", "GET", "/about", params={"fields": "storageQuota"})
+
+
+def image_mime(content: bytes) -> str:
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if content.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if content.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    raise GoogleError("This image format cannot be previewed safely", 415)
+
+
+async def file_thumbnail(file_id: str) -> tuple[bytes, str]:
+    info = await file_info(file_id)
+    url = urlsplit(info.get("thumbnailLink") or "")
+    if (url.scheme != "https" or url.netloc != "lh3.googleusercontent.com"
+            or url.username or url.password or url.fragment):
+        raise GoogleError("No supported Google thumbnail for this file", 404)
+    content = await request("thumbnail", "GET", url.path, params=dict(parse_qsl(url.query)), raw=True)
+    if not isinstance(content, bytes) or len(content) > MAX_DOWNLOAD:
+        raise GoogleError("Thumbnail exceeds the 25 MB download limit", 413)
+    return content, image_mime(content)
+
+
+async def file_preview(file_id: str) -> tuple[bytes, str]:
+    info = await file_info(file_id)
+    mime = info.get("mimeType") or ""
+    if int(info.get("size") or 0) > MAX_DOWNLOAD:
+        raise GoogleError("This file is larger than Kairos's 25 MB download limit", 413)
+    if mime == "application/vnd.google-apps.document":
+        from core.google_preview import sanitize_html
+        content = await file_content(file_id, "text/html")
+        return sanitize_html(content.decode("utf-8", errors="replace")).encode("utf-8"), "text/html"
+    if mime == "application/vnd.google-apps.presentation":
+        return await file_content(file_id, "application/pdf"), "application/pdf"
+    if mime == "application/pdf":
+        return await file_content(file_id), mime
+    if mime.startswith("image/"):
+        content = await file_content(file_id)
+        return content, image_mime(content)
+    extension = os.path.splitext(info.get("name") or "")[1].lower()
+    if (mime.startswith("text/") or mime in ("application/json", "application/javascript", "application/xml")
+            or extension in (".txt", ".md", ".py", ".js", ".ts", ".json", ".yaml", ".yml", ".css", ".html", ".xml", ".csv", ".sql", ".sh", ".c", ".cpp", ".java", ".rs")):
+        return await file_content(file_id), "text/plain"
+    raise GoogleError("Preview unavailable for this type; download or open in Google", 415)
 
 
 async def drive_action(action: str, *, file_id: str | None = None, name: str | None = None,
@@ -385,3 +473,180 @@ async def form_action(action: str, *, file_id: str | None = None, title: str | N
                                  "isPublished": published, "isAcceptingResponses": published}},
                                    "updateMask": "publishState"})
     raise GoogleError("Unknown Forms action")
+
+
+def invalidate_calendar() -> None:
+    global _calendar_generation
+    _calendar_generation += 1
+    _calendar_cache.clear()
+
+
+def _calendar_access() -> None:
+    if not status()["calendar_connected"]:
+        raise GoogleError("Reconnect to add Calendar", 409)
+
+
+def _calendar_id(value: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_.@+-]{1,256}", value) or ".." in value:
+        raise GoogleError("Invalid Google calendar ID")
+    return quote(value, safe="")
+
+
+def calendar_settings(calendar_ids: list[str]) -> dict:
+    _calendar_access()
+    for ident in calendar_ids:
+        _calendar_id(ident)
+    data = _load()
+    data["calendar_ids"] = list(dict.fromkeys(calendar_ids))
+    _save(data)
+    invalidate_calendar()
+    return {"calendar_ids": data["calendar_ids"]}
+
+
+async def calendar_list() -> list[dict]:
+    _calendar_access()
+    calendars, page = [], None
+    while True:
+        result = await request("calendar", "GET", "/users/me/calendarList",
+                               params={"maxResults": 250, **({"pageToken": page} if page else {})})
+        for item in result.get("items", []):
+            if item.get("deleted"):
+                continue
+            calendars.append({"id": item["id"], "name": item.get("summaryOverride") or item.get("summary") or item["id"],
+                              "color": item.get("backgroundColor"), "primary": bool(item.get("primary")),
+                              "time_zone": item.get("timeZone") or "UTC", "access_role": item.get("accessRole"),
+                              "selected": not item.get("hidden", False) and item.get("selected", True)})
+        page = result.get("nextPageToken")
+        if not page:
+            return calendars
+
+
+def _timed(value: str, zone: str = "UTC") -> str:
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=ZoneInfo(zone))
+        return stamp.isoformat()
+    except (ValueError, ZoneInfoNotFoundError) as problem:
+        raise GoogleError("Enter an ISO date/time and a valid time zone") from problem
+
+
+def _map_calendar_event(item: dict, calendar: dict) -> dict:
+    start, end = item.get("start", {}), item.get("end", {})
+    all_day = "date" in start
+    zone = start.get("timeZone") or calendar.get("time_zone") or "UTC"
+    return {"id": item["id"], "title": item.get("summary") or "Untitled event",
+            "start": start.get("date") if all_day else _timed(start.get("dateTime") or "", zone),
+            "end": end.get("date") if all_day else _timed(end.get("dateTime") or start.get("dateTime") or "", end.get("timeZone") or zone),
+            "all_day": all_day, "time_zone": zone, "location": item.get("location") or "",
+            "description": item.get("description") or "", "source": "google",
+            "calendar_id": calendar["id"], "calendar_color": calendar.get("color"),
+            "calendar_name": calendar.get("name"), "editable": calendar.get("access_role") in ("owner", "writer"),
+            "web_link": item.get("htmlLink")}
+
+
+def calendar_event_time(item: dict) -> float:
+    return datetime.fromisoformat(_timed(item["start"], item.get("time_zone") or "UTC")).timestamp()
+
+
+async def calendar_events(calendar_ids: list[str], start: str, end: str) -> list[dict]:
+    _calendar_access()
+    start, end = _timed(start), _timed(end)
+    if datetime.fromisoformat(start) >= datetime.fromisoformat(end):
+        raise GoogleError("The range must end after it starts")
+    ids = tuple(sorted(set(calendar_ids)))
+    for ident in ids:
+        _calendar_id(ident)
+    key = (ids, start, end)
+    cached = _calendar_cache.get(key)
+    if cached and time.monotonic() - cached[0] < 60:
+        return deepcopy(cached[1])
+    if not ids:
+        return []
+    generation = _calendar_generation
+    calendars = {c["id"]: c for c in await calendar_list()}
+    events = []
+    for ident in ids:
+        calendar = calendars.get(ident)
+        if ident == "primary":
+            calendar = next((c for c in calendars.values() if c["primary"]), None)
+        if not calendar:
+            raise GoogleError("Google calendar no longer available", 404)
+        page = None
+        while True:
+            result = await request("calendar", "GET", f"/calendars/{_calendar_id(ident)}/events",
+                                   params={"timeMin": start, "timeMax": end, "singleEvents": "true",
+                                           "orderBy": "startTime", "maxResults": 2500,
+                                           **({"pageToken": page} if page else {})})
+            events.extend(_map_calendar_event(item, calendar) for item in result.get("items", [])
+                          if item.get("status") != "cancelled" and item.get("start"))
+            page = result.get("nextPageToken")
+            if not page:
+                break
+    events.sort(key=calendar_event_time)
+    # A response started before a write must not refill the cache afterwards.
+    if generation == _calendar_generation:
+        if len(_calendar_cache) >= 64:
+            _calendar_cache.clear()
+        _calendar_cache[key] = (time.monotonic(), deepcopy(events))
+    return events
+
+
+async def selected_calendar_events(start: str, end: str) -> list[dict]:
+    if not status()["calendar_connected"]:
+        return []
+    ids = _load().get("calendar_ids")
+    if ids is None:
+        ids = [c["id"] for c in await calendar_list() if c["selected"]]
+    return await calendar_events(ids, start, end)
+
+
+async def calendar_action(action: str, *, calendar_id: str = "primary", event_id: str | None = None,
+                          event: dict | None = None, text: str | None = None) -> dict:
+    _calendar_access()
+    path = f"/calendars/{_calendar_id(calendar_id)}/events"
+    if action not in ("create", "update", "delete", "quick_add"):
+        raise GoogleError("Unknown Google Calendar action")
+    if action in ("update", "delete"):
+        path += "/" + _id(event_id or "")
+    body = None
+    params = None
+    if action == "quick_add":
+        if not text or not text.strip() or len(text) > 2000:
+            raise GoogleError("Enter an event description under 2001 characters")
+        path += "/quickAdd"
+        params = {"text": text}
+    elif action != "delete":
+        fields = event or {}
+        body = {k: v for k, v in fields.items() if k in ("summary", "description", "location", "start", "end")}
+        if action == "create" and not all(body.get(k) for k in ("summary", "start", "end")):
+            raise GoogleError("An event needs a title, start and end")
+        for key in ("start", "end"):
+            if key not in body:
+                continue
+            value = body[key]
+            if not isinstance(value, dict) or ("date" in value) == ("dateTime" in value):
+                raise GoogleError("Use either date or dateTime for an event boundary")
+            if "date" in value:
+                try:
+                    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value["date"]):
+                        raise ValueError()
+                    datetime.strptime(value["date"], "%Y-%m-%d")
+                except (ValueError, TypeError) as problem:
+                    raise GoogleError("Enter an all-day date as YYYY-MM-DD") from problem
+                body[key] = {"date": value["date"]}
+            else:
+                body[key] = {"dateTime": _timed(value.get("dateTime") or "", value.get("timeZone") or "UTC")}
+                if value.get("timeZone"):
+                    body[key]["timeZone"] = value["timeZone"]
+        if "start" in body and "end" in body:
+            date_only = "date" in body["start"]
+            if date_only != ("date" in body["end"]):
+                raise GoogleError("Start and end must both be all-day or timed")
+            key = "date" if date_only else "dateTime"
+            if datetime.fromisoformat(body["start"][key]) >= datetime.fromisoformat(body["end"][key]):
+                raise GoogleError("The event must end after it starts; all-day end dates are exclusive")
+    method = {"create": "POST", "update": "PATCH", "delete": "DELETE", "quick_add": "POST"}[action]
+    result = await request("calendar", method, path, body=body, params=params)
+    invalidate_calendar()
+    return result if isinstance(result, dict) else {"deleted": True}

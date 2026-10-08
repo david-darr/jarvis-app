@@ -45,7 +45,7 @@ CLAUDE_APPROVED_BEFORE = {f"mcp__hive_mind__{name}" for name in (
     "search_sessions list_skills search_skills read_skill list_notes list_tasks list_upcoming_events list_specs "
     "read_spec list_documents read_document list_contacts list_task_runs create_note update_note delete_note "
     "create_task update_task delete_task create_event update_event delete_event save_generated_image run_code "
-    "browse save_generated_file google_drive google_sheets google_forms agent_remember agent_ask "
+    "browse save_generated_file google_drive google_sheets google_forms google_calendar agent_remember agent_ask "
     # Helpers (roadmap phase 5, 2026-10-06): delegate and collect.
     "delegate helper_results computer").split()}
 
