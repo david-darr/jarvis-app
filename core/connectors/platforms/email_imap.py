@@ -16,6 +16,7 @@ from email.utils import parseaddr
 
 from core.connectors import register
 from core.connectors.base import Connector, ConnectorError, Field, Inbound
+from core.crm_sources import message_time
 
 _QUOTE_START = re.compile(r"^(On .+wrote:|-----Original Message-----|From: .+)$", re.MULTILINE)
 SEP = "\x1f"  # conversation = address, subject and message ID, kept together
@@ -105,7 +106,10 @@ class Email(Connector):
                 sender = address if _verified(message) else f"unverified:{address}"
                 found.append(Inbound(conversation=SEP.join([address, subject, message.get("Message-ID", "")]),
                                      sender=sender, text=fresh, attachments=files, replying_to=quoted,
-                                     sender_name=parseaddr(message.get("From", ""))[0]))
+                                     sender_name=parseaddr(message.get("From", ""))[0],
+                                     message_id=message.get("Message-ID", ""),
+                                     thread_id=(message.get("References", "").split() or [message.get("In-Reply-To") or message.get("Message-ID", "")])[0],
+                                     sent_at=message_time(message.get("Date"))))
         return found
 
     async def send(self, conversation: str, text: str) -> None:

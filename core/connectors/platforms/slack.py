@@ -7,6 +7,7 @@ write) and a bot token (chat:write, channels:history, im:history,
 groups:history), subscribed to message.channels / message.im events."""
 import json
 import re
+from datetime import datetime, timezone
 
 from core.connectors import register
 from core.connectors.base import Connector, ConnectorError, Field, Inbound, require
@@ -69,13 +70,26 @@ class Slack(Connector):
             return None  # our own messages, edits, joins
         thread, ts = event.get("thread_ts"), event.get("ts")
         replying_to = ""
+        source_context = ""
         if thread and thread != ts:
             parent = await api.get(f"{API}/conversations.replies", params={"channel": event["channel"], "ts": thread, "limit": 1})
             first = ((parent.json() if parent.status_code == 200 else {}).get("messages") or [{}])[0]
+            source_context = first.get("text", "")
             if first.get("user") == self.bot_user or first.get("bot_id"):
                 replying_to = first.get("text", "")
+        source_url = None
+        if ts:
+            try:
+                link = _slack(await api.get(f"{API}/chat.getPermalink",
+                    params={"channel": event["channel"], "message_ts": ts}), "Reading the message link")
+                source_url = link.get("permalink")
+            except Exception:
+                pass  # Source capture remains available without a native link.
         return Inbound(conversation=event["channel"], sender=event.get("user", ""),
-                       text=_MENTION.sub("", event.get("text") or ""), replying_to=replying_to)
+                       text=_MENTION.sub("", event.get("text") or ""), replying_to=replying_to,
+                       message_id=ts or "", thread_id=thread or ts or "",
+                       sent_at=datetime.fromtimestamp(float(ts), timezone.utc).isoformat() if ts else None,
+                       source_url=source_url, source_context=source_context)
 
     async def send(self, conversation: str, text: str) -> None:
         async with self.http(headers={"Authorization": f"Bearer {self.setting('bot_token')}"}) as api:

@@ -128,6 +128,11 @@ class Hub:
         text = (inbound.text or "").strip()
         if not text and not inbound.attachments:
             return
+        try:
+            from core.crm_scanner import capture_connector
+            capture_connector("connector", record["id"], inbound)
+        except Exception:
+            logger.exception("connector: CRM capture failed")
         trusted = inbound.sender in allowed and not open_to_anyone
         try:
             reply = await self._reply(adapter, inbound, text, trusted)

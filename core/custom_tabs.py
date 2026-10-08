@@ -132,6 +132,11 @@ def migrate_user_tabs() -> list[str]:
 # Each entry is a real tab already built to the routes/tab_<slug>.py
 # convention; enabling just makes discover() stop skipping it.
 TAB_TEMPLATES = {
+    "crm": {
+        "label": "CRM",
+        "blurb": "Turn connected messages into follow-ups with deadlines, priorities and source links.",
+        "detail": "Scan selected email accounts and connections, review uncertain requests, and track work by contact and project. Every extracted task keeps its source evidence.",
+    },
     "school": {
         "label": "School",
         "blurb": "Track courses, assignments and due dates, with a per-course chat that remembers what you're working on.",

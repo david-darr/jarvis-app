@@ -283,6 +283,8 @@ function appendItemCard(dayPanel, item, rerenderSelf, refreshGrid) {
   checkbox.addEventListener("change", async () => {
     if (item.source === "calendar") {
       await api(`/api/calendar/events/${item.id}`, { method: "PATCH", body: JSON.stringify({ completed: checkbox.checked }) });
+    } else if (item.source === "crm") {
+      await api(`/api/tab-crm/tasks/${item.id}`, { method: "PATCH", body: JSON.stringify({ status: checkbox.checked ? "done" : "active" }) });
     } else {
       await api(`/api/notes/${item.id}`, { method: "PATCH", body: JSON.stringify({ completed: checkbox.checked }) });
     }
@@ -304,7 +306,7 @@ function appendItemCard(dayPanel, item, rerenderSelf, refreshGrid) {
           toast("Event deleted", "success");
         }, { danger: true }),
       ])
-    : el("span", { class: "meta", text: "From Notes" });
+    : el("span", { class: "meta", text: item.source === "crm" ? "From CRM" : "From Notes" });
 
   dayPanel.appendChild(el("div", { class: "glass card has-row-actions" + (item.completed ? " cal-item-completed" : "") }, [
     el("div", { class: "card-row" }, [

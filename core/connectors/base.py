@@ -50,6 +50,12 @@ class Inbound:
     sender_name: str = ""
     attachments: list = field(default_factory=list)  # [(filename, bytes)]
     replying_to: str = ""  # the text of our own message this one replies to
+    # Optional provenance for passive consumers such as the CRM tab.
+    message_id: str = ""
+    thread_id: str = ""
+    sent_at: str | None = None
+    source_url: str | None = None
+    source_context: str = ""  # CRM context; does not change chat reply routing
 
 
 class ConnectorError(Exception):
