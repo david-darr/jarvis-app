@@ -950,7 +950,40 @@ async def _helper_results(args, ctx):
     return helpers.results_text(args.get("batch_id"), ctx)
 
 
-# -- agents: only in an agent's own runs and chats (services/agent_service.py) --
+# -- handing work to an agent, from any admin chat (services/agent_handoff.py) --
+
+@register(
+    "hand_to_agent",
+    "Hand work to an agent by name or id. Creates a card; progress, questions and the result return to this chat.",
+    _object({"agent": _str("Agent name or id"), "work": _str("The work to hand over")}, ("agent", "work")),
+    admin_only=True, effect=WRITE,
+)
+async def _hand_to_agent(args, ctx):
+    from services.agent_service import agent_service
+    from services.agent_handoff import hand_off, recent_context
+    if not ctx.session_id:
+        raise ValueError("Hand work over from a chat")
+    name = str(args["agent"]).strip().casefold()
+    matches = [a for a in agent_service.list_agents() if a["id"].casefold() == name or a["name"].casefold() == name]
+    if len(matches) != 1:
+        raise ValueError("Name one existing agent")
+    # Agents run in Auto, with computer use: once this turn has read untrusted
+    # content (a page, a file, an email), handing work on asks first, so
+    # injected text can't put an agent to work unseen. A clean turn - the
+    # person asked in plain words - hands over without a prompt.
+    if ctx.turn_taint and ctx.turn_taint.tainted:
+        from core import permissions
+        decision = await permissions.decide(
+            surface=ctx.permission_surface, tool="hand_to_agent",
+            arguments={"agent": matches[0]["name"], "work": str(args["work"])[:300]},
+            title=f"Hand work to {matches[0]['name']}",
+            description=f"This turn read {ctx.turn_taint.reason}. " + str(args["work"])[:300],
+            is_admin=ctx.is_admin, force_prompt=True)
+        if decision.behavior != "allow":
+            return f"Not run: {decision.reason or 'handing work to the agent was not approved'}"
+    event = hand_off(matches[0]["id"], args["work"], ctx.session_id, recent_context(ctx.session_id))
+    return f"Handed to {event['agent_name']} (card {event['card_id']})." + (f" {event['note']}" if event['note'] else "")
+
 
 @register(
     "agent_remember",

@@ -68,6 +68,7 @@
     const path = url.pathname;
     if (method === "GET") {
       const sessionMatch = path.match(/^\/api\/sessions\/([^/]+)$/);
+      if (sessionMatch && state.handoffSessions?.[sessionMatch[1]]) return json(fixture(url));
       if (sessionMatch && store.sessions[sessionMatch[1]]) return json(store.sessions[sessionMatch[1]]);
       if (path.match(/^\/api\/sessions\/([^/]+)\/context$/) && store.sessions[path.split("/")[3]]) return json({ available: false });
       try { return json(fixture(url)); } catch (_) { return json({ detail: "Not available in the demo" }, 404); }
@@ -75,7 +76,18 @@
     let body = {};
     try { if (typeof rawBody === "string") body = JSON.parse(rawBody); } catch (_) { /* not JSON */ }
     if (path === "/api/settings/computer-use") { state.computerUse = body; return json({ ok: true }); }
+    if (path === '/api/chat/stream' && body.references?.some(ref => ref.kind === 'agent') && store.sessions[body.session_id]) {
+      state.handoffSessions ||= {};
+      state.handoffSessions[body.session_id] ||= store.sessions[body.session_id];
+    }
     const updated = mutate(path, method, body);
+    if (updated?.handoffs) {
+      // Let the visitor see queued, working and the returned agent reply.
+      setTimeout(() => { state.handoffStatus = 'working'; }, 1200);
+      setTimeout(() => { state.handoffStatus = 'done'; }, 4500);
+      return new Response(`data: ${JSON.stringify(updated)}\n\ndata: {"done":true}\n\n`,
+        { headers: { 'Content-Type': 'text/event-stream' } });
+    }
     if (updated) { const { _status = 200, ...payload } = updated; return json(payload, _status); }
     if (path === "/api/sessions" && method === "POST") {
       const id = "demo" + store.nextId++;

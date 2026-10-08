@@ -16,25 +16,39 @@ TEXT_EXTENSIONS = chat_artifacts.TEXT_EXTENSIONS
 
 def metadata(references: list[dict]) -> list[dict]:
     """Save only the fields needed to reselect a reference on edit/regenerate."""
-    return [{"kind": ref["kind"], "id": ref["id"], "session_id": ref.get("session_id"),
+    saved = [{"kind": ref["kind"], "id": ref["id"], "session_id": ref.get("session_id"),
              "label": (ref.get("label") if isinstance(ref.get("label"), str) else "Reference")[:500]}
             for ref in references]
+    from services.agent_service import agent_service
+    for ref in saved:
+        if ref["kind"] == "agent":
+            agent = agent_service.get(ref["id"])
+            if agent:
+                ref.update(label=agent["name"], avatar=agent["name"][:1].upper(), color=agent.get("color"))
+    return saved
 
 
-def search(query: str, current_session_id: str | None = None) -> list[dict]:
+def search(query: str, current_session_id: str | None = None, is_admin: bool = False) -> list[dict]:
     """Return compact, client-safe search results; no paths outside the vault."""
     query = query.strip()[:100]
     needle = query.casefold()
     results: list[dict] = []
+    if is_admin:
+        from services.agent_service import agent_service
+        for agent in agent_service.list_agents():
+            if not needle or needle in (agent['name'] + ' ' + agent.get('role', '')).casefold():
+                results.append({"kind": "agent", "id": agent["id"], "label": agent["name"],
+                                "detail": agent.get("role", ""), "avatar": agent["name"][:1].upper(),
+                                "color": agent.get("color")})
     for group in chat_files.list_library():
         for item in group["files"]:
             if not item["exists"] or (needle and needle not in (item["name"] + " " + group["title"]).casefold()):
                 continue
             results.append({"kind": "file", "id": item["id"], "session_id": group["session_id"],
                             "label": item["name"], "detail": group["title"]})
-            if len(results) >= 4:
+            if sum(r["kind"] == "file" for r in results) >= 4:
                 break
-        if len(results) >= 4:
+        if sum(r["kind"] == "file" for r in results) >= 4:
             break
 
     if query:
@@ -148,7 +162,7 @@ def _chat_content(reference: dict, current_session_id: str) -> tuple[str, str]:
     return "selected chat", f"Chat: {session.get('title') or session_id}\n{content or '[This chat has no messages.]'}"
 
 
-def resolve(session_id: str, references: list[dict] | None) -> str:
+def resolve(session_id: str, references: list[dict] | None, is_admin: bool = False) -> str:
     """Validate client IDs against current records and build bounded model context."""
     if not references:
         return ""
@@ -161,7 +175,7 @@ def resolve(session_id: str, references: list[dict] | None) -> str:
         if not isinstance(reference, dict):
             raise ValueError("Invalid reference")
         kind = reference.get("kind")
-        if kind not in ("file", "note", "chat"):
+        if kind not in ("file", "note", "chat", "agent"):
             raise ValueError("Invalid reference type")
         ref_id = reference.get("id")
         source_session = reference.get("session_id")
@@ -172,6 +186,13 @@ def resolve(session_id: str, references: list[dict] | None) -> str:
         if key in seen:
             continue
         seen.add(key)
+        if kind == "agent":
+            from services.agent_service import agent_service
+            if not is_admin:
+                raise ValueError("Only admins can hand work to agents")
+            if agent_service.get(ref_id) is None:
+                raise ValueError("A referenced agent is no longer available")
+            continue
         try:
             if kind == "file":
                 label, content = _file_content(reference)

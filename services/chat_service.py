@@ -425,9 +425,31 @@ def _taint_turn(session_id: str, brain, reference_context: str) -> None:
         brain.pending_reference_taint = True
 
 
+def _hand_off_references(session_id: str, text: str, attachment_ids: list[str] | None, is_admin: bool,
+                         reference_context: str, references: list[dict] | None) -> list[dict] | None:
+    agents = list(dict.fromkeys(ref.get("id") for ref in (references or []) if ref.get("kind") == "agent"))
+    if not agents:
+        return None
+    from services.agent_service import agent_service
+    from services.agent_handoff import hand_off, recent_context
+    if not is_admin:
+        raise ValueError("Only admins can hand work to agents")
+    if len(references) > 5 or any(not isinstance(agent_id, str) or agent_service.get(agent_id) is None for agent_id in agents):
+        raise ValueError("Select existing agents, with at most 5 references")
+    if not text.strip() and not attachment_ids:
+        raise ValueError("Say what work to hand over")
+    context = recent_context(session_id)
+    session_manager.append_message(session_id, "user", text, extra=_user_message_extra(references, attachment_ids))
+    work = _apply_attachments(session_id, text, attachment_ids) + reference_context
+    return [hand_off(agent_id, work, session_id, context) for agent_id in agents]
+
+
 async def _send_message(session_id: str, text: str, attachment_ids: list[str] | None = None,
                         is_admin: bool = False, reference_context: str = "",
                         references: list[dict] | None = None) -> str:
+    handed = _hand_off_references(session_id, text, attachment_ids, is_admin, reference_context, references)
+    if handed is not None:
+        return "\n".join(f"Handed to {event['agent_name']}." + (f" {event['note']}" if event['note'] else "") for event in handed)
     image_ids = validate_image_attachments(session_id, attachment_ids)
     await _compact_if_nearly_full(session_id)
     index = session_manager.append_message(session_id, "user", text,
@@ -488,6 +510,10 @@ async def stream_message(session_id: str, text: str, attachment_ids: list[str] |
 async def _stream_message(session_id: str, text: str, attachment_ids: list[str] | None = None,
                           is_admin: bool = False, reference_context: str = "",
                           references: list[dict] | None = None) -> AsyncIterator[str]:
+    handed = _hand_off_references(session_id, text, attachment_ids, is_admin, reference_context, references)
+    if handed is not None:
+        yield {"handoffs": handed}
+        return
     image_ids = validate_image_attachments(session_id, attachment_ids)
     await _compact_if_nearly_full(session_id)
     index = session_manager.append_message(session_id, "user", text,

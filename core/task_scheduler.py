@@ -207,6 +207,8 @@ async def _run_card(card: dict) -> None:
     try:
         brain = _task_brain(card)
         await brain.connect()
+        if card.get("context") and hasattr(brain, "pending_reference_taint"):
+            brain.pending_reference_taint = "context from another conversation"
         prompt = task_service.card_prompt(card)
         if agent:
             prompt = agent_service.run_prompt(agent, prompt)
@@ -216,6 +218,8 @@ async def _run_card(card: dict) -> None:
         events.emit("card.review", f"{card['name']} is ready for review", task_id=card["id"])
         if agent:
             agent_service.notify_review(agent["id"], card)
+        from services.agent_handoff import finished
+        finished(card, output)
         logger.info("card '%s' (%s) finished; waiting for review", card["name"], card["id"])
     except Exception as e:
         failed = task_service.fail_card(card["id"], str(e) or type(e).__name__)
@@ -226,7 +230,13 @@ async def _run_card(card: dict) -> None:
         logger.exception("card '%s' (%s) failed (attempt %s)", card["name"], card["id"], card["attempts"])
     finally:
         if agent:
-            agent_service.end_run(agent["id"])
+            raised = agent_service.end_run(agent["id"])
+            # An answer can arrive through the source chat before this run
+            # ends. It still belongs to the next run, as an inbox answer does.
+            if (card.get("reply_to") and card.get("status") == "review"
+                    and any(i["kind"] == "question" and i["status"] == "answered" for i in raised)
+                    and not agent_service.open_items_for_card(card["id"])):
+                task_service.set_card_status(card["id"], "ready")
         if brain is not None:
             await brain.disconnect()
 
@@ -236,6 +246,9 @@ async def dispatch_cards() -> Optional[dict]:
     oldest Ready card whose dependencies are Done. Returns the card run."""
     for card in task_service.reclaim_stale_cards(running=set(_running)):
         logger.warning("card '%s' (%s): its run was lost; now %s", card["name"], card["id"], card["status"])
+    for card in task_service.list_tasks():
+        if card.get("reply_to") and card.get("status") == "ready":
+            task_service._sync_handoff(card)
     card = task_service.claim_next_card(eligible=agent_may_run)
     if card is not None:
         await start_run(card, "schedule")

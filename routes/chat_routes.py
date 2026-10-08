@@ -32,7 +32,7 @@ async def list_chat_files_library(user: str = Depends(require_user)) -> list[dic
 @router.get("/references")
 def search_chat_references(q: str = "", session_id: str | None = None,
                            user: str = Depends(require_user)) -> list[dict]:
-    return chat_references.search(q, session_id)
+    return chat_references.search(q, session_id, auth_manager.is_admin(user))
 
 
 class PublishFileRequest(BaseModel):
@@ -128,7 +128,7 @@ async def send_chat_message(body: ChatRequest, user: str = Depends(require_user)
     is_admin = auth_manager.is_admin(user)
     try:
         chat_service.validate_image_attachments(body.session_id, body.attachment_ids)
-        reference_context = await asyncio.to_thread(chat_references.resolve, body.session_id, body.references)
+        reference_context = await asyncio.to_thread(chat_references.resolve, body.session_id, body.references, is_admin)
     except ValueError as error:
         raise HTTPException(422, str(error))
     reply = await chat_service.send_message(body.session_id, body.message, body.attachment_ids, is_admin,
@@ -145,7 +145,7 @@ async def stream_chat_message(body: ChatRequest, user: str = Depends(require_use
         raise HTTPException(409, "This chat is busy. Wait for the current response to finish.")
     try:
         chat_service.validate_image_attachments(body.session_id, body.attachment_ids)
-        reference_context = await asyncio.to_thread(chat_references.resolve, body.session_id, body.references)
+        reference_context = await asyncio.to_thread(chat_references.resolve, body.session_id, body.references, is_admin)
     except ValueError as error:
         raise HTTPException(422, str(error))
 

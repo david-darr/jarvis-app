@@ -128,6 +128,8 @@ class TaskService:
         agent_id: Optional[str] = None,
         report_when: Optional[str] = None,
         trigger: Optional[dict] = None,
+        reply_to: Optional[str] = None,
+        context: str = "",
     ) -> dict:
         if schedule_kind not in ("once", "interval", "daily", "card"):
             raise ValueError("schedule_kind must be 'once', 'interval', 'daily' or 'card'")
@@ -193,6 +195,8 @@ class TaskService:
             # The webhook trigger that made this card ({id, name};
             # services/trigger_service.py), so the board can say where it came from.
             "trigger": trigger,
+            "reply_to": reply_to,
+            "context": context,
         }
         if schedule_kind == "card":
             task.update({"status": status or "backlog", "depends_on": list(depends_on or []), "attempts": 0,
@@ -273,6 +277,7 @@ class TaskService:
             card["attempts"] = 0
         card["status"] = status
         self._save_tasks()
+        self._sync_handoff(card)
         return card
 
     def claim_next_card(self, now: Optional[float] = None, card_id: Optional[str] = None,
@@ -295,6 +300,7 @@ class TaskService:
         card["claimed_until"] = now + CARD_LEASE_SECONDS
         card["run_started_at"] = now
         self._save_tasks()
+        self._sync_handoff(card)
         return card
 
     def finish_card(self, card_id: str, output: str) -> dict:
@@ -304,6 +310,7 @@ class TaskService:
         card["claimed_until"] = None
         self._append_run(card, output, None, "succeeded")
         self._save_tasks()
+        self._sync_handoff(card)
         _hook("card.review", {"source": "agent" if card.get("agent_id") else "task", "card": card["name"],
                               "card_id": card_id, "agent_id": card.get("agent_id"), "output": output,
                               "trigger": (card.get("trigger") or {}).get("name")})
@@ -316,7 +323,14 @@ class TaskService:
         card["claimed_until"] = None
         self._append_run(card, "", error, "lost" if lost else "failed")
         self._save_tasks()
+        self._sync_handoff(card)
         return card
+
+    @staticmethod
+    def _sync_handoff(card: dict) -> None:
+        if card.get("reply_to"):
+            from services.agent_handoff import sync_card
+            sync_card(card)
 
     def reclaim_stale_cards(self, now: Optional[float] = None, running=()) -> list[dict]:
         """Running cards whose lease ran out: the run is taken as lost.
@@ -335,6 +349,8 @@ class TaskService:
         cards it waited on, and, on a re-run, its last result with the
         feedback on it."""
         parts = [card["prompt"]]
+        if card.get("context"):
+            parts.append(card["context"])
         for dep in card.get("depends_on") or []:
             result = self._latest(self._tasks.get(dep) or {}, "result")
             if result:
@@ -474,6 +490,8 @@ class TaskService:
             return task
         self._append_run(task, "", STOPPED_NOTE, "stopped")
         self._save_tasks()
+        if task["schedule_kind"] == "card":
+            self._sync_handoff(task)
         return task
 
     def skip_occurrence(self, task_id: str) -> None:

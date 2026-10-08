@@ -152,6 +152,27 @@
   color: var(--text-faint); font: inherit; font-size: 16px; line-height: 1; cursor: pointer;
 }
 .chat-reference-chip button:hover { color: var(--text); }
+.chat-reference-kind { display: flex; align-items: center; gap: 5px; }
+.handoff-avatar {
+  display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px;
+  border-radius: 50%; color: var(--text); background: var(--surface-2); font-size: 12px;
+}
+.chat-reference-chip .handoff-avatar { width: 20px; height: 20px; font-size: 10px; }
+.agent-message-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-weight: 550; margin-bottom: 10px; }
+.agent-handoff { border: 1px solid var(--hairline); border-radius: var(--radius); padding: 14px; }
+.agent-handoff .agent-message-heading { margin-bottom: 0; width: 100%; }
+/* The status as a pill at the card's right edge, tinted by state. */
+.agent-handoff-status { margin-left: auto; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 500;
+  border: 1px solid var(--hairline-soft); color: var(--text-dim); }
+.agent-handoff-status[data-status="working"] { color: var(--accent); border-color: rgba(var(--accent-rgb), .45); }
+.agent-handoff-status[data-status="needs_you"] { color: var(--warn); border-color: rgba(var(--warn-rgb), .5); background: rgba(var(--warn-rgb), .08); }
+.agent-handoff-status[data-status="done"] { color: var(--success); border-color: rgba(var(--success-rgb), .45); }
+.agent-handoff-status[data-status="failed"] { color: var(--danger); border-color: rgba(var(--danger-rgb), .45); }
+.agent-handoff-note { margin-top: 8px; }
+.agent-handoff-answer { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.agent-handoff-answer textarea { flex: 1 1 180px; min-width: 0; }
+.side-chat-input-top { flex: 1; min-width: 0; position: relative; }
+.side-chat-input-top .side-chat-input { width: 100%; }
 .model-picker-btn { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-picker-item { width: 100%; text-align: left; font: inherit; background: none; border: 0; }
 .model-version-form { padding: 12px; display: grid; gap: 10px; }

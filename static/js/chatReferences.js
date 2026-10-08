@@ -1,14 +1,16 @@
 // Composer @ picker. Selected IDs stay separate from the visible draft and
 // are resolved again by the server when the message is sent.
 import { api } from './api.js';
+import { agentAvatar } from './agentHandoff.js';
 
 const MAX_REFERENCES = 5;
-const KINDS = { file: 'File', note: 'Vault note', chat: 'Chat' };
+const KINDS = { file: 'File', note: 'Vault note', chat: 'Chat', agent: 'Agent' };
+let pickerNumber = 0;
 
 export function mountChatReferences(input, inputTop, getSessionId) {
   const list = document.createElement('div');
   list.className = 'chat-reference-picker';
-  list.id = 'chat-reference-picker';
+  list.id = `chat-reference-picker-${++pickerNumber}`;
   list.setAttribute('role', 'listbox');
   list.setAttribute('aria-label', 'References');
   list.hidden = true;
@@ -28,7 +30,7 @@ export function mountChatReferences(input, inputTop, getSessionId) {
   let requestNumber = 0;
 
   const key = item => `${item.kind}:${item.session_id || ''}:${item.id}`;
-  const getSelected = () => selected.map(({ kind, id, session_id, label }) => ({ kind, id, session_id, label }));
+  const getSelected = () => selected.map(({ kind, id, session_id, label, color }) => ({ kind, id, session_id, label, color }));
   const hide = () => {
     clearTimeout(timer);
     requestNumber++;
@@ -44,6 +46,7 @@ export function mountChatReferences(input, inputTop, getSessionId) {
     for (const item of selected) {
       const chip = document.createElement('span');
       chip.className = 'chat-reference-chip';
+      if (item.kind === 'agent') chip.append(agentAvatar(item.label, item.color));
       const label = document.createElement('span');
       label.textContent = `${KINDS[item.kind]} · ${item.label}`;
       const remove = document.createElement('button');
@@ -88,13 +91,14 @@ export function mountChatReferences(input, inputTop, getSessionId) {
     results.forEach((item, index) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.id = `chat-reference-option-${index}`;
+      button.id = `${list.id}-option-${index}`;
       button.className = 'chat-reference-option';
       button.setAttribute('role', 'option');
       button.setAttribute('aria-selected', String(index === active));
       const kind = document.createElement('span');
       kind.className = 'chat-reference-kind';
       kind.textContent = KINDS[item.kind];
+      if (item.kind === 'agent') kind.prepend(agentAvatar(item.label, item.color));
       const name = document.createElement('span');
       name.className = 'chat-reference-name';
       name.textContent = item.label;
@@ -108,7 +112,7 @@ export function mountChatReferences(input, inputTop, getSessionId) {
     });
     list.hidden = false;
     input.setAttribute('aria-expanded', 'true');
-    if (results.length) input.setAttribute('aria-activedescendant', `chat-reference-option-${active}`);
+    if (results.length) input.setAttribute('aria-activedescendant', `${list.id}-option-${active}`);
     else input.removeAttribute('aria-activedescendant');
   };
   const update = () => {
@@ -144,7 +148,7 @@ export function mountChatReferences(input, inputTop, getSessionId) {
       if (!results.length) return;
       active = (active + (event.key === 'ArrowDown' ? 1 : -1) + results.length) % results.length;
       paintResults();
-      list.querySelector(`#chat-reference-option-${active}`)?.scrollIntoView({ block: 'nearest' });
+      list.querySelector(`#${list.id}-option-${active}`)?.scrollIntoView({ block: 'nearest' });
     } else if ((event.key === 'Enter' || event.key === 'Tab') && results.length) {
       event.preventDefault();
       event.stopPropagation();

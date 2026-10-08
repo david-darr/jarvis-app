@@ -47,7 +47,9 @@ CLAUDE_APPROVED_BEFORE = {f"mcp__hive_mind__{name}" for name in (
     "create_task update_task delete_task create_event update_event delete_event save_generated_image run_code "
     "browse save_generated_file google_drive google_sheets google_forms agent_remember agent_ask "
     # Helpers (roadmap phase 5, 2026-10-06): delegate and collect.
-    "delegate helper_results computer").split()}
+    "delegate helper_results computer "
+    # Agent mentions (2026-10-08): hand work to a named agent from a chat.
+    "hand_to_agent").split()}
 
 
 def load_cli():
