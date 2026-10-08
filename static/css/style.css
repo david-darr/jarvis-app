@@ -171,7 +171,7 @@ nav#nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: 
   .sidebar-collapsed .sidebar-header { justify-content: center; gap: 0; }
   .sidebar-collapsed .sidebar-toggle-chevron { transform: rotate(180deg); }
   .sidebar-collapsed .nav-item > span,
-  .sidebar-collapsed .sidebar-user-name,
+  .sidebar-collapsed .sidebar-user-name { width: 0; opacity: 0; }
   .sidebar-collapsed .nav-item { gap: 0; justify-content: center; padding: 10px 0; }
   .sidebar-collapsed .nav-group-label { font-size: 0; height: 26px; padding: 0; margin: 12px 10px 0; border-top: 1px solid var(--border); }
   .sidebar-collapsed #sidebar-footer { padding: 10px 0 0; }

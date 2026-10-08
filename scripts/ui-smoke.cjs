@@ -175,6 +175,7 @@ app.whenReady().then(async () => {
     await delay(300);
     assert.equal(await railWidth(), 52);
     assert.ok(await js("[...document.querySelectorAll('#sidebar .nav-item svg')].every(e=>{const r=e.getBoundingClientRect();return r.left>=0&&r.right<=52})"), 'Icons fit the slim rail');
+    assert.ok(await js("[...document.querySelectorAll('#sidebar .nav-item > span, #sidebar .sidebar-user-name')].every(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return (r.width===0||s.opacity==='0'||s.display==='none')&&r.right<=52})"), 'Labels are hidden in the slim rail');
     assert.equal(await js("document.querySelector('#sidebar-toggle').getAttribute('aria-expanded')"), "false");
     assert.equal(await js("localStorage.getItem('jarvis:sidebar-collapsed')"), "true");
     assert.ok(await js("[...document.querySelectorAll('#nav button')].every(b => b.getAttribute('aria-label') && b.querySelector('svg'))"), "Every icon-only tab has an accessible name and an icon");
