@@ -9,17 +9,23 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-_DATA = tempfile.TemporaryDirectory(prefix="kairos-crm-test-", ignore_cleanup_errors=True)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.tab_test_support import TemporaryDirectory
+
+_DATA = TemporaryDirectory(prefix=".tab-test-crm-", dir=str(Path(__file__).resolve().parent))
 os.environ["JARVIS_DATA_DIR"] = _DATA.name
 os.environ["JARVIS_VAULT_DIR"] = os.path.join(_DATA.name, "vault")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from core import crm_scanner, custom_tabs, settings, model_endpoints
-from core.crm_sources import read_mailbox, text_body
-from services.crm_service import CRMService
-from routes import tab_crm
+from core import custom_tabs, settings, model_endpoints, tab_api
+settings.update_settings(enabled_tab_templates=["crm"])
+custom_tabs.discover()
+from kairos_tabs.crm import scanner as crm_scanner, routes as tab_crm
+from kairos_tabs.crm.sources import read_mailbox, text_body
+from kairos_tabs.crm.service import CRMService
+from dataclasses import asdict
 import email
 
 BODY = "Please send the revised proposal by Friday at 3pm."
@@ -39,7 +45,7 @@ def message(**fields):
 
 class StoreTests(unittest.TestCase):
     def setUp(self):
-        self.path = os.path.join(_DATA.name, "store-" + self.id().split(".")[-1] + ".json")
+        self.path = "store-" + self.id().split(".")[-1] + ".json"
         self.store = CRMService(self.path)
         self.store.configure("alice", {"timezone": "America/New_York"})
         self.source = self.store.add_source("alice", "email", "mail", "My inbox")
@@ -57,7 +63,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(restored.pending("alice", self.source["id"]), [])
 
     def test_failed_atomic_write_rolls_back_tasks_and_marker(self):
-        with patch("services.crm_service.write_json_atomic", side_effect=OSError("disk full")):
+        with patch("core.tab_api.atomic_io.write_json_atomic", side_effect=OSError("disk full")):
             with self.assertRaises(OSError):
                 self.store.apply("alice", self.msg["id"], self.validated())
         self.assertEqual(self.store.tasks("alice"), [])
@@ -154,7 +160,7 @@ class ExtractionTests(unittest.TestCase):
             yield ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1,
                 is_error=False, num_turns=1, session_id="test", result='{"tasks": []}')
         with patch.object(model_endpoints, "get_endpoint", return_value={"kind": "claude_cli", "model": ""}), \
-             patch("claude_agent_sdk.query", query), patch("core.claude_cli.preferred_cli_path", return_value=None):
+             patch("claude_agent_sdk.query", query), patch("core.claude_cli.preferred_cli_path", return_value=None), patch("core.tab_api.tempfile.TemporaryDirectory", TemporaryDirectory):
             self.assertEqual(asyncio.run(crm_scanner.extract("test", "source")), '{"tasks": []}')
         options = captured["options"]
         self.assertEqual(options.tools, [])
@@ -227,8 +233,8 @@ class FakeMailbox:
 
 class MailTests(unittest.TestCase):
     def test_read_and_unread_mail_use_uid_and_peek_with_bounded_progress(self):
-        account = {"imap_host": "mail", "imap_port": 993, "email": "me@example.com", "password_encrypted": "opaque"}
-        with patch("core.crm_sources.imaplib.IMAP4_SSL", FakeMailbox), patch("core.crm_sources.email_service.get_account", return_value=account), patch("core.crm_sources.decrypt", return_value="test"):
+        account = {"id": "mail", "imap_host": "mail", "imap_port": 993, "email": "me@example.com", "password_encrypted": "opaque"}
+        with patch("core.tab_api.imaplib.IMAP4_SSL", FakeMailbox), patch("services.email_service.email_service.get_account", return_value=account), patch("core.tab_api.secret_storage.decrypt", return_value="test"), patch.object(tab_api, "email_accounts", return_value=[account]):
             rows, coverage = read_mailbox({"connection_id": "mail", "folder": "INBOX"}, {"lookback_days": 14, "max_messages": 1}, {"10:23"})
         self.assertEqual(rows[0]["external_id"], "10:24")
         self.assertEqual(rows[0]["thread_id"], "<thread@test>")
@@ -246,7 +252,7 @@ class MailTests(unittest.TestCase):
 class RouteTests(unittest.TestCase):
     def setUp(self):
         settings.update_settings(enabled_tab_templates=["crm"])
-        self.store = CRMService(os.path.join(_DATA.name, "routes-" + self.id().split(".")[-1] + ".json"))
+        self.store = CRMService("routes-" + self.id().split(".")[-1] + ".json")
         self.patch = patch.object(tab_crm, "crm_service", self.store)
         self.patch.start()
         self.app = FastAPI()
@@ -283,28 +289,28 @@ class ScanTests(unittest.IsolatedAsyncioTestCase):
     async def test_connector_capture_requires_selected_scope_and_stops_when_paused(self):
         from core.connectors.base import Inbound
         settings.update_settings(enabled_tab_templates=["crm"])
-        store = CRMService(os.path.join(_DATA.name, "capture.json"))
+        store = CRMService("capture.json")
         store.configure("local", {})
         source = store.add_source("local", "connector", "test", "Selected", conversations=["C1"])
         inbound = Inbound(conversation="C2", sender="customer", text=BODY, message_id="2", thread_id="1", source_context="Earlier request")
         with patch.object(crm_scanner, "crm_service", store):
-            crm_scanner.capture_connector("connector", "test", inbound)
+            crm_scanner.capture_connector("connector", "test", asdict(inbound))
             self.assertEqual(store.pending("local", source["id"]), [])
             inbound.conversation = "C1"
-            crm_scanner.capture_connector("connector", "test", inbound)
-            crm_scanner.capture_connector("connector", "test", inbound)
+            crm_scanner.capture_connector("connector", "test", asdict(inbound))
+            crm_scanner.capture_connector("connector", "test", asdict(inbound))
             pending = store.pending("local", source["id"])
             self.assertEqual(len(pending), 1)
             self.assertEqual(pending[0]["context"], "Earlier request")
             self.assertFalse(pending[0]["context_incomplete"])
             store.toggle_source("local", source["id"], False)
             inbound.message_id = "3"
-            crm_scanner.capture_connector("connector", "test", inbound)
+            crm_scanner.capture_connector("connector", "test", asdict(inbound))
             self.assertEqual(len(store.pending("local", source["id"])), 1)
 
     async def test_manual_scan_returns_immediately_and_prevents_overlap(self):
         settings.update_settings(enabled_tab_templates=["crm"])
-        store = CRMService(os.path.join(_DATA.name, "background.json"))
+        store = CRMService("background.json")
         store.configure("local", {"endpoint_id": "test"})
         source = store.add_source("local", "connector", "test", "Selected")
         msg = store.capture(source, message())
@@ -331,7 +337,7 @@ class ScanTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failure_is_retryable_and_another_source_can_succeed(self):
         settings.update_settings(enabled_tab_templates=["crm"])
-        store = CRMService(os.path.join(_DATA.name, "scan.json"))
+        store = CRMService("scan.json")
         store.configure("local", {"endpoint_id": "test", "timezone": "America/New_York"})
         bad = store.add_source("local", "connector", "bad", "Bad")
         good = store.add_source("local", "connector", "good", "Good")
@@ -349,4 +355,7 @@ class ScanTests(unittest.IsolatedAsyncioTestCase):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    try:
+        unittest.main(verbosity=2)
+    finally:
+        _DATA.cleanup()

@@ -3,17 +3,18 @@ import asyncio
 import json
 import logging
 import re
-import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from core import model_endpoints, token_usage
-from core.crm_sources import read_mailbox
-from core.untrusted import wrap_untrusted
-from services.crm_service import crm_service, valid_due, PRIORITIES
+from core import tab_api
+from core.tab_api import wrap_untrusted
+from .sources import read_mailbox
+from .service import crm_service, valid_due, PRIORITIES
+
+api = tab_api.for_tab(__package__)
 
 logger = logging.getLogger(__name__)
 _locks = {}
@@ -156,36 +157,7 @@ def validate_output(raw, message, context, existing, settings):
 
 
 async def extract(endpoint_id, prompt):
-    endpoint = model_endpoints.get_endpoint(endpoint_id)
-    if endpoint is None:
-        raise ValueError("Choose an extraction model in Sources")
-    if endpoint["kind"] == "codex_cli":
-        raise ValueError("Select Claude CLI, a local model or an API model for tool-free scanning")
-    if endpoint["kind"] == "claude_cli":
-        from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
-        from core import claude_cli
-        # Empty tools is an enforced CLI option, not a prompt-level promise.
-        with tempfile.TemporaryDirectory(prefix="kairos-crm-reader-") as directory:
-            options = ClaudeAgentOptions(tools=[], mcp_servers={}, strict_mcp_config=True,
-                setting_sources=[], skills=[], plugins=[], cwd=directory, max_turns=1,
-                cli_path=claude_cli.preferred_cli_path(),
-                model=endpoint.get("model") or None, system_prompt=SYSTEM,
-                extra_args={"no-session-persistence": None, "disable-slash-commands": None})
-            async for message in query(prompt=prompt, options=options):
-                if isinstance(message, ResultMessage):
-                    if message.is_error:
-                        raise ValueError("The extraction model failed")
-                    if message.usage:
-                        token_usage.record_usage(endpoint_id, message.usage)
-                    return message.result or ""
-        raise ValueError("The extraction model did not return a result")
-    from core.providers.openai_compatible import run_turn
-    base, model, api_key, num_ctx = model_endpoints.resolve_runtime(endpoint_id)
-    def usage(value):
-        token_usage.record_usage(endpoint_id, value)
-    return await run_turn(base, model, api_key,
-        [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
-        tools=None, tool_executor=None, num_ctx=num_ctx, on_usage=usage)
+    return await tab_api.complete(endpoint_id, SYSTEM, prompt)
 
 
 def extraction_input(message, existing, settings):
@@ -194,12 +166,12 @@ def extraction_input(message, existing, settings):
     payload = {"timezone": settings["timezone"], "message_date": message.get("sent_at"),
         "sender": message.get("sender"), "recipient_account": message.get("account"), "subject": message.get("subject"),
         "existing_tasks": [{k: t.get(k) for k in ("id", "title", "due_date", "status")} for t in existing]}
-    endpoint = model_endpoints.get_endpoint(settings["endpoint_id"]) or {}
+    context_size = tab_api.model_context_size(settings["endpoint_id"])
     budget = 30000
-    if endpoint.get("kind") == "local":
+    if context_size is not None:
         # UTF-8 bytes give a conservative token ceiling without loading a
         # provider-specific tokenizer. Reserve room for JSON, wrapper and output.
-        budget = min(budget, (endpoint.get("num_ctx") or 16384)
+        budget = min(budget, context_size
             - len(SYSTEM.encode("utf-8")) - len(json.dumps(payload).encode("utf-8")) - 2300)
         if budget < 512:
             raise ValueError("The extraction model context is too small")
@@ -232,13 +204,12 @@ async def scan(owner, retry=False):
             try:
                 # Existing connections are application-admin resources. Do not
                 # poll them after an owner loses their administrator grant.
-                from core.auth import auth_manager
-                if not auth_manager.is_admin(owner):
+                if not tab_api.is_admin(owner):
                     raise ValueError("The source owner no longer has connection access")
                 if source["kind"] == "email":
                     known = crm_service.known(owner, source["id"])
                     messages, coverage = await asyncio.to_thread(read_mailbox, source, settings, known)
-                    if not auth_manager.is_admin(owner):
+                    if not tab_api.is_admin(owner):
                         raise ValueError("The source owner no longer has connection access")
                     for message in messages:
                         crm_service.capture(source, message)
@@ -246,8 +217,7 @@ async def scan(owner, retry=False):
                     if coverage["errors"]:
                         result["error"] = "; ".join(coverage["errors"])
                 elif source["kind"] == "document":
-                    from services.documents_service import get_document
-                    doc = get_document(source["connection_id"])
+                    doc = tab_api.document(source["connection_id"])
                     if not doc:
                         raise ValueError("The Library document was removed")
                     crm_service.capture(source, {"external_id": f"{doc['id']}:{doc['updated_at']}",
@@ -256,8 +226,7 @@ async def scan(owner, retry=False):
                         "sent_at": datetime.fromtimestamp(doc["updated_at"], ZoneInfo(settings["timezone"])).isoformat()})
                 pending = crm_service.pending(owner, source["id"])
                 for message in pending[:settings["max_messages"]]:
-                    from core.custom_tabs import enabled_templates
-                    if "crm" not in enabled_templates() or not crm_service.source(owner, source["id"])["enabled"] or not auth_manager.is_admin(owner):
+                    if not api.is_on or not crm_service.source(owner, source["id"])["enabled"] or not tab_api.is_admin(owner):
                         result["error"] = "Scanning paused; queued messages were kept."
                         break
                     existing = [t for t in crm_service.tasks(owner) if t.get("source_id") == source["id"]
@@ -265,7 +234,7 @@ async def scan(owner, retry=False):
                     try:
                         prompt, context, bounded_message, existing = extraction_input(message, existing, settings)
                         raw = await asyncio.wait_for(extract(settings["endpoint_id"], prompt), timeout=180)
-                        if "crm" not in enabled_templates() or not crm_service.source(owner, source["id"])["enabled"] or not auth_manager.is_admin(owner):
+                        if not api.is_on or not crm_service.source(owner, source["id"])["enabled"] or not tab_api.is_admin(owner):
                             result["error"] = "Scanning paused; queued messages were kept."
                             break
                         items = validate_output(raw, bounded_message, context, existing, settings)
@@ -288,27 +257,25 @@ async def scan(owner, retry=False):
         return {"results": outcomes, "created": sum(r["created"] for r in outcomes)}
 
 
-def capture_connector(kind, connection_id, inbound):
+def capture_connector(kind, connection_id, message):
     """Called after existing admission checks. Queue only explicitly selected sources."""
-    from core.custom_tabs import enabled_templates
-    if "crm" not in enabled_templates() or not inbound.message_id:
+    if not api.is_on or not message.get("message_id"):
         return
     for owner in crm_service.owners():
-        from core.auth import auth_manager
-        if not auth_manager.is_admin(owner):
+        if not tab_api.is_admin(owner):
             continue
         for source in crm_service.sources(owner):
             if source["kind"] != kind or source["connection_id"] != connection_id or not source["enabled"]:
                 continue
-            if source["conversations"] and inbound.conversation not in source["conversations"]:
+            if source["conversations"] and message.get("conversation", "") not in source["conversations"]:
                 continue
-            context = inbound.source_context or inbound.replying_to
-            crm_service.capture(source, {"external_id": f"{inbound.conversation}:{inbound.message_id}",
-                "thread_id": f"{inbound.conversation}:{inbound.thread_id or inbound.message_id}",
-                "subject": inbound.conversation, "sender": inbound.sender, "sender_name": inbound.sender_name,
-                "sent_at": inbound.sent_at, "body": inbound.text[:18000], "context": context[:6000],
-                "context_incomplete": bool(inbound.thread_id and inbound.thread_id != inbound.message_id and not context),
-                "truncated": len(inbound.text) > 18000 or len(context) > 6000, "url": inbound.source_url})
+            context = message.get("source_context", "") or message.get("replying_to", "")
+            crm_service.capture(source, {"external_id": f"{message.get('conversation', '')}:{message.get('message_id', '')}",
+                "thread_id": f"{message.get('conversation', '')}:{message.get('thread_id', '') or message.get('message_id', '')}",
+                "subject": message.get("conversation", ""), "sender": message.get("sender", ""), "sender_name": message.get("sender_name", ""),
+                "sent_at": message.get("sent_at", ""), "body": message.get("text", "")[:18000], "context": context[:6000],
+                "context_incomplete": bool(message.get("thread_id", "") and message.get("thread_id", "") != message.get("message_id", "") and not context),
+                "truncated": len(message.get("text", "")) > 18000 or len(context) > 6000, "url": message.get("source_url", "")})
 
 
 def scanning(owner):
@@ -334,10 +301,9 @@ def begin_scan(owner, retry=False):
 
 
 async def _loop():
-    from core.custom_tabs import enabled_templates
     while True:
         await asyncio.sleep(30)
-        if "crm" not in enabled_templates():
+        if not api.is_on:
             continue
         for owner in crm_service.owners():
             settings = crm_service.settings(owner)

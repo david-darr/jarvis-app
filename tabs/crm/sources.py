@@ -1,14 +1,15 @@
 """Read-only CRM collection. Transport identifiers are assigned here, not by AI."""
 import email
-import imaplib
 import re
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
-from email.utils import parsedate_to_datetime, parseaddr
+from email.utils import parseaddr
 from html.parser import HTMLParser
 
-from core.secret_storage import decrypt
-from services.email_service import email_service
+from core import tab_api
+from core.tab_api import message_time
+
+api = tab_api.for_tab(__package__)
 
 MAX_BYTES = 1_000_000
 MAX_TEXT = 18000
@@ -63,31 +64,17 @@ def text_body(msg):
     return "\n".join(plain or html).strip()
 
 
-def message_time(value):
-    try:
-        result = parsedate_to_datetime(value)
-        if result.tzinfo is None:
-            return None
-        return result.isoformat()
-    except (ValueError, TypeError, IndexError):
-        return None
-
-
 def _literal(parts):
     return next((part[1] for part in parts or [] if isinstance(part, tuple) and isinstance(part[1], bytes)), None)
 
 
 def read_mailbox(source, settings, known):
-    account = email_service.get_account(source["connection_id"], decrypted=True)
+    account = next((a for a in tab_api.email_accounts() if a["id"] == source["connection_id"]), None)
     if account is None:
         raise ValueError("The connected email account was removed")
     since = (datetime.now(timezone.utc) - timedelta(days=settings["lookback_days"])).date()
     results, errors = [], []
-    with imaplib.IMAP4_SSL(account["imap_host"], account["imap_port"], timeout=20) as box:
-        box.login(account["email"], decrypt(account["password_encrypted"]))
-        status, _ = box.select('"' + source["folder"].replace("\\", "\\\\").replace('"', '\\"') + '"', readonly=True)
-        if status != "OK":
-            raise ValueError("The mailbox folder could not be opened")
+    with tab_api.open_mailbox(source["connection_id"], source["folder"]) as box:
         _, validity_data = box.response("UIDVALIDITY")
         validity = next((v.decode() for v in validity_data or [] if isinstance(v, bytes)), None)
         if not validity or not validity.isdigit():

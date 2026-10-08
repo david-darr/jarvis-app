@@ -49,3 +49,6 @@ nohup.out
 
 # evals: real transcripts and run output never committed (evals/README.md)
 evals/**/results/
+
+# Isolated tab tests use a workspace temp root in restricted environments.
+scripts/.tab-test-*/

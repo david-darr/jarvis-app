@@ -17,9 +17,9 @@ Per platform:
 
 Not a PyInstaller freeze, for two reasons specific to this codebase:
 
-  1. core/custom_tabs.py discovers routes/tab_*.py by scanning the directory
-     at runtime and importlib-importing what it finds — and Developer Mode
-     lets a connected model WRITE new ones into a live install. PyInstaller
+  1. core/custom_tabs.py discovers folder tabs and legacy routes/tab_*.py
+     at runtime — user tabs stay in the data directory, while tabs/** ships
+     alongside routes/** in electron-builder's backend extraResource. PyInstaller
      resolves its module graph at build time, so a tab created after
      packaging could never be imported. Freezing would silently break a
      shipped feature.

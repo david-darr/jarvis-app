@@ -17,7 +17,7 @@ const demoState = { empty: false };
 let sessionDelay = 0;
 const writes = [];
 const now = Date.now() / 1000;
-const { fixture } = require("../demo/fixtures.js")({ now, state: demoState });
+const { fixture, mutate } = require("../demo/fixtures.js")({ now, state: demoState });
 const errors = [];
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
@@ -40,7 +40,13 @@ const server = http.createServer(async (req, res) => {
     if (req.method !== "GET") {
       let body = ""; for await (const chunk of req) body += chunk;
       writes.push({ path: url.pathname, method: req.method, body });
-      res.end('{"ok":true}'); return;
+      let parsed = {}; try { parsed = JSON.parse(body); } catch {}
+      const updated = mutate(url.pathname, req.method, parsed);
+      if (url.pathname === "/api/chat/stream") {
+        res.setHeader("Content-Type", "text/event-stream");
+        res.end('data: {"chunk":"Tab build request received."}\n\ndata: {"done":true}\n\n'); return;
+      }
+      res.end(JSON.stringify(updated || (url.pathname === "/api/sessions" ? { id: "s1" } : { ok: true }))); return;
     }
     try { res.end(JSON.stringify(fixture(url))); }
     catch (error) { errors.push(error.message); res.writeHead(404); res.end('{"detail":"Missing fixture"}'); }
@@ -49,8 +55,10 @@ const server = http.createServer(async (req, res) => {
   // /kairos/ is the site's address on GitHub Pages (404.html uses it).
   const pathname = url.pathname.startsWith("/kairos/") ? "/docs/" + url.pathname.slice("/kairos/".length) : url.pathname;
   // A folder serves its index.html, as GitHub Pages does (docs/demo/).
-  const file = path.resolve(root, pathname === "/" ? "static/index.html" : "." + decodeURIComponent(pathname) + (pathname.endsWith("/") ? "index.html" : ""));
-  if (!["static", "docs"].some(dir => file.startsWith(path.join(root, dir) + path.sep))) { res.writeHead(404); res.end(); return; }
+  const tabFile = pathname.match(/^\/tab-files\/([a-z][a-z0-9_]*)\/(view\.(?:js|css))$/);
+  const file = path.resolve(root, tabFile ? `tabs/${tabFile[1]}/${tabFile[2]}` :
+    pathname === "/" ? "static/index.html" : "." + decodeURIComponent(pathname) + (pathname.endsWith("/") ? "index.html" : ""));
+  if (!tabFile && !["static", "docs"].some(dir => file.startsWith(path.join(root, dir) + path.sep))) { res.writeHead(404); res.end(); return; }
   try {
     const mime = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".png": "image/png", ".svg": "image/svg+xml",
       ".webp": "image/webp", ".jpg": "image/jpeg", ".woff2": "font/woff2" };
@@ -155,8 +163,9 @@ app.whenReady().then(async () => {
     assert.equal(await js("document.activeElement.id"), "sidebar-toggle");
     await win.webContents.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
     await win.webContents.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
-    await delay(350);
-    assert.equal(await railWidth(), 204, "Keyboard expands sidebar");
+    // Wait for the 260 ms width transition to settle rather than a fixed delay.
+    await waitFor("Math.round(document.querySelector('#sidebar').getBoundingClientRect().width) === 204");
+    assert.equal(Math.round(await railWidth()), 204, "Keyboard expands sidebar");
     await js("document.activeElement.blur()");
     for (const [label, width, height] of [["desktop", 1440, 900], ["mobile", 390, 844]]) {
       win.setContentSize(width, height);
@@ -230,6 +239,58 @@ app.whenReady().then(async () => {
           assert.ok(await js("[...document.querySelectorAll('.tool-store-card')].some(c => c.textContent.includes('Local files') && c.querySelector('.tool-store-badge').textContent === 'Not responding')"), label + " a down server is not called connected");
           await js("document.querySelector('.tool-store-held').scrollIntoView()");
           await capture(label + "-tool-store-health");
+          // The Tabs steps below save on purpose; their writes are checked here
+          // and then dropped, so later "nothing was saved" checks stay exact.
+          const tabStoreWrites = writes.length;
+          await js("[...document.querySelectorAll('.tool-store-filters button')].find(b=>b.textContent==='Tabs').click()");
+          await waitFor("document.querySelectorAll('[data-tab-kind=prebuilt]').length === 2");
+          assert.deepEqual(await js("[...document.querySelectorAll('[data-tab-kind=prebuilt] h4')].map(n=>n.textContent).sort()"), ["CRM", "School"], label + " prebuilt tabs in store");
+          assert.ok(await js("document.querySelector('[data-tab-slug=project_tracker]').textContent.includes('Needs approval') && [...document.querySelectorAll('[data-tab-slug=project_tracker] button')].some(b=>b.textContent==='Approve')"), label + " admin sees pending source approval");
+          assert.ok(await js("!document.querySelector('.sidebar-devmode-btn, .nav-item[data-tab=new-tab]') && !document.documentElement.classList.contains('dev-mode')"), label + " retired Developer Mode and New Tab entry are gone");
+          await js("[...document.querySelectorAll('[data-tab-slug=crm] button')].find(b=>b.textContent==='Add').click()");
+          await waitFor("!!document.querySelector('.nav-item[data-tab=crm]') && document.querySelector('[data-tab-slug=crm]').textContent.includes('Remove')");
+          assert.ok(writes.some(w => w.path === "/api/system/tab-templates/crm" && JSON.parse(w.body).enabled), label + " Add enables a prebuilt immediately");
+          await js("[...document.querySelectorAll('[data-tab-slug=crm] button')].find(b=>b.textContent==='Remove').click()");
+          await waitFor("!document.querySelector('.nav-item[data-tab=crm]') && document.querySelector('[data-tab-slug=crm]').textContent.includes('Add')");
+          assert.deepEqual(await overflow(), [], label + " tabs category overflow");
+          assert.ok(await js("[...document.querySelectorAll('.tool-store-manage button')].some(b=>!b.hidden && b.textContent==='Build a tab') && [...document.querySelectorAll('.tool-store-manage button')].some(b=>!b.hidden && b.textContent==='Install a tab')"), label + " tab creation actions in header");
+          assert.ok(await js("document.querySelector('[data-tab-slug=crm] .tool-store-card-foot button').classList.contains('primary') && document.querySelector('[data-tab-slug=project_tracker] .tool-store-card-foot button').classList.contains('primary')"), label + " Add and Approve are primary buttons");
+          assert.ok(await js("[...document.querySelectorAll('[data-tab-slug=project_tracker] .tool-store-card-foot button')].some(b=>b.textContent==='Export' && b.classList.contains('quiet')) && !!document.querySelector('[data-tab-slug=project_tracker] .btn.quiet.danger')"), label + " Export and Remove are styled buttons");
+          assert.ok(await js("document.querySelector('[data-tab-slug=crm] .set-pill-muted')?.textContent === 'Off' && document.querySelector('[data-tab-slug=project_tracker] .set-pill-warn')?.textContent === 'Needs approval'"), label + " shared status tones");
+          await js("document.getElementById('view-content').scrollTop=0");
+          await capture(label + "-tool-store-tabs");
+          await js("document.querySelector('[data-tab-slug=project_tracker] .disclosure-panel').open=true; document.querySelector('[data-tab-slug=project_tracker]').scrollIntoView({block:'start'})");
+          assert.ok(await js("getComputedStyle(document.querySelector('[data-tab-slug=project_tracker] summary')).listStyleType === 'none'"), label + " app disclosure style");
+          assert.deepEqual(await js("[...document.querySelectorAll('[data-tab-slug] .tool-store-card-foot')].filter(foot=>{const buttons=[...foot.querySelectorAll('button')];return buttons.some(b=>Math.abs(b.getBoundingClientRect().top-buttons[0].getBoundingClientRect().top)>2)}).map(foot=>foot.closest('[data-tab-slug]').dataset.tabSlug)"), [], label + " tab actions stay in one row");
+          assert.deepEqual(await overflow(), [], label + " open tab file review overflow");
+          await capture(label + "-tool-store-tabs-review");
+          if (label === "desktop") {
+            await waitFor("!!document.querySelector('.tab-build-form')");
+            await js("[...document.querySelectorAll('.tool-store-manage button')].find(b=>b.textContent==='Build a tab').click()");
+            await waitFor("!document.querySelector('.tab-build-form').closest('details').hidden");
+            await js("document.querySelector('.tab-build-form input').value='Research'; document.querySelector('.tab-build-form textarea').value='Track my sources'; document.querySelector('.tab-build-build-btn').click()");
+            await waitFor("document.querySelector('.nav-item[data-tab=chat]').classList.contains('active')");
+            await waitFor("!!document.querySelector('.chat-layout')");
+            await waitFor("sessionStorage.getItem('jarvis:pendingChatHandoff') === null");
+            for (let i = 0; i < 80 && !writes.some(w => w.path === "/api/chat/stream" && w.body.includes('Research')); i++) await delay(50);
+            const handoff = writes.find(w => w.path === "/api/chat/stream" && w.body.includes('Research'));
+            assert.ok(handoff && JSON.parse(handoff.body).message.includes('data/tabs/<slug>/') && JSON.parse(handoff.body).message.includes('core.tab_api'), "Build hands a folder-tab request to a model chat");
+            await navigate("tool-store");
+          }
+          writes.splice(tabStoreWrites);
+        }
+        if (tab === "calendar" && !demoState.empty) {
+          const calendarWrites = writes.length;
+          await waitFor("[...document.querySelectorAll('.cal-day-panel .card')].some(c=>c.textContent.includes('Review the course project'))");
+          assert.ok(await js("[...document.querySelectorAll('.cal-day-panel .card')].find(c=>c.textContent.includes('Review the course project')).textContent.includes('School')"), label + " Calendar names the tab source");
+          // Toggle it either way (desktop leaves it ticked): each layout must send its own PATCH.
+          const wasChecked = await js("[...document.querySelectorAll('.cal-day-panel .card')].find(c=>c.textContent.includes('Review the course project')).querySelector('input[type=checkbox]').checked");
+          await js("[...document.querySelectorAll('.cal-day-panel .card')].find(c=>c.textContent.includes('Review the course project')).querySelector('input[type=checkbox]').click()");
+          await waitFor(`[...document.querySelectorAll('.cal-day-panel .card')].find(c=>c.textContent.includes('Review the course project'))?.querySelector('input').checked === ${!wasChecked}`);
+          // The PATCH goes out just after the box ticks; poll for it.
+          for (let i = 0; i < 80 && !writes.some(w => w.path === "/api/tab-school/assignments/a1" && w.method === "PATCH"); i++) await delay(50);
+          assert.ok(writes.some(w => w.path === "/api/tab-school/assignments/a1" && w.method === "PATCH"), label + " Calendar PATCHes the tab toggle URL");
+          writes.splice(calendarWrites);
         }
         if (tab === "tasks" && !demoState.empty) {
           // The work board (Hermes track 2026-09-23): cards sit in their
@@ -342,9 +403,7 @@ app.whenReady().then(async () => {
         ["Models", "Connections", "Workspace", "Personal", "Administration"],
         label + " settings groups",
       );
-      // Custom Tabs stays behind Developer Mode, which this fixture reports
-      // as off — the regrouping must not have loosened that gate.
-      assert.ok(!(await js("[...document.querySelectorAll('.settings-nav-item')].some(i=>i.dataset.section==='custom-tabs')")), "Custom Tabs stays dev-mode gated");
+      assert.ok(!(await js("document.querySelector('[data-section=custom-tabs]')")), "Tabs are managed in the Tool Store");
       // -- Speech panel (David's ask 2026-09-15). Without it there is no way
       // to obtain a model, so dictation could only ever refuse.
       await js("document.querySelector('[data-section=speech]').click()");
@@ -503,13 +562,15 @@ app.whenReady().then(async () => {
         label + " a blocking command shows only its own fields");
       assert.deepEqual(await overflow(), [], label + " add hook overflow");
       await capture(label + "-hook-add");
+      // Earlier steps (Tool Store, Calendar) save things; count only this one.
+      const writesBeforeCancel = writes.length;
       await js("[...document.querySelectorAll('.hook-form .btn')].find(b => b.textContent === 'Add hook').click()");
       await waitFor("!!document.querySelector('.confirm-panel')");
       assert.ok(await js("document.querySelector('.confirm-panel').textContent.includes(\"$d -match 'Remove-Item\")"), label + " the exact command is shown before it is saved");
       await capture(label + "-hook-confirm");
       await js("[...document.querySelectorAll('.confirm-panel .btn')].find(b => b.textContent === 'Cancel').click()");
       await waitFor("!document.querySelector('.confirm-panel')");
-      assert.equal(writes.length, 0, label + " cancelling saves nothing");
+      assert.equal(writes.length, writesBeforeCancel, label + " cancelling saves nothing");
       await js("document.querySelector('#settings-content .set-back').click()");
       await waitFor("document.querySelectorAll('.hook-row').length === 2");
       await js("document.querySelector('[data-section=vault]').click()");
@@ -965,7 +1026,7 @@ app.whenReady().then(async () => {
       await js("document.getElementById('demo-frame').loading = 'eager'");
       await waitDemo("d && d.querySelectorAll('.nav-item[data-tab]').length >= 10 && !!d.querySelector('.dashboard-core')", "Home loads in the demo");
       assert.ok(await inDemo("!!d.querySelector('.demo-badge')"), label + " the demo says it is a demo");
-      for (const tab of ["chat", "notes", "library", "calendar", "email", "tasks", "tool-store", "agents", "cookbook", "home"]) {
+      for (const tab of ["chat", "notes", "library", "calendar", "email", "tasks", "tool-store", "agents", "cookbook", "school", "home"]) {
         await inDemo("d.querySelector('.nav-item[data-tab=" + tab + "]').click()");
         await waitDemo("d.getElementById('view-content')?.dataset.view === '" + tab + "' && !d.querySelector('#view-content .empty-state[role=status]')", tab + " opens in the demo");
         assert.ok(await inDemo("!d.getElementById('view-content').textContent.includes(\"couldn't load\")"), label + " demo " + tab + " renders");
@@ -1022,6 +1083,10 @@ app.whenReady().then(async () => {
     const errorsBefore = errors.length;
     await win.loadURL(docsOnDisk + "demo/index.html");
     await waitFor("document.querySelectorAll('.nav-item[data-tab]').length >= 10 && !!document.querySelector('.dashboard-core')");
+    assert.deepEqual(await js("[...document.querySelectorAll('.nav-item[data-tab]')].filter(n=>['school','crm'].includes(n.dataset.tab)).map(n=>n.dataset.tab)"), ["school"], "Demo starts with School only");
+    await js("document.querySelector('.nav-item[data-tab=school]').click()");
+    await waitFor("document.getElementById('view-content')?.dataset.view === 'school' && document.getElementById('school-body')?.textContent.includes('Software Design')");
+    assert.ok(await js("!document.getElementById('view-content').textContent.includes(\"couldn't load\")"), "School loads from the bundle on file://");
     await js("document.querySelector('.nav-item[data-tab=chat]').click()");
     await waitFor("!!document.getElementById('chat-input')");
     await js("(() => { const i = document.getElementById('chat-input'); i.value = 'Hello'; i.dispatchEvent(new Event('input', { bubbles: true })); document.getElementById('chat-send').click(); return true; })()");

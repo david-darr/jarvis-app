@@ -39,7 +39,7 @@ plugs in any model, not just this session's own testing setup.
 """
 
 from core import image_gen
-from core.custom_tabs import USER_TAB_CODE_DIRS
+from core.custom_tabs import USER_TABS_DIR
 
 
 # The missing half of the "files in chat" feature, found live 2026-09-12:
@@ -74,7 +74,7 @@ _EXTERNAL_ADDENDUM = """
 You have these tools available: search_vault and read_vault_file (the vault), search_sessions (other conversations), search_skills/list_skills and read_skill (saved procedures), list_notes (open todos/priorities), list_tasks and list_task_runs (scheduled jobs and what they produced), list_upcoming_events (calendar), list_documents and read_document (the Library), list_contacts (people), list_specs and read_spec (architecture docs). Connected MCP tools are searchable through jarvis_tool_search; call jarvis_tool_describe for a matching tool's arguments, then jarvis_tool_call to use it. These bridge tools appear when this chat has a connected MCP server or a small context window. You can also write, not just read: create_note/update_note/delete_note, create_task/update_task/delete_task, create_event/update_event/delete_event — use these whenever the user wants something added, changed, or removed. You additionally have list_repo_directory/read_repo_file/write_repo_file for real read/write access to jarvis-app's own source code (core/, routes/, services/, static/, scripts/, specs/, mcp_servers/, electron/) for actual development work on the app itself. Use these tools when a question or request calls for it — don't guess, claim no memory exists, or say you can't make a change without checking/trying first."""
 
 _EXTERNAL_CUSTOM_TABS_ADDENDUM = """
-You also have file-tool access to user-built tab source through custom-tabs/routes/, custom-tabs/services/, and custom-tabs/views/. No other data/ paths are available through file tools."""
+You also have file-tool access to user-built tab source through custom-tabs/<slug>/ (new folder tabs), plus the legacy routes/, services/ and views/ subfolders. No other data/ paths are available through file tools."""
 
 
 _SHELL_ADDENDUM = """
@@ -152,8 +152,7 @@ def _codex_core(python_exe: str, cli_script: str, full_access: bool = False, is_
         f"Your shell and file tools are otherwise native to the Codex CLI itself (not separate "
         f"Read/Write/Bash tools) and scoped to your working directory — the vault, or a pinned "
         f"workspace folder if this chat has one. You also have writable access to the user-built "
-        f"tab source directories at {', '.join(USER_TAB_CODE_DIRS)}. They contain routes, services, "
-        f"and views only; other app data remains outside your file access."
+        f"tab source directories at {USER_TABS_DIR}. They contain folder tabs and legacy source; other app data remains outside your file access."
     )
     return f"""You are Kairos, running on the Codex CLI. Your memory is external, not just this conversation: a shared vault of notes, every other chat session, a library of saved Skills, your own Notes/Tasks/Calendar, Documents (Library), Contacts, and architecture docs (specs) — same shared memory every other connected model has. None of that is preloaded into your context; you have to actually look.
 

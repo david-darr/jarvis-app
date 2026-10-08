@@ -50,7 +50,7 @@ TURN_MESSAGE_TIMEOUT_SECONDS = 180
 
 def _is_user_tab_source_path(path: str) -> bool:
     absolute = os.path.normcase(os.path.abspath(path))
-    for root in custom_tabs.USER_TAB_CODE_DIRS:
+    for root in (custom_tabs.USER_TABS_DIR,):
         root = os.path.normcase(os.path.abspath(root))
         try:
             if os.path.commonpath([absolute, root]) == root:
@@ -80,7 +80,7 @@ def _inside(path: str, roots: list[str]) -> bool:
 def _untrusted_claude_read_path(path: str, cwd: str) -> bool:
     absolute = os.path.normcase(os.path.abspath(os.path.join(cwd, path)))
     roots = [os.path.normcase(os.path.abspath(root)) for root in
-             (*custom_tabs.USER_TAB_CODE_DIRS, DATA_DIR)]
+             (custom_tabs.USER_TABS_DIR, DATA_DIR)]
     for root in roots:
         try:
             if os.path.commonpath([absolute, root]) == root:

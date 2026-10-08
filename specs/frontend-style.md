@@ -4,7 +4,7 @@ Last updated: 2026-10-06
 
 ## Direction
 
-Kairos uses ink and gold on parchment: warm light grounds, clear hierarchy, soft shadows, and a single gilded hairline on featured surfaces. The ring's point is the only gilded part of the mark. The default is light; a person may still choose a dark custom base in Appearance. No tactical-HUD brackets, neon outlines, glowing dark-first surfaces, or whole-app recoloring in Developer Mode.
+Kairos uses ink and gold on parchment: warm light grounds, clear hierarchy, soft shadows, and a single gilded hairline on featured surfaces. The ring's point is the only gilded part of the mark. The default is light; a person may still choose a dark custom base in Appearance. No tactical-HUD brackets, neon outlines, glowing dark-first surfaces, or whole-app recoloring for tab management.
 
 The brand package's `BRAND.md` defines the mark, palette and type. Its ceiling-painting reference supplies the cloud-ring sky; the UI uses the sky on Home, onboarding and the splash. Jost carries body and controls; Cormorant Garamond Italic is reserved for display headlines and the tagline. Both fonts are self-hosted.
 
@@ -41,13 +41,13 @@ The default is Kairos parchment. Color, Image and Flow derive the same working t
 
 Sidebar groups separate Workspace and Intelligence. On phones it becomes a drawer. Chat has its own history drawer. Settings remains a desktop floating window and mobile full page.
 
-Settings navigation is grouped into Models, Connections, Workspace, Personal, and Administration. Administration is admin-only and Custom Tabs stays behind Developer Mode; grouping changes presentation only and never widens a gate. Its search matches per-section keywords as well as labels, so the words someone actually types find the right panel, and a group heading hides when nothing under it matches. The desktop window is draggable by its titlebar and stays wholly inside the app viewport, re-clamping after a drag, an edge resize, an app resize, and reopening; resize, minimize, and close are unchanged, and the mobile full page has no draggable window.
+Settings navigation is grouped into Models, Connections, Workspace, Personal, and Administration. Administration is admin-only. Tabs are managed in Tool Store > Tabs, with admin-only add, remove, install and source approval actions; sidebar order stays in Settings > Layout. Its search matches per-section keywords as well as labels, so the words someone actually types find the right panel, and a group heading hides when nothing under it matches. The desktop window is draggable by its titlebar and stays wholly inside the app viewport, re-clamping after a drag, an edge resize, an app resize, and reopening; resize, minimize, and close are unchanged, and the mobile full page has no draggable window.
 
 Settings pages (redesigned 2026-10-05 after Hermes's desktop settings, Codex and Claude) are built only from `static/js/settingsKit.js`, styled in `static/css/settings.css`: a page header (title, one-line description from the section registry, actions), then titled groups of rows with hairline dividers. A row is label and description on the left, control on the right, stacking under the label in a narrow pane; every on/off setting is a switch, states are pills, destructive actions are quiet red buttons. Pages render into the body `selectSection()` hands them and use `page.actions()` for header buttons or `page.sub()` for a sub-page with a way back. Every nav item has an icon. Do not hand-roll cards in Settings. Closing the desktop window (✕, Escape, or a click outside) only hides it, so you stay on the tab you were on. On phones Settings opens on a list of sections (search, grouped rows with icons and ›); a row opens its page full screen under a top bar whose back arrow goes up one level (sub-page to page, page to the list, the list to the tab Settings was opened from). Header actions and form buttons run full width there, and a lone switch or state stays on the right of its row.
 
 ### Collapsible sidebar
 
-The header's panel toggle collapses the desktop sidebar from `--sidebar-width: 204px` to `--sidebar-rail-width: 52px` over 260ms using `--ease-out`. The content naturally takes the released space; do not overlay the rail or remount the current view. Labels fade while icons remain usable. Account, Settings, and Developer Mode remain accessible in the rail.
+The header's panel toggle collapses the desktop sidebar from `--sidebar-width: 204px` to `--sidebar-rail-width: 52px` over 260ms using `--ease-out`. The content naturally takes the released space; do not overlay the rail or remount the current view. Labels fade while icons remain usable. Account, Settings, and Tool Store remain accessible in the rail.
 
 `sidebar.js` owns the local `jarvis:sidebar-collapsed` preference, toggle state, and hover/focus tooltips. Storage failure must not prevent toggling. All navigation buttons have accessible names, custom tabs without artwork get a fallback icon, and the toggle exposes `aria-expanded`. Tooltips render outside the scrolling sidebar so they cannot be clipped. At 768px and below the desktop preference has no visual effect: keep the full labeled mobile drawer. Reduced motion removes the transition.
 
@@ -141,6 +141,10 @@ The last group on Added Models (roadmap phase 5, 2026-10-06; core/helpers.py) is
 Claude and Codex are never offered, because their built-in tools can't be limited to reading; the backend refuses them too. Helpers have no page of their own. Their work shows in the chat as the `delegate` and `helper_results` tool calls.
 
 ## Tool Store: health and review
+
+Tool Store > Tabs lists Prebuilt and Yours. Build a tab and Install a tab are header actions with forms above the cards. Card footers use real `.btn` buttons in one row: Add and Approve are primary, Remove is quiet danger, Export is quiet. Review files uses `.disclosure-panel`, with a wrapping file list and fingerprint. Status uses the shared `.set-pill` tones: On is ok, Off muted, approval/newer-API states warn, Invalid/Failed error. A failure reason is one line with the full text in its title. `ui-smoke` captures `desktop-tool-store-tabs` and `mobile-tool-store-tabs`.
+
+User tabs are folders in `data/tabs/<slug>/` (`custom-tabs/<slug>/` through file tools), containing `tab.json`, `routes.py`, and optional service, hooks, view, CSS and helpers. Python imports Kairos only through `core.tab_api`; endpoints own `/api/tab-<slug>/...`. Runtime JSON and encrypted tab secrets live in `data/tab-data/<slug>/`. New or changed user source needs an admin's fingerprint-bound approval in Yours. Approved folders load without editing app code or restarting and survive app updates. The old split layout remains supported for existing tabs; new builds use folders. Developer Mode and the New Tab sidebar entry are retired.
 
 Roadmap phase 6 (2026-10-06): core/integrations.py and core/mcp_client.py. Every added MCP server's card shows a `.tool-store-health` line with a Check button:
 - **Working:** the usable tool count and when it was checked, in green.

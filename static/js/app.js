@@ -45,13 +45,29 @@ const NAV = [
 const STUB_TABS = new Set();
 
 const modules = {};
-// Tabs the user built live in the data directory (so app updates can't wipe
-// them) and are served from /custom-views rather than the bundled
-// static/js/views/. The server tells us which is which via the manifest's
-// view_url; anything without one uses the built-in relative path.
+// Folder views come from /tab-files; old split views use /custom-views.
+// Their manifest supplies the module and optional stylesheet URLs.
 const customViewUrls = {};
+const customStyleUrls = {};
+const customStyles = new Map();
 
 async function loadModule(tabId) {
+  const style = customStyleUrls[tabId];
+  if (style) {
+    if (!customStyles.has(style)) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = style;
+      // Rendering waits for the stylesheet; two simultaneous navigations
+      // share the same link and promise instead of adding it twice.
+      customStyles.set(style, new Promise((resolve, reject) => {
+        link.onload = resolve;
+        link.onerror = () => { customStyles.delete(style); link.remove(); reject(new Error(`Could not load ${style}`)); };
+        document.head.appendChild(link);
+      }));
+    }
+    await customStyles.get(style);
+  }
   if (modules[tabId]) return modules[tabId];
   const custom = customViewUrls[tabId];
   const path = custom || (STUB_TABS.has(tabId) ? "./views/stub.js" : `./views/${tabId}.js`);
@@ -215,22 +231,15 @@ async function buildSidebar() {
 
   const nav = document.getElementById("nav");
   // Cleared before rebuilding — buildSidebar() now also runs whenever
-  // Developer Mode is toggled (to show/hide "+ New Tab" live), not just
-  // once at boot, so without this every toggle click appended a second
-  // full copy of the nav on top of the first (the reported duplicate-tabs
-  // bug, 2026-09-01).
-  // Custom tabs (Developer Mode, David's ask 2026-09-01) — discovered
-  // server-side from routes/tab_*.py (core/custom_tabs.py), so a new tab
-  // never needs NAV or icons.js edited. Always shown once built, not gated
-  // behind Developer Mode being on. Best-effort: a fetch failure here
-  // shouldn't break the built-in nav. Fetched before the nav is cleared, so
-  // a rebuild (a layout change) never shows an empty sidebar.
+  // Approved and enabled tabs supply their own sidebar manifests.
   const customTabs = await api("/api/system/custom-tabs").catch(() => []);
+  for (const id of Object.keys(customViewUrls)) { delete customViewUrls[id]; delete customStyleUrls[id]; }
   nav.innerHTML = "";
   const items = new Map(NAV.map((item) => [item.id, { id: item.id, label: item.label, svg: ICONS[item.icon] || "" }]));
   for (const item of customTabs) {
     if (items.has(item.id)) continue;
     if (item.view_url) customViewUrls[item.id] = item.view_url;
+    if (item.style_url) customStyleUrls[item.id] = item.style_url;
     items.set(item.id, { id: item.id, label: item.label, svg: item.icon_svg || ICONS.library });
   }
   setKnownTabs([...items.values()]);
@@ -258,22 +267,6 @@ async function buildSidebar() {
   }
   refreshAgentBadge();
 
-  // "+" New Tab (Developer Mode only, David's ask 2026-09-01) — at the
-  // bottom of the nav list itself, below any custom tabs, distinct from
-  // the Developer Mode toggle in the sidebar footer below. Rebuilt by
-  // buildDeveloperModeRow()'s toggle handler so it appears/disappears
-  // immediately without a page reload.
-  if (document.documentElement.classList.contains("dev-mode")) {
-    const newTabEl = document.createElement("button");
-    newTabEl.type = "button";
-    newTabEl.className = "nav-item nav-item-new-tab";
-    newTabEl.dataset.tab = "new-tab";
-    newTabEl.setAttribute("aria-label", "New Tab");
-    newTabEl.innerHTML = `${ICONS.plus || ""}<span>New Tab</span>`;
-    newTabEl.addEventListener("click", () => switchTab("new-tab"));
-    nav.appendChild(newTabEl);
-  }
-
   nav.querySelectorAll(".nav-item").forEach((item) => {
     item.classList.toggle("active", item.dataset.tab === activeTab);
     if (item.dataset.tab === activeTab) item.setAttribute("aria-current", "page");
@@ -288,52 +281,9 @@ async function buildSidebar() {
 // menu; the gear button is its own separate click straight into the
 // floating Settings window — they're related but distinct actions, not one
 // thing.
-// Developer Mode toggle (David's ask 2026-09-01) — its own row, directly
-// above the user-card/settings row. Reads current state off the
-// documentElement class boot() already set rather than re-fetching
-// /api/settings (admin-gated — a second call here would 401 for a
-// non-admin user and break the whole sidebar footer over one toggle).
-function buildDeveloperModeRow() {
-  const row = document.createElement("div");
-  row.className = "sidebar-footer-row sidebar-devmode-row";
-
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "sidebar-devmode-btn";
-  btn.setAttribute("aria-label", "Developer Mode");
-  const sync = () => {
-    const on = document.documentElement.classList.contains("dev-mode");
-    btn.classList.toggle("active", on);
-    btn.setAttribute("aria-pressed", String(on));
-    btn.title = on ? "Developer Mode is on — click to turn off" : "Turn on Developer Mode";
-  };
-  btn.innerHTML = `${ICONS.devMode || ""}<span>Developer Mode</span>`;
-  sync();
-
-  btn.addEventListener("click", async () => {
-    const next = !document.documentElement.classList.contains("dev-mode");
-    document.documentElement.classList.toggle("dev-mode", next);
-    sync();
-    buildSidebar(); // rebuilds the nav so "+ New Tab" appears/disappears live
-    try {
-      await api("/api/settings/developer-mode", { method: "POST", body: JSON.stringify({ enabled: next }) });
-    } catch (_) {
-      // Couldn't persist (e.g. non-admin user) — revert the visual flip
-      // rather than leaving the UI claiming a state that didn't save.
-      document.documentElement.classList.toggle("dev-mode", !next);
-      sync();
-      buildSidebar();
-    }
-  });
-
-  row.appendChild(btn);
-  return row;
-}
-
 async function buildSidebarFooter() {
   const footer = document.getElementById("sidebar-footer");
   footer.innerHTML = "";
-  footer.appendChild(buildDeveloperModeRow());
 
   const status = await api("/api/auth/status").catch(() => null);
   const displayName = !status ? "…" : status.username === "local" ? "Local User" : status.username || "Local User";
@@ -461,9 +411,6 @@ async function boot() {
   const settings = await api("/api/settings");
   const app = document.getElementById("app");
 
-  // Developer Mode (David's ask 2026-09-01) — applied at boot from the
-  // persisted setting; toggleDeveloperMode() (sidebar footer) flips it live.
-  document.documentElement.classList.toggle("dev-mode", !!settings.developer_mode_enabled);
 
   if (!settings.onboarding_complete) {
     app.style.display = "none";
@@ -491,9 +438,13 @@ async function startApp() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeMobileMenu();
   });
-  // Adding/removing a premade tab (views/new-tab.js) rebuilds the nav so it
+  // Adding/removing a tab in the Tool Store rebuilds the nav so it
   // appears immediately instead of after a reload.
-  document.addEventListener("jarvis:tabs-changed", () => { buildSidebar(); });
+  document.addEventListener("jarvis:tabs-changed", async () => {
+    for (const id of Object.keys(customViewUrls)) delete modules[id];
+    const tabs = await buildSidebar();
+    if (activeTab && !NAV.some((item) => item.id === activeTab) && !tabs.some((item) => item.id === activeTab)) switchTab("home");
+  });
   document.addEventListener("kairos:layout", () => { buildSidebar(); });
   commandPalette.init({ nav: NAV, customTabs: customTabs || [], switchTab, openSettings });
   floatingProgress.init({ switchTab });

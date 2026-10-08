@@ -65,8 +65,6 @@
   --font-display: var(--k-font-serif);
   --font-mono: 'Cascadia Code', Consolas, monospace;
 }
-/* Developer mode stays visible without recoloring the whole workspace. */
-:root.dev-mode { --dev-indicator: var(--danger); }
 
 * { box-sizing: border-box; }
 
@@ -165,8 +163,8 @@ html, body {
 
 nav#nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; overflow-x: hidden; }
 
-#brand, .nav-item > span, .sidebar-user-name, .sidebar-devmode-btn > span { transition: opacity 150ms ease; }
-.nav-item > span, .sidebar-devmode-btn > span { white-space: nowrap; overflow: hidden; }
+#brand, .nav-item > span, .sidebar-user-name { transition: opacity 150ms ease; }
+.nav-item > span { white-space: nowrap; overflow: hidden; }
 @media (min-width: 769px) {
   .sidebar-collapsed #sidebar { width: var(--sidebar-rail-width); padding-left: 6px; padding-right: 6px; }
   .sidebar-collapsed #brand { flex: 0 0 0; padding: 0; opacity: 0; }
@@ -174,14 +172,12 @@ nav#nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: 
   .sidebar-collapsed .sidebar-toggle-chevron { transform: rotate(180deg); }
   .sidebar-collapsed .nav-item > span,
   .sidebar-collapsed .sidebar-user-name,
-  .sidebar-collapsed .sidebar-devmode-btn > span { width: 0; opacity: 0; }
   .sidebar-collapsed .nav-item { gap: 0; justify-content: center; padding: 10px 0; }
   .sidebar-collapsed .nav-group-label { font-size: 0; height: 26px; padding: 0; margin: 12px 10px 0; border-top: 1px solid var(--border); }
   .sidebar-collapsed #sidebar-footer { padding: 10px 0 0; }
   .sidebar-collapsed .sidebar-footer-row { flex-direction: column; align-items: center; }
   .sidebar-collapsed .sidebar-footer-row > div { flex: none !important; width: 100%; }
   .sidebar-collapsed .sidebar-user-card { justify-content: center; gap: 0; padding: 8px 0; }
-  .sidebar-collapsed .sidebar-devmode-btn { justify-content: center; gap: 0; padding: 10px 0; }
   .sidebar-collapsed .sidebar-settings-btn { width: 36px; height: 36px; }
 }
 @media (max-width: 768px) {
@@ -229,21 +225,6 @@ nav#nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: 
 }
 .sidebar-settings-btn:hover { color: var(--text); background: rgba(var(--ink-rgb), 0.04); border-color: var(--border); }
 .sidebar-settings-btn svg { width: 16px; height: 16px; opacity: 0.8; }
-
-/* -- Developer Mode toggle (David's ask 2026-09-01) — its own row, above
-   the user-card/settings row above. */
-.sidebar-devmode-row { margin-bottom: 6px; }
-.sidebar-devmode-btn {
-  display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 10px; border-radius: 8px; cursor: pointer;
-  background: none; border: 1px solid transparent; color: var(--text-dim); font-size: 12.5px;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
-}
-.sidebar-devmode-btn:hover { color: var(--text); background: rgba(var(--ink-rgb), 0.04); border-color: var(--border); }
-.sidebar-devmode-btn svg { width: 16px; height: 16px; opacity: 0.8; flex-shrink: 0; }
-.sidebar-devmode-btn.active {
-  color: var(--dev-indicator, var(--accent)); background: rgba(var(--danger-rgb), .06); border-color: transparent;
-}
-.sidebar-devmode-btn.active svg { opacity: 1; }
 
 /* -- main content ------------------------------------------------------ */
 #content { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
@@ -331,7 +312,6 @@ input:focus, textarea:focus, select:focus {
 .segmented-tab:focus-visible,
 .sidebar-user-card:focus-visible,
 .sidebar-settings-btn:focus-visible,
-.sidebar-devmode-btn:focus-visible,
 .overflow-menu-item:focus-visible,
 .palette-item:focus-visible,
 .input-icon-btn:focus-visible,
@@ -522,32 +502,22 @@ input[type="checkbox"]:checked::after {
 .coming-soon h3 { font-weight: 300; color: var(--text-dim); letter-spacing: 1px; }
 .coming-soon p { color: var(--text-faint); font-size: 12.5px; max-width: 380px; text-align: center; }
 
-/* -- "+" New Tab builder (Developer Mode, David's ask 2026-09-01) — a
-   fill-in-the-blanks "title page" that hands off into a real chat
-   conversation (see chat.js's pending-handoff comment) rather than a
-   second bespoke chat renderer. */
-.new-tab-view { align-items: center; }
-.new-tab-header { text-align: center; margin-bottom: 20px; }
-.new-tab-header h1 { font-weight: 300; letter-spacing: 2px; font-size: 22px; color: var(--accent); margin: 0 0 6px; }
-.new-tab-header p { color: var(--text-faint); font-size: 13px; margin: 0; }
-.new-tab-form { width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 16px; }
-.new-tab-field { display: flex; flex-direction: column; gap: 6px; }
-.new-tab-field label { font-size: 12px; color: var(--text-dim); letter-spacing: 0.3px; }
-.new-tab-field textarea { resize: vertical; font-family: inherit; }
-.new-tab-checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; }
-.new-tab-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
-.new-tab-chip {
+/* -- Tool Store tab builder ------------------------------------------- */
+.tab-build-form { width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 16px; }
+.tab-build-field { display: flex; flex-direction: column; gap: 6px; }
+.tab-build-field label { font-size: 12px; color: var(--text-dim); letter-spacing: 0.3px; }
+.tab-build-field textarea { resize: vertical; font-family: inherit; }
+.tab-build-checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; }
+.tab-build-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.tab-build-chip {
   background: rgba(var(--ink-rgb), 0.035); border: 1px solid var(--border); color: var(--text-dim);
   border-radius: 999px; padding: 6px 12px; font-size: 12px; cursor: pointer;
   transition: color 0.12s, background 0.12s, border-color 0.12s;
 }
-.new-tab-chip:hover { color: var(--text); border-color: var(--border-strong); }
-.new-tab-chip.active { color: var(--accent); background: var(--accent-dim); border-color: var(--border-strong); }
-.new-tab-error { color: var(--danger); font-size: 12.5px; }
-/* Premade-tab gallery (David's ask 2026-09-03) */
-.new-tab-section-title { font-size: 13px; color: var(--text); letter-spacing: 0.5px; margin-bottom: 6px; }
-.template-card { margin-bottom: 10px; }
-.new-tab-build-btn { align-self: flex-start; padding: 10px 20px; font-size: 13.5px; }
+.tab-build-chip:hover { color: var(--text); border-color: var(--border-strong); }
+.tab-build-chip.active { color: var(--accent); background: var(--accent-dim); border-color: var(--border-strong); }
+.tab-build-error { color: var(--danger); font-size: 12.5px; }
+.tab-build-build-btn { align-self: flex-start; padding: 10px 20px; font-size: 13.5px; }
 
 /* -- onboarding ---------------------------------------------------------
    Full-screen first-run wizard (David's ask, 2026-08-31) — shown in place
@@ -1306,7 +1276,6 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); opacity: .
 .sidebar-user-card { background: transparent; font: inherit; text-align: left; width: 100%; gap: 9px; padding: 8px 4px; }
 .sidebar-avatar { width: 27px; height: 27px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; background: var(--surface-2); color: var(--text-dim); font-size: 11px; }
 #sidebar-footer { border-top: 1px solid var(--border); margin-top: 16px; }
-.sidebar-devmode-btn { font-size: 11px; }
 .sidebar-user-name { color: var(--text-dim); font-size: 12px; }
 .session-item { display: block; width: 100%; text-align: left; border: none; background: transparent; font-family: inherit; line-height: 1.5; }
 .session-item.active { color: var(--text); background: rgba(var(--ink-rgb), .06); }
@@ -1321,8 +1290,6 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); opacity: .
 .custom-select-menu, .model-picker-menu, .overflow-menu, .toast, .chat-progress-card {
   backdrop-filter: none; -webkit-backdrop-filter: none;
 }
-.new-tab-header h1 { color: var(--text); letter-spacing: -.03em; font-size: 30px; }
-.new-tab-header p { line-height: 1.6; }
 .empty-state-rich { padding: 56px 24px; }
 .empty-state-icon { opacity: .55; width: 32px; height: 32px; }
 .empty-state-title { color: var(--text); font-size: 16px; letter-spacing: -.02em; }
@@ -1980,7 +1947,7 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
 .run-more { align-self: flex-start; padding: 2px 8px; font-size: 11px; }
 
 
-/* Tool Store: one quiet catalog for installed skills and optional MCP servers. */
+/* Tool Store: skills, MCP servers, prebuilt tabs and user tabs. */
 .tool-store-view { width: 100%; padding-bottom: 48px; }
 .tool-store-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 22px 0 10px; }
 .tool-store-search { flex: 1 1 260px; min-width: 0; }
@@ -2014,6 +1981,15 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
 .tool-store-card h4 { margin: 15px 0 4px; overflow-wrap: anywhere; font-size: 14px; font-weight: 600; }
 .tool-store-card p { flex: 1; margin: 0 0 19px; color: var(--text-dim); font-size: 12.5px; line-height: 1.55; }
 .tool-store-card-foot { min-height: 29px; }
+.tool-store-card[data-tab-slug] .tool-store-card-foot { margin-top: auto; justify-content: flex-start; gap: 6px; }
+.tool-store-card[data-tab-slug] .tool-store-card-foot .btn { padding: 6px 12px; font-size: 12px; }
+.tool-store-card-foot .btn.quiet.danger { color: var(--danger); }
+.tool-store-card[data-tab-slug] p { flex: none; }
+.tool-store-tab-review { margin: 0 0 14px; }
+.tool-store-tab-review p { margin: 0 0 10px; }
+.tool-store-tab-files { margin: 0 0 12px; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-store-tab-hash { overflow-wrap: anywhere; }
+.tool-store-card p.tool-store-tab-reason { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--danger); }
 .tool-store-card-foot a, .tool-store-action a { color: var(--accent); font-size: 12px; text-decoration: none; }
 .tool-store-card-foot a:hover, .tool-store-action a:hover { text-decoration: underline; }
 .tool-store-action { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }

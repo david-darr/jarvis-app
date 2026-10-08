@@ -6,6 +6,10 @@ const suite = process.argv[2];
 if (!['browser-smoke', 'chat-smoke', 'ui-smoke', 'usage-overlay-smoke', 'crm-smoke'].includes(suite)) {
   throw new Error('Choose browser-smoke, chat-smoke, ui-smoke, usage-overlay-smoke, or crm-smoke');
 }
+if (suite === 'crm-smoke') {
+  require('node:fs').accessSync(path.join(__dirname, '..', 'tabs', 'crm', 'view.js'));
+  require('node:fs').accessSync(path.join(__dirname, '..', 'tabs', 'crm', 'view.css'));
+}
 const electronBinary = process.env.JARVIS_ELECTRON_BINARY || require('../electron/node_modules/electron');
 const result = spawnSync(electronBinary,
   [path.join(__dirname, suite + '.cjs'), ...process.argv.slice(3)],

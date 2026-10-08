@@ -1,11 +1,11 @@
-import { api, el } from "../api.js";
+import { api, el } from "/static/js/api.js";
 
 // School: Canvas assignments grouped by course. Three states in one view
 // (no routing) — overview (upcoming-across-everything + course cards, a mix
 // of Calendar's "Next 7 Days" panel and Cookbook's card grid), a course's
 // assignment list, and an assignment workspace (text editor + a real chat
 // session scoped to that course, memory built server-side — see
-// services/school_service.py). Draft edits autosave (debounced) and push a
+// this tab's service.py). Draft edits autosave (debounced) and push a
 // context note into the course's chat session on save, so the assistant's
 // memory of "what I'm working on" tracks the editor without spending a
 // model turn on every keystroke (see sync-memory's docstring).

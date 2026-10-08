@@ -24,7 +24,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/api/')) {
     res.setHeader('Content-Type', 'application/json');
     let value;
-    if (url.pathname === '/api/system/custom-tabs') value = [{ id: 'crm', label: 'CRM', icon_svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>', user_tab: false }];
+    if (url.pathname === '/api/system/custom-tabs') value = [{ id: 'crm', label: 'CRM', icon_svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>', user_tab: false, format: 'folder', view_url: '/tab-files/crm/view.js', style_url: '/tab-files/crm/view.css' }];
     else if (url.pathname === '/api/tab-crm/connections') value = { connections: [{ kind: 'email', id: 'email1', label: 'Work inbox' }], models: [{ id: 'model1', name: 'Local extraction', kind: 'local' }] };
     else if (url.pathname === '/api/agents') value = [];
     else if (url.pathname === '/api/tab-crm/messages/message1') value = { subject: 'Proposal', sender: 'customer@example.com', account: 'work@example.com',
@@ -50,8 +50,10 @@ const server = http.createServer(async (req, res) => {
     }
     res.end(JSON.stringify(value)); return;
   }
-  const file = path.resolve(root, url.pathname === '/' ? 'static/index.html' : '.' + decodeURIComponent(url.pathname));
-  if (!file.startsWith(path.join(root, 'static') + path.sep)) { res.writeHead(404); res.end(); return; }
+  const tabFile = url.pathname.match(/^\/tab-files\/crm\/(view\.js|view\.css)$/);
+  const file = tabFile ? path.join(root, 'tabs', 'crm', tabFile[1])
+    : path.resolve(root, url.pathname === '/' ? 'static/index.html' : '.' + decodeURIComponent(url.pathname));
+  if (!tabFile && !file.startsWith(path.join(root, 'static') + path.sep)) { res.writeHead(404); res.end(); return; }
   try {
     res.setHeader('Content-Type', ({ '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.jpg': 'image/jpeg', '.png': 'image/png' })[path.extname(file)] || 'application/octet-stream');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:");

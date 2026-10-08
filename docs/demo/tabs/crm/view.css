@@ -1,0 +1,54 @@
+.crm-view { max-width: 1200px; }
+.crm-view .view-header, .crm-actions, .crm-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.crm-view .view-header { justify-content: space-between; }
+.crm-tabs { margin: 4px 0 20px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.crm-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+.crm-stat { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; padding: 16px; cursor: pointer; color: var(--text); font: inherit; }
+.crm-stat strong { font-size: 26px; font-weight: 500; }
+.crm-stat:hover, .crm-task:hover { background: var(--surface-2); }
+.crm-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.crm-filters > input { flex: 1 1 220px; min-width: 0; }
+.crm-filters > .custom-select { flex: 0 1 155px; min-width: 0; }
+.crm-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, .95fr); align-items: start; gap: 18px; }
+.crm-layout-single { grid-template-columns: 1fr; }
+.crm-task-list { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.crm-task { padding: 16px; text-align: left; cursor: pointer; color: var(--text); font: inherit; width: 100%; }
+.crm-task.selected { border-color: var(--accent); box-shadow: inset 3px 0 var(--accent); }
+.crm-task-top, .crm-task-bottom { display: flex; justify-content: space-between; gap: 10px; align-items: start; }
+.crm-task-top strong { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.crm-task-meta { margin: 7px 0 12px; overflow-wrap: anywhere; }
+.crm-priority { font-size: 11px; border: 1px solid var(--border-strong); border-radius: 20px; padding: 2px 8px; white-space: nowrap; }
+.crm-priority.urgent, .crm-overdue { color: var(--danger); }
+.crm-priority.high { color: var(--accent); }
+.crm-detail { min-width: 0; margin: 0; }
+.crm-detail .field, .crm-settings .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; min-width: 0; }
+.crm-detail .field input, .crm-detail .field textarea, .crm-settings .field input { width: 100%; min-width: 0; box-sizing: border-box; }
+.crm-detail .custom-select, .crm-settings .custom-select { width: 100%; }
+.crm-detail h3, .crm-settings h3 { margin: 0 0 14px; }
+.crm-detail h4 { margin: 20px 0 10px; }
+.crm-detail-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.crm-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 12px; }
+.crm-pair > .btn { margin-bottom: 12px; }
+.crm-check { display: flex; align-items: center; gap: 8px; margin: 5px 0 14px; font-size: 12px; }
+.crm-check input { flex: none; }
+.crm-detail > .crm-actions { margin: 14px 0; }
+.crm-review { color: var(--warn); font-size: 12px; overflow-wrap: anywhere; }
+.crm-proposal { border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 12px; margin: 12px 0; font-size: 12px; }
+.crm-evidence { border-top: 1px solid var(--border); padding: 12px 0; }
+.crm-evidence blockquote { margin: 8px 0; border-left: 2px solid var(--hairline); padding: 0 0 0 12px; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.crm-source { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.crm-source > div { min-width: 0; overflow-wrap: anywhere; }
+.crm-source-modal { width: min(800px, calc(100vw - 40px)); max-width: 800px; max-height: calc(100dvh - 40px); overflow-y: auto; }
+.crm-source-modal pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 13px; line-height: 1.65; background: var(--bg-panel-solid); padding: 14px; border-radius: var(--radius); }
+.crm-run { padding: 10px 0; border-top: 1px solid var(--border); }
+.crm-view :is(button, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 760px) {
+  .crm-layout { grid-template-columns: 1fr; }
+  .crm-detail { grid-row: 1; }
+  .crm-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .crm-stat { padding: 12px; }
+  .crm-filters > .custom-select { flex: 1 1 140px; }
+  .crm-view .view-header { align-items: flex-start; }
+  .crm-source { align-items: flex-start; flex-wrap: wrap; }
+  .crm-pair { grid-template-columns: 1fr; gap: 0; }
+}

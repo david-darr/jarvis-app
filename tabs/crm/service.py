@@ -5,7 +5,6 @@ message marker commit together; a failed write rolls back in-memory state.
 """
 import copy
 import hashlib
-import os
 import re
 import threading
 import time
@@ -15,10 +14,10 @@ from datetime import date, datetime
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-from core.atomic_io import read_json, write_json_atomic
-from core.constants import DATA_DIR
+from core import tab_api
 
-CRM_FILE = os.path.join(DATA_DIR, "crm.json")
+api = tab_api.for_tab(__package__)
+api.adopt_data_file("crm.json")
 STATUSES = ("active", "in_progress", "waiting", "needs_review", "done", "dismissed")
 PRIORITIES = ("urgent", "high", "normal", "low")
 DEFAULTS = {"endpoint_id": None, "timezone": "UTC", "review_all": False,
@@ -47,10 +46,10 @@ def valid_due(value):
 
 
 class CRMService:
-    def __init__(self, path=None):
-        self.path = path or CRM_FILE
+    def __init__(self, name=None):
+        self.name = name or "crm.json"
         self._lock = threading.RLock()
-        self._data = read_json(self.path, {"settings": {}, "sources": {}, "messages": {}, "tasks": {}, "runs": []})
+        self._data = api.read_json(self.name, {"settings": {}, "sources": {}, "messages": {}, "tasks": {}, "runs": []})
 
     @contextmanager
     def transaction(self):
@@ -58,7 +57,7 @@ class CRMService:
             before = copy.deepcopy(self._data)
             try:
                 yield
-                write_json_atomic(self.path, self._data)
+                api.write_json(self.name, self._data)
             except BaseException:
                 self._data = before
                 raise
@@ -321,7 +320,8 @@ class CRMService:
                 first <= datetime.fromisoformat(due.replace("Z", "+00:00")) < last)
             if in_range:
                 items.append({"id": task["id"], "title": task["title"], "start": due, "end": due,
-                              "all_day": all_day, "source": "crm", "completed": False,
+                              "all_day": all_day, "source": "tab", "source_label": "From CRM",
+                              "toggle_url": f"/api/tab-crm/tasks/{task['id']}/completed", "completed": False,
                               "location": task.get("contact", ""), "description": task.get("notes", "")})
         return items
 

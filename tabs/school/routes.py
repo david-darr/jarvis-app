@@ -1,6 +1,6 @@
 """School tab: Canvas assignments grouped by course, a saved draft per
 assignment (the text editor), and a per-course chat session with real
-memory — see services/school_service.py for the sync/session-memory logic.
+memory — see service.py for the sync/session-memory logic.
 This module just adapts request/response shape, same split as every other
 routes/*.py file in this app.
 """
@@ -9,31 +9,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from core import sync_engine
-from core.middleware import require_user
-from services.school_service import school_service
+from core import tab_api
+from core.tab_api import require_user
+from .service import school_service
 
+api = tab_api.for_tab(__package__)
 router = APIRouter(prefix="/api/tab-school", tags=["school"])
-
-# Joins the nightly Sync All pass (David's ask 2026-09-06 — Canvas should
-# refresh itself rather than waiting for someone to press Sync). Registering
-# at import means it only participates when this tab is actually mounted, and
-# it's the pattern any user-authored tab can copy to get its own API synced
-# daily: import core.sync_engine and register one async callable.
-sync_engine.register_provider("School (Canvas)", school_service.sync)
-
-TAB_MANIFEST = {
-    "id": "school",
-    "label": "School",
-    "icon_svg": (
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" '
-        'stroke-linecap="round" stroke-linejoin="round">'
-        '<path d="M12 3L1 8l11 5 9-4.1V17"/>'
-        '<path d="M5 10.5V16c0 1.5 3 3.5 7 3.5s7-2 7-3.5v-5.5"/>'
-        "</svg>"
-    ),
-}
-
 
 class SettingsRequest(BaseModel):
     canvas_base_url: Optional[str] = None

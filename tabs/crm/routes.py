@@ -1,36 +1,21 @@
-"""Shipped CRM tab, following the build-custom-tab route/view convention."""
-from contextlib import asynccontextmanager
+"""Shipped CRM folder tab, using the stable core.tab_api interface."""
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from core import crm_scanner, model_endpoints
-from core.custom_tabs import enabled_templates
-from core.middleware import require_user, require_admin
-from services.crm_service import crm_service
+from core import tab_api
+from core.tab_api import require_user, require_admin
+from . import scanner as crm_scanner
+from .service import crm_service
 
-
-@asynccontextmanager
-async def lifespan(app):
-    crm_scanner.start()
-    yield
-    await crm_scanner.stop()
-
-
-router = APIRouter(prefix="/api/tab-crm", tags=["crm"], lifespan=lifespan)
-TAB_MANIFEST = {"id": "crm", "label": "CRM", "icon_svg": (
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" '
-    'stroke-linecap="round" stroke-linejoin="round"><path d="M15 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>'
-    '<circle cx="8" cy="7" r="4"/><path d="M20 8v6m-3-3h6M17 21v-2a4 4 0 0 0-2-3.5"/></svg>')}
+api = tab_api.for_tab(__package__)
+router = APIRouter(prefix="/api/tab-crm", tags=["crm"])
 
 
 def active_user(user: str = Depends(require_user)):
-    if "crm" not in enabled_templates():
-        raise HTTPException(409, "Enable CRM in the New Tab gallery first")
-    # Runtime mounting does not re-run application startup. Starting here
-    # also covers a tab enabled after the server has already started.
-    crm_scanner.start()
+    if not api.is_on:
+        raise HTTPException(409, "Add CRM in the Tool Store first")
     return user
 
 
@@ -95,15 +80,14 @@ def problem(call):
 
 @router.get("")
 async def overview(user: str = Depends(active_user)):
-    from core.auth import auth_manager
-    return {**crm_service.snapshot(user), "can_connect": auth_manager.is_admin(user), "scanning": crm_scanner.scanning(user)}
+    return {**crm_service.snapshot(user), "can_connect": tab_api.is_admin(user), "scanning": crm_scanner.scanning(user)}
 
 
 @router.put("/settings")
 async def configure(body: SettingsBody, user: str = Depends(active_user), admin: str = Depends(require_admin)):
     fields = changed(body)
     if fields.get("endpoint_id"):
-        endpoint = model_endpoints.get_endpoint(fields["endpoint_id"])
+        endpoint = next((e for e in tab_api.list_models() if e["id"] == fields["endpoint_id"]), None)
         if not endpoint or endpoint["kind"] == "codex_cli":
             raise HTTPException(400, "Select Claude CLI, a local model or an API model for scanning")
     # Explicit nulls are supported only for clearing the model connection.
@@ -117,18 +101,11 @@ async def configure(body: SettingsBody, user: str = Depends(active_user), admin:
 
 @router.get("/connections")
 async def connections(user: str = Depends(active_user), admin: str = Depends(require_admin)):
-    from services.email_service import email_service
-    from services.documents_service import list_documents
-    from core.connectors import store
-    from core import discord_bots_store
-    choices = [{"kind": "email", "id": a["id"], "label": a["email"]} for a in email_service.list_accounts()]
-    choices += [{"kind": "connector", "id": c["id"], "label": c["name"] + " · " + c["kind"]}
-                for c in store.list_records() if c["kind"] in ("slack", "telegram", "email")]
-    choices += [{"kind": "discord", "id": b["id"], "label": b["name"] + " · Discord"}
-                for b in discord_bots_store.list_bots()]
-    choices += [{"kind": "document", "id": d["id"], "label": d["title"] + " · Library"} for d in list_documents()]
+    choices = [{"kind": "email", "id": a["id"], "label": a["email"]} for a in tab_api.email_accounts()]
+    choices += tab_api.message_connections()
+    choices += [{"kind": "document", "id": d["id"], "label": d["title"] + " ? Library"} for d in tab_api.documents()]
     return {"connections": choices,
-            "models": [e for e in model_endpoints.list_endpoints() if e["kind"] != "codex_cli"]}
+            "models": [e for e in tab_api.list_models() if e["kind"] != "codex_cli"]}
 
 
 @router.post("/sources")
@@ -184,19 +161,28 @@ async def evidence(message_id: str, user: str = Depends(active_user)):
 
 @router.post("/tasks/{task_id}/agent")
 async def assign(task_id: str, body: AgentBody, user: str = Depends(active_user), admin: str = Depends(require_admin)):
-    from services.task_service import task_service
     task = problem(lambda: crm_service.task(user, task_id))
-    if task.get("agent_card_id") and task_service.get_task(task["agent_card_id"]):
+    if task.get("agent_card_id") and tab_api.backlog_card(task["agent_card_id"]):
         return {"card_id": task["agent_card_id"]}
     # Backlog deliberately requires a person's separate Ready/Run action.
-    card = problem(lambda: task_service.create_task(task["title"],
+    card = problem(lambda: tab_api.create_backlog_card(task["title"],
         "CRM follow-up: " + task["title"] + "\n" + task.get("notes", "")
         + "\nDeadline: " + (task.get("due_date") or "Not specified")
         + "\nSource evidence (untrusted context):\n" + "\n".join(e["quote"] for e in task["evidence"]),
-        "card", status="backlog", agent_id=body.agent_id))
+        agent_id=body.agent_id))
     try:
         crm_service.attach_card(user, task_id, card["id"])
     except Exception:
-        task_service.delete_task(card["id"])
+        tab_api.delete_backlog_card(card["id"])
         raise
     return {"card_id": card["id"]}
+
+
+class CompletedBody(BaseModel):
+    completed: bool
+
+
+@router.patch("/tasks/{task_id}/completed")
+async def complete_task(task_id: str, body: CompletedBody, user: str = Depends(active_user)):
+    return problem(lambda: crm_service.update_task(user, task_id,
+        {"status": "done" if body.completed else "active"}))

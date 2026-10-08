@@ -15,7 +15,7 @@ _RESTORED = _backup.apply_pending_restore()
 
 from core.constants import STATIC_DIR
 from core.middleware import SecurityHeadersMiddleware
-from core import custom_tabs, image_gen, remote_access, task_scheduler, vault_sync
+from core import custom_tabs, tab_hooks, image_gen, remote_access, task_scheduler, vault_sync
 from core.builtin_tasks import autoenable_builtins, migrate_builtin_schedules
 from core.channels import discord_channel
 from core.connectors import hub as connector_hub
@@ -134,6 +134,7 @@ async def lifespan(_app: FastAPI):
     # triage). Once per install — see autoenable_builtins() for why it can't
     # resurrect something the user turned off.
     autoenable_builtins()
+    await tab_hooks.reconcile()
     task_scheduler.start()
     await discord_channel.start()
     # Every other messaging platform (core/connectors), each supervised so a
@@ -154,6 +155,7 @@ async def lifespan(_app: FastAPI):
             task_scheduler.stop()
             await discord_channel.stop()
             await connector_hub.stop_all()
+            await tab_hooks.stop_all()
             await chat_service.shutdown()
             # Do not leave the built-in model process orphaned at shutdown.
             llamacpp_engine.stop()
@@ -196,8 +198,8 @@ app.include_router(tool_routes.router)
 app.include_router(run_routes.router)
 
 # Developer Mode (David's ask 2026-09-01) — the only app.py edit a custom
-# tab ever needs. Every routes/tab_*.py found here gets mounted; adding a
-# new tab afterward is purely new files, see core/custom_tabs.py.
+# tab ever needs. Eligible folder tabs and approved legacy routes get
+# mounted; adding a tab is purely new files, see core/custom_tabs.py.
 # Tabs the user builds live in the data directory so app updates can't wipe
 # them (David's ask 2026-09-03). migrate_user_tabs() relocates any created by
 # an older build, before discovery runs.

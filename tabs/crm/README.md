@@ -1,8 +1,8 @@
 # CRM prebuilt tab
 
-CRM is offered in the New Tab gallery for every installation. Its source ships in the application; personal data stays in `DATA_DIR/crm.json`. Fresh installations have no sources, model selection, sample tasks or enabled scanning. Removing the tab disables it and preserves records.
+CRM is offered in Tool Store > Tabs for every installation. Its source ships in the application; personal data stays in `data/tab-data/crm/crm.json`. Fresh installations have no sources, model selection, sample tasks or enabled scanning. Removing the tab disables it and preserves records.
 
-The implementation follows the saved `build-custom-tab` skill: `routes/tab_crm.py` exports its router and manifest, `static/js/views/crm.js` exports `render`, and `services/crm_service.py` owns an atomic JSON store. No changes to `app.py`, `app.js` or the shared icon registry are needed. The stylesheet uses shared appearance tokens.
+The tab is a folder package: `tabs/crm/tab.json` declares metadata and hooks, `routes.py` exports its router, `view.js` exports `render`, and `service.py` owns an atomic JSON store through `core.tab_api`. Existing `crm.json` is adopted once. Models, mail, auth, Library access and backlog cards go through `core.tab_api`; the base app dispatches declared hooks without naming this tab. `view.css` is loaded from the manifest. The stylesheet uses shared appearance tokens.
 
 ## Source collection and extraction
 
@@ -20,7 +20,7 @@ Relative deadlines use the message timestamp and configured IANA timezone. No de
 
 Tasks have deadlines, priority explanations, contact/project fields, source evidence, status, notes and optional snoozing. Contacts groups follow-ups by their recorded contact; it does not merge identities across providers. Later messages can propose changes; they do not overwrite edits or reopen completed/dismissed work. Suggested changes can be accepted or rejected. Users can manage manual tasks without connection-admin access.
 
-Active, reviewed CRM deadlines appear in Calendar by reading the owned CRM records directly. Calendar completion updates CRM status; completed work remains in CRM's Done view. Assignment creates a backlog card in the existing Work Board and requires a separate Ready/Run action.
+Active, reviewed CRM deadlines appear through the `calendar_items` hook. Calendar PATCHes the returned `toggle_url` with `completed`, updating CRM status; completed work remains in CRM's Done view. Assignment creates a backlog card in the existing Work Board and requires a separate Ready/Run action.
 
 ## Validation performed locally
 

@@ -45,8 +45,7 @@ const errorText = (problem) => (problem?.message || String(problem)).replace(/^\
 // `keywords` is what makes the search box useful: the words someone would
 // really type for each page ("2fa", "api key", "tailscale"), not a
 // restatement of its title. `admin: true` on a group builds it for admins
-// only, and Custom Tabs stays additionally behind Developer Mode, the same
-// condition app.js uses for its "+ New Tab" nav item.
+// only. Tabs are managed in the Tool Store.
 const I = (body) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
 const NAV_ICONS = {
   "add-models": I('<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 9v6M9 12h6"/>'),
@@ -69,7 +68,6 @@ const NAV_ICONS = {
   runs: I('<circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><path d="M5 8v8"/><path d="M10 6h10M10 12h10M10 18h10"/>'),
   "sandbox-changes": I('<path d="M8 6l-5 6 5 6M16 6l5 6-5 6"/>'),
   "file-checkpoints": I('<path d="M3 12a9 9 0 109-9 9 9 0 00-6.4 2.6L3 8"/><path d="M3 3v5h5M12 8v4l3 2"/>'),
-  "custom-tabs": I('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v5"/>'),
 };
 
 const SECTION_GROUPS = [
@@ -152,9 +150,6 @@ const SECTION_GROUPS = [
       { id: "file-checkpoints", label: "File checkpoints", render: renderFileCheckpointsPanel,
         description: "Each model turn saves the Vault and its working folder before and after. Review the files, then restore the ones you choose. A file changed again cannot be restored from an older checkpoint; large skipped files were not protected.",
         keywords: ["checkpoint", "rollback", "restore", "undo", "files", "vault", "history"] },
-      { id: "custom-tabs", label: "Custom Tabs", render: renderCustomTabsPanel, devMode: true,
-        description: "Reorder, keep building, or delete tabs your AI model has built.",
-        keywords: ["new tab", "developer mode", "custom tab"] },
     ],
   },
 ];
@@ -181,12 +176,6 @@ export async function openSettingsWindow(section) {
   if (section === "integrations") activeSectionId = section;
   if (pillEl) { pillEl.remove(); pillEl = null; }
   cachedStatus = await api("/api/auth/status");
-  // Guards against a stale activeSectionId from a previous visit if
-  // Developer Mode got turned off in between (buildNav() already hides the
-  // nav entry — this keeps selectSection() from rendering the panel anyway).
-  if (activeSectionId === "custom-tabs" && !document.documentElement.classList.contains("dev-mode")) {
-    activeSectionId = "add-models";
-  }
   const modal = getModal();
   modal.classList.remove("hidden");
   hidePageBehind();
@@ -425,10 +414,8 @@ function attachResizeHandles(panel) {
 // Which sections this user can actually reach. One place, so the nav, the
 // search, and selectSection() can never disagree about it.
 function visibleSections() {
-  const devMode = document.documentElement.classList.contains("dev-mode");
   return SECTION_GROUPS
     .filter((group) => !group.admin || cachedStatus.is_admin)
-    .map((group) => ({ ...group, sections: group.sections.filter((s) => !s.devMode || devMode) }))
     .filter((group) => group.sections.length);
 }
 
@@ -1802,100 +1789,6 @@ async function renderSandboxChangesPanel(body, status, page) {
       diffBox,
     ]);
   }));
-}
-
-// -- Admin: Custom Tabs (Developer Mode, David's ask 2026-09-01) ------------
-async function renderCustomTabsPanel(body, status, page) {
-  const tabs = await api("/api/system/custom-tabs");
-  const approvals = await api("/api/system/custom-tabs/pending-approvals").catch(() => []);
-  const rerender = () => renderCustomTabsPanel(body, status, page);
-  const parts = [];
-
-  const pending = approvals.filter((entry) => !entry.approved);
-  const waitingForRestart = approvals.filter((entry) => entry.approved && !tabs.some((tab) => tab.id === entry.id));
-  if (pending.length) {
-    parts.push(group({ title: "Source awaiting approval", cls: "set-danger",
-      description: "Custom-tab code runs inside Kairos. Review these files in your Kairos data folder before approving. Any source change invalidates every tab approval." },
-      pending.map((entry) => {
-        const approve = el("button", { class: "btn primary", text: "Approve this source", disabled: !!entry.blocked });
-        approve.addEventListener("click", async () => {
-          const ok = await confirmDialog({
-            title: `Approve the "${entry.id}" tab source?`,
-            message: `This allows these files to run as Kairos custom-tab code. Inspect all files before approving.\n\n${entry.files.join("\n")}\n\nFingerprint: ${entry.fingerprint}`,
-            confirmLabel: "Approve source", danger: false,
-          });
-          if (!ok) return;
-          try {
-            await api(`/api/system/custom-tabs/${encodeURIComponent(entry.id)}/approve`, { method: "POST", body: JSON.stringify({ fingerprint: entry.fingerprint }) });
-            toast("Source approved. Restart Kairos to load the tab.", "success");
-          } catch (error) { toast(error.message || "Approval failed; review the current source again.", "error"); }
-          await rerender();
-        });
-        return row({ title: entry.id, control: approve,
-          description: [entry.blocked ? "Fingerprint unavailable; source is blocked." : `Files: ${entry.files.join(", ")}`,
-            entry.fingerprint ? el("div", { class: "set-mono", text: `SHA-256: ${entry.fingerprint}` }) : null] });
-      })));
-  }
-  if (waitingForRestart.length) {
-    parts.push(note(`Approved source for ${waitingForRestart.map((entry) => entry.id).join(", ")}. Restart Kairos to load it.`));
-  }
-  if (!tabs.length) {
-    if (!pending.length && !waitingForRestart.length) parts.push(group({}, [empty("No custom tabs yet. Use \"+ New Tab\" in the sidebar.")]));
-    body.replaceChildren(...parts);
-    return;
-  }
-
-  // "Keep Building" needs a model (found live 2026-09-02: with none it
-  // silently returned the "no model yet" reply), so one picker serves every
-  // tab on this page.
-  const endpoints = await api("/api/models").catch(() => []);
-  const modelSelect = endpoints.length ? customSelect({}, endpoints.map((ep) => el("option", { value: ep.id, text: modelLabel(ep) }))) : null;
-  parts.push(group({}, [row({ title: "Build with", description: modelSelect ? "The model Keep Building uses." : "Add a model first in Add Models.",
-    control: modelSelect || pill("No models", "warn") })]));
-
-  parts.push(group({ title: "Your tabs" }, tabs.map((tab, i) => {
-    const reorder = async (delta) => {
-      const order = tabs.map((t) => t.id);
-      const j = i + delta;
-      [order[i], order[j]] = [order[j], order[i]];
-      await api("/api/system/custom-tabs/order", { method: "POST", body: JSON.stringify({ order }) });
-      await rerender();
-    };
-    const up = el("button", { class: "btn quiet", text: "↑", title: "Move up", disabled: i === 0, onclick: () => reorder(-1) });
-    const down = el("button", { class: "btn quiet", text: "↓", title: "Move down", disabled: i === tabs.length - 1, onclick: () => reorder(1) });
-    const keepBuilding = el("button", { class: "btn", text: "Keep building", disabled: !modelSelect,
-      title: modelSelect ? "" : "Add a model first in Add Models." });
-    keepBuilding.addEventListener("click", async () => {
-      // Ask what to change first (found live 2026-09-02: it used to send a
-      // prompt ending mid-sentence with no request in it).
-      const change = prompt(`What do you want to change or add to the "${tab.label}" tab?`);
-      if (!change || !change.trim()) return;
-      const message = [
-        `I want to keep working on the "${tab.label}" tab.`,
-        "",
-        `Its files are routes/tab_${tab.id}.py, static/js/views/${tab.id}.js, and services/${tab.id}_service.py if it has one. Read the current files first.`,
-        "",
-        `What I want changed: ${change.trim()}`,
-      ].join("\n");
-      const session = await api("/api/sessions", { method: "POST", body: JSON.stringify({}) });
-      await api(`/api/sessions/${session.id}/model`, { method: "POST", body: JSON.stringify({ model_endpoint_id: modelSelect.value }) });
-      sessionStorage.setItem("jarvis:pendingChatHandoff", JSON.stringify({ sessionId: session.id, message }));
-      closeSettingsWindow();
-      document.querySelector('.nav-item[data-tab="chat"]')?.click();
-    });
-    const remove = el("button", { class: "btn quiet danger", text: "Delete", onclick: async () => {
-      const ok = await confirmDialog({ title: `Delete the "${tab.label}" tab?`,
-        message: "This removes the tab's files from disk. A restart is needed for its API routes to fully unmount.", confirmLabel: "Delete tab" });
-      if (!ok) return;
-      await api(`/api/system/custom-tabs/${tab.id}`, { method: "DELETE" });
-      toast(`Tab "${tab.label}" deleted`, "success");
-      await rerender();
-    } });
-    const icon = el("span", { class: "set-icon" });
-    icon.innerHTML = tab.icon_svg || "";
-    return row({ icon, title: tab.label, control: [up, down, keepBuilding, remove] });
-  })));
-  body.replaceChildren(...parts);
 }
 
 // Every standing grant, and a way to take it back. An "always" that cannot

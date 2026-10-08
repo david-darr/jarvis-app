@@ -927,9 +927,9 @@ export async function render(container, tabId, options = {}) {
   backdropInstant = false;
   backdrop.ready.then(() => options.transitionReady?.());
 
-  // New Tab builder handoff (Developer Mode, David's ask 2026-09-01) — the
+  // Tool Store tab builder handoff — the
   // one deliberate exception to "Chat always lands on the welcome screen"
-  // above. new-tab.js creates a real session and stashes it here rather
+  // above. tool-store.js creates a real session and stashes it here rather
   // than landing the user back at a blank welcome screen right after they
   // filled out the form. Consumed once (removeItem) so a later, ordinary
   // visit to this tab still resets to welcome as normal.

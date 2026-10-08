@@ -32,10 +32,8 @@ class UpdateEventRequest(BaseModel):
 @router.get("/events")
 async def list_events(start: str = Query(...), end: str = Query(...), user: str = Depends(require_user)) -> list[dict]:
     events = calendar_service.list_range(start, end)
-    from core.custom_tabs import enabled_templates
-    if "crm" in enabled_templates():
-        from services.crm_service import crm_service
-        events += crm_service.calendar_events(user, start, end)
+    from core import tab_hooks
+    events += await tab_hooks.calendar_items(user, start, end)
     return events
 
 

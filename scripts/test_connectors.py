@@ -115,14 +115,14 @@ class RulesTests(ConnectorTestCase):
         self.assertIsNone(session_manager.get_session(session_id).get("agent_id"))
         self.assertEqual(json.loads(self.api.sent("POST", "replies")[0].content)["text"], "JARVIS reply")
 
-    def test_crm_capture_runs_only_after_connector_admission(self):
-        with patch("core.crm_scanner.capture_connector") as captured:
+    def test_tab_hooks_run_only_after_connector_admission(self):
+        with patch("core.tab_hooks.emit_message") as captured:
             self.receive(STRANGER, "Private message")
             captured.assert_not_called()
             self.receive(OWNER, "Allowed message")
             captured.assert_called_once()
-            self.assertEqual(captured.call_args.args[:2], ("connector", self.record["id"]))
-            self.assertEqual(captured.call_args.args[2].text, "Allowed message")
+            self.assertEqual(captured.call_args.args[0], {"kind": "connector", "connection_id": self.record["id"]})
+            self.assertEqual(captured.call_args.args[1]["text"], "Allowed message")
 
     def test_strangers_are_ignored_unless_the_connector_is_open(self):
         self.receive(STRANGER, "hello")

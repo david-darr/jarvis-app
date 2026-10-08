@@ -8,7 +8,7 @@
 // Nothing leaves the visitor's browser and no model is ever called.
 (function () {
   const state = { empty: false };
-  const { fixture, data } = window.kairosFixtures({ state });
+  const { fixture, data, mutate } = window.kairosFixtures({ state, demo: true });
   const store = { sessions: {}, nextId: 1 };  // chats started in the demo
   const realFetch = window.fetch.bind(window);
 
@@ -57,6 +57,8 @@
     }
     let body = {};
     try { if (typeof rawBody === "string") body = JSON.parse(rawBody); } catch (_) { /* not JSON */ }
+    const updated = mutate(path, method, body);
+    if (updated) return json(updated);
     if (path === "/api/sessions" && method === "POST") {
       const id = "demo" + store.nextId++;
       const now = Date.now() / 1000;

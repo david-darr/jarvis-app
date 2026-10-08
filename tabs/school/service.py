@@ -27,7 +27,6 @@ message in that course's chat. Re-opening the same assignment with an
 unchanged draft is a no-op (fingerprint check) so browsing around doesn't
 spam the transcript with duplicate notes.
 """
-import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -35,12 +34,10 @@ from typing import Optional
 
 import httpx
 
-from core.atomic_io import read_json, write_json_atomic
-from core.constants import DATA_DIR
-from core.secret_storage import decrypt, encrypt
-from core.session_manager import session_manager
+from core import tab_api
 
-SCHOOL_FILE = os.path.join(DATA_DIR, "school.json")
+api = tab_api.for_tab(__package__)
+api.adopt_data_file("school.json")
 TIMEOUT_SECONDS = 30
 
 _COURSE_SUFFIX_RE = re.compile(r"^(.*)\s\[(.+)\]\s*$")
@@ -162,13 +159,13 @@ async def _sync_from_api(base_url: str, token: str) -> list[dict]:
 
 class SchoolService:
     def __init__(self) -> None:
-        self._data: dict = read_json(SCHOOL_FILE, {
+        self._data: dict = api.read_json("school.json", {
             "settings": {}, "assignments": {}, "drafts": {}, "chat_seed_fingerprints": {},
             "last_synced_at": None, "last_sync_source": None,
         })
 
     def _save(self) -> None:
-        write_json_atomic(SCHOOL_FILE, self._data)
+        api.write_json("school.json", self._data)
 
     # -- settings ---------------------------------------------------------
     def get_settings(self) -> dict:
@@ -188,7 +185,7 @@ class SchoolService:
             s["canvas_base_url"] = canvas_base_url.strip()
         if canvas_api_token is not None:
             # Empty string clears a previously saved token; never store plaintext.
-            s["canvas_api_token_encrypted"] = encrypt(canvas_api_token) if canvas_api_token else None
+            s["canvas_api_token_encrypted"] = api.encrypt(canvas_api_token) if canvas_api_token else None
         if ics_url is not None:
             s["ics_url"] = ics_url.strip()
         self._save()
@@ -202,7 +199,7 @@ class SchoolService:
         ics_url = s.get("ics_url")
 
         if base_url and token_encrypted:
-            fetched = await _sync_from_api(base_url, decrypt(token_encrypted))
+            fetched = await _sync_from_api(base_url, api.decrypt(token_encrypted))
             source = "canvas_api"
         elif ics_url:
             fetched = await _sync_from_ics(ics_url)
@@ -282,7 +279,7 @@ class SchoolService:
 
     # -- per-course chat memory -----------------------------------------------
     def get_course_session_id(self, course: str) -> str:
-        return session_manager.get_or_create_channel_session(f"school:{course}", f"School — {course}")
+        return api.chat_session(course, f"School — {course}")
 
     def sync_course_memory(self, assignment_id: str) -> Optional[dict]:
         a = self.get_assignment(assignment_id)
@@ -305,7 +302,7 @@ class SchoolService:
             lines.append(f'Details: {a["description"]}')
         if draft.strip():
             lines.append(f"Current draft/work so far:\n{draft}")
-        session_manager.append_message(session_id, "user", "\n".join(lines))
+        api.append_chat_message(session_id, "user", "\n".join(lines))
 
         seeds[assignment_id] = fingerprint
         self._save()

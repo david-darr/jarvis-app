@@ -18,7 +18,7 @@ This is the real product (v2). [jarvis-starter-kit](https://github.com/david-dar
 - **A focused workspace**: a centered new-chat composer that settles below the conversation, independently collapsible chat history, and a 52px icon rail. Layout preferences are remembered; mobile keeps full navigation and chat-history drawers.
 - **Notes, Calendar, Email, Library** — one unified place for priorities and todos (due-dated notes render on the calendar), CalDAV/iCal calendar sync, IMAP/SMTP email accounts, documents and chat files. Library also lets you browse, search, read and edit Vault notes, with a Map for their links.
 - **Tasks** — scheduled automations, either your own prompts or built-in ones (Daily Brief, tidy-up jobs, skill audits). Output can be delivered to a connected channel rather than just sitting in the tab.
-- **Tool Store** — find and manage reusable `SKILL.md` procedures, install a public GitHub skill file, and browse or connect MCP tool servers.
+- **Tool Store** — find and manage reusable `SKILL.md` procedures, connect MCP tool servers, and add, build or install tabs.
 - **One memory, not two** — checkbox items in your vault's `Active Priorities.md` are synced into Notes on every launch, grouped by their vault headings, so asking about your priorities returns what's actually written in your vault. Ticking one in the app ticks it in the vault file too.
 - **Channels** — reach the same assistant from Discord, with conversation state shared through the same sessions and vault.
 - **Cookbook** — download and run local models without a separate install.
@@ -45,6 +45,20 @@ Memory is a folder of markdown notes, not a database — so it stays readable, p
 The same workspace, with more room for your content. Demo data shown.
 
 </details>
+
+## Tabs
+
+School and CRM ship as prebuilt tabs. Add or remove them in **Tool Store > Tabs**; an admin can switch them on immediately. Their cards describe what they do and which sources they read.
+
+Use **Build a tab** in the same category to describe a name, icon, behavior and data sources, then choose a model. Kairos starts a chat with that request and the folder format it should build.
+
+Admins can install a `.kairostab` archive or a public GitHub folder link. Kairos checks paths, size, Python imports and the shared skill scanner before installing. Dangerous scans are refused; caution findings need explicit confirmation. Folder user tabs can also be exported from Yours.
+
+User source lives in one `data/tabs/<slug>/` folder, reached by the model's file tools as `custom-tabs/<slug>/`. It contains `tab.json` and `routes.py`, with optional `service.py`, `hooks.py`, `view.js`, `view.css` and helpers. New builds use API version 1 and keep their endpoints under `/api/tab-<slug>/...`. Tab data lives separately in `data/tab-data/<slug>/`, so replacing or removing source keeps the saved data and app updates keep user tabs. Existing tabs in the old split layout continue working. Sidebar order belongs to **Settings > Layout**.
+
+Installed or newly built code awaits an admin's source review in Yours. Approval is tied to the displayed fingerprint and file list; changing any file revokes it. Folder tabs load after approval without restarting. Legacy tabs can require a restart and share a source-tree approval. Approved code runs with Kairos's privileges, so approval is a trust decision.
+
+Tabs use `core.tab_api` as their stable interface to Kairos: confined JSON storage, tab-owned encryption, tool-free completions, read-only mail and selected connection metadata, Library documents, backlog cards, chats and sync. Ciphertexts carry an authenticated `kairos-tab:<slug>:` prefix; a tab cannot decrypt another tab's values or app credential tokens. Core migrates old tab-owned tokens during data adoption. This interface grants no access to Kairos's stored credentials and is not a Python sandbox.
 
 ## Install
 

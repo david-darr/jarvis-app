@@ -17,6 +17,9 @@ file, so --check (run by scripts/test_site_demo.py) catches a demo built from
 older app files, or edited by hand.
 """
 import hashlib
+import os
+import platform
+import uuid
 import json
 import re
 import shutil
@@ -34,25 +37,16 @@ DEMO_STYLE = """<style>
     background: #2A1F18; color: #F3EADB; font: 500 11px/1.4 Jost, "Segoe UI", sans-serif; pointer-events: none; opacity: .92; }
 </style>"""
 # app.js loads a tab's module from a path held in a variable, which no bundler
-# can follow. The demo has no custom tabs, so the bundle gets the literal form,
-# which esbuild expands to every file in views/.
+# can follow. Literal imports bundle built-in views and each prebuilt view.
 TAB_IMPORT = "modules[tabId] = await import(path);"
-TAB_IMPORT_DEMO = "modules[tabId] = await import(`./views/${STUB_TABS.has(tabId) ? 'stub' : tabId}.js`);"
-BUNDLER = r"""
-const [esbuildPath, entry, outfile, find, replacement] = process.argv.slice(1);
-const fs = require("node:fs");
-require(esbuildPath).build({
-  entryPoints: [entry], outfile, bundle: true, format: "iife", minify: true, legalComments: "none",
-  target: "es2022", logLevel: "error", external: ["./vendor/pdf.mjs"],
-  plugins: [{ name: "demo-tabs", setup(build) {
-    build.onLoad({ filter: /[\\/]static[\\/]js[\\/]app\.js$/ }, (args) => {
-      const code = fs.readFileSync(args.path, "utf8");
-      if (!code.includes(find)) throw new Error("static/js/app.js no longer loads tabs the way the demo expects");
-      return { contents: code.replace(find, replacement), loader: "js" };
-    });
-  } }],
-}).catch(() => process.exit(1));
-"""
+
+
+def tab_import_demo():
+    prebuilts = ",".join(json.dumps(p.parent.name) + ": () => import(" +
+        json.dumps("../../tabs/" + p.parent.name + "/view.js") + ")"
+        for p in sorted((REPO / "tabs").glob("*/view.js")))
+    return "const prebuiltViews = {" + prebuilts + "}; modules[tabId] = await (prebuiltViews[tabId] ? prebuiltViews[tabId]() : import(`./views/${STUB_TABS.has(tabId) ? 'stub' : tabId}.js`));"
+
 
 
 def sources():
@@ -63,6 +57,9 @@ def sources():
             files["static/" + rel] = path
     for path in sorted(DEMO.glob("*.js")):
         files["demo/" + path.name] = path
+    for path in sorted((REPO / "tabs").rglob("*")):
+        if path.is_file() and (path.suffix == ".js" or path.name in ("view.css", "tab.json")):
+            files[path.relative_to(REPO).as_posix()] = path
     files["scripts/build_site_demo.py"] = Path(__file__).resolve()
     return files
 
@@ -101,14 +98,40 @@ def esbuild():
 
 
 def bundle(target):
-    found = subprocess.run(["node", "-e", BUNDLER, str(esbuild()), str(STATIC / "js" / "app.js"), str(target),
-                            TAB_IMPORT, TAB_IMPORT_DEMO], cwd=REPO)
-    if found.returncode:
-        sys.exit("bundling the app for the demo failed")
+    # Stage source rewrites in this worktree, then call the native CLI. This
+    # avoids Node's service subprocess (blocked by some Windows runners) and
+    # keeps the exact same module identities for relative/absolute imports.
+    stage = REPO / "data" / ("demo-build-" + uuid.uuid4().hex)
+    stage.mkdir(parents=True)
+    try:
+        shutil.copytree(STATIC / "js", stage / "static" / "js")
+        for original in (REPO / "tabs").rglob("*.js"):
+            copied = stage / original.relative_to(REPO)
+            copied.parent.mkdir(parents=True, exist_ok=True)
+            source = original.read_text(encoding="utf-8")
+            def resolve(match):
+                absolute = stage / "static" / match.group(2)
+                relative = os.path.relpath(absolute, copied.parent).replace(os.sep, "/")
+                return match.group(1) + relative + match.group(1)
+            source = re.sub(r"([\"'])/static/([^\"']+)\1", resolve, source)
+            copied.write_text(source, encoding="utf-8")
+        entry = stage / "static" / "js" / "app.js"
+        source = entry.read_text(encoding="utf-8")
+        assert TAB_IMPORT in source, "app.js no longer loads tabs the way the demo expects"
+        entry.write_text(source.replace(TAB_IMPORT, tab_import_demo()), encoding="utf-8")
+        system = {"win32": "win32", "darwin": "darwin"}.get(sys.platform, "linux")
+        arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x64"
+        package = esbuild().parent / "@esbuild" / (system + "-" + arch)
+        binary = package / ("esbuild.exe" if system == "win32" else "bin/esbuild")
+        found = subprocess.run([str(binary), str(entry), "--bundle", "--format=iife", "--minify",
+                                "--legal-comments=none", "--target=es2022", "--log-level=error",
+                                "--external:./vendor/pdf.mjs", "--outfile=" + str(target)], cwd=REPO)
+        if found.returncode:
+            sys.exit("bundling the app for the demo failed")
+    finally:
+        shutil.rmtree(stage)
     code = target.read_text(encoding="utf-8")
-    # A url() set in a CSS variable resolves against the stylesheet that uses
-    # it (static/css/), not the page, so those get the full address. They are
-    # in template literals (api.js's model marks).
+    # Stylesheet CSS variables resolve against static/css/, not the page.
     code = code.replace("url('/static/", "url('${new URL(\"static/\",document.baseURI).href}")
     target.write_text(re.sub(r"""(["'`(])/static/""", r"\1static/", code), encoding="utf-8")
 
@@ -119,12 +142,15 @@ def build():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True)
     for name, path in files.items():
-        if name.startswith("static/js/") and name[len("static/"):] not in KEPT_JS or name.startswith("scripts/") or name == "static/index.html":
+        if (name.startswith("static/js/") and name[len("static/"):] not in KEPT_JS
+                or name.startswith("scripts/") or name == "static/index.html"
+                or name.startswith("tabs/") and path.name != "view.css"):
             continue  # bundled into app.js, rewritten as the demo's index.html, or not part of the site
         target = OUT / (name[len("demo/"):] if name.startswith("demo/") else name)
         target.parent.mkdir(parents=True, exist_ok=True)
         if path.suffix == ".css":  # url('/static/img/x') from static/css/ is ../img/x
-            target.write_text(path.read_text(encoding="utf-8").replace("/static/", "../"), encoding="utf-8")
+            relative_static = os.path.relpath(OUT / "static", target.parent).replace(os.sep, "/") + "/"
+            target.write_text(path.read_text(encoding="utf-8").replace("/static/", relative_static), encoding="utf-8")
         else:
             shutil.copy2(path, target)
     bundle(OUT / "app.js")

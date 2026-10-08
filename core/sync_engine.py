@@ -3,7 +3,7 @@
 David's ask 2026-09-06: calendars, imported calendar feeds, Canvas, and any
 API a user adds later should all refresh themselves daily, instead of the user
 having to press Sync on each one. Before this, syncing existed only as route
-handlers in routes/integrations_routes.py and routes/tab_school.py — reachable
+handlers in routes/integrations_routes.py and tabs/school/routes.py — reachable
 by a button click and nothing else, so an unattended app slowly went stale.
 
 Two kinds of source, deliberately:
@@ -12,11 +12,9 @@ Two kinds of source, deliberately:
   from integrations.json, so a feed added tomorrow is picked up with no code
   change and no registration call.
 - **Registered providers** are for anything that isn't an integration record —
-  today the School tab's Canvas sync. A tab registers itself when its routes
-  module is imported, which is exactly when that tab is actually mounted, so
-  a disabled tab contributes nothing. This is the extension point for the
-  "other added apis by users" half of the ask: a user-authored tab module
-  calls register_provider() at import and joins the daily cycle for free.
+  registered by tabs through core.tab_api when their start hook runs.
+  The tab loader removes registrations on disable, deletion or shutdown.
+  A disabled tab contributes nothing to the daily cycle.
 
 Every sync here is best-effort and isolated: one unreachable feed must never
 stop the rest, because they all share a single nightly run.
@@ -38,6 +36,10 @@ def register_provider(name: str, fn: Callable[[], Awaitable]) -> None:
     tab_x both resolve for user tabs — see core/custom_tabs.py) registers once
     rather than syncing twice."""
     _providers[name] = fn
+
+
+def unregister_provider(name: str) -> None:
+    _providers.pop(name, None)
 
 
 def list_providers() -> list[str]:

@@ -16,7 +16,7 @@ from email.utils import parseaddr
 
 from core.connectors import register
 from core.connectors.base import Connector, ConnectorError, Field, Inbound
-from core.crm_sources import message_time
+from core.mail_utils import message_time
 
 _QUOTE_START = re.compile(r"^(On .+wrote:|-----Original Message-----|From: .+)$", re.MULTILINE)
 SEP = "\x1f"  # conversation = address, subject and message ID, kept together

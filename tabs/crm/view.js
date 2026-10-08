@@ -47,9 +47,7 @@ function button(text, action, kind = "") {
 
 export async function render(container) {
   container.replaceChildren();
-  if (!document.getElementById("crm-styles")) {
-    document.head.append(el("link", { id: "crm-styles", rel: "stylesheet", href: "/static/css/crm.css" }));
-  }
+
   let data, connections = { connections: [], models: [] }, agents = [];
   let mode = "tasks", filter = "open", query = "", contactFilter = "", projectFilter = "", sourceFilter = "", priorityFilter = "";
   let selected = null, disposed = false, pollTimer = null, editing = false, closeSource = null;

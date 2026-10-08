@@ -32,7 +32,6 @@ DEFAULTS: dict[str, Any] = {
     # hardcoded baseline in core/brain.py, instead of needing a code change
     # every time Canva's own tool set shifts.
     "extra_allowed_tools": [],
-    "developer_mode_enabled": False,  # Sidebar toggle, David's ask 2026-09-01
     # Compact a local/API chat near a full context window before its next
     # message (roadmap phase 3, 2026-10-05; services/chat_service.py).
     "auto_compact": True,
@@ -40,8 +39,8 @@ DEFAULTS: dict[str, Any] = {
     # 2026-10-06): None = the first local one, "off", or a local or API
     # connection's id.
     "helper_endpoint_id": None,
-    "custom_tab_order": [],  # Settings > Admin > Custom Tabs, David's ask 2026-09-01
     "approved_custom_tab_fingerprints": {},  # Only run user tab source whose current tree hash an admin approved.
+    "approved_folder_tab_fingerprints": {},  # Folder tabs approve only their own paths and bytes.
     # Remote access over Tailscale (David's ask 2026-09-03: users should be
     # able to set this up during onboarding the way we run it by hand).
     # See core/remote_access.py.
@@ -57,10 +56,12 @@ DEFAULTS: dict[str, Any] = {
     # Bundled skills already copied into the user's skills folder — tracked
     # per-slug so deleting one doesn't get it resurrected next launch.
     "seeded_skills": [],
+    # Last untouched bundled SKILL.md, for updates that preserve user edits.
+    "seeded_skill_hashes": {},
     # Premade tabs the user has switched on (David's ask 2026-09-03). The
     # code for these ships with the app but stays unmounted until opted into,
     # so a download doesn't arrive carrying someone else's workflow. See
-    # core/custom_tabs.py's TAB_TEMPLATES.
+    # core/custom_tabs.py and tabs/<slug>/tab.json.
     "enabled_tab_templates": [],
     # Built-ins this install has already switched on automatically. Tracked
     # per-action, once ever, so an upgrade can turn on a newly-shipped
