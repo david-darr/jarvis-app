@@ -238,6 +238,8 @@ class AgentService:
         self._save_inbox()
         if current:
             current.setdefault("raised", []).append(item["id"])
+        from services.agent_handoff import mirror_question
+        mirror_question(item)
         return item
 
     def resolve(self, item_id: str, status: str, answer: Optional[str] = None) -> dict:
@@ -248,6 +250,8 @@ class AgentService:
             raise ValueError("this has already been answered")
         item.update({"status": status, "answer": answer, "resolved_at": time.time()})
         self._save_inbox()
+        from services.agent_handoff import question_resolved
+        question_resolved(item)
         return item
 
     def open_items_for_card(self, card_id: str) -> list[dict]:

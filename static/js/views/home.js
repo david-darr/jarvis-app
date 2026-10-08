@@ -1,7 +1,7 @@
 import { api, el, modelMark } from "../api.js";
 import { ICONS } from "../icons.js";
 import { mountDither } from "../dither.js";
-import { halftonePalette } from "../appearance.js";
+import { halftonePalette, halftoneSource, halftoneFocus, halftoneVersion } from "../appearance.js";
 import { homeLayout } from "../layout.js";
 import { SIGN_IN, toSnap, toneOf, usedCopy, resetCopy, ago, staleOf } from "../quotaReadings.js";
 
@@ -161,17 +161,25 @@ export function render(container, tabId, options = {}) {
   content.append(hero, grid);
   container.appendChild(content);
   // Chat to Home (app.js switchTab) waits for the banner before animating
-  // into it. It's drawn in the appearance's halftone colors and redrawn when
-  // those change.
-  const bannerOptions = { cell: 4, fade: [0.86, 1.0], focusX: 0.7, focusY: 0.4 };
-  let bannerPalette = JSON.stringify(halftonePalette());
-  let disposeBanner = mountDither(banner, "/static/img/home-figure.webp", { ...bannerOptions, palette: halftonePalette(), onReady: options.transitionReady });
+  // into it. It's drawn from the Home halftone slot (a custom picture, or
+  // the Kairos figure), in the appearance's halftone colors, and redrawn
+  // when any of those change.
+  const bannerKey = () => JSON.stringify({ src: halftoneSource("home"), focus: halftoneFocus("home"), palette: halftonePalette() });
+  const bannerOptions = () => {
+    const focus = halftoneFocus("home");
+    return { cell: 4, fade: [0.86, 1.0], focusX: focus ? focus.x : 0.7, focusY: focus ? focus.y : 0.4,
+      palette: halftonePalette(), version: halftoneVersion("home") };
+  };
+  let bannerState = bannerKey();
+  banner.dataset.halftoneSrc = halftoneSource("home");  // read by scripts/ui-smoke.cjs
+  let disposeBanner = mountDither(banner, halftoneSource("home"), { ...bannerOptions(), onReady: options.transitionReady });
   const onAppearance = () => {
-    const next = JSON.stringify(halftonePalette());
-    if (next === bannerPalette || disposed) return;
-    bannerPalette = next;
+    const next = bannerKey();
+    if (next === bannerState || disposed) return;
+    bannerState = next;
+    banner.dataset.halftoneSrc = halftoneSource("home");
     disposeBanner();
-    disposeBanner = mountDither(banner, "/static/img/home-figure.webp", { ...bannerOptions, palette: halftonePalette() });
+    disposeBanner = mountDither(banner, halftoneSource("home"), bannerOptions());
   };
   document.addEventListener("kairos:appearance", onAppearance);
   for (const item of [chats, schedule, projects, activity, system, models]) {

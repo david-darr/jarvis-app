@@ -83,6 +83,7 @@ const server = http.createServer(async (req, res) => {
       if (updated?._status) res.statusCode = updated._status;
       if (url.pathname === "/api/chat/stream") {
         res.setHeader("Content-Type", "text/event-stream");
+        if (updated?.handoffs) { res.end(`data: ${JSON.stringify(updated)}\n\ndata: {"done":true}\n\n`); return; }
         res.end('data: {"chunk":"Tab build request received."}\n\ndata: {"done":true}\n\n'); return;
       }
       res.end(JSON.stringify(updated || (url.pathname === "/api/sessions" ? { id: "s1" } : { ok: true }))); return;
@@ -1162,6 +1163,76 @@ app.whenReady().then(async () => {
     await capture("desktop-titlebar-settings");
     await js("document.querySelector('.settings-titlebar-btn[title=Close]').click()");
     await js("document.documentElement.classList.remove('electron-shell')");
+    // Agent mentions use one renderer in the main, side and embedded chats.
+    // Each action waits for its own request and each status for its own DOM.
+    // They need the sample agents, so they run outside the empty pass, which
+    // is restored for the checks after them.
+    const emptyBeforeMentions = demoState.empty;
+    demoState.empty = false;
+    const waitForWrite = async (start, path, matches) => {
+      for (let i = 0; i < 80; i++) {
+        const request = writes.slice(start).find(w => w.path === path && matches(JSON.parse(w.body || '{}')));
+        if (request) return request;
+        await delay(50);
+      }
+      throw new Error('Timed out waiting for ' + path);
+    };
+    const mentionAgent = async (scope, inputSelector, sendSelector, id, work) => {
+      demoState.handoffStatus = 'queued'; demoState.handoffAnswered = false;
+      await js(`(() => { const input = document.querySelector(${JSON.stringify(inputSelector)}); input.focus(); input.value = '@Scout'; input.dispatchEvent(new Event('input')); })()`);
+      await waitFor(`!!document.querySelector(${JSON.stringify(scope + ' .chat-reference-option')})`);
+      assert.ok(await js(`document.querySelector(${JSON.stringify(scope + ' .chat-reference-option')}).textContent.includes('Agent')`), 'Agent appears in @ search');
+      await js(`document.querySelector(${JSON.stringify(scope + ' .chat-reference-option')}).click()`);
+      assert.ok(await js(`!!document.querySelector(${JSON.stringify(scope + ' .chat-reference-chip .handoff-avatar')})`), 'Agent chip carries its avatar');
+      const start = writes.length;
+      await js(`(() => { const input = document.querySelector(${JSON.stringify(inputSelector)}); input.value = ${JSON.stringify(work)}; input.dispatchEvent(new Event('input')); document.querySelector(${JSON.stringify(sendSelector)}).click(); })()`);
+      await waitForWrite(start, '/api/chat/stream', body => body.session_id === id && body.message.includes(work) && body.references?.some(ref => ref.kind === 'agent' && ref.id === 'a1'));
+      await waitFor(`!!document.querySelector(${JSON.stringify(scope + ' .agent-handoff[data-status="queued"]')})`);
+      demoState.handoffStatus = 'working';
+      await waitFor(`!!document.querySelector(${JSON.stringify(scope + ' .agent-handoff[data-status="working"]')})`);
+    };
+    const expectAgentReply = async scope => {
+      demoState.handoffStatus = 'done';
+      await waitFor(`!!document.querySelector(${JSON.stringify(scope + ' .agent-handoff[data-status="done"]')})`);
+      await waitFor(`[...document.querySelectorAll(${JSON.stringify(scope + ' .agent-message .msg-body')})].some(body => body.textContent.includes('Two remote roles found'))`);
+      assert.ok(await js(`!!document.querySelector(${JSON.stringify(scope + ' .agent-message-heading .handoff-avatar')})`), 'Returned reply has agent identity');
+      assert.ok(await js(`!document.querySelector(${JSON.stringify(scope)}).textContent.includes('No text response was returned')`), 'Handoff has no chat-model placeholder');
+      assert.deepEqual(await overflow(), [], 'Handoff fits the chat');
+    };
+    for (const [label, width, height] of [['desktop', 1440, 900], ['mobile', 390, 844]]) {
+      win.setContentSize(width, height);
+      const id = 'handoff-' + label;
+      await navigate('chat', { sessionId: id });
+      await mentionAgent('#chat-main', '#chat-input', '#chat-send', id, 'Find remote roles ' + label);
+      await capture(label + '-agent-handoff-working');
+      demoState.handoffStatus = 'needs_you';
+      await waitFor("!!document.querySelector('#chat-main .agent-handoff-answer')");
+      await capture(label + '-agent-handoff-question');
+      const questionId = await js("document.querySelector('#chat-main .agent-handoff-answer').closest('.agent-message').dataset.handoffKey");
+      const answerStart = writes.length;
+      await js("(() => { const form = document.querySelector('#chat-main .agent-handoff-answer'); form.querySelector('textarea').value = 'Europe'; form.querySelector('button').click(); })()");
+      await waitForWrite(answerStart, '/api/agents/inbox/' + questionId + '/answer', body => body.text === 'Europe' && body.choice === 'reply');
+      await waitFor("document.querySelector('#chat-main .agent-message')?.textContent.includes('Handed to Scout') && !document.querySelector('#chat-main .agent-handoff-answer')");
+      await expectAgentReply('#chat-main');
+      await capture(label + '-agent-handoff-reply');
+      if (label === 'desktop') {
+        await js("import('/static/js/sideChat.js').then(m => m.openSideChat('handoff-side'))");
+        await waitFor("document.querySelector('.side-chat')?.dataset.sessionId === 'handoff-side'");
+        await mentionAgent('.side-chat', '.side-chat .side-chat-input', '.side-chat .side-chat-send', 'handoff-side', 'Find roles from side chat');
+        await expectAgentReply('.side-chat');
+        await capture('desktop-side-agent-handoff-reply');
+        await js("document.querySelector('.side-chat-close').click()");
+      }
+      delete demoState.handoffSessions.as1;
+      await navigate('agents', { agentId: 'a1' });
+      await waitFor("!!document.querySelector('.agent-chat-main .side-chat-input')");
+      await mentionAgent('.agent-chat-main', '.agent-chat-main .side-chat-input', '.agent-chat-main .side-chat-send', 'as1', 'Find roles from agent chat ' + label);
+      await expectAgentReply('.agent-chat-main');
+      await capture(label + '-agent-chat-handoff-reply');
+    }
+    demoState.handoffSessions = {}; delete demoState.handoffStatus; delete demoState.handoffAnswered;
+    demoState.empty = emptyBeforeMentions;
+    win.setContentSize(1440, 900);
     unavailable = true;
     await navigate("home");
     await waitFor("document.querySelector('.dashboard-system-pill')?.textContent === 'Status unavailable'");

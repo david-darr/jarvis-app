@@ -134,6 +134,24 @@
         if (body.action === 'move') file.parents = [body.parent];
       }
       return file || { ok: true };
+      }
+    if (route === '/api/chat/stream' && method === 'POST' && body.references?.some(ref => ref.kind === 'agent')) {
+      state.handoffSessions ||= {};
+      const session = state.handoffSessions[body.session_id] ||= { ...fixture(new URL(`/api/sessions/${body.session_id}`, 'http://demo')) };
+      session.messages.push({ role: 'user', content: body.message, ts: now });
+      const handed = [...new Set(body.references.filter(ref => ref.kind === 'agent').map(ref => ref.id))].map(id => {
+        const agent = agentsFixture.find(a => a.id === id);
+        return { role: 'assistant', content: `Handed to ${agent.name}`, ts: now, type: 'handoff',
+          id: 'h-' + body.session_id + '-' + session.messages.length + '-' + id, card_id: 'hc-' + body.session_id,
+          agent_id: id, agent_name: agent.name, agent_color: agent.color, handoff_status: 'queued' };
+      });
+      session.messages.push(...handed);
+      return { handoffs: handed };
+    }
+    if (/^\/api\/agents\/inbox\/hq-.*\/answer$/.test(route) && method === 'POST') {
+      state.handoffAnswered = true;
+      state.handoffStatus = 'queued';
+      return { ok: true, next: 'the card will run again' };
     }
     const computer = route.match(/^\/api\/computer\/([^/]+)\/(takeover|handback|stop|input|record\/start|record\/stop)$/);
     if (computer && method === 'POST') {
@@ -346,6 +364,24 @@
         message_count: 2, model_endpoint_id: "m1", agent_id: url.searchParams.get("agent_id") }]);
     }
     if (route === "/api/sessions") return list(sessions);
+    if (route === '/api/chat/references') {
+      const needle = (url.searchParams.get('q') || '').toLowerCase();
+      return list(agentsFixture.filter(a => `${a.name} ${a.role}`.toLowerCase().includes(needle))
+        .map(a => ({ kind: 'agent', id: a.id, label: a.name, detail: a.role, avatar: a.name[0], color: a.color })));
+    }
+    if (/^\/api\/sessions\/[^/]+$/.test(route) && state.handoffSessions?.[route.split('/')[3]]) {
+      const session = state.handoffSessions[route.split('/')[3]];
+      const messages = session.messages.map(m => m.type === 'handoff' ? { ...m, handoff_status: state.handoffStatus || 'queued' } : m);
+      for (const event of messages.filter(m => m.type === 'handoff')) {
+        if (state.handoffStatus === 'needs_you' || state.handoffAnswered) messages.push({ role: 'assistant', ts: now + 1,
+          content: 'Which region should I search?', agent_id: event.agent_id, agent_name: event.agent_name, agent_color: event.agent_color,
+          handoff_message_id: 'hq-' + event.id, inbox_item_id: 'hq-' + event.id, question_status: state.handoffAnswered ? 'answered' : 'open' });
+        if (state.handoffStatus === 'done') messages.push({ role: 'assistant', ts: now + 2,
+          content: 'Two remote roles found for you.', agent_id: event.agent_id, agent_name: event.agent_name, agent_color: event.agent_color,
+          handoff_message_id: 'hr-' + event.id });
+      }
+      return { ...session, messages };
+    }
     // Must precede the generic /api/sessions/ match below, which would
     // otherwise swallow this and return a whole session object.
     if (route.endsWith("/context")) return { available: true, used_tokens: 48200, capacity_tokens: 258400, percent: 18.7, estimated_capacity: false, capacity_source: "cli_cache", model: "synthetic-model" };

@@ -11,6 +11,8 @@ import { api, el, toast, customSelect } from './api.js';
 import * as chatStream from './chatStream.js';
 import { renderMessageBody } from './chatContent.js';
 import { showPermissionPrompt } from './permissionPrompt.js';
+import { mountChatReferences } from './chatReferences.js';
+import { renderAgentHandoff, watchAgentHandoffs } from './agentHandoff.js';
 
 const CLI_KINDS = ['claude_cli', 'codex_cli'];
 
@@ -32,21 +34,26 @@ export async function mountSessionChat(host, options = {}) {
 
   const messages = el('div', { class: 'side-messages session-chat-messages', role: 'log', 'aria-label': label });
   const input = el('textarea', { class: 'side-chat-input', rows: '1', placeholder: options.placeholder || 'Message Kairos', 'aria-label': options.placeholder || 'Message Kairos' });
+  const inputTop = el('div', { class: 'side-chat-input-top' }, [input]);
+  const references = mountChatReferences(input, inputTop, () => sessionId);
   const send = el('button', { type: 'button', class: 'side-chat-send btn', text: 'Send' });
   const tools = el('div', { class: 'session-chat-tools' });
   const status = el('span', { class: 'meta session-chat-status', role: 'status' });
   host.replaceChildren(el('div', { class: 'session-chat' }, [
-    tools, messages, el('div', { class: 'side-chat-composer glass' }, [input, send]),
+    tools, messages, el('div', { class: 'side-chat-composer glass' }, [inputTop, send]),
   ]));
   tools.hidden = !options.modelPicker && !options.openInChats;
 
-  const card = (role, text) => {
+  const card = (role, text, message = null) => {
+    const agent = message && renderAgentHandoff(message, sessionId);
+    if (agent) return agent;
     const body = el('div', { class: 'msg-body' });
     renderMessageBody(body, text, sessionId, role === 'assistant');
     return el('div', { class: `msg ${role}` }, [body]);
   };
   const busy = () => !!sessionId && chatStream.getInFlight(sessionId)?.status === 'processing';
   const syncSend = () => { send.textContent = busy() ? 'Stop' : 'Send'; send.dataset.mode = busy() ? 'stop' : 'send'; };
+  const handoffs = watchAgentHandoffs(messages, () => sessionId);
 
   const attach = (replyBody) => {
     unsubscribe();
@@ -59,6 +66,7 @@ export async function mountSessionChat(host, options = {}) {
         showPermissionPrompt(entry.permission, () => { entry.permission = null; });
       }
       const replyCard = replyBody.closest('.msg');
+      if (entry.status === 'done' && entry.handoffs) { replyCard?.remove(); handoffs.refresh(); }
       if (entry.status === 'failed' && replyCard && !replyCard.classList.contains('msg-failed')) {
         replyCard.classList.add('msg-failed');
         replyCard.append(el('div', { class: 'msg-interrupted', text: entry.error || 'Response interrupted. Try again.' }));
@@ -89,7 +97,7 @@ export async function mountSessionChat(host, options = {}) {
     }
     if (!host.isConnected) return;
     const shown = session.messages.filter((m) => m.role === 'user' || m.role === 'assistant');
-    messages.replaceChildren(...shown.map((m) => card(m.role, m.content)));
+    messages.replaceChildren(...shown.map((m) => card(m.role, m.content, m)));
     if (busy()) {
       const reply = card('assistant', '');
       messages.append(reply);
@@ -160,12 +168,14 @@ export async function mountSessionChat(host, options = {}) {
       try { sessionId = await options.createSession(); }
       catch (problem) { toast(problem.message, 'error'); return; }
     }
+    const selected = references.getSelected();
+    references.clear();
     input.value = ''; input.style.height = 'auto';
     messages.querySelector('.agent-chat-empty')?.remove();
     messages.append(card('user', text));
     const reply = card('assistant', '');
     messages.append(reply);
-    try { chatStream.startTurn(sessionId, session?.title || label, text, []); }
+    try { chatStream.startTurn(sessionId, session?.title || label, text, [], selected); }
     catch (error) { toast(error.message, 'error'); reply.remove(); return; }
     attach(reply.querySelector('.msg-body'));
     syncSend();
@@ -181,5 +191,5 @@ export async function mountSessionChat(host, options = {}) {
   await load();
   await drawModelPicker();
   syncSend();
-  return () => unsubscribe();
+  return () => { unsubscribe(); references.dispose(); handoffs.dispose(); };
 }

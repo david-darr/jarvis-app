@@ -11,6 +11,8 @@ import { api, el, toast } from './api.js';
 import * as chatStream from './chatStream.js';
 import { renderMessageBody } from './chatContent.js';
 import { showPermissionPrompt } from './permissionPrompt.js';
+import { mountChatReferences } from './chatReferences.js';
+import { renderAgentHandoff, watchAgentHandoffs } from './agentHandoff.js';
 
 export const SESSION_MIME = 'application/x-jarvis-session';
 const STORAGE_KEY = 'jarvis:side-chat';
@@ -23,6 +25,8 @@ let hooks = {};           // { mainSessionId(), openInMain(id), onClosed() }
 let sessionId = null;
 let unsubscribe = () => {};
 let shownPermission = null;
+let disposeHandoffs = () => {};
+let references = null;
 
 function remember(id) {
   try { id ? localStorage.setItem(STORAGE_KEY, id) : localStorage.removeItem(STORAGE_KEY); } catch { /* private mode */ }
@@ -31,7 +35,9 @@ function remember(id) {
 export function sideChatSessionId() { return sessionId; }
 export function canSplit() { return wide.matches; }
 
-function card(role, text) {
+function card(role, text, message = null) {
+  const agent = message && renderAgentHandoff(message, sessionId);
+  if (agent) return agent;
   const body = el('div', { class: 'msg-body' });
   renderMessageBody(body, text, sessionId, role === 'assistant');
   return el('div', { class: `msg ${role}` }, [body]);
@@ -40,12 +46,14 @@ function card(role, text) {
 // Mount into a freshly rendered chat layout (chat.js's render runs on every
 // visit to the Chats tab). Reopens the side chat that was open last time.
 export function mountSideChat(chatLayout, options) {
+  disposeHandoffs(); references?.dispose(); references = null;
   layout = chatLayout; hooks = options; pane = null; sessionId = null;
   unsubscribe(); unsubscribe = () => {};
   wireDropZone(chatLayout.querySelector('#chat-main'));
   let saved = null;
   try { saved = localStorage.getItem(STORAGE_KEY); } catch { /* private mode */ }
   if (saved && wide.matches) openSideChat(saved, { quiet: true });
+  return () => { unsubscribe(); disposeHandoffs(); references?.dispose(); references = null; };
 }
 
 export async function openSideChat(id, { quiet = false } = {}) {
@@ -63,6 +71,7 @@ export async function openSideChat(id, { quiet = false } = {}) {
 }
 
 export function closeSideChat() {
+  disposeHandoffs(); references?.dispose(); references = null;
   unsubscribe(); unsubscribe = () => {};
   sessionId = null;
   remember(null);
@@ -72,9 +81,12 @@ export function closeSideChat() {
 }
 
 function build(session) {
+  disposeHandoffs(); references?.dispose();
   pane?.remove();
   const messages = el('div', { class: 'side-messages', role: 'log', 'aria-label': `Messages in ${session.title}` });
   const input = el('textarea', { class: 'side-chat-input', rows: '1', placeholder: 'Message this chat', 'aria-label': `Message ${session.title}` });
+  const inputTop = el('div', { class: 'side-chat-input-top' }, [input]);
+  references = mountChatReferences(input, inputTop, () => sessionId);
   const send = el('button', { type: 'button', class: 'side-chat-send btn', text: 'Send' });
   const title = el('div', { class: 'side-chat-title', text: session.title, title: session.title });
   const makeMain = el('button', { type: 'button', class: 'btn side-chat-promote', text: 'Make main', title: 'Swap this chat with the main one' });
@@ -98,10 +110,12 @@ function build(session) {
     el('div', { class: 'side-chat-inner' }, [
       el('header', { class: 'side-chat-header' }, [title, el('div', { class: 'side-chat-actions' }, [modeControl, makeMain, close])]),
       messages,
-      el('div', { class: 'side-chat-composer glass' }, [input, send, modeNotice]),
+      el('div', { class: 'side-chat-composer glass' }, [inputTop, send, modeNotice]),
     ]),
   ]);
-  for (const msg of session.messages) messages.append(card(msg.role, msg.content));
+  for (const msg of session.messages) messages.append(card(msg.role, msg.content, msg));
+  const handoffs = watchAgentHandoffs(messages, () => sessionId);
+  disposeHandoffs = () => handoffs.dispose();
   layout.append(pane);
   layout.classList.add('has-side-chat');
   applyWidth();
@@ -148,6 +162,7 @@ function build(session) {
         showPermissionPrompt(entry.permission, () => { entry.permission = null; });
       }
       const replyCard = replyBody.closest('.msg');
+      if (entry.status === 'done' && entry.handoffs) { replyCard?.remove(); handoffs.refresh(); }
       if (entry.status === 'failed' && replyCard && !replyCard.classList.contains('msg-failed')) {
         replyCard.classList.add('msg-failed');
         replyCard.append(el('div', { class: 'msg-interrupted', text: entry.error || 'Response interrupted. Try again.' }));
@@ -175,11 +190,13 @@ function build(session) {
     const text = input.value.trim();
     if (!text) return;
     if (text.startsWith('/')) { toast('Slash commands work in the main chat', 'error'); return; }
+    const selected = references.getSelected();
+    references.clear();
     input.value = ''; input.style.height = 'auto';
     messages.append(card('user', text));
     const reply = card('assistant', '');
     messages.append(reply);
-    try { chatStream.startTurn(sessionId, session.title, text, []); }
+    try { chatStream.startTurn(sessionId, session.title, text, [], selected); }
     catch (error) { toast(error.message, 'error'); reply.remove(); return; }
     attach(reply.querySelector('.msg-body'));
     syncSend();

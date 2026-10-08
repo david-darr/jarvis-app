@@ -17,6 +17,7 @@ import { openWebCapture } from '../screenCapture.js';
 import { mountChatReferences } from '../chatReferences.js';
 import { mountChatTimeline } from '../chatTimeline.js';
 import { mountChatBackdrop } from '../chatBackdrop.js';
+import { renderAgentHandoff, watchAgentHandoffs } from '../agentHandoff.js';
 
 // Composer rebuilt to match Odysseus's actual chat-input-bar structure
 // (David's ask 2026-08-31, cross-checked against the real repo at
@@ -74,6 +75,8 @@ const ICON_GEAR = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" s
 function entering(card) { card.classList.add('msg-enter'); return card; }
 
 function messageCard(role, text, ts, status = 'complete', imageSources = [], failure = null) {
+  const agent = failure && renderAgentHandoff(failure, activeSessionId);
+  if (agent) return agent;
   const time = new Date((ts || Date.now() / 1000) * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const body = el("div", { class: "msg-body" });
   renderMessageBody(body, text, activeSessionId, role === 'assistant');
@@ -456,7 +459,8 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
     }
     if (entry.status === "done") {
       cursor.remove();
-      if (!entry.text) replyBody.textContent = 'No text response was returned.';
+      if (entry.handoffs) replyCard.remove();
+      else if (!entry.text) replyBody.textContent = 'No text response was returned.';
       const actionRow = replyCard.querySelector(".msg-actions");
       if (!actionRow.classList.contains("has-done")) {
         const doneIcon = el("span", { class: "msg-done" });
@@ -655,6 +659,7 @@ export async function render(container, tabId, options = {}) {
 
   const main = el("div", { id: "chat-main", class: 'is-empty' }, [mobileHeader]);
   const messages = el("div", { id: "chat-messages" });
+  const handoffs = watchAgentHandoffs(messages, () => activeSessionId, () => syncChatLayout(messages));
   const attachStrip = el("div", { id: "attach-strip", class: "attach-strip" });
 
   // -- composer: top row (textarea + model picker) --------------------
@@ -842,7 +847,7 @@ export async function render(container, tabId, options = {}) {
 
   container.append(sessionsPanel, sessionsBackdrop, main);
   // A second chat beside this one (static/js/sideChat.js).
-  mountSideChat(container, {
+  const disposeSideChat = mountSideChat(container, {
     mainSessionId: () => activeSessionId,
     openInMain: (id) => openSession(id, sessionsList, messages),
   });
@@ -944,6 +949,8 @@ export async function render(container, tabId, options = {}) {
   const cleanup = () => {
     if (disposed) return;
     disposed = true;
+    handoffs.dispose();
+    disposeSideChat();
     backdrop.dispose();
     if (activeBackdrop === backdrop) activeBackdrop = null;
     disposeFind();

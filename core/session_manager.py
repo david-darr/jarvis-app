@@ -454,7 +454,7 @@ class SessionManager:
             result = list(messages)
         if exclude_last and result:
             result = result[:-1]
-        return result
+        return [m for m in result if m.get("type") != "handoff"]
 
     def compact_session(self, session_id: str, through_index: int, summary: str) -> dict:
         """Records a compaction checkpoint without deleting or rewriting any

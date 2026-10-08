@@ -118,6 +118,10 @@ async function _runTurn(sessionId, entry, text, attachmentIds, references) {
           entry.permission = payload.permission;
           _notify(sessionId);
         }
+        if (payload.handoffs) {
+          entry.handoffs = payload.handoffs;
+          _notify(sessionId);
+        }
         if (payload.tool_event) {
           entry.runId = payload.run_id;
           entry.toolEvents ||= [];
