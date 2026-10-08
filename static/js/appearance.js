@@ -16,6 +16,25 @@ let settings = { ...DEFAULTS }, storageKey = '', imageBitmap = null;
 let imageCanvas, shaderCanvas, previewCanvas, glScene, animation = 0, lastFrame = 0, time = 0;
 let storageIssue = '', imageRevision = 0, identityRevision = 0, imageQueue = Promise.resolve();
 
+// Custom halftone pictures (David, 2026-10-08): one optional picture per
+// scene - Home's banner and the chat's figure/sky - stored the same way as
+// the Image background (IndexedDB, device-local), each under its own key so
+// replacing one never touches the others. `halftoneUrl` holds the live
+// object URL for a slot with a picture (null falls back to the Kairos one);
+// `halftoneRevision` only moves forward, so a loader call started before a
+// replace or reset can tell it's stale and drop its result.
+const HALFTONE_SLOTS = ['home', 'figure', 'sky'];
+const HALFTONE_DEFAULT_SRC = { home: '/static/img/home-figure.webp', figure: '/static/img/home-figure.webp', sky: '/static/img/kairos-sky.jpg' };
+let halftoneUrl = { home: null, figure: null, sky: null };
+let halftoneRevision = { home: 0, figure: 0, sky: 0 };
+const halftoneDbKey = (slot) => storageKey + ':halftone:' + slot;
+
+function normalizeHalftoneSlot(raw) {
+  const focusX = typeof raw?.focusX === 'number' && Number.isFinite(raw.focusX) ? Math.max(0, Math.min(1, raw.focusX)) : 0.5;
+  const focusY = typeof raw?.focusY === 'number' && Number.isFinite(raw.focusY) ? Math.max(0, Math.min(1, raw.focusY)) : 0.5;
+  const hash = typeof raw?.hash === 'string' && /^[0-9a-f]{0,64}$/.test(raw.hash) ? raw.hash : '';
+  return { focusX, focusY, hash };
+}
 function normalize(raw = {}) {
   const value = { ...DEFAULTS };
   if (['default', 'color', 'image', 'shader'].includes(raw.mode)) value.mode = raw.mode;
@@ -28,6 +47,10 @@ function normalize(raw = {}) {
   // Terminal chat style (David's ask 2026-09-25): chats look and read like a
   // terminal harness. Presentation only; see the [data-chat-style] rules.
   if (['standard', 'terminal'].includes(raw.chatStyle)) value.chatStyle = raw.chatStyle;
+  // Per-slot focus point (default centre) and a content hash, so two slots
+  // that hold the same picture can be told apart from two that merely look
+  // similar (chatBackdrop.js skips the dissolve when figure and sky match).
+  value.halftoneImages = Object.fromEntries(HALFTONE_SLOTS.map((slot) => [slot, normalizeHalftoneSlot(raw.halftoneImages?.[slot])]));
   return value;
 }
 const rgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
@@ -76,12 +99,32 @@ export function halftonePalette() {
 }
 const halftoneState = () => !['default', 'color'].includes(settings.mode) ? 'none' : settings.halftone ? 'on' : 'off';
 
+// A slot's picture: the stored one (an object URL) or the Kairos default.
+// `halftoneFocus` returns null for a default picture, so callers keep their
+// own built-in anchor until a custom picture actually needs one.
+export function halftoneSource(slot) { return halftoneUrl[slot] || HALFTONE_DEFAULT_SRC[slot]; }
+export function halftoneFocus(slot) {
+  if (!halftoneUrl[slot]) return null;
+  const { focusX, focusY } = settings.halftoneImages[slot];
+  return { x: focusX, y: focusY };
+}
+// Only moves forward on a replace or reset; dither.js folds it into its
+// cache key so a new picture at the same slot always redraws.
+export function halftoneVersion(slot) { return halftoneRevision[slot]; }
+// True once figure and sky hold the identical picture (by content, not by
+// slot), so chatBackdrop.js can skip the dissolve between them.
+export function halftoneSharedChatPicture() {
+  const { figure, sky } = settings.halftoneImages;
+  return !!figure.hash && figure.hash === sky.hash;
+}
+
 export function getAppearance() {
   return { ...settings, hasImage: !!imageBitmap, storageIssue,
-    staticFallback: settings.mode === 'shader' && glScene === false };
+    staticFallback: settings.mode === 'shader' && glScene === false,
+    halftoneSlots: Object.fromEntries(HALFTONE_SLOTS.map((slot) => [slot,
+      { hasImage: !!halftoneUrl[slot], focusX: settings.halftoneImages[slot].focusX, focusY: settings.halftoneImages[slot].focusY }])) };
 }
-function imageStore(action, value) {
-  const key = storageKey;
+function imageStore(action, value, key = storageKey) {
   const operation = imageQueue.catch(() => {}).then(() => new Promise((resolve, reject) => {
     const request = indexedDB.open('jarvis-appearance', 1);
     request.onupgradeneeded = () => request.result.createObjectStore('images');
@@ -104,6 +147,7 @@ export async function initAppearance(username) {
   const revision = ++identityRevision;
   ++imageRevision;
   imageBitmap?.close(); imageBitmap = null; storageIssue = '';
+  for (const slot of HALFTONE_SLOTS) { if (halftoneUrl[slot]) URL.revokeObjectURL(halftoneUrl[slot]); halftoneUrl[slot] = null; ++halftoneRevision[slot]; }
   storageKey = 'jarvis:appearance:v1:' + String(username || 'local');
   try { settings = normalize(JSON.parse(localStorage.getItem(storageKey) || '{}')); }
   catch { settings = { ...DEFAULTS }; }
@@ -117,6 +161,13 @@ export async function initAppearance(username) {
       imageBitmap = bitmap;
     }
   } catch { if (revision === identityRevision) storageIssue = 'The saved image could not be loaded. Choose it again to retry.'; }
+  for (const slot of HALFTONE_SLOTS) {
+    try {
+      const saved = await imageStore('get', undefined, halftoneDbKey(slot));
+      if (revision !== identityRevision) return;
+      if (saved instanceof Blob) halftoneUrl[slot] = URL.createObjectURL(saved);
+    } catch { /* that slot keeps its default picture */ }
+  }
   if (revision !== identityRevision) return;
   apply();
 }
@@ -129,10 +180,13 @@ export function updateAppearance(patch) {
   apply();
 }
 
-export async function setAppearanceImage(file) {
+// Validate, decode and downsample a picture (shared by the Image background
+// and the halftone slots): PNG/JPEG/WebP, up to 12 MB, long edge capped at
+// 2560px, re-encoded to WebP. Never uploaded - the blob this returns only
+// ever goes into this device's IndexedDB.
+async function prepareImageBlob(file) {
   if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) throw new Error('Choose a PNG, JPEG, or WebP image.');
   if (file.size > 12 * 1024 * 1024) throw new Error('Choose an image smaller than 12 MB.');
-  const revision = ++imageRevision;
   let decoded;
   try { decoded = await createImageBitmap(file); } catch { throw new Error('This image could not be opened. Try another image.'); }
   if (decoded.width * decoded.height > 40000000) { decoded.close(); throw new Error('Choose an image below 40 megapixels.'); }
@@ -144,6 +198,18 @@ export async function setAppearanceImage(file) {
   decoded.close();
   const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .88));
   if (!blob) throw new Error('This image could not be prepared.');
+  return blob;
+}
+// A short content hash (not reversible), used only to tell whether two
+// halftone slots hold the same picture.
+async function hashBlob(blob) {
+  const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+  return [...new Uint8Array(digest)].slice(0, 16).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+export async function setAppearanceImage(file) {
+  const revision = ++imageRevision;
+  const blob = await prepareImageBlob(file);
   if (revision !== imageRevision) return;
   // Saving first means a quota failure leaves the previous image intact.
   try { await imageStore('put', blob); } catch { throw new Error('Image could not be saved. Free some device storage and retry.'); }
@@ -159,8 +225,45 @@ export async function removeAppearanceImage() {
   imageBitmap?.close(); imageBitmap = null;
   updateAppearance({ mode: settings.mode === 'image' ? 'color' : settings.mode });
 }
+
+export async function setHalftoneImage(slot, file) {
+  if (!HALFTONE_SLOTS.includes(slot)) throw new Error('Unknown halftone slot.');
+  const revision = ++halftoneRevision[slot];
+  // Hashed from the original upload, not the downsampled/re-encoded blob:
+  // two slots given the same picture should match even though re-encoding a
+  // picture to WebP twice isn't guaranteed to produce identical bytes.
+  const hash = await hashBlob(file);
+  const blob = await prepareImageBlob(file);
+  if (revision !== halftoneRevision[slot]) return;
+  // Saving first means a quota failure leaves the previous picture intact.
+  try { await imageStore('put', blob, halftoneDbKey(slot)); } catch { throw new Error('Image could not be saved. Free some device storage and retry.'); }
+  if (revision !== halftoneRevision[slot]) return;
+  if (halftoneUrl[slot]) URL.revokeObjectURL(halftoneUrl[slot]);
+  halftoneUrl[slot] = URL.createObjectURL(blob);
+  updateAppearance({ halftoneImages: { ...settings.halftoneImages, [slot]: { focusX: .5, focusY: .5, hash } } });
+}
+
+export async function removeHalftoneImage(slot) {
+  if (!HALFTONE_SLOTS.includes(slot)) throw new Error('Unknown halftone slot.');
+  ++halftoneRevision[slot];
+  await imageStore('delete', undefined, halftoneDbKey(slot));
+  if (halftoneUrl[slot]) URL.revokeObjectURL(halftoneUrl[slot]);
+  halftoneUrl[slot] = null;
+  updateAppearance({ halftoneImages: { ...settings.halftoneImages, [slot]: { focusX: .5, focusY: .5, hash: '' } } });
+}
+
+// Click-to-anchor on a slot's thumbnail (appearancePanel.js); a no-op
+// without a custom picture there, since the default pictures keep their own
+// built-in anchor.
+export function setHalftoneFocus(slot, x, y) {
+  if (!HALFTONE_SLOTS.includes(slot) || !halftoneUrl[slot]) return;
+  const prev = settings.halftoneImages[slot];
+  updateAppearance({ halftoneImages: { ...settings.halftoneImages, [slot]: { ...prev, focusX: Math.max(0, Math.min(1, x)), focusY: Math.max(0, Math.min(1, y)) } } });
+}
+
 export async function resetAppearance() {
   await removeAppearanceImage();
+  for (const slot of HALFTONE_SLOTS) await removeHalftoneImage(slot);
   updateAppearance(DEFAULTS);
 }
 export function setAppearancePreview(canvas) { previewCanvas = canvas; draw(); }
