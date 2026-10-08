@@ -48,6 +48,14 @@ export function renderAppearancePanel(content, _status, page) {
     el('p', { class: 'meta', text: 'Your sidebar follows in a slightly darker shade.' }),
   ]);
 
+  // Halftone (David, 2026-10-07): Kairos and Color only; Image and Shader
+  // have their own background.
+  const halftone = toggle({ label: 'Halftone backgrounds', onChange: (on) => { updateAppearance({ halftone: on }); sync(); } });
+  halftone.id = 'appearance-halftone';
+  const halftoneSection = el('div', { class: 'appearance-halftone-setting' }, [
+    group({}, [row({ title: 'Halftone backgrounds', description: "Home's card and the chat's figure and sky, drawn in dots, with the transitions between them. In Color they're two-tone in your colors.", control: halftone })]),
+  ]);
+
   const controls = new Map();
   function dial(key, title, description) {
     const output = el('output', { for: `appearance-${key}` });
@@ -170,13 +178,14 @@ export function renderAppearancePanel(content, _status, page) {
   if (page) page.actions([reset]);
   else root.append(el('div', { class: 'appearance-heading' }, [el('div', {}, [el('h2', { text: 'Appearance' }),
     el('p', { class: 'meta', text: 'A workspace that feels like yours.' })]), reset]));
-  root.append(previewFrame, modes, palette, imageOptions, shaderOptions, chatStyleSection, overlaySection, status);
+  root.append(previewFrame, modes, palette, halftoneSection, imageOptions, shaderOptions, chatStyleSection, overlaySection, status);
   content.replaceChildren(root);
   function sync() {
     const value = getAppearance();
     for (const [mode, button] of modeButtons) button.setAttribute('aria-pressed', String(mode === value.mode));
     for (const [style, button] of styleButtons) button.setAttribute('aria-pressed', String(style === value.chatStyle));
     palette.hidden = value.mode === 'default'; imageOptions.hidden = value.mode !== 'image'; shaderOptions.hidden = value.mode !== 'shader';
+    halftoneSection.hidden = !['default', 'color'].includes(value.mode); halftone.checked = value.halftone;
     color.value = value.color; hex.textContent = value.color.toUpperCase();
     for (const button of swatches.children) button.setAttribute('aria-pressed', String(button.dataset.color === value.color));
     for (const [key, control] of controls) {

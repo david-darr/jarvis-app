@@ -6,6 +6,7 @@
 // drawn once per size and kept between visits to the tab (drawing the whole
 // area takes 100-200 ms).
 import { ditherCell, dissolveCells, drawDither, loadDitherImage } from "./dither.js";
+import { halftonePalette } from "./appearance.js";
 
 const SCENES = {
   figure: { src: "/static/img/home-figure.webp", opts: { cell: 4, focusX: 0.7, focusY: 0.4 } },
@@ -16,12 +17,13 @@ const cache = new Map();  // "scene WxH" -> canvas; the newest few only
 const CACHE_LIMIT = 4;
 
 async function sceneCanvas(name, W, H) {
-  const key = `${name} ${W}x${H}`;
+  const palette = halftonePalette();
+  const key = `${name} ${W}x${H} ${JSON.stringify(palette)}`;
   if (cache.has(key)) { const hit = cache.get(key); cache.delete(key); cache.set(key, hit); return hit; }
   const scene = SCENES[name];
   const img = await loadDitherImage(scene.src);
   const canvas = document.createElement("canvas");
-  const ms = drawDither(canvas, img, W, H, scene.opts);
+  const ms = drawDither(canvas, img, W, H, { ...scene.opts, palette });
   canvas.dataset.drawMs = String(Math.round(ms));
   cache.set(key, canvas);
   while (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
@@ -94,10 +96,20 @@ export function mountChatBackdrop(host) {
     }, 150);
   });
   observer.observe(el);
+  // A new appearance redraws the scene on show in its colors (or the
+  // painting's), without a dissolve.
+  let paletteKey = JSON.stringify(halftonePalette());
+  const onAppearance = () => {
+    const next = JSON.stringify(halftonePalette());
+    if (next === paletteKey) return;
+    paletteKey = next;
+    if (scene) { const name = scene; scene = null; size = ""; show(name); }
+  };
+  document.addEventListener("kairos:appearance", onAppearance);
 
   return {
     show,
     ready,
-    dispose() { disposed = true; clearTimeout(resizeTimer); observer.disconnect(); el.remove(); },
+    dispose() { disposed = true; clearTimeout(resizeTimer); observer.disconnect(); document.removeEventListener("kairos:appearance", onAppearance); el.remove(); },
   };
 }

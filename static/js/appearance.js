@@ -1,11 +1,11 @@
 // Device-local appearance. Images are decoded into canvas pixels, never
 // injected as URLs or uploaded. IndexedDB keeps them out of small JSON storage.
 const DEFAULTS = Object.freeze({ mode: 'default', color: '#f3eadb', tint: .65,
-  distortion: .35, swirl: .3, grainMixer: .2, grainOverlay: .12, motion: true, chatStyle: 'standard' });
+  distortion: .35, swirl: .3, grainMixer: .2, grainOverlay: .12, motion: true, chatStyle: 'standard', halftone: true });
 const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
 const TOKENS = ['--bg', '--bg-panel', '--bg-panel-solid', '--surface-2', '--sidebar-bg',
   '--text', '--text-dim', '--text-faint', '--sidebar-text', '--sidebar-muted', '--sidebar-accent', '--border', '--border-strong', '--accent', '--accent-rgb',
-  '--ink-rgb', '--shade-rgb', '--scrim', '--danger', '--danger-rgb', '--success', '--success-rgb', '--warn', '--warn-rgb'];
+  '--ink-rgb', '--shade-rgb', '--scrim', '--danger', '--danger-rgb', '--success', '--success-rgb', '--warn', '--warn-rgb', '--wash-rgb'];
 // Status colors that stay readable on each kind of base: Kairos's own on a
 // light one, lighter tints on a dark one (both clear WCAG AA on their base).
 const STATUS = {
@@ -24,6 +24,7 @@ function normalize(raw = {}) {
     if (typeof raw[key] === 'number' && Number.isFinite(raw[key])) value[key] = Math.max(0, Math.min(1, raw[key]));
   }
   if (typeof raw.motion === 'boolean') value.motion = raw.motion;
+  if (typeof raw.halftone === 'boolean') value.halftone = raw.halftone;
   // Terminal chat style (David's ask 2026-09-25): chats look and read like a
   // terminal harness. Presentation only; see the [data-chat-style] rules.
   if (['standard', 'terminal'].includes(raw.chatStyle)) value.chatStyle = raw.chatStyle;
@@ -57,6 +58,23 @@ function readable(color, fade = 0) {
   }
   return [foreground, foreground, foreground];
 }
+
+// The halftone backgrounds (David, 2026-10-07): Home's card and the chat's
+// figure and sky. Kairos draws them in the painting's own colors; Color
+// draws them two-tone, the theme's ink on its base, so they suit any light
+// or dark pick. Image and Shader bring their own background, so they don't
+// offer it. null means the painting's colors.
+export function halftonePalette() {
+  if (settings.mode !== 'color') return null;
+  const base = rgb(settings.color);
+  // On a dark base the bright sky has to become the base, so the figure
+  // reads light-on-dark; its ink is softened there so it stays a quiet
+  // etching rather than a stark negative.
+  const soften = luminance(base) > .179 ? 0 : .45;
+  const ink = readable(base).map((v, i) => Math.round(v + (base[i] - v) * soften));
+  return { ink, base };
+}
+const halftoneState = () => !['default', 'color'].includes(settings.mode) ? 'none' : settings.halftone ? 'on' : 'off';
 
 export function getAppearance() {
   return { ...settings, hasImage: !!imageBitmap, storageIssue,
@@ -169,6 +187,7 @@ function apply() {
   const root = document.documentElement;
   root.dataset.appearance = settings.mode;
   root.dataset.chatStyle = settings.chatStyle;
+  root.dataset.halftone = halftoneState();  // on | off | none (style.css, app.js)
   if (settings.mode === 'default') {
     TOKENS.forEach(key => root.style.removeProperty(key));
     root.style.removeProperty('color-scheme');
@@ -193,6 +212,7 @@ function apply() {
       '--ink-rgb': light ? text.join(', ') : '255, 255, 255',
       '--shade-rgb': light ? text.join(', ') : '0, 0, 0',
       '--scrim': light ? `rgba(${text.join(', ')}, .28)` : 'rgba(0, 0, 0, .55)',
+      '--wash-rgb': color.join(', '),  // the halftone washes, in the base color
     };
     for (const [name, wanted] of Object.entries(status)) {
       const value = legible(wanted, color, text);
@@ -204,6 +224,8 @@ function apply() {
   if (settings.mode === 'shader' && glScene === undefined) glScene = createShader();
   draw(); animate();
   syncTitleBar();
+  // The halftone backgrounds redraw in the new colors (chatBackdrop.js, home.js).
+  document.dispatchEvent(new CustomEvent('kairos:appearance'));
 }
 
 // The desktop window's own controls (electron/preload.js setTitleBar).

@@ -8,6 +8,7 @@ import * as floatingProgress from "./floatingProgress.js";
 import { setupSidebar, restoreSidebar } from "./sidebar.js";
 import { closeBrowser, openBrowser } from "./browserPane.js";
 import { initAppearance } from "./appearance.js";
+import { initLayout, setKnownTabs, sidebarLayout } from "./layout.js";
 
 restoreSidebar();
 if (window.jarvis?.browser) document.documentElement.classList.add("electron-shell");
@@ -21,16 +22,18 @@ if (/mac/i.test(navigator.userAgentData?.platform || navigator.platform || "")) 
 // ask, 2026-08-31) — it's now the sidebar-footer user card instead of a
 // top-level nav item, matching the Odysseus screenshot's bottom-left
 // avatar+username+gear pattern.
+// The order and groups shown come from layout.js (Settings > Layout); Agents
+// sits in the top group with Home and Chats by default (David, 2026-10-07).
 const NAV = [
   { id: "home", label: "Home", icon: "home" },
   { id: "chat", label: "Chats", icon: "chats" },
+  { id: "agents", label: "Agents", icon: "agents" },
   { id: "notes", label: "Notes", icon: "notes" },
   { id: "library", label: "Library", icon: "library" },
   { id: "calendar", label: "Calendar", icon: "calendar" },
   { id: "email", label: "Email", icon: "email" },
   { id: "tasks", label: "Tasks", icon: "tasks" },
   { id: "tool-store", label: "Tool Store", icon: "store" },
-  { id: "agents", label: "Agents", icon: "agents" },
   { id: "cookbook", label: "Cookbook", icon: "cookbook" },
 ];
 
@@ -74,7 +77,7 @@ let navigationVersion = 0;
 export function switchTab(tabId, options = {}) {
   const homeAndChat = (activeTab === "home" && tabId === "chat") || (activeTab === "chat" && tabId === "home");
   if (!homeAndChat || !document.startViewTransition || matchMedia("(prefers-reduced-motion: reduce)").matches
-      || document.documentElement.dataset.appearance !== "default") {
+      || document.documentElement.dataset.halftone !== "on") {
     return performSwitch(tabId, options);
   }
   let landed;
@@ -216,45 +219,44 @@ async function buildSidebar() {
   // once at boot, so without this every toggle click appended a second
   // full copy of the nav on top of the first (the reported duplicate-tabs
   // bug, 2026-09-01).
+  // Custom tabs (Developer Mode, David's ask 2026-09-01) — discovered
+  // server-side from routes/tab_*.py (core/custom_tabs.py), so a new tab
+  // never needs NAV or icons.js edited. Always shown once built, not gated
+  // behind Developer Mode being on. Best-effort: a fetch failure here
+  // shouldn't break the built-in nav. Fetched before the nav is cleared, so
+  // a rebuild (a layout change) never shows an empty sidebar.
+  const customTabs = await api("/api/system/custom-tabs").catch(() => []);
   nav.innerHTML = "";
-  for (const item of NAV) {
-    if (item.id === "notes" || item.id === "tool-store") {
+  const items = new Map(NAV.map((item) => [item.id, { id: item.id, label: item.label, svg: ICONS[item.icon] || "" }]));
+  for (const item of customTabs) {
+    if (items.has(item.id)) continue;
+    if (item.view_url) customViewUrls[item.id] = item.view_url;
+    items.set(item.id, { id: item.id, label: item.label, svg: item.icon_svg || ICONS.library });
+  }
+  setKnownTabs([...items.values()]);
+  // Groups, order and hidden tabs: Settings > Layout (layout.js).
+  for (const group of sidebarLayout([...items.keys()])) {
+    if (!group.ids.length) continue;
+    if (group.label) {
       const label = document.createElement("div");
       label.className = "nav-group-label";
-      label.textContent = item.id === "notes" ? "Workspace" : "Intelligence";
+      label.textContent = group.label;
       nav.appendChild(label);
     }
-    const navEl = document.createElement("button");
-    navEl.type = "button";
-    navEl.className = "nav-item";
-    navEl.dataset.tab = item.id;
-    navEl.setAttribute("aria-label", item.label);
-    navEl.innerHTML = `${ICONS[item.icon] || ""}<span>${item.label}</span>`;
-    navEl.addEventListener("click", () => switchTab(item.id));
-    nav.appendChild(navEl);
+    for (const id of group.ids) {
+      const item = items.get(id);
+      const navEl = document.createElement("button");
+      navEl.type = "button";
+      navEl.className = "nav-item";
+      navEl.dataset.tab = item.id;
+      navEl.setAttribute("aria-label", item.label);
+      navEl.innerHTML = `${item.svg}<span></span>`;
+      navEl.querySelector("span").textContent = item.label;
+      navEl.addEventListener("click", () => switchTab(item.id));
+      nav.appendChild(navEl);
+    }
   }
   refreshAgentBadge();
-
-  // Custom tabs (Developer Mode, David's ask 2026-09-01) — discovered
-  // server-side from routes/tab_*.py (core/custom_tabs.py), appended after
-  // the built-in NAV so a new tab never needs this array or icons.js
-  // edited. Always shown once built, not gated behind Developer Mode being
-  // on — that toggle is a cosmetic/context signal, not a visibility gate.
-  // Best-effort: a fetch failure here shouldn't break the built-in nav.
-  const customTabs = await api("/api/system/custom-tabs").catch(() => []);
-  for (const item of customTabs) {
-    if (NAV.some((builtIn) => builtIn.id === item.id)) continue;
-    if (item.view_url) customViewUrls[item.id] = item.view_url;
-    const navEl = document.createElement("button");
-    navEl.type = "button";
-    navEl.className = "nav-item";
-    navEl.dataset.tab = item.id;
-    navEl.setAttribute("aria-label", item.label);
-    navEl.innerHTML = `${item.icon_svg || ICONS.library}<span></span>`;
-    navEl.querySelector("span").textContent = item.label;
-    navEl.addEventListener("click", () => switchTab(item.id));
-    nav.appendChild(navEl);
-  }
 
   // "+" New Tab (Developer Mode only, David's ask 2026-09-01) — at the
   // bottom of the nav list itself, below any custom tabs, distinct from
@@ -453,6 +455,7 @@ async function boot() {
   await auth.run(overlay);
   const identity = await api('/api/auth/status');
   await initAppearance(identity.username);
+  initLayout(identity.username);
   overlay.classList.add("hidden");
 
   const settings = await api("/api/settings");
@@ -491,6 +494,7 @@ async function startApp() {
   // Adding/removing a premade tab (views/new-tab.js) rebuilds the nav so it
   // appears immediately instead of after a reload.
   document.addEventListener("jarvis:tabs-changed", () => { buildSidebar(); });
+  document.addEventListener("kairos:layout", () => { buildSidebar(); });
   commandPalette.init({ nav: NAV, customTabs: customTabs || [], switchTab, openSettings });
   floatingProgress.init({ switchTab });
   // Activating an external link in a reply (David's ask 2026-09-15). Those

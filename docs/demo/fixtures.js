@@ -200,6 +200,14 @@
       m1: { fresh_tokens: 1200000, cache_read_tokens: 95000000, unsplit_tokens: 0, total_tokens: 96200000 },
       m3: { fresh_tokens: 842000, cache_read_tokens: 0, unsplit_tokens: 0, total_tokens: 842000 },
     };
+    // Account limits for Home's "Your models" and the overlay (quotaReadings.js);
+    // state.quotas lets ui-smoke try a signed-out or stale reading.
+    if (route === "/api/models/quotas") return state.quotas || { providers: [
+      { provider: "claude", status: "ok", updated_at: now - 120, note: "", windows: [
+        { name: "5-hour", used_percent: 34, resets_at: now + 2 * 3600 + 600 }, { name: "Weekly", used_percent: 61, resets_at: now + 4 * 86400 }] },
+      { provider: "codex", status: "ok", updated_at: now - 300, note: "", windows: [
+        { name: "5-hour", used_percent: 12, resets_at: now + 3 * 3600 }, { name: "Weekly", used_percent: 83, resets_at: now + 2 * 86400 }] },
+    ], recorded: [] };
     if (route === "/api/documents") return list(docs);
     if (route === "/api/chat/files/library") return list([]);
     if (route === "/api/documents/search") return list(docs.filter(d => d.title.toLowerCase().includes(url.searchParams.get("q").toLowerCase())));
