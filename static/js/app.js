@@ -1,6 +1,6 @@
 import { ICONS } from "./icons.js";
 import { WORDMARK } from "./brand.js";
-import { api } from "./api.js";
+import { api, useAppMenusForSelects } from "./api.js";
 import * as onboarding from "./onboarding.js";
 import * as auth from "./auth.js";
 import * as commandPalette from "./commandPalette.js";
@@ -8,6 +8,7 @@ import * as floatingProgress from "./floatingProgress.js";
 import { setupSidebar, restoreSidebar } from "./sidebar.js";
 import { closeBrowser, openBrowser } from "./browserPane.js";
 import { initAppearance } from "./appearance.js";
+import { initLayout, setKnownTabs, sidebarLayout } from "./layout.js";
 
 restoreSidebar();
 if (window.jarvis?.browser) document.documentElement.classList.add("electron-shell");
@@ -21,16 +22,18 @@ if (/mac/i.test(navigator.userAgentData?.platform || navigator.platform || "")) 
 // ask, 2026-08-31) — it's now the sidebar-footer user card instead of a
 // top-level nav item, matching the Odysseus screenshot's bottom-left
 // avatar+username+gear pattern.
+// The order and groups shown come from layout.js (Settings > Layout); Agents
+// sits in the top group with Home and Chats by default (David, 2026-10-07).
 const NAV = [
   { id: "home", label: "Home", icon: "home" },
   { id: "chat", label: "Chats", icon: "chats" },
+  { id: "agents", label: "Agents", icon: "agents" },
   { id: "notes", label: "Notes", icon: "notes" },
   { id: "library", label: "Library", icon: "library" },
   { id: "calendar", label: "Calendar", icon: "calendar" },
   { id: "email", label: "Email", icon: "email" },
   { id: "tasks", label: "Tasks", icon: "tasks" },
   { id: "tool-store", label: "Tool Store", icon: "store" },
-  { id: "agents", label: "Agents", icon: "agents" },
   { id: "cookbook", label: "Cookbook", icon: "cookbook" },
 ];
 
@@ -42,13 +45,29 @@ const NAV = [
 const STUB_TABS = new Set();
 
 const modules = {};
-// Tabs the user built live in the data directory (so app updates can't wipe
-// them) and are served from /custom-views rather than the bundled
-// static/js/views/. The server tells us which is which via the manifest's
-// view_url; anything without one uses the built-in relative path.
+// Folder views come from /tab-files; old split views use /custom-views.
+// Their manifest supplies the module and optional stylesheet URLs.
 const customViewUrls = {};
+const customStyleUrls = {};
+const customStyles = new Map();
 
 async function loadModule(tabId) {
+  const style = customStyleUrls[tabId];
+  if (style) {
+    if (!customStyles.has(style)) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = style;
+      // Rendering waits for the stylesheet; two simultaneous navigations
+      // share the same link and promise instead of adding it twice.
+      customStyles.set(style, new Promise((resolve, reject) => {
+        link.onload = resolve;
+        link.onerror = () => { customStyles.delete(style); link.remove(); reject(new Error(`Could not load ${style}`)); };
+        document.head.appendChild(link);
+      }));
+    }
+    await customStyles.get(style);
+  }
   if (modules[tabId]) return modules[tabId];
   const custom = customViewUrls[tabId];
   const path = custom || (STUB_TABS.has(tabId) ? "./views/stub.js" : `./views/${tabId}.js`);
@@ -65,7 +84,37 @@ let activeUnmount = null; // set by a view's render() if it needs teardown (e.g.
 let view = document.getElementById("view-content");
 let navigationVersion = 0;
 
-export async function switchTab(tabId, options = {}) {
+// Home and Chat (David, 2026-10-07): Home's halftone card grows into the
+// chat background, and shrinks back into the card on the way home, through
+// the browser's view transitions. Both are named `kairos-backdrop` only
+// while it runs (style.css, :root.tab-transition). The new screen is
+// captured once the arriving view has drawn its halftone (and the chat has
+// opened any chat it was asked for), or after 800 ms at most.
+export function switchTab(tabId, options = {}) {
+  const homeAndChat = (activeTab === "home" && tabId === "chat") || (activeTab === "chat" && tabId === "home");
+  if (!homeAndChat || !document.startViewTransition || matchMedia("(prefers-reduced-motion: reduce)").matches
+      || document.documentElement.dataset.halftone !== "on") {
+    return performSwitch(tabId, options);
+  }
+  let landed;
+  const ready = new Promise((resolve) => { landed = resolve; });
+  const root = document.documentElement;
+  root.classList.add("tab-transition");
+  return new Promise((resolve) => {
+    const transition = document.startViewTransition(() => {
+      const run = performSwitch(tabId, { ...options, transitionReady: landed });
+      run.then(resolve, resolve);
+      // Not `run`: a view can finish rendering before its halftone is drawn.
+      return Promise.race([ready, new Promise((r) => setTimeout(r, 800))]);
+    });
+    // A transition is skipped when another starts (a second click mid-way);
+    // the switch itself still happens, so that's not an error.
+    transition.ready.catch(() => {});
+    transition.finished.finally(() => root.classList.remove("tab-transition"));
+  });
+}
+
+async function performSwitch(tabId, options = {}) {
   const version = ++navigationVersion;
   // The side browser's chrome lives in the Chat view's DOM, but in the
   // desktop app the page itself is a NATIVE view owned by the main process.
@@ -182,65 +231,41 @@ async function buildSidebar() {
 
   const nav = document.getElementById("nav");
   // Cleared before rebuilding — buildSidebar() now also runs whenever
-  // Developer Mode is toggled (to show/hide "+ New Tab" live), not just
-  // once at boot, so without this every toggle click appended a second
-  // full copy of the nav on top of the first (the reported duplicate-tabs
-  // bug, 2026-09-01).
+  // Approved and enabled tabs supply their own sidebar manifests.
+  const customTabs = await api("/api/system/custom-tabs").catch(() => []);
+  for (const id of Object.keys(customViewUrls)) { delete customViewUrls[id]; delete customStyleUrls[id]; }
   nav.innerHTML = "";
-  for (const item of NAV) {
-    if (item.id === "notes" || item.id === "tool-store") {
+  const items = new Map(NAV.map((item) => [item.id, { id: item.id, label: item.label, svg: ICONS[item.icon] || "" }]));
+  for (const item of customTabs) {
+    if (items.has(item.id)) continue;
+    if (item.view_url) customViewUrls[item.id] = item.view_url;
+    if (item.style_url) customStyleUrls[item.id] = item.style_url;
+    items.set(item.id, { id: item.id, label: item.label, svg: item.icon_svg || ICONS.library });
+  }
+  setKnownTabs([...items.values()]);
+  // Groups, order and hidden tabs: Settings > Layout (layout.js).
+  for (const group of sidebarLayout([...items.keys()])) {
+    if (!group.ids.length) continue;
+    if (group.label) {
       const label = document.createElement("div");
       label.className = "nav-group-label";
-      label.textContent = item.id === "notes" ? "Workspace" : "Intelligence";
+      label.textContent = group.label;
       nav.appendChild(label);
     }
-    const navEl = document.createElement("button");
-    navEl.type = "button";
-    navEl.className = "nav-item";
-    navEl.dataset.tab = item.id;
-    navEl.setAttribute("aria-label", item.label);
-    navEl.innerHTML = `${ICONS[item.icon] || ""}<span>${item.label}</span>`;
-    navEl.addEventListener("click", () => switchTab(item.id));
-    nav.appendChild(navEl);
+    for (const id of group.ids) {
+      const item = items.get(id);
+      const navEl = document.createElement("button");
+      navEl.type = "button";
+      navEl.className = "nav-item";
+      navEl.dataset.tab = item.id;
+      navEl.setAttribute("aria-label", item.label);
+      navEl.innerHTML = `${item.svg}<span></span>`;
+      navEl.querySelector("span").textContent = item.label;
+      navEl.addEventListener("click", () => switchTab(item.id));
+      nav.appendChild(navEl);
+    }
   }
   refreshAgentBadge();
-
-  // Custom tabs (Developer Mode, David's ask 2026-09-01) — discovered
-  // server-side from routes/tab_*.py (core/custom_tabs.py), appended after
-  // the built-in NAV so a new tab never needs this array or icons.js
-  // edited. Always shown once built, not gated behind Developer Mode being
-  // on — that toggle is a cosmetic/context signal, not a visibility gate.
-  // Best-effort: a fetch failure here shouldn't break the built-in nav.
-  const customTabs = await api("/api/system/custom-tabs").catch(() => []);
-  for (const item of customTabs) {
-    if (NAV.some((builtIn) => builtIn.id === item.id)) continue;
-    if (item.view_url) customViewUrls[item.id] = item.view_url;
-    const navEl = document.createElement("button");
-    navEl.type = "button";
-    navEl.className = "nav-item";
-    navEl.dataset.tab = item.id;
-    navEl.setAttribute("aria-label", item.label);
-    navEl.innerHTML = `${item.icon_svg || ICONS.library}<span></span>`;
-    navEl.querySelector("span").textContent = item.label;
-    navEl.addEventListener("click", () => switchTab(item.id));
-    nav.appendChild(navEl);
-  }
-
-  // "+" New Tab (Developer Mode only, David's ask 2026-09-01) — at the
-  // bottom of the nav list itself, below any custom tabs, distinct from
-  // the Developer Mode toggle in the sidebar footer below. Rebuilt by
-  // buildDeveloperModeRow()'s toggle handler so it appears/disappears
-  // immediately without a page reload.
-  if (document.documentElement.classList.contains("dev-mode")) {
-    const newTabEl = document.createElement("button");
-    newTabEl.type = "button";
-    newTabEl.className = "nav-item nav-item-new-tab";
-    newTabEl.dataset.tab = "new-tab";
-    newTabEl.setAttribute("aria-label", "New Tab");
-    newTabEl.innerHTML = `${ICONS.plus || ""}<span>New Tab</span>`;
-    newTabEl.addEventListener("click", () => switchTab("new-tab"));
-    nav.appendChild(newTabEl);
-  }
 
   nav.querySelectorAll(".nav-item").forEach((item) => {
     item.classList.toggle("active", item.dataset.tab === activeTab);
@@ -256,52 +281,9 @@ async function buildSidebar() {
 // menu; the gear button is its own separate click straight into the
 // floating Settings window — they're related but distinct actions, not one
 // thing.
-// Developer Mode toggle (David's ask 2026-09-01) — its own row, directly
-// above the user-card/settings row. Reads current state off the
-// documentElement class boot() already set rather than re-fetching
-// /api/settings (admin-gated — a second call here would 401 for a
-// non-admin user and break the whole sidebar footer over one toggle).
-function buildDeveloperModeRow() {
-  const row = document.createElement("div");
-  row.className = "sidebar-footer-row sidebar-devmode-row";
-
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "sidebar-devmode-btn";
-  btn.setAttribute("aria-label", "Developer Mode");
-  const sync = () => {
-    const on = document.documentElement.classList.contains("dev-mode");
-    btn.classList.toggle("active", on);
-    btn.setAttribute("aria-pressed", String(on));
-    btn.title = on ? "Developer Mode is on — click to turn off" : "Turn on Developer Mode";
-  };
-  btn.innerHTML = `${ICONS.devMode || ""}<span>Developer Mode</span>`;
-  sync();
-
-  btn.addEventListener("click", async () => {
-    const next = !document.documentElement.classList.contains("dev-mode");
-    document.documentElement.classList.toggle("dev-mode", next);
-    sync();
-    buildSidebar(); // rebuilds the nav so "+ New Tab" appears/disappears live
-    try {
-      await api("/api/settings/developer-mode", { method: "POST", body: JSON.stringify({ enabled: next }) });
-    } catch (_) {
-      // Couldn't persist (e.g. non-admin user) — revert the visual flip
-      // rather than leaving the UI claiming a state that didn't save.
-      document.documentElement.classList.toggle("dev-mode", !next);
-      sync();
-      buildSidebar();
-    }
-  });
-
-  row.appendChild(btn);
-  return row;
-}
-
 async function buildSidebarFooter() {
   const footer = document.getElementById("sidebar-footer");
   footer.innerHTML = "";
-  footer.appendChild(buildDeveloperModeRow());
 
   const status = await api("/api/auth/status").catch(() => null);
   const displayName = !status ? "…" : status.username === "local" ? "Local User" : status.username || "Local User";
@@ -423,14 +405,12 @@ async function boot() {
   await auth.run(overlay);
   const identity = await api('/api/auth/status');
   await initAppearance(identity.username);
+  initLayout(identity.username);
   overlay.classList.add("hidden");
 
   const settings = await api("/api/settings");
   const app = document.getElementById("app");
 
-  // Developer Mode (David's ask 2026-09-01) — applied at boot from the
-  // persisted setting; toggleDeveloperMode() (sidebar footer) flips it live.
-  document.documentElement.classList.toggle("dev-mode", !!settings.developer_mode_enabled);
 
   if (!settings.onboarding_complete) {
     app.style.display = "none";
@@ -458,9 +438,14 @@ async function startApp() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeMobileMenu();
   });
-  // Adding/removing a premade tab (views/new-tab.js) rebuilds the nav so it
+  // Adding/removing a tab in the Tool Store rebuilds the nav so it
   // appears immediately instead of after a reload.
-  document.addEventListener("jarvis:tabs-changed", () => { buildSidebar(); });
+  document.addEventListener("jarvis:tabs-changed", async () => {
+    for (const id of Object.keys(customViewUrls)) delete modules[id];
+    const tabs = await buildSidebar();
+    if (activeTab && !NAV.some((item) => item.id === activeTab) && !tabs.some((item) => item.id === activeTab)) switchTab("home");
+  });
+  document.addEventListener("kairos:layout", () => { buildSidebar(); });
   commandPalette.init({ nav: NAV, customTabs: customTabs || [], switchTab, openSettings });
   floatingProgress.init({ switchTab });
   // Activating an external link in a reply (David's ask 2026-09-15). Those
@@ -493,4 +478,5 @@ async function startApp() {
   await switchTab("home");
 }
 
+useAppMenusForSelects();
 boot();

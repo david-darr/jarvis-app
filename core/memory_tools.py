@@ -359,22 +359,25 @@ def list_task_runs(task_id: Optional[str] = None) -> list[dict]:
 # compatible external model has no native file tools at all, so it needs
 # the equivalent as real function-calling tools. App source is scoped to
 # REPO_CODE_DIRS (core/constants.py); user-tab source is separately limited
-# to data/tabs/{routes,services,views}. All other data/ paths remain excluded.
+# to data/tabs/<slug>/ (and the old split source subfolders). All other data/ paths remain excluded.
 
 def _resolve_repo_path(relative_path: str) -> str:
     normalized = relative_path.replace("\\", "/").lstrip("/")
     if normalized == "custom-tabs":
-        raise ValueError("choose custom-tabs/routes, custom-tabs/services, or custom-tabs/views")
+        raise ValueError("choose custom-tabs/<slug>/ or a legacy source subfolder")
     if normalized.startswith("custom-tabs/"):
         _, area, *parts = normalized.split("/")
-        from core.custom_tabs import USER_ROUTES_DIR, USER_SERVICES_DIR, USER_VIEWS_DIR
-        roots = {"routes": USER_ROUTES_DIR, "services": USER_SERVICES_DIR, "views": USER_VIEWS_DIR}
-        root = roots.get(area)
-        if not root:
-            raise ValueError("custom tab access is limited to routes/, services/, and views/")
-        root = os.path.realpath(root)
+        from core.custom_tabs import USER_TABS_DIR
+        from core.tab_folders import SLUG, is_link
+        if not SLUG.fullmatch(area):
+            raise ValueError("invalid tab source folder")
+        parent = os.path.realpath(USER_TABS_DIR)
+        source_root = os.path.join(USER_TABS_DIR, area)
+        if is_link(USER_TABS_DIR) or is_link(source_root):
+            raise ValueError("tab source folders cannot be links")
+        root = os.path.realpath(source_root)
         full_path = os.path.realpath(os.path.join(root, *parts))
-        if os.path.commonpath([full_path, root]) != root:
+        if os.path.commonpath([root, parent]) != parent or os.path.commonpath([full_path, root]) != root:
             raise ValueError(f"'{relative_path}' is outside the custom-tab source directories")
         return full_path
     full_path = os.path.realpath(os.path.join(BASE_DIR, relative_path.lstrip("/\\")))
@@ -397,7 +400,13 @@ def list_repo_directory(relative_path: str = "") -> list[str]:
     if not relative_path:
         return [os.path.basename(d) for d in REPO_CODE_DIRS if os.path.isdir(d)] + ["custom-tabs/"]
     if relative_path.replace("\\", "/").strip("/") == "custom-tabs":
-        return ["routes/", "services/", "views/"]
+        from core.custom_tabs import USER_TABS_DIR
+        from core.tab_folders import SLUG, is_link
+        if is_link(USER_TABS_DIR):
+            raise ValueError("tab source root cannot be a link")
+        return sorted(name + "/" for name in os.listdir(USER_TABS_DIR)
+                      if SLUG.fullmatch(name) and os.path.isdir(os.path.join(USER_TABS_DIR, name))
+                      and not is_link(os.path.join(USER_TABS_DIR, name))) if os.path.isdir(USER_TABS_DIR) else []
     full_path = _resolve_repo_path(relative_path)
     if not os.path.isdir(full_path):
         raise ValueError(f"not a directory: {relative_path}")

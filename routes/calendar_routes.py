@@ -31,7 +31,10 @@ class UpdateEventRequest(BaseModel):
 
 @router.get("/events")
 async def list_events(start: str = Query(...), end: str = Query(...), user: str = Depends(require_user)) -> list[dict]:
-    return calendar_service.list_range(start, end)
+    events = calendar_service.list_range(start, end)
+    from core import tab_hooks
+    events += await tab_hooks.calendar_items(user, start, end)
+    return events
 
 
 @router.get("/events/archived")

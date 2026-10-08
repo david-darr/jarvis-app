@@ -29,6 +29,7 @@ const files = {
   '/usage-overlay': ['static/usage-overlay.html', 'text/html'],
   '/static/css/usage-overlay.css': ['static/css/usage-overlay.css', 'text/css'],
   '/static/js/usage-overlay.js': ['static/js/usage-overlay.js', 'text/javascript'],
+  '/static/js/quotaReadings.js': ['static/js/quotaReadings.js', 'text/javascript'],
 };
 const server = http.createServer((req, res) => {
   if (req.url === '/api/models/quotas' || req.url === '/api/models/quotas/refresh') {
@@ -120,7 +121,7 @@ async function run() {
 
   // Signed out: a dash on the ring and the sign-in note on the card.
   claudeStatus = 'needs_sign_in';
-  await js('refresh()');
+  await js('refreshUsageReadings()');
   await waitFor("document.querySelector('.cell[data-p=claude] .pct').textContent === '—'");
   await move(rest[0], rest[1]);
   await waitFor("!document.body.classList.contains('folded')");

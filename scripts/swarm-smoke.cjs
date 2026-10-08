@@ -101,7 +101,7 @@ const server = http.createServer(async (req, res) => {
   const json = (value, code = 200) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(value)); };
   if (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/swarm')) {
     if (url.pathname === '/api/auth/status') return json({ auth_enabled: false, username: 'local', is_admin: true });
-    if (url.pathname === '/api/settings') return json({ onboarding_complete: true, developer_mode_enabled: false });
+    if (url.pathname === '/api/settings') return json({ onboarding_complete: true });
     if (url.pathname === '/api/system/custom-tabs') return json([{ id: 'agents', label: 'Custom collision', view_url: '/must-not-load.js' }]);
     if (url.pathname === '/api/agents') return json(AGENTS);
     if (url.pathname === '/api/agents/inbox') return json({ items: [], reviews: [], count: 0 });

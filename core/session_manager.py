@@ -170,6 +170,18 @@ class SessionManager:
         """
         return store.list_sessions(agent_id, include_agents)
 
+    def set_untrusted_context(self, session_id: str, reason: str) -> dict:
+        """Marks a chat whose own history carries outside text (a tab seeding
+        it with email or course material). Turn taint is otherwise per turn,
+        so text placed in the history up front would count as trusted from
+        the second turn on; chat_service taints every turn of a marked chat
+        instead, which makes shell commands ask first. One-way on purpose."""
+        session = self._require(session_id)
+        if session.get("untrusted_context") == reason:
+            return session
+        session["untrusted_context"] = reason
+        return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
+
     def set_starred(self, session_id: str, starred: bool) -> dict:
         session = self._require(session_id)
         session["starred"] = starred

@@ -13,63 +13,27 @@
    Only two providers get a ring, Claude and Codex, because only a
    subscription has a quota to draw. Readings come from core/quota_usage.py.
 */
+import { PROVIDERS, SIGN_IN, toSnap, toneOf, pctText, usedCopy, resetCopy, ago, staleOf } from './quotaReadings.js';
 const bridge = window.usageOverlay || {};
 
 /* Colour ramp: CodeNotch's three steps, in the notch's Kairos tones (usage-overlay.css :root) */
 const AMPLE = 'var(--n-ample)', WATCH = 'var(--n-watch)', CRIT = 'var(--n-crit)';
 const TRACK = 'var(--n-track)';
-const tone = f => f >= 0.8 ? CRIT : f >= 0.5 ? WATCH : AMPLE;
-// Whole percents, except where rounding would read as nothing used or nothing left
-function smallPct(v) {
-  if (v <= 0) return '0';
-  const t = Math.round(v * 10) / 10;
-  if (t < 0.1) return '<0.1';
-  if (t > 99.9) return '>99.9';
-  return t.toFixed(1);
-}
-function pctText(f) { const v = f * 100; return v > 0 && v < 1 ? smallPct(v) : String(Math.round(v)); }
-function usedCopy(w) {
-  const v = w.used * 100;
-  let used, left;
-  if ((v > 0 && v < 1) || (v > 99 && v < 100)) { used = smallPct(v); left = 100 - v > 99.9 ? '>99.9' : smallPct(Math.max(0, 100 - v)); }
-  else { const u = Math.round(v); used = String(u); left = String(Math.max(0, 100 - u)); }
-  return `${used}% Used · ${left}% left`;
-}
+const tone = f => ({ crit: CRIT, watch: WATCH, ample: AMPLE })[toneOf(f)];
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 
 /* ---- Readings --------------------------------------------------------------
    core/quota_usage.py reports {provider, status, windows:[{name, used_percent,
    resets_at (unix s)}], updated_at, note}. CodeNotch's page works in its own
    shape - {status, windows:[{id, label, used 0..1, resets_at ms}], fetched_at
-   ms, note} - so readings are converted once, here, and everything below is
-   CodeNotch's code reading CodeNotch's shape. */
-// `mark` is the provider's logo in static/img/model-marks/ (LobeHub, MIT; see the
-// NOTICE there): Codex shows the OpenAI mark, as CodeNotch's ring does.
-const PROVIDERS = [
-  { id: 'claude', name: 'Claude', mark: 'claude' },
-  { id: 'codex', name: 'Codex', mark: 'openai' },
-];
+   ms, note} - so readings are converted once (quotaReadings.js, shared with
+   Home's "Your models") and everything below is CodeNotch's code reading
+   CodeNotch's shape. */
 // A mark is drawn as a mask in the current text colour, so it is white on the
 // pill like CodeNotch's, and no SVG markup is ever put into the page.
 function markHtml(mark) { return `<span class="mark" style="--mark:url('/static/img/model-marks/${mark}.svg')"></span>`; }
-const WINDOW_IDS = { '5-hour': 'session', 'Weekly': 'weekly' };
-const WINDOW_LABELS = { '5-hour': '5-hour limit', 'Weekly': 'Weekly limit' };
-const STATUS = { ok: 'ok', stale: 'stale', needs_sign_in: 'needsAuth', rate_limited: 'stale', unavailable: 'stale' };
 let snaps = {};  // provider id -> CodeNotch-shaped snapshot
 
-function toSnap(p) {
-  return {
-    status: STATUS[p.status] || (p.stale ? 'stale' : 'ok'),
-    windows: (p.windows || []).map(w => ({
-      id: WINDOW_IDS[w.name] || w.name,
-      label: WINDOW_LABELS[w.name] || w.name,
-      used: Math.max(0, Number(w.used_percent) || 0) / 100,
-      resets_at: w.resets_at ? w.resets_at * 1000 : 0,
-    })),
-    fetched_at: p.updated_at ? p.updated_at * 1000 : 0,
-    note: p.note || '',
-  };
-}
 function applyReadings(data) {
   const next = {};
   for (const p of (data && data.providers) || []) next[p.provider] = toSnap(p);
@@ -88,9 +52,6 @@ function headlineOf(snap) {
   return ws.find(w => w.id === 'session') || ws[0];
 }
 function weeklyOf(snap) { return snap.windows.find(w => w.id === 'weekly') || null; }
-// 15 minutes, CodeNotch's (and its Mac original's) stale threshold
-function staleOf(snap) { if (snap.status === 'stale') return true; return snap.fetched_at > 0 && (Date.now() - snap.fetched_at) > 15 * 60 * 1000; }
-
 function svgArc(r, frac, color, width, extra = '') {
   if (!(frac > 0)) return '';
   const C = 2 * Math.PI * r;
@@ -135,27 +96,7 @@ function renderRing() {
   updateInteractive();
 }
 
-function resetCopy(ms) {
-  if (!ms) return '';
-  const diff = ms - Date.now();
-  if (diff <= 0) return 'Resetting…';
-  const min = Math.round(diff / 60000);
-  if (min < 60) return `Resets in ${Math.max(1, min)} min`;
-  const d = new Date(ms);
-  // A weekday only names a day in the coming week
-  if (daysApart(Date.now(), ms) >= 7) return 'Resets ' + d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  const t = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-  if (diff < 24 * 60 * 60 * 1000) return `Resets at ${t}`;
-  return `Resets ${d.toLocaleDateString(undefined, { weekday: 'short' })} ${t}`;
-}
-function daysApart(from, to) {
-  const day = ms => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
-  return Math.round((day(to) - day(from)) / 86400000);
-}
-function ago(ms) { const m = Math.round((Date.now() - ms) / 60000); return m < 60 ? `${m}m ago` : `${Math.round(m / 60)}h ago`; }
-
 let hoverId = 'claude';
-const SIGN_IN = { claude: 'Sign in to Claude Code to see usage.', codex: 'Sign in to Codex to see usage.' };
 function renderCard() {
   const p = providers().find(x => x.id === hoverId) || providers()[0];
   if (!p) { hideCard(); return; }
@@ -431,5 +372,8 @@ async function refresh() {
 }
 refresh();
 setInterval(refresh, 60_000);
+// A module keeps its functions private; this one is reached from outside the
+// page (scripts/usage-overlay-smoke.cjs reads fresh readings on demand).
+window.refreshUsageReadings = refresh;
 setInterval(() => { renderRing(); if (card.classList.contains('show')) renderCard(); }, 30_000);  // reset copy moves with time
 requestAnimationFrame(placeHandles);

@@ -250,7 +250,8 @@ class ExternalBrain:
             self._messages[0]["content"] += guidance
             self._computer_prompt = guidance
         if self.pending_reference_taint:
-            self.turn_taint.mark("selected reference")
+            self.turn_taint.mark(self.pending_reference_taint if isinstance(self.pending_reference_taint, str)
+                                 else "selected reference")
             self.pending_reference_taint = False
         self._messages.append({"role": "user", "content": user_text})
         self.last_tool_rounds = []
@@ -282,7 +283,8 @@ class ExternalBrain:
             self._messages[0]["content"] += guidance
             self._computer_prompt = guidance
         if self.pending_reference_taint:
-            self.turn_taint.mark("selected reference")
+            self.turn_taint.mark(self.pending_reference_taint if isinstance(self.pending_reference_taint, str)
+                                 else "selected reference")
             self.pending_reference_taint = False
         self._messages.append({"role": "user", "content": user_text})
         self.last_tool_rounds = []

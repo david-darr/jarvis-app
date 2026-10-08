@@ -11,6 +11,7 @@ content, and get_skill() refuses it, so no model is offered it, and the rest
 still work. Before this, one such file made list_skills() raise, which took
 every skill away from every model and emptied Tool Store's list.
 """
+import hashlib
 import logging
 import os
 import re
@@ -28,6 +29,16 @@ SKILLS_DIR = os.path.join(DATA_DIR, "skills")
 # packaged builds (it holds credentials and chat history), so anything
 # seeded there in development would never reach a real download.
 SKILL_TEMPLATES_DIR = os.path.join(BASE_DIR, "skill_templates")
+
+# Before seed hashes were tracked, this exact bundled text was shipped.
+# Normalize line endings only: even a small user edit must prevent refresh.
+_LEGACY_SEED_HASHES = {
+    "build-custom-tab": {"c12313f03035060c100ceac976653c6c1ccbe8f759285a44925b700009141cb2"},
+}
+
+
+def _seed_hash(path: str) -> str:
+    return hashlib.sha256(_read(path).encode("utf-8")).hexdigest()
 
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
 
@@ -135,7 +146,8 @@ def seed_default_skills() -> list[str]:
     Tracked per-slug in settings rather than "copy if the folder is missing":
     a user who deletes a bundled skill means it, and resurrecting it on every
     launch would be the app arguing with them. Each slug is therefore only
-    ever seeded once.
+    ever seeded once. Refresh SKILL.md only while it still matches the last
+    seed (or a known old bundled copy); never replace edits or resurrect deletions.
 
     Returns the slugs actually seeded this call.
     """
@@ -145,13 +157,29 @@ def seed_default_skills() -> list[str]:
         return []
 
     already = set(settings_store.get_setting("seeded_skills") or [])
+    hashes = dict(settings_store.get_setting("seeded_skill_hashes") or {})
+    old_hashes = hashes.copy()
     seeded = []
     for slug in sorted(os.listdir(SKILL_TEMPLATES_DIR)):
         template_dir = os.path.join(SKILL_TEMPLATES_DIR, slug)
-        if not os.path.isdir(template_dir) or slug in already:
+        if not os.path.isdir(template_dir):
             continue
         target_dir = os.path.join(SKILLS_DIR, slug)
         try:
+            src_skill = os.path.join(template_dir, "SKILL.md")
+            dst_skill = os.path.join(target_dir, "SKILL.md")
+            template_hash = _seed_hash(src_skill)
+            if slug in already:
+                if not os.path.isfile(dst_skill):
+                    continue  # A deletion is deliberate.
+                current_hash = _seed_hash(dst_skill)
+                known = _LEGACY_SEED_HASHES.get(slug, set()) | {hashes.get(slug), template_hash}
+                if current_hash in known:
+                    if current_hash != template_hash:
+                        shutil.copy2(src_skill, dst_skill)
+                        logger.info("skills_service: refreshed bundled skill '%s'", slug)
+                    hashes[slug] = template_hash
+                continue
             os.makedirs(target_dir, exist_ok=True)
             for filename in os.listdir(template_dir):
                 src = os.path.join(template_dir, filename)
@@ -160,13 +188,16 @@ def seed_default_skills() -> list[str]:
                 if os.path.isfile(src) and not os.path.exists(dst):
                     shutil.copy2(src, dst)
             seeded.append(slug)
+            if _seed_hash(dst_skill) == template_hash:
+                hashes[slug] = template_hash
             from services import skill_curator
             skill_curator.record(slug, skill_curator.BUNDLED)
-        except OSError:
+        except (OSError, SkillUnreadable):
             logger.exception("skills_service: couldn't seed bundled skill '%s'", slug)
 
+    if seeded or hashes != old_hashes:
+        settings_store.update_settings(seeded_skills=sorted(already | set(seeded)), seeded_skill_hashes=hashes)
     if seeded:
-        settings_store.update_settings(seeded_skills=sorted(already | set(seeded)))
         logger.info("skills_service: seeded bundled skills %s", ", ".join(seeded))
     return seeded
 

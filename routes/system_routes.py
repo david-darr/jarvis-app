@@ -6,6 +6,7 @@ across every domain and destroy data globally.
 import os
 import shutil
 import time
+import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
@@ -16,6 +17,7 @@ from core import backup, custom_tabs, events, logs as log_files, model_endpoints
 from core.channels import discord_channel
 from core.constants import DATA_DIR
 from core.middleware import require_admin, require_user
+from core.auth import auth_manager
 from core.vault import resolve_vault_dir
 from services.task_service import task_service
 
@@ -84,10 +86,7 @@ async def read_log(name: str = Query("backend"), limit: int = Query(200, ge=1, l
 
 @router.get("/custom-tabs")
 async def list_custom_tabs(user: str = Depends(require_user)) -> list[dict]:
-    """Developer Mode (David's ask 2026-09-01) — nav entries for every
-    discovered routes/tab_*.py. require_user, not require_admin, unlike the
-    rest of this file: every user needs this to render the sidebar, it's
-    not a diagnostic/admin surface."""
+    """Sidebar manifests for approved user tabs and enabled prebuilt tabs."""
     return custom_tabs.list_manifests()
 
 
@@ -96,15 +95,85 @@ async def pending_custom_tab_approvals(user: str = Depends(require_admin)) -> li
     return custom_tabs.pending_approvals()
 
 
+@router.get("/tabs")
+async def list_tabs(user: str = Depends(require_user)) -> list[dict]:
+    tabs = custom_tabs.list_tabs()
+    if not auth_manager.is_admin(user):
+        for tab in tabs:
+            tab.pop("fingerprint", None)
+            tab.pop("files", None)
+    return tabs
+
+
+@router.get("/tabs/{slug}/export")
+async def export_tab(slug: str, user: str = Depends(require_admin)):
+    from core import tab_install
+    import asyncio
+    try:
+        content = await asyncio.to_thread(tab_install.export, slug)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return Response(content, media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{slug}.kairostab"'})
+
+
+@router.post("/tabs/install")
+async def install_tab(request: Request, user: str = Depends(require_admin)):
+    from core import tab_install
+    import asyncio
+    import zipfile
+    try:
+        multipart = request.headers.get("content-type", "").startswith("multipart/form-data")
+        limit = tab_install.MAX_COMPRESSED + 65536 if multipart else 8192
+        incoming = bytearray()
+        async for chunk in request.stream():
+            incoming.extend(chunk)
+            if len(incoming) > limit:
+                raise ValueError("Install request exceeds limit")
+        # Reconstruct the bounded request for Starlette's multipart parser.
+        async def receive():
+            return {"type": "http.request", "body": bytes(incoming), "more_body": False}
+        bounded = Request(request.scope, receive)
+        if multipart:
+            async with bounded.form(max_files=1, max_fields=4, max_part_size=tab_install.MAX_COMPRESSED) as form:
+                file = form.get("file")
+                if not hasattr(file, "read") or not (file.filename or "").lower().endswith(".kairostab"):
+                    raise ValueError("Upload a .kairostab file")
+                content = await file.read(tab_install.MAX_COMPRESSED + 1)
+                options = {"replace": form.get("replace") == "true", "confirmed": form.get("confirmed") == "true",
+                           "expected_fingerprint": form.get("expected_fingerprint")}
+        else:
+            body = await bounded.json()
+            if not isinstance(body, dict) or not isinstance(body.get("github_url"), str):
+                raise ValueError("Provide a github_url or .kairostab upload")
+            content = await asyncio.to_thread(tab_install.github_archive, body["github_url"])
+            options = {"replace": body.get("replace") is True, "confirmed": body.get("confirmed") is True,
+                       "expected_fingerprint": body.get("expected_fingerprint")}
+        result = await asyncio.to_thread(tab_install.install, content, **options)
+        from core import tab_hooks
+        await tab_hooks.reconcile()
+        return result
+    except tab_install.ReviewRequired as exc:
+        raise HTTPException(status_code=409, detail=exc.detail)
+    except (OSError, ValueError, SyntaxError, zipfile.BadZipFile, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 class ApproveCustomTabRequest(BaseModel):
     fingerprint: str
 
 
 @router.post("/custom-tabs/{slug}/approve")
-async def approve_custom_tab(slug: str, body: ApproveCustomTabRequest,
+async def approve_custom_tab(slug: str, body: ApproveCustomTabRequest, request: Request,
                              user: str = Depends(require_admin)) -> dict:
     try:
-        return custom_tabs.approve_user_tab(slug, body.fingerprint)
+        result = custom_tabs.approve_user_tab(slug, body.fingerprint)
+        if os.path.lexists(os.path.join(custom_tabs.USER_TABS_DIR, slug)):
+            mounted = custom_tabs.mount_one(request.app, slug)
+            from core import tab_hooks
+            await tab_hooks.reconcile()
+            result["restart_required"] = not mounted
+        return result
     except KeyError:
         raise HTTPException(status_code=404, detail="custom tab not found")
     except (OSError, ValueError) as e:
@@ -120,11 +189,18 @@ async def custom_tab_view(slug: str, user: str = Depends(require_user)):
                     headers={"Cache-Control": "no-store"})
 
 
+@custom_views_router.get("/tab-files/{slug}/{filename}")
+async def folder_tab_file(slug: str, filename: str, user: str = Depends(require_user)):
+    result = custom_tabs.folder_file_bytes(slug, filename)
+    if result is None:
+        raise HTTPException(status_code=404, detail="tab file is not approved or enabled")
+    return Response(content=result, media_type="text/css" if filename == "view.css" else "application/javascript",
+                    headers={"Cache-Control": "no-store"})
+
+
 @router.get("/tab-templates")
 async def list_tab_templates(user: str = Depends(require_user)) -> list[dict]:
-    """Premade tabs offered in the New Tab gallery (David's ask 2026-09-03).
-    require_user, not admin: this is a normal "add a feature" surface, same
-    as the custom-tabs nav listing above."""
+    """Prebuilt tabs offered in the Tool Store."""
     return custom_tabs.list_templates()
 
 
@@ -134,37 +210,32 @@ class TabTemplateRequest(BaseModel):
 
 @router.post("/tab-templates/{slug}")
 async def set_tab_template(slug: str, body: TabTemplateRequest, request: Request,
-                           user: str = Depends(require_user)) -> dict:
+                           user: str = Depends(require_admin)) -> dict:
     try:
         result = custom_tabs.set_template_enabled(slug, body.enabled)
     except KeyError:
         raise HTTPException(status_code=404, detail="unknown tab template")
-    # Mount immediately so the tab works right away rather than after a
-    # restart. Disabling stops it being listed//navigable; its already-mounted
-    # routes stay until restart (same limitation custom_tabs.delete documents
-    # — Python can't unmount a FastAPI router at runtime).
+    # Mount immediately; the loader's dependency guards dormant routes.
     if body.enabled:
-        custom_tabs.mount_one(request.app, slug)
+        result["restart_required"] = not custom_tabs.mount_one(request.app, slug)
+    else:
+        result["restart_required"] = slug in getattr(request.app.state, "custom_tab_modules", {})
+    from core import tab_hooks
+    await tab_hooks.reconcile()
     return result
 
 
-class CustomTabOrderRequest(BaseModel):
-    order: list[str]
-
-
-@router.post("/custom-tabs/order")
-async def set_custom_tab_order(body: CustomTabOrderRequest, user: str = Depends(require_admin)) -> dict:
-    """Settings > Admin > Custom Tabs reorder (David's ask 2026-09-01)."""
-    settings_store.update_settings(custom_tab_order=body.order)
-    return {"ok": True}
-
-
 @router.delete("/custom-tabs/{slug}")
-async def delete_custom_tab(slug: str, user: str = Depends(require_admin)) -> dict:
-    """Settings > Admin > Custom Tabs delete (David's ask 2026-09-01) — see
-    core.custom_tabs.delete()'s docstring for the "still needs a restart to
-    fully unmount any of its own API routes" caveat."""
-    return custom_tabs.delete(slug)
+async def delete_custom_tab(slug: str, request: Request, user: str = Depends(require_admin)) -> dict:
+    """Remove user source or disable a shipped tab, preserving its data."""
+    try:
+        result = custom_tabs.delete(slug)
+        result["restart_required"] = slug in getattr(request.app.state, "custom_tab_modules", {})
+        from core import tab_hooks
+        await tab_hooks.reconcile()
+        return result
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 # Back up everything and restore it (roadmap phase 8, core/backup.py). The

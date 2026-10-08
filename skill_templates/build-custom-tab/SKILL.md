@@ -1,83 +1,197 @@
 ---
-description: How to build a new custom tab for jarvis-app (Developer Mode) — the file convention that gets it auto-discovered with zero edits to app.py, app.js, or icons.js.
+name: build-custom-tab
+description: Build a Kairos tab or workflow as a self-contained user folder using the stable core.tab_api contract.
 ---
 
-# Building a custom tab
+# Build a tab
 
-jarvis-app auto-discovers custom tabs from file naming alone — no manifest file, no registration step, no editing any shared file (`app.py`, `static/js/app.js`, `static/js/icons.js`). Drop the right files in the right place and it just appears in the sidebar nav on next server restart.
+A tab is one folder containing `tab.json` and `routes.py`, with optional
+`service.py`, `hooks.py`, `view.js`, `view.css`, and local helpers. Use this
+when someone asks for a new tab or workflow, such as a coursework tracker.
+Write source **only inside `data/tabs/<slug>/`**, reached through Kairos's file
+tools as **`custom-tabs/<slug>/`**. The installed data directory may be
+`%APPDATA%\JARVIS\data`; ask the app if unsure rather than guessing a path.
 
-Use this whenever the user asks for a new tab/workflow — e.g. "build me a School tab that shows my Canvas assignments" or "add a PSA outreach tab."
+Never edit or create anything in Kairos's own folders, including `core/`,
+`routes/`, `services/`, `tabs/`, `static/`, `app.py`, `app.js`, or `icons.js`.
+Updates replace app source; user tab folders survive them. Never import Kairos
+except through `core.tab_api`. Use relative imports for the tab's own files:
+`from .service import tracker_service`, `from . import helpers`. Standard
+library and available third-party libraries are fine; don't import other tabs.
 
-## Where the files go
+## Manifest and hooks
 
-Write a new tab into the **user tabs directory**, not the app's own source folders:
+`tab.json` is a JSON object. Required fields: `slug` (matches its folder;
+lowercase letter followed by lowercase letters, digits or underscores), `name`
+(nonempty display name), `version` (nonempty tab version string), `description`
+(string), `api` (integer API version, currently **1**), and `hooks` (list of
+hook names, `[]` if unused). Optional strings: `icon_svg`, `blurb` (card summary),
+`detail` (longer card explanation), and `reads` (sources read). Unknown fields
+are inert. An unsupported API version shows "Needs a newer Kairos".
 
-```
-<data-dir>/tabs/routes/tab_<slug>.py
-<data-dir>/tabs/views/<slug>.js
-<data-dir>/tabs/services/<slug>_service.py    (optional)
-```
+Complete example for `custom-tabs/tracker/tab.json`:
 
-`<data-dir>` is the app's data directory — `%APPDATA%\JARVIS\data` on Windows for an installed copy, or `data/` in a source checkout. Ask the app if you're unsure rather than guessing.
-
-This matters: the app's own `routes/`, `services/`, and `static/js/views/` folders live inside the install directory, and an app update replaces them wholesale. A tab written there is destroyed by the next update. The data directory is never touched by updates.
-
-The import names are identical either way — the app adds the user directories to the `routes` and `services` packages at startup, so `routes.tab_<slug>` and `services.<slug>_service` resolve from either place. Everything below is unchanged by where the file physically sits.
-
-## The convention
-
-A tab is 2-3 files:
-
-1. **`tabs/routes/tab_<slug>.py`** (required) — a normal FastAPI router, same shape as every other file in the app's `routes/`. Must define two names at module level:
-   - `router` — an `APIRouter`, prefix it under `/api/tab-<slug>` (or whatever makes sense).
-   - `TAB_MANIFEST` — `{"id": "<slug>", "label": "Human Label", "icon_svg": "<svg viewBox=\"0 0 24 24\" ...>...</svg>"}`. `icon_svg` is a full inline SVG string (same hand-drawn stroke style as `static/js/icons.js` — `fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"`), rendered directly by the frontend — this is *why* `icons.js` never needs editing.
-   - Gate endpoints with `user: str = Depends(require_user)` from `core.middleware` (same as every existing route), unless the tab genuinely needs admin-only actions (`require_admin`).
-
-2. **`tabs/views/<slug>.js`** (required) — the frontend view, served automatically at `/custom-views/<slug>.js`. Must export:
-   ```js
-   export async function render(container, tabId) { ... }
-   ```
-   `container` is the tab's content element — clear it (`container.innerHTML = ""`) and build into it. Return a cleanup function only if you own a persistent resource (an animation loop, a websocket) that needs tearing down on tab switch; otherwise return nothing. Import the shared helpers from `/static/js/api.js` (the user view is served from `/custom-views`, so `../api.js` would resolve to `/api.js`): `api(path, options)` (fetch wrapper, throws on non-2xx, parses JSON) and `el(tag, attrs, children)` (DOM builder — `attrs.text` sets textContent, `attrs.onclick` etc. wire listeners). Read `static/js/views/tasks.js` end to end as the concrete worked example of this pattern (fetch on render, rebuild a list, wire buttons that call `api()` then re-fetch).
-
-3. **`tabs/services/<slug>_service.py`** (optional, only if the tab needs its own persisted data) — a singleton class following every existing service's exact shape (see `services/task_service.py` or `services/notes_service.py`): reads its own `data/<slug>.json` once at import time via `core.atomic_io.read_json`, mutates an in-memory dict, writes back via `core.atomic_io.write_json_atomic` on every change, module-level singleton instance at the bottom (`<slug>_service = <Slug>Service()`). Import `DATA_DIR` from `core.constants` for its JSON path rather than hardcoding one, so it follows the data directory wherever it actually is. You're writing the service *code*; the data file it manages is created by that code at runtime when the app calls it.
-
-That's the whole contract. No `app.py` edit (an existing one-time hook mounts every discovered `tab_*.py` automatically, from both the app's own `routes/` and the user tabs directory), no `static/js/app.js` edit (the sidebar fetches `/api/system/custom-tabs` and appends whatever it finds, loading each view from the URL the manifest reports), no `icons.js` edit (the icon travels inline in `TAB_MANIFEST`).
-
-## Handle errors inside the view
-
-`switchTab()` catches a failure while it awaits `render()`, but it cannot catch a fetch or event handler that fails after `render()` returns. Catch those async failures in the view and show a visible error in the tab instead of leaving "Loading..." on screen. `api()` throws on network and non-2xx failures; failed GETs do not show a toast. For a request started without awaiting it:
-
-```js
-import { api, el } from "/static/js/api.js";
-
-export async function render(container) {
-  container.replaceChildren(el("p", { text: "Loading items..." }));
-  api("/api/tab-example/items")
-    .then((items) => {
-      if (container.isConnected) {
-        container.replaceChildren(el("p", { text: `${items.length} items` }));
-      }
-    })
-    .catch((error) => {
-      console.error("Could not load tab items", error);
-      if (container.isConnected) {
-        container.replaceChildren(el("p", {
-          class: "empty-state", text: "Could not load items. Reopen the tab to retry.",
-        }));
-      }
-    });
+```json
+{
+  "slug": "tracker",
+  "name": "Tracker",
+  "version": "1.0.0",
+  "description": "Track work and deadlines.",
+  "api": 1,
+  "hooks": ["start", "stop", "on_message", "calendar_items"],
+  "icon_svg": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M5 6h14M5 12h14M5 18h14\"/></svg>",
+  "blurb": "Keep deadlines and follow-ups together.",
+  "detail": "Review captured work and mark it complete.",
+  "reads": "Reads only the message connections you choose"
 }
 ```
 
-Handle async button and other event handlers with their own `try`/`catch` or `.catch()` too, and show the failure in the tab.
+Declare only hooks you implement in `hooks.py`. Exact callable signatures
+(sync `def` or async `async def` both work):
 
-## Reference implementation to imitate
+- `start()`: initialize when the approved tab turns on; return nothing.
+- `stop()`: release background resources when removed, changed or shutting down; return nothing.
+- `on_message(source, message)`: passive consumer of copied inbound dictionaries; return ignored.
+- `calendar_items(user, start, end)`: return a list of calendar item dictionaries for this user and range.
 
-Read these three files together before building a new tab — they're the simplest complete example of the exact pattern above (route + service + view):
-- `routes/task_routes.py`
-- `services/task_service.py`
-- `static/js/views/tasks.js`
+Each hook has a **2-second limit**; slow or failed hooks are skipped. Keep
+module imports quick too. Start background work and return; retain tasks and
+stop them in `stop()`. Check `api.is_on` before background side effects.
+`on_message` must never reply, intercept, redirect or block the normal chat.
+`source` has `kind` (`connector` or `discord`) and `connection_id`; `message`
+has `conversation`, `sender`, `text`, `sender_name`, `attachments`, `replying_to`,
+and provenance (`message_id`, `thread_id`, `sent_at`, `source_url`,
+`source_context`, which may be empty). Capture only sources the user chose.
 
-## After creating the files
+Calendar `user` is the authenticated username; `start` and `end` are ISO range
+strings. Filter by user and range (end exclusive). Each item needs `id`,
+`title`, `start`, `end`, `all_day`, `completed`, **`source: "tab"`**,
+**`source_label`** (e.g. `"From Tracker"`), and **`toggle_url`** under this tab's
+own `/api/tab-tracker/...` prefix. Optional `location` and `description` are
+strings. Implement the toggle as an authenticated PATCH accepting
+`{"completed": true}` or `false`. Do not point it at another tab or app route.
 
-The new router is picked up the next time the server restarts (`core/custom_tabs.py` scans `routes/` at startup) — there is currently no hot-reload for newly *added* route modules, only for edits to already-mounted ones under `--reload` (see `scripts/run_remote.py`'s own comment on its reload limitations). Tell the user their new tab needs a server restart to appear.
+## Stable API v1
+
+Bind a handle in the tab module that uses it:
+
+```python
+from core import tab_api
+api = tab_api.for_tab(__package__)
+```
+
+`tab_api.API_VERSION` is 1; v1 remains supported across app updates.
+Module functions (call as `tab_api.<name>`):
+
+- `for_tab(package)`: bind an approved, enabled registered tab package.
+- `require_user`, `require_admin`: FastAPI dependencies for signed-in or admin access.
+- `is_admin(username)`: check admin status without exposing account data.
+- `wrap_untrusted(label, text)`: delimit external text before giving it to a model.
+- `list_models()`: list endpoint `id`, `name`, `kind`, and `model`, without secrets.
+- `model_context_size(endpoint_id)`: configured local input window, or `None` for other kinds.
+- `await model_choices(endpoint_id)`: account-scoped model choices as `[{"id", "name"}]`; no catalog gives `[]`, never keys.
+- `await complete(endpoint_id, system, prompt, timeout=180, model=None)`: tool-free completion; Claude accepts an offered model ID, local/API accept only their configured model or None; Codex CLI is unsupported.
+- `email_accounts()`: connected mail account IDs, emails and names, without credentials.
+- `send_email(user, account_id, to, subject, body, in_reply_to=None)`: one plain-text email; admin only, and only from a button the person pressed after confirming the recipient. Never from background work or a model's say.
+- `open_mailbox(account_id, folder)`: read-only IMAP context manager; UID search, fetch of `RFC822.SIZE`/`BODY.PEEK[]`, and `response("UIDVALIDITY")` only.
+- `message_time(value)`: parse an RFC mail timestamp with timezone, or return `None`.
+- `message_connections()`: connection kind, ID and label for supported messaging sources.
+- `documents()`: Library document IDs and titles.
+- `document(document_id)`: read one Library document.
+- `backlog_card(card_id)`: read a work card.
+- `create_backlog_card(title, description, agent_id)`: create a backlog card for an agent.
+- `delete_backlog_card(card_id)`: delete a work card.
+
+Bound handle members (call as `api.<name>`):
+
+- `slug`: this tab's identity.
+- `is_on`: whether current source is approved and enabled.
+- `data_dir`: this tab's runtime store in `data/tab-data/<slug>/`.
+- `read_json(name, default)`: read a plain filename inside that store.
+- `write_json(name, value)`: atomically save JSON inside that store.
+- `adopt_data_file(old_name)`: migrate only this tab's legacy `<slug>.json`, including old tab-owned encrypted values.
+- `encrypt(text)`: encrypt this tab's own secret with authenticated tab ownership.
+- `decrypt(token)`: decrypt only this tab's tokens, refusing app credentials and other tabs' values.
+- `chat_session(key, title, untrusted=None, model_endpoint_id=None)`: get/create a persistent tab chat; pass `untrusted="<what>"` whenever you put outside text in it (shell commands then ask first).
+- `append_chat_message(session_id, role, text)`: append context to chat history without a model turn.
+- `register_sync(name, fn)`: register an async daily-sync provider that runs only while the tab is on; app removal unregisters it.
+
+Do not call private names or loader lifecycle internals. This interface exposes
+no stored Kairos credentials. Approval runs Python with app privileges; this
+is a supported import boundary, not a Python sandbox.
+
+## Routes, storage and secrets
+
+`routes.py` must expose a module-level FastAPI `router`. Keep every endpoint
+under **`/api/tab-<slug>/...`** and gate it with `Depends(require_user)` or
+`Depends(require_admin)` imported from `core.tab_api`:
+
+```python
+from fastapi import APIRouter, Depends
+from core import tab_api
+from core.tab_api import require_user
+
+api = tab_api.for_tab(__package__)
+router = APIRouter(prefix="/api/tab-tracker", tags=["tracker"])
+
+@router.get("/items")
+async def items(user: str = Depends(require_user)):
+    return api.read_json("items.json", {}).get(user, [])
+```
+
+Use `api.read_json`/`write_json` for persisted state, with plain filenames,
+never absolute paths or traversal. Scope per-user data to the signed-in user.
+An optional `service.py` can own a singleton, read its state once, and save on
+every change. Runtime data is created by code, not file-tool edits. Store
+tab-owned credentials encrypted with `api.encrypt`/`decrypt`; never return
+saved plaintext to the view. Show "Saved; leave blank to keep" instead.
+
+## View contract
+
+`view.js` exports **`export async function render(container, tabId, options)`**.
+It is served from `/tab-files/<slug>/view.js`; `view.css` is loaded if present.
+Clear the supplied container and build into it. Import helpers by their
+absolute app URL: `import { api, el } from "/static/js/api.js"`; relative
+`../api.js` resolves incorrectly. `api(path, options)` parses JSON and throws
+on network/non-2xx failures; `el(tag, attrs, children)` builds DOM (`text`
+sets textContent; `onclick` etc. wire listeners). Use relative imports for
+local JS helpers. To show a tab chat, use `mountSessionChat(host, { sessionId,
+modelPicker: true, openInChats: true })` from `/static/js/sessionChat.js`;
+it streams and shows permission prompts. Give `host` a fixed height. Use existing `.view-constrained`, `.view-header`, `.card`,
+`.title`, `.meta`, `.btn`, `.btn.primary`, `.btn.quiet`, `.disclosure-panel`
+and theme tokens such as `--text`, `--bg-panel`, `--border`, `--accent`.
+Use currentColor stroke SVGs; the manifest icon needs no shared icon edit.
+
+Read `tabs/school/` (routes, service, sync hook and view) and `tabs/crm/`
+(passive capture, background cleanup, calendar items and styles) as worked
+examples when available. `static/js/views/tasks.js` is also a useful read-only
+example of fetching, rebuilding lists and wiring actions.
+
+Catch request failures **inside the view**, including every async event
+handler and fire-and-forget promise. `switchTab()` catches only failures while
+awaiting `render()`; it cannot catch later work. Failed GETs show no automatic
+toast. Replace "Loading..." with a visible error and retry/reopen guidance,
+never leave it loading forever. Show an empty state with a useful next action
+when a successful request returns no items; never disguise failure as empty.
+Before delayed updates check that the container is still connected and the
+request belongs to the current view. Return a cleanup function only when
+you own resources (timers, listeners, websockets, animation loops), and
+release them on tab switch. Use textContent for external text.
+
+## Review and handoff
+
+After writing, the tab appears in **Tool Store > Tabs > Yours** as **Needs
+approval**. An admin reviews the file list/source and approves that exact
+fingerprint. Approved folder code loads without a restart or edits to Kairos.
+Changing any source file requires approval again. Source in the user data
+folder survives app updates; removing/replacing source keeps saved tab data.
+
+Before handing it over, run this checklist using the files you wrote:
+
+- Parse `tab.json`; check required fields, matching slug, API 1 and implemented hooks.
+- Check `routes.py` exposes `router`, owns its API prefix and authenticates endpoints.
+- Check all Kairos imports use only `core.tab_api`; local imports are relative.
+- Confirm every written source file is inside `custom-tabs/<slug>/` and there are no links.
+- Check initial loads, empty results and failed requests, including async actions, produce visible states.
+- Check delayed updates and cleanup, phone-width layout, and tab-owned encrypted storage if used.
+- Tell the user where to review and approve it, and what sources/data it reads.

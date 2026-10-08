@@ -68,7 +68,6 @@ async def get_settings(user: str = Depends(require_admin)) -> dict:
         "onboarding_complete": raw["onboarding_complete"],
         "vault_dir": raw["vault_dir"] or resolve_vault_dir(),
         "disabled_tools": raw["disabled_tools"],
-        "developer_mode_enabled": raw["developer_mode_enabled"],
         "auto_compact": raw["auto_compact"],
         "computer_use": raw["computer_use"],
         "helper_endpoint_id": raw["helper_endpoint_id"],
@@ -80,20 +79,6 @@ def _helper_summary() -> dict | None:
     from core import helpers
     endpoint = helpers.helper_endpoint()
     return {"id": endpoint["id"], "name": endpoint["name"], "kind": endpoint["kind"]} if endpoint else None
-
-
-class SetDeveloperModeRequest(BaseModel):
-    enabled: bool
-
-
-@router.post("/developer-mode")
-async def set_developer_mode(body: SetDeveloperModeRequest, user: str = Depends(require_admin)) -> dict:
-    """Sidebar toggle (David's ask 2026-09-01) — flips the theme to red and
-    is the entry point for building custom tabs (see core/custom_tabs.py).
-    Purely cosmetic/contextual: it does not gate whether already-built
-    custom tabs show up in the nav, only the theme."""
-    settings_store.update_settings(developer_mode_enabled=body.enabled)
-    return {"ok": True}
 
 
 class SetAutoCompactRequest(BaseModel):

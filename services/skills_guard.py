@@ -621,11 +621,11 @@ def _mask_prose_link_destinations(lines: List[str]) -> List[str]:
     return out
 
 
-def scan_file(file_path: Path, rel_path: str = "") -> List[Finding]:
+def scan_file(file_path: Path, rel_path: str = "", *, force_text: bool = False) -> List[Finding]:
     """Threat-pattern + invisible-unicode scan of one file; *rel_path* is the display path (default: file
     name). Regex findings dedupe per pattern per line; invisible chars yield one per line."""
     rel_path = rel_path or file_path.name
-    if file_path.suffix.lower() not in SCANNABLE_EXTENSIONS and file_path.name != "SKILL.md":
+    if not force_text and file_path.suffix.lower() not in SCANNABLE_EXTENSIONS and file_path.name != "SKILL.md":
         return []
     try:
         lines = file_path.read_text(encoding='utf-8').split('\n')

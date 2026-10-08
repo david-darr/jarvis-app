@@ -1,0 +1,17 @@
+{
+  "slug": "crm",
+  "name": "CRM",
+  "version": "1.0.0",
+  "description": "Follow-ups with deadlines, priorities and source evidence.",
+  "api": 1,
+  "hooks": [
+    "start",
+    "stop",
+    "on_message",
+    "calendar_items"
+  ],
+  "icon_svg": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M15 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2\"/><circle cx=\"8\" cy=\"7\" r=\"4\"/><path d=\"M20 8v6m-3-3h6M17 21v-2a4 4 0 0 0-2-3.5\"/></svg>",
+  "blurb": "Turn connected messages into follow-ups with deadlines, priorities and source links.",
+  "detail": "Scan selected email accounts and connections, review uncertain requests, and track work by contact and project. Every extracted task keeps its source evidence.",
+  "reads": "Reads the email accounts and message connections you choose"
+}

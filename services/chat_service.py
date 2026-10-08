@@ -410,6 +410,21 @@ async def send_message(session_id: str, text: str, attachment_ids: list[str] | N
         log_files.reset_log_tag(tag)
 
 
+def _taint_turn(session_id: str, brain, reference_context: str) -> None:
+    """Untrusted text in this turn's input makes its shell commands ask first:
+    an attached reference, or a chat a tab marked as carrying outside text in
+    its own history (session_manager.set_untrusted_context). Codex's own
+    shell runs outside Kairos's permission path, so this covers the Claude
+    and local/API brains only, as reference taint always has."""
+    if not isinstance(brain, (Brain, ExternalBrain)):
+        return
+    marked = (session_manager.get_session(session_id) or {}).get("untrusted_context")
+    if marked:
+        brain.pending_reference_taint = str(marked)
+    elif reference_context:
+        brain.pending_reference_taint = True
+
+
 async def _send_message(session_id: str, text: str, attachment_ids: list[str] | None = None,
                         is_admin: bool = False, reference_context: str = "",
                         references: list[dict] | None = None) -> str:
@@ -424,8 +439,7 @@ async def _send_message(session_id: str, text: str, attachment_ids: list[str] | 
 
     full_text = _prepare_sent_text(session_id, index, text, attachment_ids, reference_context)
     brain, just_created = await _get_brain(session_id, endpoint, is_admin)
-    if reference_context and isinstance(brain, (Brain, ExternalBrain)):
-        brain.pending_reference_taint = True
+    _taint_turn(session_id, brain, reference_context)
     full_text = _vision_input(endpoint, _prime_with_history(session_id, just_created, endpoint, full_text, brain), image_ids)
     session = session_manager.get_session(session_id) or {}
     usage = None
@@ -494,8 +508,7 @@ async def _stream_message(session_id: str, text: str, attachment_ids: list[str] 
         full_text = _prepare_sent_text(session_id, index, text, attachment_ids, reference_context)
         provider_started = True
         brain, just_created = await _get_brain(session_id, endpoint, is_admin)
-        if reference_context and isinstance(brain, (Brain, ExternalBrain)):
-            brain.pending_reference_taint = True
+        _taint_turn(session_id, brain, reference_context)
         full_text = _vision_input(endpoint, _prime_with_history(session_id, just_created, endpoint, full_text, brain), image_ids)
         session = session_manager.get_session(session_id) or {}
         async with file_checkpoints.around_turn(f"chat:{session_id}", session.get("workspace_dir")):

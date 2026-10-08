@@ -4,6 +4,7 @@ python-telegram-bot; this talks to the same API directly. Lesson carried
 over from Hermes: a wedged send must not stall receiving, so polling and
 sending use separate clients, each with timeouts."""
 import os
+from datetime import datetime, timezone
 
 from core.connectors import register
 from core.connectors.base import Connector, ConnectorError, Field, Inbound, require
@@ -60,7 +61,13 @@ class Telegram(Connector):
                        sender_name=sender.get("username") or sender.get("first_name", ""),
                        text=message.get("text") or message.get("caption") or "",
                        replying_to=(replied.get("text") or "") if ours else "",
-                       attachments=[a for a in attachments if a])
+                       attachments=[a for a in attachments if a],
+                       message_id=str(message.get("message_id", "")),
+                       thread_id=str(message.get("message_thread_id") or replied.get("message_id") or message.get("message_id", "")),
+                       sent_at=datetime.fromtimestamp(message["date"], timezone.utc).isoformat() if message.get("date") else None,
+                       source_context=replied.get("text") or "",
+                       source_url=(f"https://t.me/{message['chat']['username']}/{message['message_id']}"
+                                   if message["chat"].get("username") and message["chat"].get("type") in ("supergroup", "channel") else None))
 
     async def _download(self, client, token: str, file_id: str, name: str):
         info = require(await client.get(f"{API}/bot{token}/getFile", params={"file_id": file_id}), "Fetching a file")

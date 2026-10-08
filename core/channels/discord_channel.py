@@ -185,6 +185,21 @@ def _build_client(discord, bot: dict):
         if not message.content.strip() and not message.attachments:
             return
 
+        try:
+            from core import tab_hooks
+            from dataclasses import asdict
+            from core.connectors.base import Inbound
+            reference = getattr(message, "reference", None)
+            parent = getattr(reference, "resolved", None)
+            tab_hooks.emit_message({"kind": "discord", "connection_id": bot["id"]}, asdict(Inbound(
+                conversation=str(message.channel.id), sender=str(message.author.id),
+                sender_name=str(message.author), text=message.content,
+                message_id=str(message.id), thread_id=str(getattr(reference, "message_id", None) or message.id),
+                sent_at=message.created_at.isoformat(), source_url=message.jump_url,
+                replying_to=getattr(parent, "content", "") or "")))
+        except Exception:
+            logger.exception("discord_channel: tab message dispatch failed")
+
         # Agents: only this bot's own allowed user, never in an open channel.
         trusted = _may_direct_agents(str(message.channel.id), str(message.author.id), channel_modes, allowed_user_id)
         if trusted and message.reference and message.content.strip():

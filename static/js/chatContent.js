@@ -10,9 +10,29 @@ export async function copyText(text) {
   catch { toast('Clipboard unavailable. Select the text to copy it.', 'error'); }
 }
 
+// Live replies (David, 2026-10-07): a file card, code block or table that
+// appears while a reply streams forms in halftone dots (chat.css
+// .is-forming). Every paint re-renders the whole body, so each block's start
+// time is kept on the body and its animation resumes where it was. Blocks
+// in a reply that was already there (history) never animate.
+const FORM_MS = 900;
+function formBlocks(body, fragment, live) {
+  const started = body._forming ??= new Map();
+  const now = performance.now();
+  const counts = {};
+  for (const node of fragment.querySelectorAll('.artifact-card, .chat-code-block, .chat-table-wrap')) {
+    const kind = node.classList[0];
+    const key = kind + ' ' + (counts[kind] = (counts[kind] || 0) + 1);
+    if (!started.has(key)) started.set(key, live ? now : -Infinity);
+    const elapsed = now - started.get(key);
+    if (elapsed < FORM_MS) { node.classList.add('is-forming'); node.style.animationDelay = `${-Math.round(elapsed)}ms`; }
+  }
+}
+
 // Sanitize into a detached fragment BEFORE insertion. No remote image loads,
 // raw HTML styles, event handlers, frames, IDs, or application-local links.
-export function renderMessageBody(body, text, sessionId, rich = true) {
+// `live`: the reply is streaming in now (see formBlocks).
+export function renderMessageBody(body, text, sessionId, rich = true, { live = false } = {}) {
   body._rawText = text;
   body.classList.toggle('chat-prose', rich);
   if (!rich) { body.textContent = text; return; }
@@ -65,6 +85,7 @@ export function renderMessageBody(body, text, sessionId, rich = true) {
       el('span', { text: language }), el('button', { type: 'button', text: 'Copy code', onclick: () => copyText(raw) }),
     ]), pre);
   }
+  formBlocks(body, fragment, live);
   body.replaceChildren(fragment);
 }
 

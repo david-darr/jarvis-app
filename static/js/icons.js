@@ -27,10 +27,6 @@ export const ICONS = {
   // Mobile drawer toggle (David's ask 2026-09-01) — hamburger / close.
   menu: `<svg viewBox="0 0 24 24" ${S}><path d="M4 7h16M4 12h16M4 17h16"/></svg>`,
   close: `<svg viewBox="0 0 24 24" ${S}><path d="M6 6l12 12M18 6L6 18"/></svg>`,
-  // Developer Mode toggle (David's ask 2026-09-01) — angle brackets, the
-  // universal "code" mark.
-  devMode: `<svg viewBox="0 0 24 24" ${S}><path d="M8 6l-5 6 5 6M16 6l5 6-5 6"/></svg>`,
-  // "+" New Tab nav item (David's ask 2026-09-01, Developer Mode only).
   plus: `<svg viewBox="0 0 24 24" ${S}><path d="M12 5v14M5 12h14"/></svg>`,
   // Row-action + empty-state icons (David's ask 2026-09-03, professional
   // polish pass) — destructive row actions became hover-revealed icon

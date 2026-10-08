@@ -35,6 +35,15 @@ class SiteDemoTests(unittest.TestCase):
         self.assertIn('require("../demo/fixtures.js")', smoke)
         self.assertTrue((REPO / "docs" / "demo" / "fixtures.js").exists())
 
+    def test_the_demo_runs_without_a_server(self):
+        # Opened from disk there is no service worker and no module loading,
+        # so the page loads plain scripts by relative paths only.
+        page = (REPO / "docs" / "demo" / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn('type="module"', page)
+        self.assertNotIn('"/static/', page)
+        self.assertFalse((REPO / "docs" / "demo" / "sw.js").exists())
+        self.assertIn('src="demo/index.html"', (REPO / "docs" / "index.html").read_text(encoding="utf-8"))
+
     def test_the_pdf_viewer_is_left_out(self):
         self.assertFalse((REPO / "docs" / "demo" / "static" / "js" / "vendor" / "pdf.worker.mjs").exists())
 

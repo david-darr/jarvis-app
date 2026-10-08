@@ -1,12 +1,13 @@
-import { api, el, toast } from "../api.js";
+import { api, el, toast, confirmDialog, customSelect } from "../api.js";
 import { ICONS } from "../icons.js";
+import { pill } from "../settingsKit.js";
 
 // Browse what Kairos can use. Skill content and live MCP tool schemas stay
 // behind their own read/describe calls; this view only loads catalog metadata.
 export async function render(container) {
   container.innerHTML = "";
-  const state = { query: "", kind: "all", installed: false, skills: [], servers: [], integrations: [], skillsError: "", catalogError: "" };
-  const search = el("input", { type: "search", class: "tool-store-search", placeholder: "Search skills and tools", "aria-label": "Search skills and tools" });
+  const state = { query: "", kind: "all", installed: false, skills: [], servers: [], integrations: [], skillsError: "", catalogError: "", tabs: [], tabsError: "", admin: false };
+  const search = el("input", { type: "search", class: "tool-store-search", placeholder: "Search skills, tools and tabs", "aria-label": "Search skills, tools and tabs" });
   const filters = el("div", { class: "segmented-tabs tool-store-filters", role: "group", "aria-label": "Store category" });
   const installed = el("label", { class: "tool-store-installed" }, [
     el("input", { type: "checkbox" }), el("span", { text: "Added only" }),
@@ -15,23 +16,44 @@ export async function render(container) {
   const count = el("span", { class: "meta", "aria-live": "polite" });
   const manageSkills = el("button", { type: "button", class: "btn quiet", text: "Manage skills" });
   const manageTools = el("button", { type: "button", class: "btn quiet", text: "Add MCP server", disabled: true });
+  const buildTab = el("button", { type: "button", class: "btn primary", text: "Build a tab", hidden: true, "aria-expanded": "false" });
+  const installTab = el("button", { type: "button", class: "btn quiet", text: "Install a tab", hidden: true, "aria-expanded": "false" });
   const remoteInstall = el("details", { class: "disclosure-panel tool-store-install", hidden: true });
   const customServer = el("details", { class: "disclosure-panel tool-store-install", hidden: true });
+  const tabBuilder = el("details", { class: "disclosure-panel tool-store-install", hidden: true });
+  const tabInstaller = el("details", { class: "disclosure-panel tool-store-install", hidden: true });
   const managerHost = el("div", { class: "tool-store-manager", hidden: true });
   manageSkills.addEventListener("click", () => showSkillManager());
   manageTools.addEventListener("click", () => { customServer.open = true; customServer.scrollIntoView({ block: "nearest" }); });
+  // The "Build your own tab" card in Yours opens the same brief as the header button.
+  const openTabBuilder = () => {
+    tabBuilder.open = true;
+    tabBuilder.hidden = false;
+    tabBuilder.scrollIntoView({ block: "nearest" });
+  };
+  for (const [button, panel] of [[buildTab, tabBuilder], [installTab, tabInstaller]]) {
+    button.addEventListener("click", () => {
+      panel.open = !panel.open;
+      panel.hidden = !panel.open;
+      if (panel.open) panel.scrollIntoView({ block: "nearest" });
+    });
+    panel.addEventListener("toggle", () => {
+      button.setAttribute("aria-expanded", String(panel.open));
+      panel.hidden = state.kind !== "tabs" || !panel.open;
+    });
+  }
 
   container.append(el("div", { class: "view-constrained tool-store-view" }, [
     el("div", { class: "view-header" }, [
       el("div", {}, [
         el("h2", { text: "Tool Store" }),
-        el("div", { class: "sub", text: "Find skills and connect tools. Choose connected servers in each chat's Integrations menu." }),
+        el("div", { class: "sub", text: "Find skills, connect tools and add tabs. Choose connected servers in each chat's Integrations menu." }),
       ]),
     ]),
     el("div", { class: "tool-store-toolbar" }, [search, filters, installed]),
-    el("div", { class: "tool-store-summary" }, [count, el("div", { class: "tool-store-manage" }, [manageSkills, manageTools])]),
+    el("div", { class: "tool-store-summary" }, [count, el("div", { class: "tool-store-manage" }, [manageSkills, manageTools, buildTab, installTab])]),
     remoteInstall, customServer, managerHost,
-    results,
+    tabBuilder, tabInstaller, results,
   ]));
   results.append(el("div", { class: "tool-store-empty", role: "status", text: "Loading skills and tools…" }));
 
@@ -73,7 +95,7 @@ export async function render(container) {
     draw();
   });
   const loaded = await Promise.allSettled([
-    api("/api/skills"), api("/api/integrations/catalog"), api("/api/integrations"),
+    api("/api/skills"), api("/api/integrations/catalog"), api("/api/integrations"), api("/api/system/tabs"), api("/api/auth/status"),
   ]);
   if (!container.isConnected) return;
   if (loaded[0].status === "fulfilled") state.skills = loaded[0].value;
@@ -88,6 +110,12 @@ export async function render(container) {
     customServer.hidden = false;
     manageTools.disabled = false;
   } else if (state.catalogError.startsWith("Only an admin")) manageTools.remove();
+  if (loaded[3].status === "fulfilled") state.tabs = loaded[3].value;
+  else state.tabsError = "Tabs are unavailable right now.";
+  state.admin = loaded[4].status === "fulfilled" && loaded[4].value.is_admin;
+  tabBuilder.append(el("summary", { text: "Tab brief" }));
+  renderTabBuilder(tabBuilder);
+  if (state.admin) setupTabInstaller();
   draw();
 
   async function showSkillManager(focusSlug = null) {
@@ -181,7 +209,7 @@ export async function render(container) {
 
   function draw() {
     filters.innerHTML = "";
-    for (const [id, label] of [["all", "All"], ["skills", "Skills"], ["tools", "Tools"]]) {
+    for (const [id, label] of [["all", "All"], ["skills", "Skills"], ["tools", "Tools"], ["tabs", "Tabs"]]) {
       const button = el("button", {
         type: "button", class: "segmented-tab" + (state.kind === id ? " active" : ""),
         text: label, "aria-pressed": state.kind === id ? "true" : "false",
@@ -189,17 +217,29 @@ export async function render(container) {
       button.addEventListener("click", () => { state.kind = id; draw(); });
       filters.append(button);
     }
+    remoteInstall.hidden = state.kind === "tabs" || loaded[1].status !== "fulfilled";
+    customServer.hidden = remoteInstall.hidden;
+    manageSkills.hidden = state.kind === "tabs";
+    manageTools.hidden = state.kind === "tabs";
+    buildTab.hidden = state.kind !== "tabs";
+    installTab.hidden = state.kind !== "tabs" || !state.admin;
+    if (state.kind === "tabs") managerHost.hidden = true;
+    tabBuilder.hidden = state.kind !== "tabs" || !tabBuilder.open;
+    tabInstaller.hidden = state.kind !== "tabs" || !state.admin || !tabInstaller.open;
     results.innerHTML = "";
     const q = state.query;
-    const skills = state.kind === "tools" ? [] : state.skills.filter((item) =>
+    const skills = !["all", "skills"].includes(state.kind) ? [] : state.skills.filter((item) =>
       !q || `${item.slug} ${item.description}`.toLowerCase().includes(q));
-    const tools = state.kind === "skills" ? [] : state.servers.filter((item) =>
+    const tools = !["all", "tools"].includes(state.kind) ? [] : state.servers.filter((item) =>
       (!q || `${item.name} ${item.description || ""}`.toLowerCase().includes(q)) &&
       (!state.installed || item.added));
-    const custom = state.kind === "skills" ? [] : state.integrations.filter((item) => item.kind === "mcp_server" &&
+    const custom = !["all", "tools"].includes(state.kind) ? [] : state.integrations.filter((item) => item.kind === "mcp_server" &&
       !state.servers.some((server) => server.url.replace(/\/$/, "") === (item.url || "").replace(/\/$/, "")) &&
       (!q || `${item.name} ${item.url || ""}`.toLowerCase().includes(q)));
-    const total = skills.length + tools.length + custom.length;
+    const tabs = ["all", "tabs"].includes(state.kind) ? state.tabs.filter((item) =>
+      (!q || `${item.slug} ${item.name} ${item.blurb || ""} ${item.description} ${item.detail || ""} ${item.reads || ""} ${item.status} ${item.reason || ""}`.toLowerCase().includes(q)) &&
+      (!state.installed || item.kind === "user" || item.enabled)) : [];
+    const total = skills.length + tools.length + custom.length + tabs.length;
     count.textContent = `${total} result${total === 1 ? "" : "s"}`;
     if (skills.length) {
       results.append(el("h3", { class: "tool-store-heading", text: `Skills · ${skills.length}` }));
@@ -214,14 +254,156 @@ export async function render(container) {
       for (const item of custom) grid.append(customToolCard(item));
       results.append(grid);
     }
-    if (state.kind !== "skills" && state.catalogError) {
+    for (const [kind, label] of [["prebuilt", "Prebuilt"], ["user", "Yours"]]) {
+      const entries = tabs.filter((item) => item.kind === kind);
+      // Yours always ends with the way to build one, and is that card alone when empty.
+      const offerBuild = kind === "user" && state.kind === "tabs" && !q;
+      if (!entries.length && !offerBuild) continue;
+      results.append(el("h3", { class: "tool-store-heading", text: `${label} · ${entries.length}` }));
+      const grid = el("div", { class: "tool-store-grid" });
+      for (const item of entries) grid.append(tabCard(item));
+      if (offerBuild) grid.append(buildTabCard());
+      results.append(grid);
+    }
+    if (["all", "tabs"].includes(state.kind) && state.tabsError) results.append(el("div", { class: "tool-store-notice", text: state.tabsError }));
+    if (["all", "tools"].includes(state.kind) && state.catalogError) {
       results.append(el("div", { class: "tool-store-notice", text: state.catalogError }));
     }
-    if (state.kind !== "tools" && state.skillsError) {
+    if (["all", "skills"].includes(state.kind) && state.skillsError) {
       results.append(el("div", { class: "tool-store-notice", text: state.skillsError }));
     }
-    if (!total && !(state.kind !== "skills" && state.catalogError) && !(state.kind !== "tools" && state.skillsError)) {
+    if (!total && !state.tabsError && !(["all", "tools"].includes(state.kind) && state.catalogError) && !(["all", "skills"].includes(state.kind) && state.skillsError)) {
       results.append(el("div", { class: "tool-store-empty", text: q ? "No matches. Try another search." : "Nothing in this view yet." }));
+    }
+  }
+
+  async function refreshTabs() {
+    document.dispatchEvent(new CustomEvent("jarvis:tabs-changed"));
+    state.tabs = await api("/api/system/tabs");
+    state.tabsError = "";
+    draw();
+  }
+
+  function buildTabCard() {
+    return el("div", { class: "tool-store-card tool-store-build-card" }, [
+      el("h4", { text: "Build your own tab" }),
+      el("p", { text: "Describe what it should do and Kairos builds it in a chat. It lives in your data folder, survives updates and runs once an admin approves it." }),
+      el("div", { class: "tool-store-card-foot" }, [
+        el("button", { type: "button", class: "btn primary", text: "Start building", onclick: openTabBuilder }),
+      ]),
+    ]);
+  }
+
+  function tabCard(item) {
+    const slug = encodeURIComponent(item.slug);
+    const prebuilt = item.kind === "prebuilt";
+    const status = ({ needs_approval: "Needs approval", needs_newer_kairos: "Needs a newer Kairos",
+      on: "On", off: "Off", invalid: "Invalid", failed: "Failed" })[item.status] || item.status;
+    const actions = el("div", { class: "tool-store-card-foot" });
+    const review = el("details", { class: "disclosure-panel tool-store-tab-review" }, [
+      el("summary", { text: "Review files" }),
+      el("p", { class: "meta", text: item.format === "legacy"
+        ? "Legacy approval covers the shared legacy source tree. Inspect these files in your Kairos data folder."
+        : `Inspect these files in data/tabs/${item.slug}/. Approval lets this code run inside Kairos.` }),
+      el("pre", { class: "tool-store-tab-files", text: (item.files || []).join("\n") || "No files available." }),
+      el("p", { class: "meta tool-store-tab-hash", text: `SHA-256: ${item.fingerprint || "Unavailable"}` }),
+    ]);
+    const action = (label, fn, attrs = {}) => el("button", { type: "button", class: "btn quiet", text: label,
+      ...attrs, onclick: async (event) => {
+        const button = event.currentTarget;
+        button.disabled = true;
+        try { await fn(); } catch (error) { toast(error.message, "error"); }
+        finally { button.disabled = false; }
+      } });
+    if (state.admin) {
+      if (prebuilt) actions.append(action(item.enabled ? "Remove" : "Add", async () => {
+        const result = await api(`/api/system/tab-templates/${slug}`, { method: "POST", body: JSON.stringify({ enabled: !item.enabled }) });
+        toast(result.restart_required
+          ? (item.enabled ? "Tab is off. Restart Kairos to fully unload it." : "Tab enabled. Restart Kairos to load the current version.")
+          : (item.enabled ? "Tab is off." : "Tab added."), "success");
+        await refreshTabs();
+      }, { class: item.enabled ? "btn quiet danger" : "btn primary", disabled: !item.enabled && ["invalid", "needs_newer_kairos"].includes(item.status) }));
+      else {
+        if (item.status !== "on") actions.append(action("Approve", async () => {
+          const ok = await confirmDialog({ title: `Approve ${item.name}?`, danger: false, confirmLabel: "Approve source",
+            message: `Inspect all files before allowing this code to run inside Kairos.\n\n${(item.files || []).join("\n")}\n\nFingerprint: ${item.fingerprint}` });
+          if (!ok) return;
+          const result = await api(`/api/system/custom-tabs/${slug}/approve`, { method: "POST", body: JSON.stringify({ fingerprint: item.fingerprint }) });
+          toast(result.restart_required ? "Approved. Restart Kairos to unload the previous version and load this tab." : "Tab approved and added.", "success");
+          await refreshTabs();
+        }, { class: "btn primary", disabled: !item.fingerprint || ["invalid", "needs_newer_kairos"].includes(item.status) }));
+        actions.append(action("Remove", async () => {
+          if (!await confirmDialog({ title: `Remove ${item.name}?`, message: "This removes the tab's source files. Its saved data is kept.", confirmLabel: "Remove tab" })) return;
+          const result = await api(`/api/system/custom-tabs/${slug}`, { method: "DELETE" });
+          toast(result.restart_required ? "Tab removed. Restart Kairos to fully unload it." : "Tab removed.", "success");
+          await refreshTabs();
+        }, { class: "btn quiet danger" }));
+        if (item.format === "folder") actions.append(action("Export", async () => {
+          const response = await api(`/api/system/tabs/${slug}/export`);
+          const url = URL.createObjectURL(await response.blob());
+          const link = el("a", { href: url, download: `${item.slug}.kairostab` });
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }));
+      }
+    }
+    return el("article", { class: "tool-store-card", "data-tab-slug": item.slug, "data-tab-kind": item.kind }, [
+      el("div", { class: "tool-store-card-top" }, [pill(status,
+        ({ on: "ok", off: "muted", needs_approval: "warn", needs_newer_kairos: "warn", invalid: "error", failed: "error" })[item.status] || "muted")]),
+      el("h4", { text: item.name }), el("p", { text: item.blurb || item.description }),
+      item.detail ? el("p", { class: "meta", text: item.detail }) : null,
+      item.reads ? el("p", { class: "meta", text: item.reads }) : null,
+      item.reason ? el("p", { class: "tool-store-tab-reason", text: item.reason.replace(/\s+/g, " "), title: item.reason }) : null,
+      !prebuilt && state.admin ? review : null, actions,
+    ]);
+  }
+
+  function setupTabInstaller() {
+    const file = el("input", { type: "file", accept: ".kairostab", "aria-label": "Tab archive" });
+    const url = el("input", { type: "url", placeholder: "https://github.com/owner/repo/tree/main/path", "aria-label": "GitHub tab folder" });
+    const replace = el("input", { type: "checkbox" });
+    const status = el("div", { class: "meta", role: "status" });
+    const review = el("div", { class: "tool-store-review" });
+    const upload = el("button", { type: "button", class: "btn", text: "Install file", onclick: () => install("file") });
+    const github = el("button", { type: "button", class: "btn", text: "Install GitHub folder", onclick: () => install("github") });
+    tabInstaller.append(el("summary", { text: "Tab source" }),
+      el("p", { class: "meta", text: "Import a folder tab. Kairos scans it first; installed code awaits your approval in Yours." }),
+      el("div", { class: "tool-store-form-row" }, [file, upload]),
+      el("div", { class: "tool-store-form-row" }, [url, github]),
+      el("label", { class: "tab-build-checkbox-row" }, [replace, el("span", { text: "Replace an existing user tab and revoke its approval" })]), status, review);
+    async function install(kind, confirmed = false, fingerprint = null, snapshot = null) {
+      snapshot ||= { file: file.files[0], url: url.value.trim(), replace: replace.checked };
+      if (kind === "file" && !snapshot.file) { file.focus(); return; }
+      if (kind === "github" && !snapshot.url) { url.focus(); return; }
+      if (snapshot.replace && !confirmed && !await confirmDialog({ title: "Replace existing tab source?", message: "All old source files for this tab will be removed and its approval revoked. Saved tab data is kept.", confirmLabel: "Replace source" })) return;
+      upload.disabled = github.disabled = true;
+      status.textContent = "Downloading and scanning…";
+      review.replaceChildren();
+      try {
+        let body, headers;
+        if (kind === "file") {
+          body = new FormData(); body.append("file", snapshot.file);
+          body.append("replace", String(snapshot.replace)); body.append("confirmed", String(confirmed));
+          if (fingerprint) body.append("expected_fingerprint", fingerprint);
+        } else {
+          headers = { "Content-Type": "application/json" };
+          body = JSON.stringify({ github_url: snapshot.url, replace: snapshot.replace, confirmed, expected_fingerprint: fingerprint });
+        }
+        const response = await fetch("/api/system/tabs/install", { method: "POST", headers, body });
+        const payload = await response.json();
+        if (response.ok) {
+          status.textContent = `Installed ${payload.slug}. Review and approve it in Yours.`;
+          file.value = ""; url.value = "";
+          await refreshTabs();
+        } else if (response.status === 409 && typeof payload.detail === "object") {
+          const detail = payload.detail;
+          status.textContent = detail.needs_confirmation ? "Review the scan before installing." : "Installation blocked.";
+          review.append(el("pre", { text: detail.report }));
+          if (detail.needs_confirmation) review.append(el("button", { type: "button", class: "btn danger", text: "Install anyway",
+            onclick: () => install(kind, true, detail.fingerprint, snapshot) }));
+        } else status.textContent = typeof payload.detail === "string" ? payload.detail : "Installation failed.";
+      } catch (error) { status.textContent = error.message; }
+      finally { upload.disabled = github.disabled = false; }
     }
   }
 
@@ -451,4 +633,129 @@ function svg(markup) {
   const span = document.createElement("span");
   span.innerHTML = markup;
   return span.firstElementChild;
+}
+
+function modelLabel(ep) { return `${ep.name} (${ep.model || "CLI default"})`; }
+const DATA_SOURCES = ["Gmail", "Calendar", "Canvas / School", "Custom API"];
+async function renderTabBuilder(container) {
+  const endpoints = await api("/api/models").catch(() => []);
+
+  const nameInput = el("input", { placeholder: "Tab name, e.g. \"School\"" });
+  const iconInput = el("input", { placeholder: "Icon idea (optional) — e.g. \"graduation cap\"" });
+  const whatText = el("textarea", { rows: "4", placeholder: "What should this tab do?" });
+
+  const selectedSources = new Set();
+  const chipsWrap = el("div", { class: "tab-build-chips" });
+  for (const src of DATA_SOURCES) {
+    const chip = el("button", { type: "button", class: "tab-build-chip", text: src });
+    chip.addEventListener("click", () => {
+      chip.classList.toggle("active");
+      if (selectedSources.has(src)) selectedSources.delete(src);
+      else selectedSources.add(src);
+    });
+    chipsWrap.appendChild(chip);
+  }
+  const otherSourceInput = el("input", { placeholder: "Other data source (optional)" });
+
+  const savesDataCheckbox = el("input", { type: "checkbox" });
+  const savesDataDetail = el("input", {
+    placeholder: "What kind of items/fields? (optional)",
+    style: "display:none;margin-top:8px;",
+  });
+  savesDataCheckbox.addEventListener("change", () => {
+    savesDataDetail.style.display = savesDataCheckbox.checked ? "" : "none";
+  });
+  const savesDataRow = el("label", { class: "tab-build-checkbox-row" }, [
+    savesDataCheckbox,
+    el("span", { text: "This tab needs to save its own data" }),
+  ]);
+
+  const exampleText = el("textarea", {
+    rows: "3",
+    placeholder: "Walk me through an example of using this tab (optional, but helps a lot)",
+  });
+  const lookFeelInput = el("input", { placeholder: "Look & feel reference (optional) — e.g. \"like the Tasks tab\"" });
+
+  const modelOptions = endpoints.map((ep) => el("option", { value: ep.id, text: modelLabel(ep) }));
+  const modelSelect = endpoints.length
+    ? customSelect({ style: "width:100%;" }, modelOptions)
+    : null;
+  const modelField = el("div", { class: "tab-build-field" }, [
+    el("label", { text: "Model to build it" }),
+    modelSelect || el("div", { class: "tab-build-error", text: "No models added yet — add one in Settings > Add Models first." }),
+  ]);
+
+  const errorMsg = el("div", { class: "tab-build-error hidden" });
+  const buildBtn = el("button", { type: "button", class: "btn tab-build-build-btn", text: "Build my tab" });
+  if (!endpoints.length) buildBtn.disabled = true;
+
+  buildBtn.addEventListener("click", async () => {
+    const name = nameInput.value.trim();
+    const what = whatText.value.trim();
+    errorMsg.classList.add("hidden");
+    if (!name || !what) {
+      errorMsg.textContent = "Tab name and what it should do are both required.";
+      errorMsg.classList.remove("hidden");
+      return;
+    }
+
+    const sources = [...selectedSources];
+    if (otherSourceInput.value.trim()) sources.push(otherSourceInput.value.trim());
+
+    const lines = [`Build me a new Kairos tab called "${name}".`, "", `What it should do: ${what}`];
+    if (iconInput.value.trim()) lines.push(`Icon idea: ${iconInput.value.trim()}`);
+    if (sources.length) lines.push(`Data sources it should use: ${sources.join(", ")}`);
+    if (savesDataCheckbox.checked) {
+      const detail = savesDataDetail.value.trim();
+      lines.push(`It needs to save its own data${detail ? `: ${detail}` : "."}`);
+    }
+    if (exampleText.value.trim()) lines.push(`Example of how I'd use it: ${exampleText.value.trim()}`);
+    if (lookFeelInput.value.trim()) lines.push(`Look and feel reference: ${lookFeelInput.value.trim()}`);
+    lines.push(
+      "",
+      "Build a folder tab in data/tabs/<slug>/ only. Include tab.json (slug matching ^[a-z][a-z0-9_]*$, " +
+        "name, version, description, api: 1, hooks: [], optional icon_svg, blurb, detail and reads), routes.py " +
+        "exposing a FastAPI router, view.js exporting render(), optional view.css, service.py and hooks.py. " +
+        "Use relative imports inside the tab. Import Kairos only through core.tab_api; bind " +
+        "api = tab_api.for_tab(__package__) for namespaced data storage, encryption, models and read-only sources. " +
+        "Keep user data in api.data_dir, never in the source folder. Hook names are start, stop, calendar_items " +
+        "and on_message. Follow this folder format even if an older build-custom-tab skill describes split files. " +
+        "No app-folder edits. Tell me to review and approve the source in Tool Store > Tabs when ready.",
+    );
+    const message = lines.join("\n");
+
+    buildBtn.disabled = true;
+    buildBtn.textContent = "Starting...";
+    try {
+      const session = await api("/api/sessions", { method: "POST", body: JSON.stringify({}) });
+      await api(`/api/sessions/${session.id}/model`, {
+        method: "POST",
+        body: JSON.stringify({ model_endpoint_id: modelSelect.value }),
+      });
+      // Consumed once by chat.js's render() — the one deliberate exception
+      // to "Chat always lands on the welcome screen" (see its own comment).
+      sessionStorage.setItem("jarvis:pendingChatHandoff", JSON.stringify({ sessionId: session.id, message }));
+      document.querySelector('.nav-item[data-tab="chat"]')?.click();
+    } catch (e) {
+      errorMsg.textContent = `Couldn't start: ${e.message}`;
+      errorMsg.classList.remove("hidden");
+      buildBtn.disabled = false;
+      buildBtn.textContent = "Build my tab";
+    }
+  });
+
+  const form = el("div", { class: "tab-build-form" }, [
+    el("div", { class: "tab-build-field" }, [el("label", { text: "Tab name" }), nameInput]),
+    el("div", { class: "tab-build-field" }, [el("label", { text: "Icon idea" }), iconInput]),
+    el("div", { class: "tab-build-field" }, [el("label", { text: "What should this tab do?" }), whatText]),
+    el("div", { class: "tab-build-field" }, [el("label", { text: "Data sources" }), chipsWrap, otherSourceInput]),
+    el("div", { class: "tab-build-field" }, [savesDataRow, savesDataDetail]),
+    el("div", { class: "tab-build-field" }, [el("label", { text: "Example use" }), exampleText]),
+    el("div", { class: "tab-build-field" }, [el("label", { text: "Look & feel" }), lookFeelInput]),
+    modelField,
+    errorMsg,
+    buildBtn,
+  ]);
+
+  container.append(form);
 }

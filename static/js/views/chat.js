@@ -16,6 +16,7 @@ import { mountChatFind } from '../chatFind.js';
 import { openWebCapture } from '../screenCapture.js';
 import { mountChatReferences } from '../chatReferences.js';
 import { mountChatTimeline } from '../chatTimeline.js';
+import { mountChatBackdrop } from '../chatBackdrop.js';
 
 // Composer rebuilt to match Odysseus's actual chat-input-bar structure
 // (David's ask 2026-08-31, cross-checked against the real repo at
@@ -68,6 +69,10 @@ const ICON_GEAR = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" s
 //
 // ts is a unix-seconds float (session_manager.append_message) or omitted
 // for a card being built live during streaming (uses "now").
+// A message sent or received just now rises in (chat.css .msg-enter); ones
+// loaded from history appear at once.
+function entering(card) { card.classList.add('msg-enter'); return card; }
+
 function messageCard(role, text, ts, status = 'complete', imageSources = [], failure = null) {
   const time = new Date((ts || Date.now() / 1000) * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const body = el("div", { class: "msg-body" });
@@ -355,6 +360,11 @@ let shownPermission = null;
 // the reply; selected references travel with a queued draft.
 const queuedBySession = new Map();   // sessionId -> [{text, references}]
 const pausedQueues = new Set();      // sessionIds whose queue waits for Resume
+// The halftone background (chatBackdrop.js): the figure while the chat is
+// empty, the sky once it has messages. `backdropInstant` holds off the
+// dissolve while the view is still landing (e.g. opening a chat from Home).
+let activeBackdrop = null;
+let backdropInstant = false;
 let composerRefs = null;             // { messages, input, sendBtn, attachStrip, queueHost } of the mounted view
 
 function renderQueue() {
@@ -441,7 +451,7 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
     if (current) syncChatBusy(entry.status === 'processing');
     replyCard.setAttribute('aria-busy', String(entry.status === 'processing'));
     if (entry.text) {
-      renderMessageBody(replyBody, entry.text, sessionId);
+      renderMessageBody(replyBody, entry.text, sessionId, true, { live: entry.status === 'processing' });
       if (entry.status === "processing") replyBody.appendChild(cursor);
     }
     if (entry.status === "done") {
@@ -520,6 +530,7 @@ function syncChatLayout(messages, title) {
     dock.getAnimations().forEach(animation => animation.cancel());
     const before = dock.getBoundingClientRect();
     main.classList.toggle('is-empty', empty);
+    activeBackdrop?.show(empty ? 'figure' : 'sky', { animate: !backdropInstant });
     const after = dock.getBoundingClientRect();
     if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
       dock.animate([
@@ -546,6 +557,12 @@ export async function render(container, tabId, options = {}) {
   closeChatComputer();
   container.innerHTML = "";
   container.classList.add("chat-layout");
+  activeBackdrop?.dispose();
+  const backdrop = activeBackdrop = mountChatBackdrop(container);
+  backdropInstant = true;
+  // A chat opened by id (e.g. from Home) almost always has messages: start on
+  // the sky rather than drawing the figure first.
+  backdrop.show(options.sessionId ? 'sky' : 'figure');
   clearStagedAttachments();
   // Belt-and-suspenders reset (David's ask 2026-09-12): app.js's switchTab()
   // already calls the previous mount's returned unmount — see the bottom of
@@ -927,6 +944,8 @@ export async function render(container, tabId, options = {}) {
   const cleanup = () => {
     if (disposed) return;
     disposed = true;
+    backdrop.dispose();
+    if (activeBackdrop === backdrop) activeBackdrop = null;
     disposeFind();
     timeline.dispose();
     if (activeTimeline === timeline) activeTimeline = null;
@@ -961,10 +980,13 @@ export async function render(container, tabId, options = {}) {
   if (disposed || !container.isConnected) return cleanup;
   if (options.sessionId) await openSession(options.sessionId, sessionsList, messages);
   if (disposed || !container.isConnected) return cleanup;
+  // Landed: from here on, gaining or losing messages dissolves the background.
+  backdropInstant = false;
+  backdrop.ready.then(() => options.transitionReady?.());
 
-  // New Tab builder handoff (Developer Mode, David's ask 2026-09-01) — the
+  // Tool Store tab builder handoff — the
   // one deliberate exception to "Chat always lands on the welcome screen"
-  // above. new-tab.js creates a real session and stashes it here rather
+  // above. tool-store.js creates a real session and stashes it here rather
   // than landing the user back at a blank welcome screen right after they
   // filled out the form. Consumed once (removeItem) so a later, ordinary
   // visit to this tab still resets to welcome as normal.
@@ -1500,8 +1522,8 @@ function sendVoiceTurn(text, { onChunk, onDone }) {
   return new Promise((resolve, reject) => {
     const messages = document.getElementById('chat-messages');
     if (!messages || !activeSessionId) { reject(new Error('No chat is open.')); return; }
-    messages.appendChild(messageCard('user', text));
-    const replyCard = messageCard('assistant', '');
+    messages.appendChild(entering(messageCard('user', text)));
+    const replyCard = entering(messageCard('assistant', ''));
     const replyBody = replyCard.querySelector('.msg-body');
     messages.appendChild(replyCard);
     syncChatLayout(messages);
@@ -2372,7 +2394,7 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
     }
     input.value = "";
     input.style.height = "auto";
-    messages.appendChild(messageCard("user", text));
+    messages.appendChild(entering(messageCard("user", text)));
     syncChatLayout(messages);
     const sessionsList = document.getElementById("sessions-list");
     const { output } = await runSlashCommand(text, {
@@ -2382,7 +2404,7 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
       onCurrentSessionDeleted: () => { activeSessionId = null; activeTimeline?.reset(); messages.innerHTML = ""; },
       onWorkspaceCleared: () => syncWorkspacePill(null),
     });
-    messages.appendChild(messageCard("assistant", output));
+    messages.appendChild(entering(messageCard("assistant", output)));
     syncChatLayout(messages);
     messages.scrollTop = messages.scrollHeight;
     // Persist so the command + its reply survive leaving and reopening this
@@ -2432,9 +2454,9 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
   input.value = "";
   chatReferences?.clear();
   input.style.height = "auto";
-  messages.appendChild(messageCard("user", text || (imageSources.length ? "" : "(attachment)"),
-    undefined, "complete", imageSources));
-  const replyCard = messageCard("assistant", "");
+  messages.appendChild(entering(messageCard("user", text || (imageSources.length ? "" : "(attachment)"),
+    undefined, "complete", imageSources)));
+  const replyCard = entering(messageCard("assistant", ""));
   const replyBody = replyCard.querySelector(".msg-body");
   messages.appendChild(replyCard);
   syncChatLayout(messages);

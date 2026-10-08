@@ -115,6 +115,15 @@ class RulesTests(ConnectorTestCase):
         self.assertIsNone(session_manager.get_session(session_id).get("agent_id"))
         self.assertEqual(json.loads(self.api.sent("POST", "replies")[0].content)["text"], "JARVIS reply")
 
+    def test_tab_hooks_run_only_after_connector_admission(self):
+        with patch("core.tab_hooks.emit_message") as captured:
+            self.receive(STRANGER, "Private message")
+            captured.assert_not_called()
+            self.receive(OWNER, "Allowed message")
+            captured.assert_called_once()
+            self.assertEqual(captured.call_args.args[0], {"kind": "connector", "connection_id": self.record["id"]})
+            self.assertEqual(captured.call_args.args[1]["text"], "Allowed message")
+
     def test_strangers_are_ignored_unless_the_connector_is_open(self):
         self.receive(STRANGER, "hello")
         self.assertFalse(self.turn.called)
@@ -259,6 +268,7 @@ class SlackTests(ConnectorTestCase):
         self.api.add(("POST", "/auth.test", {"ok": True, "user_id": "UBOT"}),
                      ("POST", "/apps.connections.open", {"ok": True, "url": "wss://slack.test"}),
                      ("GET", "/conversations.replies", {"ok": True, "messages": [{"user": "UBOT", "text": "q [S-abcdef]"}]}),
+                     ("GET", "/chat.getPermalink", {"ok": True, "permalink": "https://workspace.slack.com/archives/C1/p2"}),
                      ("POST", "/chat.postMessage", {"ok": True}))
         socket = FakeSocket([
             {"type": "hello"},
@@ -273,6 +283,9 @@ class SlackTests(ConnectorTestCase):
         self.assertEqual(received.call_count, 1, "its own message is skipped")
         inbound = received.call_args.args[1]
         self.assertEqual((inbound.text, inbound.replying_to), ("hi", "q [S-abcdef]"))
+        self.assertEqual(inbound.source_url, "https://workspace.slack.com/archives/C1/p2")
+        self.assertEqual(inbound.source_context, "q [S-abcdef]")
+        self.assertEqual(self.api.sent("GET", "/chat.getPermalink")[0].url.params["message_ts"], "2")
         self.assertEqual(json.loads(self.api.sent("POST", "/chat.postMessage")[0].content)["channel"], "C1")
         self.assertEqual(self.api.sent("POST", "/apps.connections.open")[0].headers["authorization"], "Bearer xapp")
 

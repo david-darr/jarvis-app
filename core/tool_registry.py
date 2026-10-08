@@ -655,7 +655,7 @@ async def _list_repo_directory(args, ctx):
 
 @register(
     "read_repo_file",
-    "Read one file from jarvis-app source (e.g. 'core/brain.py'); supported OpenAI models can also read user-built tab source (e.g. 'custom-tabs/routes/tab_minecraft.py').",
+    "Read one file from jarvis-app source (e.g. 'core/brain.py'); supported OpenAI models can also read user-built tab source (e.g. 'custom-tabs/my_tab/routes.py').",
     _object({"path": _str()}, ("path",)),
     surfaces=frozenset({OPENAI}),
 )
@@ -671,7 +671,7 @@ async def _read_repo_file(args, ctx):
 
 @register(
     "write_repo_file",
-    "Create or overwrite one file in jarvis-app source with the given full content (full-file replacement, not a patch/diff). Supported OpenAI models can also write user tabs under custom-tabs/routes/, custom-tabs/services/, and custom-tabs/views/. Creates parent directories if needed.",
+    "Create or overwrite one file in jarvis-app source with the given full content (full-file replacement, not a patch/diff). Supported OpenAI models can also write user tabs under custom-tabs/<slug>/ (folder tabs), plus the legacy routes/, services/ and views/ subfolders. Creates parent directories if needed.",
     _object({"path": _str(), "content": _str()}, ("path", "content")),
     # Admin only (roadmap phase 7, 2026-10-06): Kairos's own source runs as
     # you at the next start, and Claude and Codex already give repo writes to

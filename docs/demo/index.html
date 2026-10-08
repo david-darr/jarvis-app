@@ -2,23 +2,23 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<script src="boot.js"></script>
+<script src="fixtures.js"></script>
+<script src="shim.js"></script>
 <style>
   .demo-badge { position: fixed; z-index: 10200; right: 14px; bottom: 14px; padding: 6px 12px; border-radius: 999px;
     background: #2A1F18; color: #F3EADB; font: 500 11px/1.4 Jost, "Segoe UI", sans-serif; pointer-events: none; opacity: .92; }
-  .demo-unsupported { font: 15px/1.6 Jost, "Segoe UI", sans-serif; color: #3A2A20; text-align: center; margin: 20vh auto; max-width: 420px; }
 </style>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Kairos demo</title>
-<link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
-<link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png">
-<link rel="preload" href="/static/fonts/Jost-Variable.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/static/css/kairos-theme.css">
-<link rel="stylesheet" href="/static/css/style.css">
-<link rel="stylesheet" href="/static/css/chat.css">
-<link rel="stylesheet" href="/static/css/appearance.css">
-<link rel="stylesheet" href="/static/css/swarm.css">
-<link rel="stylesheet" href="/static/css/settings.css">
+<link rel="icon" type="image/svg+xml" href="static/img/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="static/img/favicon-32.png">
+<link rel="preload" href="static/fonts/Jost-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="static/css/kairos-theme.css">
+<link rel="stylesheet" href="static/css/style.css">
+<link rel="stylesheet" href="static/css/chat.css">
+<link rel="stylesheet" href="static/css/appearance.css">
+<link rel="stylesheet" href="static/css/swarm.css">
+<link rel="stylesheet" href="static/css/settings.css">
 </head>
 <body>
   <!-- The desktop window's title bar (style.css .titlebar): drag anywhere on
@@ -53,6 +53,6 @@
 
   <div id="onboarding-overlay" class="onboarding-overlay hidden"></div>
 
-  
+  <script src="app.js"></script>
 </body>
 </html>

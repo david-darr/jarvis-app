@@ -1,0 +1,14 @@
+{
+  "slug": "school",
+  "name": "School",
+  "icon_svg": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 3L1 8l11 5 9-4.1V17\"/><path d=\"M5 10.5V16c0 1.5 3 3.5 7 3.5s7-2 7-3.5v-5.5\"/></svg>",
+  "version": "1.0.0",
+  "description": "Courses, assignments, saved drafts and per-course chat.",
+  "api": 1,
+  "hooks": [
+    "start"
+  ],
+  "blurb": "Track courses, assignments and due dates, with a per-course chat that remembers what you're working on.",
+  "detail": "Built around coursework: add assignments with due dates, keep drafts, and talk to Kairos about a specific class in a chat that accumulates that course's context.",
+  "reads": "Reads your Canvas courses and assignments or the calendar feed you connect"
+}

@@ -226,8 +226,8 @@ function buildSkillEditor(skill, list) {
 
   return el("div", { class: "glass bracket card" }, [
     el("div", { class: "title", style: "margin-bottom:8px;", text: skill.slug }),
-    el("div", { class: "new-tab-field" }, [el("label", { text: "Description" }), descInput]),
-    el("div", { class: "new-tab-field", style: "margin-top:8px;" }, [el("label", { text: "Body (SKILL.md content)" }), bodyText]),
+    el("div", { class: "tab-build-field" }, [el("label", { text: "Description" }), descInput]),
+    el("div", { class: "tab-build-field", style: "margin-top:8px;" }, [el("label", { text: "Body (SKILL.md content)" }), bodyText]),
     errorMsg,
     el("div", { class: "card-row", style: "gap:6px;margin-top:10px;" }, [saveBtn, cancelBtn]),
   ]);

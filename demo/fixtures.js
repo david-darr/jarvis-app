@@ -32,7 +32,45 @@
     { id: "e1", title: "Project check-in", start: future(3), end: future(4), source: "event" },
     { id: "e2", title: "Time to think", start: future(26), end: future(27), source: "event" },
     { id: "e3", title: "Weekly review", start: future(60), end: future(61), source: "event" },
+    { id: "tab-a1", title: "Review the course project", start: future(4), source: "tab", source_label: "School",
+      toggle_url: "/api/tab-school/assignments/a1", completed: false },
   ];
+  const tabs = [
+    { slug: "school", name: "School", description: "Courses and assignments", blurb: "Keep track of schoolwork",
+      detail: "Connect Canvas or a course calendar.", reads: "Reads the Canvas courses or calendar feed you connect",
+      kind: "prebuilt", format: "prebuilt", enabled: true, status: "on", reason: null },
+    { slug: "crm", name: "CRM", description: "Contacts and conversations", blurb: "Keep up with your contacts",
+      detail: "Find follow-ups across the sources you choose.", reads: "Reads the email accounts and message connections you choose",
+      kind: "prebuilt", format: "prebuilt", enabled: false, status: "off", reason: null },
+    { slug: "project_tracker", name: "Project tracker", description: "Your team's project notes", kind: "user", format: "folder",
+      status: "needs_approval", reason: null, fingerprint: "a".repeat(64), files: ["tab.json", "routes.py", "view.js"] },
+  ];
+  const tabManifest = (tab) => ({ id: tab.slug, label: tab.name, format: tab.format, user_tab: tab.kind === "user",
+    view_url: `/tab-files/${tab.slug}/view.js`,
+    style_url: tab.slug === "crm" ? (options.demo ? "tabs/crm/view.css" : "/tab-files/crm/view.css") : null });
+  function mutate(route, method, body = {}) {
+    const template = route.match(/^\/api\/system\/tab-templates\/([^/]+)$/);
+    if (template && method === "POST") {
+      const tab = tabs.find((t) => t.slug === template[1] && t.kind === "prebuilt");
+      tab.enabled = !!body.enabled; tab.status = tab.enabled ? "on" : "off";
+      return { slug: tab.slug, enabled: tab.enabled };
+    }
+    const approve = route.match(/^\/api\/system\/custom-tabs\/([^/]+)\/approve$/);
+    if (approve && method === "POST") {
+      const tab = tabs.find((t) => t.slug === approve[1]);
+      tab.status = "on";
+      return { id: tab.slug, restart_required: false };
+    }
+    const remove = route.match(/^\/api\/system\/custom-tabs\/([^/]+)$/);
+    if (remove && method === "DELETE") {
+      const index = tabs.findIndex((t) => t.slug === remove[1]);
+      if (index >= 0) tabs.splice(index, 1);
+      return { ok: true };
+    }
+    const event = events.find((e) => e.toggle_url === route);
+    if (event && method === "PATCH") { Object.assign(event, body); return event; }
+    return null;
+  }
   const tasks = [
     { id: "t1", name: "Daily briefing", enabled: true, schedule_kind: "daily", run_time: "07:00", next_run_at: future(6), last_run_at: now - 3000,
       deliver_to_channel: "discord" },
@@ -104,7 +142,7 @@
     const route = url.pathname;
     const list = (data) => state.empty ? [] : data;
     if (route === "/api/auth/status") return { auth_enabled: false, setup_required: false, username: "Alex", is_admin: true, instance: state.empty ? "dev" : "" };
-    if (route === "/api/settings") return { onboarding_complete: true, developer_mode_enabled: false, vault_dir: "C:\\Users\\Alex\\Documents\\Vault",
+    if (route === "/api/settings") return { onboarding_complete: true, vault_dir: "C:\\Users\\Alex\\Documents\\Vault",
       computer_use: state.computerUse || { enabled: true, allow_non_admins: false, allow_reactions: false, desktop: false } };
     const computers = state.empty ? [] : [
       { owner: 'chat:' + (state.computerChat || 's1'), url: 'https://example.com/', title: 'Example Domain', last_action: now - 20,
@@ -157,7 +195,8 @@
       audit: [{ at: now - 60, decision: "allow", tool: "WebFetch", content: "docs.python.org", by: "Alex" }] };
     if (route === "/api/file-checkpoints") return [];
     if (route === "/api/settings/agent-tools") return { available: ["Bash", "Read", "Write", "WebFetch"], disabled: ["WebFetch"], extra_allowed: [] };
-    if (route === "/api/system/custom-tabs") return [{ id: "school", label: "School" }];
+    if (route === "/api/system/custom-tabs") return tabs.filter((t) => t.status === "on").map(tabManifest);
+    if (route === "/api/system/tabs") return tabs;
     if (route === "/api/system/status") return { scheduler_running: true, vault_ok: true, enabled_task_count: state.empty ? 0 : 1, model_endpoint_count: state.empty ? 0 : 3, discord_connected_bots: [], next_task: state.empty ? null : { name: "Daily briefing", next_run_at: future(6) } };
     if (route === "/api/system/logs/files") return [
       { name: "backend", file: "backend.log", size: 204800, modified: now - 30 },
@@ -224,6 +263,14 @@
       m1: { fresh_tokens: 1200000, cache_read_tokens: 95000000, unsplit_tokens: 0, total_tokens: 96200000 },
       m3: { fresh_tokens: 842000, cache_read_tokens: 0, unsplit_tokens: 0, total_tokens: 842000 },
     };
+    // Account limits for Home's "Your models" and the overlay (quotaReadings.js);
+    // state.quotas lets ui-smoke try a signed-out or stale reading.
+    if (route === "/api/models/quotas") return state.quotas || { providers: [
+      { provider: "claude", status: "ok", updated_at: now - 120, note: "", windows: [
+        { name: "5-hour", used_percent: 34, resets_at: now + 2 * 3600 + 600 }, { name: "Weekly", used_percent: 61, resets_at: now + 4 * 86400 }] },
+      { provider: "codex", status: "ok", updated_at: now - 300, note: "", windows: [
+        { name: "5-hour", used_percent: 12, resets_at: now + 3 * 3600 }, { name: "Weekly", used_percent: 83, resets_at: now + 2 * 86400 }] },
+    ], recorded: [] };
     if (route === "/api/documents") return list(docs);
     if (route === "/api/chat/files/library") return list([]);
     if (route === "/api/documents/search") return list(docs.filter(d => d.title.toLowerCase().includes(url.searchParams.get("q").toLowerCase())));
@@ -289,6 +336,10 @@
     if (route === "/api/cookbook/engine/downloaded") return [];
     if (route === "/api/tab-school/settings") return { canvas_base_url: "", ics_url: "", canvas_api_token_configured: false };
     if (route === "/api/tab-school/courses") return list([{ name: "Software Design", upcoming_count: 2, overdue_count: 0, assignment_count: 8 }]);
+    if (route === "/api/tab-school/assignments/a1") return { id: "a1", course: "Software Design", title: "Review the project brief", due: future(40), completed: false,
+      attachment_links: [], url: "", description: "Read the brief and list three questions for the kickoff." };
+    if (route === "/api/tab-school/assignments/a1/draft") return { content: "" };
+    if (route === "/api/tab-school/courses/session") return { session_id: "school-course" };
     if (route === "/api/tab-school/assignments") return url.searchParams.has("overdue") ? [] : list([{ id: "a1", course: "Software Design", title: "Review the project brief", due: future(40), completed: false, attachment_links: [] }]);
     if (route === "/api/integrations") return [
       // Roadmap phase 6: a working server with a tool held for review, one
@@ -314,5 +365,5 @@
       { id: "context7", name: "Context7", description: "Up-to-date library documentation.", auth: "none", url: "https://mcp.context7.com/mcp", docs: null, added: true }];
     throw new Error("No fixture for " + route);
   }
-  return { fixture, data: { models, sessions, projects, notes, events, tasks, runs, agentsFixture, agentInbox, docs } };
+  return { fixture, mutate, data: { models, sessions, projects, notes, events, tasks, runs, agentsFixture, agentInbox, docs } };
 });

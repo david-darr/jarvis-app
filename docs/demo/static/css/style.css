@@ -44,6 +44,8 @@
   /* Parchment as numbers, for washes over brand imagery (always light,
      whatever the appearance). */
   --parchment-rgb: 243, 234, 219;
+  /* The halftone washes' color: parchment, or a Color theme's base (appearance.js). */
+  --wash-rgb: var(--parchment-rgb);
   /* The gold point of the mark: the one gilded thing. */
   --point: var(--k-gold);
   /* Categorical colors for charts and graphs (the vault map): mid-tones that
@@ -54,16 +56,15 @@
   --sidebar-width: 204px;
   --sidebar-rail-width: 52px;
   --chat-column: 780px;
-  --glass-sheen: linear-gradient(160deg, rgba(var(--ink-rgb), .55), transparent 35%);
   --shadow-elevated: 0 12px 40px rgba(var(--shade-rgb), .10);
+  /* Every menu and picker (the popup block further down). */
+  --popup-shadow: 0 1px 2px rgba(var(--shade-rgb), .06), 0 14px 36px rgba(var(--shade-rgb), .14);
   --shadow-lifted: 0 16px 50px rgba(var(--shade-rgb), .14);
   --ease-out: cubic-bezier(.22,1,.36,1);
   --font-sans: var(--k-font-sans);
   --font-display: var(--k-font-serif);
   --font-mono: 'Cascadia Code', Consolas, monospace;
 }
-/* Developer mode stays visible without recoloring the whole workspace. */
-:root.dev-mode { --dev-indicator: var(--danger); }
 
 * { box-sizing: border-box; }
 
@@ -162,8 +163,8 @@ html, body {
 
 nav#nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; overflow-x: hidden; }
 
-#brand, .nav-item > span, .sidebar-user-name, .sidebar-devmode-btn > span { transition: opacity 150ms ease; }
-.nav-item > span, .sidebar-devmode-btn > span { white-space: nowrap; overflow: hidden; }
+#brand, .nav-item > span, .sidebar-user-name { transition: opacity 150ms ease; }
+.nav-item > span { white-space: nowrap; overflow: hidden; }
 @media (min-width: 769px) {
   .sidebar-collapsed #sidebar { width: var(--sidebar-rail-width); padding-left: 6px; padding-right: 6px; }
   .sidebar-collapsed #brand { flex: 0 0 0; padding: 0; opacity: 0; }
@@ -171,14 +172,12 @@ nav#nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: 
   .sidebar-collapsed .sidebar-toggle-chevron { transform: rotate(180deg); }
   .sidebar-collapsed .nav-item > span,
   .sidebar-collapsed .sidebar-user-name,
-  .sidebar-collapsed .sidebar-devmode-btn > span { width: 0; opacity: 0; }
   .sidebar-collapsed .nav-item { gap: 0; justify-content: center; padding: 10px 0; }
   .sidebar-collapsed .nav-group-label { font-size: 0; height: 26px; padding: 0; margin: 12px 10px 0; border-top: 1px solid var(--border); }
   .sidebar-collapsed #sidebar-footer { padding: 10px 0 0; }
   .sidebar-collapsed .sidebar-footer-row { flex-direction: column; align-items: center; }
   .sidebar-collapsed .sidebar-footer-row > div { flex: none !important; width: 100%; }
   .sidebar-collapsed .sidebar-user-card { justify-content: center; gap: 0; padding: 8px 0; }
-  .sidebar-collapsed .sidebar-devmode-btn { justify-content: center; gap: 0; padding: 10px 0; }
   .sidebar-collapsed .sidebar-settings-btn { width: 36px; height: 36px; }
 }
 @media (max-width: 768px) {
@@ -226,21 +225,6 @@ nav#nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: 
 }
 .sidebar-settings-btn:hover { color: var(--text); background: rgba(var(--ink-rgb), 0.04); border-color: var(--border); }
 .sidebar-settings-btn svg { width: 16px; height: 16px; opacity: 0.8; }
-
-/* -- Developer Mode toggle (David's ask 2026-09-01) — its own row, above
-   the user-card/settings row above. */
-.sidebar-devmode-row { margin-bottom: 6px; }
-.sidebar-devmode-btn {
-  display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 10px; border-radius: 8px; cursor: pointer;
-  background: none; border: 1px solid transparent; color: var(--text-dim); font-size: 12.5px;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
-}
-.sidebar-devmode-btn:hover { color: var(--text); background: rgba(var(--ink-rgb), 0.04); border-color: var(--border); }
-.sidebar-devmode-btn svg { width: 16px; height: 16px; opacity: 0.8; flex-shrink: 0; }
-.sidebar-devmode-btn.active {
-  color: var(--dev-indicator, var(--accent)); background: rgba(var(--danger-rgb), .06); border-color: transparent;
-}
-.sidebar-devmode-btn.active svg { opacity: 1; }
 
 /* -- main content ------------------------------------------------------ */
 #content { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
@@ -328,7 +312,6 @@ input:focus, textarea:focus, select:focus {
 .segmented-tab:focus-visible,
 .sidebar-user-card:focus-visible,
 .sidebar-settings-btn:focus-visible,
-.sidebar-devmode-btn:focus-visible,
 .overflow-menu-item:focus-visible,
 .palette-item:focus-visible,
 .input-icon-btn:focus-visible,
@@ -345,13 +328,13 @@ input:focus, textarea:focus, select:focus {
    but a native <select> still renders the OS's own plain gray caret, which
    breaks the glass/cyan look. Swap it for a hand-drawn cyan chevron (same
    stroke-SVG style as every other icon in the app, e.g. .nav-item svg) via
-   a background-image, since `currentColor` doesn't apply inside one. Option
-   list styling (the dropdown's open menu) stays OS-native — not stylable
-   from CSS in Electron/Chromium, same limitation every browser has. */
+   a background-image, since `currentColor` doesn't apply inside one. The
+   list it opens is the app's own menu, not the OS's (useAppMenusForSelects
+   in api.js, 2026-10-07). */
 select {
   appearance: none;
   -webkit-appearance: none;
-  background-image: url('/static/img/chevron-down.svg');
+  background-image: url('../img/chevron-down.svg');
   background-repeat: no-repeat;
   background-position: right 10px center;
   background-size: 12px;
@@ -382,12 +365,12 @@ select {
 /* Drawn in the text color through a mask, so it follows any appearance. */
 .custom-select-chevron {
   flex-shrink: 0; width: 12px; height: 12px; background: var(--text-faint);
-  -webkit-mask: url('/static/img/chevron-down.svg') center / 12px no-repeat;
-  mask: url('/static/img/chevron-down.svg') center / 12px no-repeat;
+  -webkit-mask: url('../img/chevron-down.svg') center / 12px no-repeat;
+  mask: url('../img/chevron-down.svg') center / 12px no-repeat;
 }
 .custom-select-menu {
   /* `fixed`, positioned in JS from the button's real getBoundingClientRect()
-     and appended straight to <body> (see customSelect() in api.js) — not
+     and appended straight to <body> (see openOptionMenu() in api.js) — not
      `absolute` inside .custom-select. A real bug found live 2026-09-01: an
      `absolute` menu can only paint above elements sharing its own stacking
      context, and a sibling `.glass.bracket.card` further down the page (its
@@ -395,19 +378,13 @@ select {
      z-index. z-index 2500 clears the Settings window's .modal-backdrop
      (1500) and the onboarding overlay (2000). */
   position: fixed; z-index: 2500; min-width: 160px;
-  max-height: 260px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 4px;
-  background: var(--glass-sheen), var(--bg-panel-solid);
-  backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6);
-  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-elevated);
+  max-height: 260px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
 }
-.custom-select-menu.hidden { display: none; }
+.custom-select-heading { padding: 8px 10px 4px; font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-faint); }
 .custom-select-item {
-  display: block; width: 100%; padding: 7px 10px; border-radius: 6px; font-size: 12.5px;
-  color: var(--text); cursor: pointer; text-align: left; background: none; border: none;
+  display: block; width: 100%; cursor: pointer; text-align: left; background: none; border: none;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.custom-select-item:hover { background: var(--accent-dim); }
-.custom-select-item.active { color: var(--accent); }
 .custom-select-item.disabled { opacity: 0.4; cursor: default; }
 .custom-select-item.disabled:hover { background: none; }
 
@@ -442,6 +419,10 @@ input[type="checkbox"]:checked {
   border-color: var(--accent);
   box-shadow: none;
 }
+/* The check draws itself on the box just clicked (it has focus); boxes that
+   load already checked don't animate. */
+input[type="checkbox"]:checked:focus::after { animation: check-draw 200ms cubic-bezier(.22, 1, .36, 1); }
+@keyframes check-draw { from { transform: rotate(45deg) scale(.2); opacity: 0; } }
 input[type="checkbox"]:checked::after {
   content: "";
   position: absolute; left: 5px; top: 2px;
@@ -521,32 +502,22 @@ input[type="checkbox"]:checked::after {
 .coming-soon h3 { font-weight: 300; color: var(--text-dim); letter-spacing: 1px; }
 .coming-soon p { color: var(--text-faint); font-size: 12.5px; max-width: 380px; text-align: center; }
 
-/* -- "+" New Tab builder (Developer Mode, David's ask 2026-09-01) — a
-   fill-in-the-blanks "title page" that hands off into a real chat
-   conversation (see chat.js's pending-handoff comment) rather than a
-   second bespoke chat renderer. */
-.new-tab-view { align-items: center; }
-.new-tab-header { text-align: center; margin-bottom: 20px; }
-.new-tab-header h1 { font-weight: 300; letter-spacing: 2px; font-size: 22px; color: var(--accent); margin: 0 0 6px; }
-.new-tab-header p { color: var(--text-faint); font-size: 13px; margin: 0; }
-.new-tab-form { width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 16px; }
-.new-tab-field { display: flex; flex-direction: column; gap: 6px; }
-.new-tab-field label { font-size: 12px; color: var(--text-dim); letter-spacing: 0.3px; }
-.new-tab-field textarea { resize: vertical; font-family: inherit; }
-.new-tab-checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; }
-.new-tab-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
-.new-tab-chip {
+/* -- Tool Store tab builder ------------------------------------------- */
+.tab-build-form { width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 16px; }
+.tab-build-field { display: flex; flex-direction: column; gap: 6px; }
+.tab-build-field label { font-size: 12px; color: var(--text-dim); letter-spacing: 0.3px; }
+.tab-build-field textarea { resize: vertical; font-family: inherit; }
+.tab-build-checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; }
+.tab-build-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.tab-build-chip {
   background: rgba(var(--ink-rgb), 0.035); border: 1px solid var(--border); color: var(--text-dim);
   border-radius: 999px; padding: 6px 12px; font-size: 12px; cursor: pointer;
   transition: color 0.12s, background 0.12s, border-color 0.12s;
 }
-.new-tab-chip:hover { color: var(--text); border-color: var(--border-strong); }
-.new-tab-chip.active { color: var(--accent); background: var(--accent-dim); border-color: var(--border-strong); }
-.new-tab-error { color: var(--danger); font-size: 12.5px; }
-/* Premade-tab gallery (David's ask 2026-09-03) */
-.new-tab-section-title { font-size: 13px; color: var(--text); letter-spacing: 0.5px; margin-bottom: 6px; }
-.template-card { margin-bottom: 10px; }
-.new-tab-build-btn { align-self: flex-start; padding: 10px 20px; font-size: 13.5px; }
+.tab-build-chip:hover { color: var(--text); border-color: var(--border-strong); }
+.tab-build-chip.active { color: var(--accent); background: var(--accent-dim); border-color: var(--border-strong); }
+.tab-build-error { color: var(--danger); font-size: 12.5px; }
+.tab-build-build-btn { align-self: flex-start; padding: 10px 20px; font-size: 13.5px; }
 
 /* -- onboarding ---------------------------------------------------------
    Full-screen first-run wizard (David's ask, 2026-08-31) — shown in place
@@ -555,7 +526,7 @@ input[type="checkbox"]:checked::after {
 .onboarding-overlay {
   position: fixed; inset: 0; z-index: 2000;
   display: flex; align-items: center; justify-content: center;
-  background: linear-gradient(rgba(var(--shade-rgb), .1), rgba(var(--shade-rgb), .2)), url('/static/img/kairos-sky.jpg') center / cover;
+  background: linear-gradient(rgba(var(--shade-rgb), .1), rgba(var(--shade-rgb), .2)), url('../img/kairos-sky.jpg') center / cover;
 }
 .onboarding-overlay.hidden { display: none; }
 .onboarding-card { width: 480px; max-width: 90vw; max-height: min(90vh, 760px); overflow-y: auto; padding: 32px 30px; background: var(--bg-panel-solid); box-shadow: var(--shadow-elevated); }
@@ -568,11 +539,52 @@ input[type="checkbox"]:checked::after {
 
 /* -- chat -------------------------------------------------------------- */
 .chat-layout { flex-direction: row; padding: 0; }
-:root[data-appearance='default'] .chat-layout {
-  background: linear-gradient(color-mix(in srgb, var(--k-parchment) 66%, transparent),
-    color-mix(in srgb, var(--k-parchment) 76%, transparent)),
-    url('/static/img/kairos-sky.jpg') center / cover;
+/* The halftone background (static/js/chatBackdrop.js, David 2026-10-07):
+   the figure while the chat is empty, the sky once it has messages, each
+   under its own parchment wash, which crossfades with the dot dissolve.
+   Other appearances draw their own background instead. */
+.chat-layout { position: relative; isolation: isolate; }
+.chat-backdrop { position: absolute; inset: 0; z-index: -1; overflow: hidden; background: rgb(var(--wash-rgb)); }
+.chat-backdrop .dither-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.chat-backdrop::before, .chat-backdrop::after { content: ""; position: absolute; inset: 0; z-index: 1; transition: opacity 700ms ease; }
+/* Figure: the composer and greeting sit centre-left; the figure shows right. */
+.chat-backdrop::before { opacity: 0; background:
+  radial-gradient(ellipse 46% 40% at 42% 50%, rgba(var(--wash-rgb), .9), rgba(var(--wash-rgb), .55) 60%, rgba(var(--wash-rgb), 0) 100%),
+  linear-gradient(90deg, rgba(var(--wash-rgb), .62), rgba(var(--wash-rgb), .3) 55%, rgba(var(--wash-rgb), .08)); }
+/* Sky: the same wash the photo had, so messages read as before. */
+.chat-backdrop::after { opacity: 0; background: linear-gradient(color-mix(in srgb, rgb(var(--wash-rgb)) 66%, transparent), color-mix(in srgb, rgb(var(--wash-rgb)) 76%, transparent)); }
+.chat-backdrop[data-scene='figure']::before, .chat-backdrop[data-scene='sky']::after { opacity: 1; }
+:root:not([data-halftone='on']) .chat-backdrop { display: none; }
+@media (max-width: 768px) {
+  /* On a phone the composer spans the width and the figure sits behind it. */
+  .chat-backdrop::before { background: linear-gradient(180deg, rgba(var(--wash-rgb), .5), rgba(var(--wash-rgb), .84) 40%, rgba(var(--wash-rgb), .84) 66%, rgba(var(--wash-rgb), .45)); }
 }
+
+/* Home and Chat (app.js switchTab): Home's card grows into this background
+   (and back), while each side's text fades out and the other's fades in
+   over it. The names exist only during the transition. */
+:root.tab-transition .dashboard-core, :root.tab-transition .chat-backdrop { view-transition-name: kairos-backdrop; }
+/* No blur while it animates: the browser carries the column's backdrop blur
+   onto its transition layer, which kept blurring Home's left side after the
+   column had faded (found 2026-10-07). */
+:root.tab-transition #chat-sessions { view-transition-name: kairos-chat-sessions; backdrop-filter: none; }
+::view-transition-group(kairos-chat-sessions) { backdrop-filter: none; }
+:root.tab-transition #chat-main { view-transition-name: kairos-chat-main; }
+/* Home's card text fades over the background instead of being covered by it. */
+:root.tab-transition .dashboard-header { view-transition-name: kairos-home-header; }
+:root.tab-transition .dashboard-intro { view-transition-name: kairos-home-intro; }
+/* overflow: clip, because these images, unlike <img>, aren't clipped when
+   object-fit scales them past their box (found 2026-10-07: the card spilled
+   over the sidebar). */
+::view-transition-group(kairos-backdrop) { overflow: clip; animation-duration: 480ms; animation-timing-function: cubic-bezier(.22, 1, .36, 1); }
+::view-transition-old(kairos-backdrop), ::view-transition-new(kairos-backdrop) {
+  height: 100%; object-fit: cover; object-position: 70% 40%; animation-duration: 480ms; }
+::view-transition-new(kairos-chat-main), ::view-transition-new(kairos-chat-sessions),
+::view-transition-new(kairos-home-header), ::view-transition-new(kairos-home-intro) { animation: chat-lands 300ms 200ms both ease-out; }
+::view-transition-old(kairos-chat-main), ::view-transition-old(kairos-chat-sessions),
+::view-transition-old(kairos-home-header), ::view-transition-old(kairos-home-intro) { animation: chat-leaves 160ms both ease-in; }
+@keyframes chat-leaves { to { opacity: 0; } }
+@keyframes chat-lands { from { opacity: 0; transform: translateY(6px); } }
 
 /* -- status rows + dots (System panel, and reused by the Activity feed) -- */
 .status-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 12.5px; }
@@ -790,16 +802,8 @@ input[type="checkbox"]:checked::after {
 .cal-upcoming-day-label:first-child { margin-top: 0; }
 
 /* -- context menu (session right-click) --------------------------------- */
-.context-menu {
-  position: fixed; z-index: 1000; min-width: 140px; padding: 4px;
-  box-shadow: 0 8px 24px rgba(var(--shade-rgb), 0.5);
-}
-.context-menu-item {
-  padding: 7px 10px; border-radius: 6px; font-size: 12.5px; color: var(--text);
-  cursor: pointer;
-}
-.context-menu-item:hover { background: var(--accent-dim); }
-.context-menu-item.active { color: var(--accent); }
+.context-menu { position: fixed; z-index: 1000; min-width: 160px; }
+.context-menu-item { cursor: pointer; }
 .context-menu-item.danger { color: var(--danger); }
 .context-menu-item.danger:hover { background: rgba(var(--danger-rgb), 0.1); }
 .star-mark { color: var(--accent); }
@@ -849,22 +853,17 @@ input[type="checkbox"]:checked::after {
   /* Opens upward from the button (David's ask 2026-09-01) — the model
      picker sits at the top of the composer, so opening downward pushed the
      menu awkwardly toward/under the send row instead of into open space. */
-  position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 50; min-width: 220px;
-  max-height: 260px; overflow-y: auto; overflow-x: hidden; padding: 4px;
-  background: var(--glass-sheen), var(--bg-panel-solid);
-  backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6);
-  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-elevated);
+  position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 50; min-width: 240px;
+  max-height: 300px; overflow-y: auto; overflow-x: hidden;
 }
 .model-picker-menu.hidden { display: none; }
-.model-picker-item { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 9px; font-size: 12.5px; cursor: pointer; }
-.model-picker-item:hover { background: var(--surface-2); }
-.model-picker-item.active { background: var(--surface-2); font-weight: 500; }
-.model-picker-item.active::after { content: ""; margin-left: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--point); flex-shrink: 0; }
+.model-picker-item { display: flex; align-items: center; gap: 9px; cursor: pointer; }
 .model-picker-heading { padding: 8px 10px 6px; font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-faint); }
 .model-connection-text { display: grid; min-width: 0; }
 .model-connection-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-connection-sub { font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
-.model-add-item { margin-top: 4px; border-top: 1px solid var(--border); border-radius: 0 0 9px 9px; color: var(--text-dim); }
+.model-add-item { margin-top: 7px; color: var(--text-dim); }
+.model-add-item::before { content: ""; position: absolute; top: -4px; left: 4px; right: 4px; height: 1px; background: var(--border); }
 /* The composer's model control: one pill, connection | model and reasoning. */
 .model-pill { display: inline-flex; align-items: center; flex-shrink: 0; height: 32px; border: 1px solid var(--hairline-soft); border-radius: 999px; background: rgba(var(--ink-rgb), .025); min-width: 0; }
 .model-pill .model-picker-wrap { display: flex; min-width: 0; }
@@ -893,10 +892,7 @@ input[type="checkbox"]:checked::after {
 
 .overflow-wrapper { position: relative; }
 .overflow-menu {
-  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 50; min-width: 180px; padding: 4px;
-  background: var(--glass-sheen), var(--bg-panel-solid);
-  backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6);
-  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-elevated);
+  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 50; min-width: 200px;
 }
 .overflow-menu.hidden { display: none; }
 /* Opens downward from its anchor instead of the default upward-from-the-
@@ -909,14 +905,43 @@ input[type="checkbox"]:checked::after {
    positioning for any future downward-opening menu. */
 .overflow-menu.below { top: calc(100% + 6px); right: 0; bottom: auto; left: auto; }
 .overflow-menu-item {
-  display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 6px;
-  font-size: 12.5px; color: var(--text); cursor: pointer; width: 100%; background: none; border: none; text-align: left;
+  display: flex; align-items: center; gap: 10px; cursor: pointer; width: 100%; background: none; border: none; text-align: left;
 }
-.overflow-menu-item:hover { background: var(--accent-dim); }
-.overflow-menu-item.active { color: var(--accent); }
+.overflow-menu-item svg { width: 16px; height: 16px; flex: none; color: var(--text-dim); }
 .overflow-menu-item[disabled] { opacity: 0.4; cursor: default; }
 .overflow-menu-item[disabled]:hover { background: none; }
-.documents-popover { width: 330px; min-width: 0; z-index: 60; padding: 10px; overflow-y: auto; }
+/* -- popups: one look for every menu and picker (David, 2026-10-07: the
+   old ones had a grey smear from the dark theme's glass sheen, six
+   different styles, and covered the composer). Flat parchment, a hairline,
+   one soft shadow; rows of one height with the same hover; the current
+   choice gets an ink check. Placement stays with each menu's own rule. */
+.custom-select-menu, .model-picker-menu, .overflow-menu, .context-menu, .chat-reference-picker {
+  padding: 6px; background: var(--bg-panel-solid); border: 1px solid var(--border-strong);
+  border-radius: 14px; box-shadow: var(--popup-shadow); animation: popup-in 120ms ease-out;
+}
+@keyframes popup-in { from { opacity: 0; transform: translateY(4px); } }
+.custom-select-item, .model-picker-item, .overflow-menu-item, .context-menu-item {
+  position: relative; min-height: 34px; padding: 8px 10px; border-radius: 8px;
+  font-size: 13px; line-height: 1.35; color: var(--text); font-weight: 400;
+}
+:is(.custom-select-item, .model-picker-item, .overflow-menu-item, .context-menu-item):hover { background: var(--surface-2); }
+:is(.custom-select-item, .model-picker-item, .overflow-menu-item, .context-menu-item).active { padding-right: 32px; color: var(--text); background: none; }
+:is(.custom-select-item, .model-picker-item, .overflow-menu-item, .context-menu-item).active:hover { background: var(--surface-2); }
+:is(.custom-select-item, .model-picker-item, .overflow-menu-item, .context-menu-item).active::after {
+  content: ""; position: absolute; right: 10px; top: 50%; width: 14px; height: 14px; margin-top: -7px; background: var(--text);
+  -webkit-mask: url('../img/check.svg') center / contain no-repeat;
+  mask: url('../img/check.svg') center / contain no-repeat;
+}
+.context-menu-item.danger:hover { background: rgba(var(--danger-rgb), 0.08); }
+/* Rows without a logo line up with the ones that have one. */
+.model-picker-item .model-mark { margin-right: 7px; }
+.model-picker-menu:has(.model-mark) .model-picker-item:not(:has(.model-mark)) { padding-left: calc(26px + 1em); }
+/* Menus opened from the composer sit fully above it, aligned to its edges,
+   instead of covering its text box. */
+.chat-input-bar .overflow-wrapper, .chat-input-bar .model-picker-wrap { position: static; }
+.chat-input-bar .overflow-menu { bottom: calc(100% + 8px); left: 0; }
+.chat-input-bar .model-picker-menu { bottom: calc(100% + 8px); right: 0; }
+.documents-popover { width: 330px; min-width: 0; z-index: 60; overflow-y: auto; }
 .documents-menu-heading { display: grid; gap: 3px; padding: 5px 6px 11px; }
 .documents-menu-heading strong { color: var(--text); font-size: 13px; font-weight: 650; }
 .documents-menu-heading span { color: var(--text-dim); font-size: 11px; }
@@ -1030,6 +1055,18 @@ input[type="checkbox"]:checked::after {
   background: var(--scrim); backdrop-filter: blur(3px);
 }
 .modal-backdrop.hidden { display: none; }
+/* Dialogs and the Settings window (David, 2026-10-07): the scrim fades and
+   the panel rises 6 px into place; closing (.hidden) plays it backwards,
+   since display waits for the transition (allow-discrete). A dialog that is
+   removed outright (confirmDialog) only animates in. */
+.modal-backdrop { transition: opacity 160ms ease, display 180ms allow-discrete; }
+.modal-backdrop.hidden { opacity: 0; }
+.modal-backdrop > * { transition: opacity 180ms ease, transform 200ms cubic-bezier(.22, 1, .36, 1); }
+.modal-backdrop.hidden > * { opacity: 0; transform: translateY(6px) scale(.985); }
+@starting-style {
+  .modal-backdrop:not(.hidden) { opacity: 0; }
+  .modal-backdrop:not(.hidden) > * { opacity: 0; transform: translateY(6px) scale(.985); }
+}
 .modal-panel { width: 480px; max-width: 90vw; max-height: 80vh; display: flex; flex-direction: column; padding: 20px; }
 .modal-panel h4 { font-weight: 400; margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between; }
 .modal-panel .muted { color: var(--text-faint); font-size: 12px; margin-bottom: 12px; line-height: 1.5; }
@@ -1159,7 +1196,7 @@ input[type="checkbox"]:checked::after {
 .toast {
   pointer-events: auto; cursor: pointer;
   max-width: 340px; padding: 10px 14px; font-size: 12.5px; line-height: 1.45; color: var(--text);
-  background: var(--glass-sheen), var(--bg-panel-solid);
+  background: var(--bg-panel-solid);
   backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6);
   border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: var(--shadow-elevated);
   border-left: 3px solid var(--accent);
@@ -1187,7 +1224,7 @@ input[type="checkbox"]:checked::after {
   pointer-events: auto; cursor: pointer;
   display: flex; align-items: center; gap: 8px;
   max-width: 280px; padding: 9px 13px; font-size: 12.5px; color: var(--text);
-  background: var(--glass-sheen), var(--bg-panel-solid);
+  background: var(--bg-panel-solid);
   backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6);
   border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: var(--shadow-elevated);
   border-left: 3px solid var(--accent);
@@ -1240,7 +1277,6 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); opacity: .
 .sidebar-user-card { background: transparent; font: inherit; text-align: left; width: 100%; gap: 9px; padding: 8px 4px; }
 .sidebar-avatar { width: 27px; height: 27px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; background: var(--surface-2); color: var(--text-dim); font-size: 11px; }
 #sidebar-footer { border-top: 1px solid var(--border); margin-top: 16px; }
-.sidebar-devmode-btn { font-size: 11px; }
 .sidebar-user-name { color: var(--text-dim); font-size: 12px; }
 .session-item { display: block; width: 100%; text-align: left; border: none; background: transparent; font-family: inherit; line-height: 1.5; }
 .session-item.active { color: var(--text); background: rgba(var(--ink-rgb), .06); }
@@ -1255,8 +1291,6 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); opacity: .
 .custom-select-menu, .model-picker-menu, .overflow-menu, .toast, .chat-progress-card {
   backdrop-filter: none; -webkit-backdrop-filter: none;
 }
-.new-tab-header h1 { color: var(--text); letter-spacing: -.03em; font-size: 30px; }
-.new-tab-header p { line-height: 1.6; }
 .empty-state-rich { padding: 56px 24px; }
 .empty-state-icon { opacity: .55; width: 32px; height: 32px; }
 .empty-state-title { color: var(--text); font-size: 16px; letter-spacing: -.02em; }
@@ -1439,7 +1473,7 @@ input[type="checkbox"]:checked::after { border-color: var(--text); }
 .eyebrow { font-size: 10px; font-weight: 500; letter-spacing: .13em; text-transform: uppercase; color: var(--text-faint); }
 .dashboard-header p { font-size: 12px; color: var(--text-dim); margin: 5px 0 0; }
 .dashboard-system-pill { display: inline-flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-dim); white-space: nowrap;
-  padding: 5px 11px; border-radius: 999px; background: rgba(var(--parchment-rgb), .92); border: 1px solid var(--border); }
+  padding: 5px 11px; border-radius: 999px; background: rgba(var(--wash-rgb), .92); border: 1px solid var(--border); }
 .dashboard-intro h1 span { display: block; color: var(--text-dim); }
 .dashboard-hero { position: relative; display: flex; flex-direction: column; min-height: 400px; padding: 24px 30px; margin: 0 0 16px; border: 1px solid var(--hairline-soft); border-radius: var(--radius); overflow: hidden; background: var(--bg-panel); }
 .dashboard-intro { position: relative; z-index: 1; flex: 1; max-width: 510px; padding: 36px 0 20px; }
@@ -1451,10 +1485,14 @@ input[type="checkbox"]:checked::after { border-color: var(--text); }
 /* Home's banner: the Kairos figure as halftone (static/js/dither.js), with
    the plain painting underneath until it draws. A parchment wash keeps the
    text side readable. */
-.dashboard-core { position: absolute; inset: 0; overflow: hidden; background: var(--k-parchment) url('/static/img/home-figure.webp') 70% 40% / cover no-repeat; }
+.dashboard-core { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; background: rgb(var(--wash-rgb)) url('../img/home-figure.webp') 70% 40% / cover no-repeat; }
 .dashboard-core.is-dithered { background-image: none; }
+/* Halftone switched off: a plain card. In Color its painting fallback would
+   clash too, so it goes with the dots. */
+:root[data-halftone='off'] .dashboard-core { background: none; }
+:root[data-halftone='off'] .dashboard-core > .dither-canvas, :root[data-halftone='off'] .dashboard-core::after { display: none; }
 .dashboard-core .dither-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-.dashboard-core::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(var(--parchment-rgb), .95) 0%, rgba(var(--parchment-rgb), .86) 34%, rgba(var(--parchment-rgb), 0) 64%); }
+.dashboard-core::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(var(--wash-rgb), .95) 0%, rgba(var(--wash-rgb), .86) 34%, rgba(var(--wash-rgb), 0) 64%); }
 .dashboard-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 22px 0; margin-bottom: 30px; }
 .dashboard-stat { border: none; border-right: 1px solid var(--border); background: none; color: var(--text); display: grid; grid-template-columns: 20px 1fr; gap: 4px 12px; text-align: left; padding: 2px 24px; cursor: pointer; border-radius: 0; }
 .dashboard-stat:first-child { padding-left: 0; }
@@ -1466,6 +1504,22 @@ input[type="checkbox"]:checked::after { border-color: var(--text); }
 .dashboard-icon { color: var(--text-faint); flex-shrink: 0; display: flex; align-items: center; }
 .dashboard-icon svg { width: 16px; height: 16px; }
 .dashboard-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 24px 36px; }
+/* The numbers strip sits in the grid too (its place is in Settings > Layout), across both columns. */
+.dashboard-grid > .dashboard-stats { grid-column: 1 / -1; margin-bottom: 6px; }
+/* Home's first fill: each panel's contents fade in, 40 ms after the last. */
+.is-filled .dashboard-section-body { animation: home-fill 320ms ease-out both; }
+.is-filled .dashboard-grid > :nth-child(2) .dashboard-section-body { animation-delay: 40ms; }
+.is-filled .dashboard-grid > :nth-child(3) .dashboard-section-body { animation-delay: 80ms; }
+.is-filled .dashboard-grid > :nth-child(4) .dashboard-section-body { animation-delay: 120ms; }
+.is-filled .dashboard-grid > :nth-child(5) .dashboard-section-body { animation-delay: 160ms; }
+.is-filled .dashboard-grid > :nth-child(6) .dashboard-section-body { animation-delay: 200ms; }
+.is-filled .dashboard-grid > :nth-child(7) .dashboard-section-body { animation-delay: 240ms; }
+@keyframes home-fill { from { opacity: 0; transform: translateY(4px); } }
+/* A completed note: the strike draws across, the text dims. */
+/* Inline, so the strike runs under the words on each line, not the row. */
+.note-title { display: inline; -webkit-box-decoration-break: clone; box-decoration-break: clone; background: linear-gradient(currentColor, currentColor) 0 55% / 0 1px no-repeat; transition: background-size 280ms ease, opacity 280ms ease; }
+.note-title.is-done { background-size: 100% 1px; opacity: .5; }
+.note-title.is-settled { transition: none; }
 .dashboard-section { min-width: 0; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
 .dashboard-section-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .dashboard-section-header h2 { font-size: 13px; font-weight: 500; margin: 0; color: var(--text); }
@@ -1473,7 +1527,7 @@ input[type="checkbox"]:checked::after { border-color: var(--text); }
 /* Model provider logos (see modelMark in static/js/api.js). */
 .model-mark { display: inline-block; flex: none; width: 1em; height: 1em; vertical-align: -0.14em; background: currentColor; -webkit-mask: var(--mark) center/contain no-repeat; mask: var(--mark) center/contain no-repeat; }
 .dashboard-row > .model-mark { width: 18px; height: 18px; color: var(--text); }
-.model-picker-item .model-mark, .model-row-title .model-mark { margin-right: 7px; }
+.model-row-title .model-mark { margin-right: 7px; }
 .dashboard-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 8px; background: transparent; border: none; border-radius: 8px; color: var(--text-dim); text-align: left; }
 button.dashboard-row { cursor: pointer; }
 button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
@@ -1484,6 +1538,18 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
 .dashboard-row:hover .dashboard-row-arrow, .dashboard-row:focus-visible .dashboard-row-arrow { opacity: 1; }
 .dashboard-empty { font-size: 12px; line-height: 1.7; color: var(--text-faint); padding: 20px 8px; min-height: 74px; }
 .dashboard-model-usage { font-size: 10px; white-space: nowrap; }
+/* A subscription's limits under its row, as the desktop overlay shows them:
+   calm below half, amber from half, red from 80%, in the theme's own
+   status colors. */
+.dashboard-quota { display: grid; gap: 10px; padding: 2px 8px 12px 38px; }
+.dashboard-quota-window { display: grid; gap: 4px; }
+.dashboard-quota-head { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; color: var(--text-dim); }
+.dashboard-quota-reset, .dashboard-quota-used, .dashboard-quota-note { font-size: 10px; color: var(--text-faint); }
+.dashboard-quota-track { height: 4px; border-radius: 999px; background: rgba(var(--ink-rgb), .08); overflow: hidden; }
+.dashboard-quota-fill { display: block; height: 100%; border-radius: inherit; transition: width 400ms ease; }
+.dashboard-quota-fill.tone-ample { background: var(--success); }
+.dashboard-quota-fill.tone-watch { background: var(--warn); }
+.dashboard-quota-fill.tone-crit { background: var(--danger); }
 .dashboard-activity { display: flex; align-items: baseline; gap: 10px; padding: 10px 0; font-size: 11px; }
 .dashboard-activity > span:nth-child(2) { flex: 1; color: var(--text-dim); overflow-wrap: anywhere; }
 .dashboard-activity .status-dot { align-self: center; width: 5px; height: 5px; }
@@ -1518,7 +1584,7 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
     display: flex; align-items: center; justify-content: center;
     position: fixed; top: calc(var(--titlebar-h) + 12px); left: 12px; z-index: 60;
     width: 38px; height: 38px; border-radius: 9px;
-    background: var(--glass-sheen), var(--bg-panel-solid);
+    background: var(--bg-panel-solid);
     backdrop-filter: blur(14px) saturate(1.5); -webkit-backdrop-filter: blur(14px) saturate(1.5);
     border: 1px solid var(--border); color: var(--text); cursor: pointer;
     box-shadow: var(--shadow-elevated);
@@ -1644,7 +1710,7 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
   .dashboard-header { align-items: flex-start; gap: 12px; }
   .dashboard-system-pill { font-size: 9px; padding-top: 2px; gap: 5px; }
   .dashboard-hero { min-height: 0; padding: 18px; margin-top: 0; }
-  .dashboard-core::after { background: linear-gradient(180deg, rgba(var(--parchment-rgb), .94), rgba(var(--parchment-rgb), .84) 72%, rgba(var(--parchment-rgb), .5)); }
+  .dashboard-core::after { background: linear-gradient(180deg, rgba(var(--wash-rgb), .94), rgba(var(--wash-rgb), .84) 72%, rgba(var(--wash-rgb), .5)); }
   .dashboard-intro { padding: 34px 0 48px; }
   .dashboard-intro h1 { font-size: 38px; margin: 12px 0 16px; }
   .dashboard-intro > p { max-width: 100%; }
@@ -1877,7 +1943,7 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
 .run-more { align-self: flex-start; padding: 2px 8px; font-size: 11px; }
 
 
-/* Tool Store: one quiet catalog for installed skills and optional MCP servers. */
+/* Tool Store: skills, MCP servers, prebuilt tabs and user tabs. */
 .tool-store-view { width: 100%; padding-bottom: 48px; }
 .tool-store-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 22px 0 10px; }
 .tool-store-search { flex: 1 1 260px; min-width: 0; }
@@ -1911,6 +1977,15 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
 .tool-store-card h4 { margin: 15px 0 4px; overflow-wrap: anywhere; font-size: 14px; font-weight: 600; }
 .tool-store-card p { flex: 1; margin: 0 0 19px; color: var(--text-dim); font-size: 12.5px; line-height: 1.55; }
 .tool-store-card-foot { min-height: 29px; }
+.tool-store-card[data-tab-slug] .tool-store-card-foot { margin-top: auto; justify-content: flex-start; gap: 6px; }
+.tool-store-card[data-tab-slug] .tool-store-card-foot .btn { padding: 6px 12px; font-size: 12px; }
+.tool-store-card-foot .btn.quiet.danger { color: var(--danger); }
+.tool-store-card[data-tab-slug] p { flex: none; }
+.tool-store-tab-review { margin: 0 0 14px; }
+.tool-store-tab-review p { margin: 0 0 10px; }
+.tool-store-tab-files { margin: 0 0 12px; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-store-tab-hash { overflow-wrap: anywhere; }
+.tool-store-card p.tool-store-tab-reason { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--danger); }
 .tool-store-card-foot a, .tool-store-action a { color: var(--accent); font-size: 12px; text-decoration: none; }
 .tool-store-card-foot a:hover, .tool-store-action a:hover { text-decoration: underline; }
 .tool-store-action { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }

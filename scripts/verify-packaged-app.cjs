@@ -184,6 +184,11 @@ function checkProfile(profile, stage) {
   await requireFreePort();
   if (!fs.existsSync(appExe)) fail('no packaged app at ' + appExe + ' - run `npm run dist` in electron/ first');
   if (!fs.existsSync(runtimeExe)) fail('no bundled runtime at ' + runtimeExe);
+  // extraResources copies tabs/** with routes/** via **/*; assert against
+  // the actual installer output so a future filter cannot drop prebuilts.
+  for (const file of ['tab.json', 'routes.py', 'service.py', 'view.js']) {
+    if (!fs.existsSync(path.join(backendDir, 'tabs', 'school', file))) fail('missing bundled School file: ' + file);
+  }
   // Windows reports the launch path in Win32_Process even when dist is a junction.
   realRuntime = runtimeExe;
 

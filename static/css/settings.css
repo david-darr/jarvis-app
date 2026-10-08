@@ -32,7 +32,8 @@
 
 /* -- page ----------------------------------------------------------------- */
 .settings-content { padding: 0; }
-.set-page { max-width: 760px; margin: 0 auto; padding: 28px 36px 64px; }
+.set-page { max-width: 760px; margin: 0 auto; padding: 28px 36px 64px; animation: set-page-in 140ms ease-out; }
+@keyframes set-page-in { from { opacity: 0; } }
 .set-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
 .set-header-text { min-width: 0; }
 .set-title { margin: 0; font-size: 20px; font-weight: 550; letter-spacing: -.02em; color: var(--text); }
@@ -243,3 +244,18 @@
   .set-header { flex-direction: column; }
   .settings-nav-item svg { display: none; }
 }
+
+/* -- Settings > Layout (views/layoutPanel.js) ----------------------------- */
+.layout-lists { display: grid; gap: 14px; padding: 14px 16px 16px; }
+.layout-group h4 { margin: 0 0 6px; font-size: 11px; font-weight: 500; color: var(--text-faint); }
+.layout-list { list-style: none; margin: 0; padding: 4px; min-height: 40px; display: grid; gap: 2px; border: 1px dashed var(--border); border-radius: 10px; }
+.layout-item { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; background: var(--bg-panel); cursor: grab; }
+.layout-item:hover { background: var(--surface-2); }
+.layout-item.is-dragging { opacity: .5; }
+.layout-item.is-hidden .layout-label { color: var(--text-faint); text-decoration: line-through; text-decoration-color: var(--border-strong); }
+.layout-handle { color: var(--text-faint); font-size: 14px; line-height: 1; }
+.layout-label { flex: 1; min-width: 0; font-size: 13px; }
+.layout-move { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 1px solid var(--border); border-radius: 7px; background: none; color: var(--text-dim); cursor: pointer; }
+.layout-move:hover:not(:disabled) { color: var(--text); border-color: var(--border-strong); }
+.layout-move:disabled { opacity: .35; cursor: default; }
+
