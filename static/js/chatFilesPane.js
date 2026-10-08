@@ -57,6 +57,7 @@ export function refreshChatFiles(sessionId) {
 
 export function openChatFiles(sessionId) {
   if (!sessionId) return;
+  import('./chatComputerPane.js').then(m => m.closeChatComputer()).catch(() => {});
   closeChatFiles();
   closeArtifact();
   closeBrowser();

@@ -293,9 +293,42 @@
 .browser-viewport { flex: 1; min-height: 0; position: relative; background: #fff; }
 .browser-frame { border: 0; display: block; width: 100%; height: 100%; background: #fff; }
 
+/* The contained computer is a screenshot stream, shared by Chats and Agents. */
+.chat-computer-body { flex: 1; min-height: 0; overflow: auto; padding: 14px; }
+.computer-panel { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+.computer-panel-head, .computer-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.computer-panel-head { justify-content: space-between; }
+.computer-title { font-size: 14px; font-weight: 550; min-width: 0; overflow-wrap: anywhere; }
+.computer-url { color: var(--text-dim); font-size: 12px; overflow-wrap: anywhere; }
+.computer-time, .computer-state { font-size: 12px; }
+.computer-state { color: var(--text-dim); }
+.computer-panel.is-taken-over .computer-state { color: var(--accent); font-weight: 600; }
+.computer-stage { box-sizing: border-box; width: 100%; aspect-ratio: 8 / 5; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 8px; overflow: hidden; outline-offset: 3px; }
+.computer-stage:focus-visible { outline: 2px solid var(--accent); }
+.computer-panel.is-taken-over .computer-stage { cursor: crosshair; }
+.computer-frame { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; }
+.agent-computer-section { margin-bottom: 12px; }
+.agent-computer-section > .title { margin-bottom: 10px; }
+.chat-computer-toggle svg { width: 16px; height: 16px; }
+.computer-watch { font-size: 11px; }
+.computer-shot { flex-basis: 100%; margin-top: 6px; }
+.computer-shot summary { cursor: zoom-in; list-style: none; }
+.computer-shot[open] summary { cursor: zoom-out; }
+.computer-thumbnail { display: block; width: 180px; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px; }
+.computer-shot[open] .computer-thumbnail { width: 100%; }
+.chat-computer-history { margin-top: 12px; }
+.chat-computer-history > details > summary { cursor: pointer; font-size: 12px; color: var(--text-dim); }
+.chat-computer-step { display: block; }
+
 @keyframes artifact-enter { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: translateX(0); } }
 @media (max-width: 1100px) { .artifact-panel { position: absolute; inset: 0 0 0 auto; width: min(620px, 85%); z-index: 30; box-shadow: var(--shadow-elevated); } .chat-layout { position: relative; } }
 @media (max-width: 680px) { .artifact-panel { width: 100%; inset: 0; } .chat-prose { font-size: 14px; } .chat-input-bar .model-picker-btn { max-width: 105px; font-size: 10px; padding-inline: 4px; } .chat-input-right { gap: 4px; } .artifact-header { padding: 16px; } .msg-actions { opacity: 1; } }
+/* Files and Computer share an opaque phone drawer and the chat header's menu clearance. */
+@media (max-width: 768px) {
+  .artifact-panel { position: fixed; inset: var(--titlebar-h) 0 0; width: 100%; background: var(--bg-panel-solid); }
+  .artifact-panel > .artifact-header { min-height: 62px; padding: 12px 16px 12px 62px; }
+}
 @media (prefers-reduced-motion: reduce) { .artifact-panel { animation: none; } .artifact-card { transition: none; } }
 
 /* -- stopped turn (David's ask 2026-09-15, voice work's foundation) ------ */

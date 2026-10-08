@@ -70,6 +70,7 @@ async def get_settings(user: str = Depends(require_admin)) -> dict:
         "disabled_tools": raw["disabled_tools"],
         "developer_mode_enabled": raw["developer_mode_enabled"],
         "auto_compact": raw["auto_compact"],
+        "computer_use": raw["computer_use"],
         "helper_endpoint_id": raw["helper_endpoint_id"],
         "helper_endpoint": _helper_summary(),
     }
@@ -97,6 +98,19 @@ async def set_developer_mode(body: SetDeveloperModeRequest, user: str = Depends(
 
 class SetAutoCompactRequest(BaseModel):
     enabled: bool
+
+
+class SetComputerUseRequest(BaseModel):
+    enabled: bool
+    allow_non_admins: bool = False
+    allow_reactions: bool = False
+
+
+@router.post("/computer-use")
+async def set_computer_use(body: SetComputerUseRequest, user: str = Depends(require_admin)) -> dict:
+    value = body.model_dump()
+    settings_store.update_settings(computer_use=value)
+    return {"ok": True, "computer_use": value}
 
 
 @router.post("/auto-compact")

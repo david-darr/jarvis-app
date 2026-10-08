@@ -128,6 +128,8 @@ class RunContext:
     # behaviour (per-message timeouts only, no token budget for chats/tasks).
     deadline: Optional[float] = None
     budget_tokens: Optional[int] = None
+    computer_events: list = field(default_factory=list, compare=False)
+    computer_queue: asyncio.Queue = field(default_factory=asyncio.Queue, compare=False)
 
 
 # The run in progress, for what it starts (core/helpers.py: a helper's run
@@ -154,6 +156,16 @@ def leave(context: RunContext) -> None:
 def current_for(session_id: Optional[str]) -> Optional[RunContext]:
     """The run in progress: this task's, else the chat's."""
     return CURRENT.get() or (_BY_SESSION.get(session_id) if session_id else None)
+
+
+def computer_event(session_id: Optional[str], kind: str, detail: dict, ok=None) -> None:
+    context = current_for(session_id)
+    if context is None or len(context.computer_events) >= TIMELINE_LIMIT:
+        return
+    step = {"at": time.time(), "kind": kind, "name": "computer", "ok": ok,
+            "detail": json.dumps(detail, ensure_ascii=False), "seconds": None}
+    context.computer_events.append(step)
+    context.computer_queue.put_nowait(step)
 
 
 @dataclass(frozen=True)
@@ -382,6 +394,9 @@ def record(context: RunContext, tally: Tally, outcome: str, stop: Optional[StopR
     `runs`). outcome: finished, failed or stopped. Never fails the run."""
     usage = tally.usage
     timeline = list(tally.timeline)
+    if context.computer_events:
+        timeline = [step for step in timeline if step.get("name") not in ("computer", "mcp__hive_mind__computer")]
+        timeline = sorted([*timeline, *context.computer_events], key=lambda step: step["at"])[:TIMELINE_LIMIT]
     if tally.dropped:
         timeline.append({"at": time.time(), "kind": "truncated", "name": None, "ok": None,
                          "detail": f"{tally.dropped} more steps were not kept", "seconds": None})

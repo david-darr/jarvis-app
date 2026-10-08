@@ -44,12 +44,13 @@ class SessionManager:
     # JSON import itself, so the migration doesn't depend on this class
     # having been constructed (or on which module imported what first).
 
-    def create_session(self, title: str = "New Chat") -> dict:
+    def create_session(self, title: str = "New Chat", owner_user: str | None = None) -> dict:
         session_id = uuid.uuid4().hex[:12]
         now = time.time()
         session = {
             "id": session_id,
             "title": title,
+            "owner_user": owner_user,
             "starred": False,
             "created_at": now,
             "updated_at": now,
@@ -106,6 +107,7 @@ class SessionManager:
         fork = {
             "id": uuid.uuid4().hex[:12],
             "title": f"{title[:73]} (fork)",
+            "owner_user": source.get("owner_user"),
             "starred": False,
             "created_at": now,
             "updated_at": now,
@@ -579,6 +581,8 @@ class SessionManager:
         store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def delete_session(self, session_id: str) -> None:
+        from core.computer import manager
+        manager.forget(f"chat:{session_id}")
         store.delete_session(session_id)
 
     def get_channel_session_id(self, channel_key: str) -> Optional[str]:

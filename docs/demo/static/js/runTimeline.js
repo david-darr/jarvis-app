@@ -26,15 +26,40 @@ export function runSummary(run) {
     run.tool_calls ? `${run.tool_calls} tool${run.tool_calls === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
 }
 
-function stepRow(step) {
+export function computerDetail(step) {
+  if (step.name !== 'computer' && step.name !== 'mcp__hive_mind__computer') return null;
+  try { return JSON.parse(step.detail); } catch { return null; }
+}
+
+export function stepRow(step) {
   const failed = step.ok === false;
   const name = step.name ? ` ${step.name}` : "";
   const took = step.seconds != null ? ` · ${step.seconds}s` : "";
-  return el("div", { class: `run-step run-step-${step.kind}${failed ? " is-error" : ""}` }, [
+  const computer = computerDetail(step);
+  const detail = computer ? `${computer.action} ${computer.url}${computer.text ? '\n' + computer.text : ''}` : step.detail;
+  const row = el("div", { class: `run-step run-step-${step.kind}${failed ? " is-error" : ""}` }, [
     el("span", { class: "run-step-time", text: clock(step.at) }),
     el("span", { class: "run-step-what", text: `${STEP_LABELS[step.kind] || step.kind}${name}${failed && step.kind === "tool_finished" ? " (failed)" : ""}${took}` }),
-    ...(step.detail ? [el("div", { class: "run-step-detail", text: step.detail })] : []),
+    ...(detail ? [el("div", { class: "run-step-detail", text: detail })] : []),
   ]);
+  const source = computer?.image && computer.image.length <= 81920 && /^[A-Za-z0-9+/=]+$/.test(computer.image)
+    ? `data:image/jpeg;base64,${computer.image}` : computer?.image_url === '/static/img/computer-fixture.jpg' ? computer.image_url : null;
+  if (source) row.append(el('details', { class: 'computer-shot' }, [
+    el('summary', { 'aria-label': `Expand screenshot: ${computer.action} ${computer.url}` }, [
+      el('img', { class: 'computer-thumbnail', src: source, alt: `${computer.action} on ${computer.url}`, loading: 'lazy' }),
+    ]),
+  ]));
+  return row;
+}
+
+export async function mountComputerHistory(card, sessionId, runId) {
+  if (!runId || card.querySelector('.chat-computer-history')) return;
+  const holder = el('div', { class: 'chat-computer-history' });
+  card.append(holder);
+  const detail = await api(`/api/computer/${encodeURIComponent('chat:' + sessionId)}/history?run_id=${encodeURIComponent(runId)}`).catch(() => null);
+  if (!holder.isConnected) return;
+  if (!detail?.steps?.length) { holder.remove(); return; }
+  holder.append(el('details', { open: true }, [el('summary', { text: 'Computer activity' }), runTimeline(detail)]));
 }
 
 export function runTimeline(detail) {

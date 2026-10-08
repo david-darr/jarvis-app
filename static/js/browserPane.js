@@ -66,6 +66,7 @@ export function openBrowser(initialUrl) {
   // cycle: chatContent.js opens this pane for external links.
   import('./chatContent.js').then(m => m.closeArtifact()).catch(() => {});
   import('./chatFilesPane.js').then(m => m.closeChatFiles()).catch(() => {});
+  import('./chatComputerPane.js').then(m => m.closeChatComputer()).catch(() => {});
   closeBrowser();
 
   const host = document.querySelector('.chat-layout');

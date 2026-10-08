@@ -20,9 +20,11 @@ What this module owns:
 """
 import os
 import re
+import shutil
 import time
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from core.atomic_io import read_json, write_json_atomic
@@ -42,7 +44,7 @@ COLORS = ("#d9b260", "#b9d2e3", "#e8c39e", "#d99a92", "#b5c7a5", "#cdbfd9")
 LEGACY_COLORS = dict(zip(("#b3a7f5", "#7dd3c0", "#f0b37e", "#e88f8f", "#8fb8e8", "#c9d67a"), COLORS))
 # Fields a person may change; everything else is the service's.
 EDITABLE = ("name", "role", "instructions", "endpoint_id", "color", "enabled", "daily_run_cap",
-            "deliver_to_channel", "integration_ids")
+            "deliver_to_channel", "integration_ids", "keep_signed_in")
 REPLIES_IN_PROMPT = 5
 # A reply code on a channel notification ("[S-7f3a2b]": the agent's initial
 # and the start of the item's or card's id). Replying to that message in
@@ -76,7 +78,8 @@ class AgentService:
 
     def create(self, name: str, role: str = "", instructions: str = "", endpoint_id: Optional[str] = None,
                color: Optional[str] = None, daily_run_cap: int = DEFAULT_DAILY_RUN_CAP,
-               deliver_to_channel: Optional[str] = None, integration_ids: Optional[list] = None) -> dict:
+               deliver_to_channel: Optional[str] = None, integration_ids: Optional[list] = None,
+               keep_signed_in: bool = False) -> dict:
         name = _clean_name(name)
         self._check_unique(name, None)
         agent_id = uuid.uuid4().hex[:10]
@@ -86,6 +89,7 @@ class AgentService:
             "color": color if color in COLORS else COLORS[len(self._agents) % len(COLORS)],
             "enabled": True, "daily_run_cap": _cap(daily_run_cap), "deliver_to_channel": deliver_to_channel or None,
             "integration_ids": list(integration_ids) if integration_ids is not None else None,
+            "keep_signed_in": bool(keep_signed_in),
             "created_at": time.time(),
         }
         self._agents[agent_id] = agent
@@ -105,7 +109,7 @@ class AgentService:
                 value = _cap(value)
             elif key == "color" and value not in COLORS:
                 raise ValueError("pick one of the offered colors")
-            elif key == "enabled":
+            elif key in ("enabled", "keep_signed_in"):
                 value = bool(value)
             agent[key] = value
         self._save()
@@ -115,6 +119,7 @@ class AgentService:
         """The identity, memory and open inbox items go; its pending work is
         removed by the caller (task_service), its finished history stays."""
         self._require(agent_id)
+        self.forget_logins(agent_id)
         del self._agents[agent_id]
         self._save()
         self._inbox = [i for i in self._inbox if i["agent_id"] != agent_id]
@@ -126,6 +131,20 @@ class AgentService:
                 os.rmdir(os.path.dirname(path))
             except OSError:
                 pass
+
+    def forget_logins(self, agent_id: str) -> None:
+        """Remove a kept browser profile only after its container has stopped."""
+        self._require(agent_id)
+        from core.computer import PROFILES, manager
+        if manager.is_running(f"agent:{agent_id}"):
+            raise ValueError("stop this agent's computer before forgetting logins")
+        if not re.fullmatch(r"[0-9a-f]{10}", agent_id or ""):
+            raise ValueError("bad agent id")
+        root = PROFILES.resolve()
+        target = (PROFILES / agent_id).resolve()
+        if Path(DATA_DIR).resolve() not in root.parents or root not in target.parents:
+            raise ValueError("profile path is outside Kairos data")
+        shutil.rmtree(target, ignore_errors=True)
 
     def _require(self, agent_id: str) -> dict:
         agent = self._agents.get(agent_id)

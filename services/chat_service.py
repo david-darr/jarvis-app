@@ -564,9 +564,15 @@ async def _stream_with_permission_prompts(session_id: str, brain, full_text: str
     replies = brain.events(full_text)
     next_chunk = asyncio.ensure_future(anext(replies))
     next_ask = asyncio.ensure_future(queue.get())
+    context = runs.current_for(session_id)
+    computer_queue = context.computer_queue if context else asyncio.Queue()
+    next_computer = asyncio.ensure_future(computer_queue.get())
     try:
         while True:
-            done, _ = await asyncio.wait({next_chunk, next_ask}, return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait({next_chunk, next_ask, next_computer}, return_when=asyncio.FIRST_COMPLETED)
+            if next_computer in done:
+                yield {"tool_event": next_computer.result(), "run_id": context.run_id if context else None}
+                next_computer = asyncio.ensure_future(computer_queue.get())
             if next_ask in done:
                 yield {"permission": next_ask.result()}
                 next_ask = asyncio.ensure_future(queue.get())
@@ -574,6 +580,8 @@ async def _stream_with_permission_prompts(session_id: str, brain, full_text: str
                 try:
                     item = next_chunk.result()
                 except StopAsyncIteration:
+                    while not computer_queue.empty():
+                        yield {"tool_event": computer_queue.get_nowait(), "run_id": context.run_id if context else None}
                     return
                 tally.add(item)
                 if item.kind is runs.EventKind.TEXT:
@@ -581,12 +589,13 @@ async def _stream_with_permission_prompts(session_id: str, brain, full_text: str
                 next_chunk = asyncio.ensure_future(anext(replies))
     finally:
         next_ask.cancel()
+        next_computer.cancel()
         if not next_chunk.done():
             next_chunk.cancel()
         # Closing denies anything still waiting: a window that went away
         # cannot approve, and silence must never mean yes.
         permissions.close_channel(f"chat:{session_id}")
-        await asyncio.gather(next_ask, next_chunk, return_exceptions=True)
+        await asyncio.gather(next_ask, next_chunk, next_computer, return_exceptions=True)
         await replies.aclose()
 
 

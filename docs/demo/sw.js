@@ -35,6 +35,26 @@ async function api(request, url) {
   const method = request.method;
   // Live streams (Swarm events): none in the demo. 204 tells EventSource to stop.
   if (route.startsWith("/api/swarm/") && route.endsWith("/events") && method === "GET") return new Response(null, { status: 204 });
+  if (/^\/api\/computer\/[^/]+\/frames$/.test(route) && method === 'GET') {
+    if (!fixture(url).owner) return new Response(null, { status: 204 });
+    const picture = await fetch(SCOPE + 'static/img/computer-fixture.jpg');
+    const bytes = new Uint8Array(await picture.arrayBuffer());
+    let binary = ''; for (const byte of bytes) binary += String.fromCharCode(byte);
+    const image = btoa(binary);
+    let timer;
+    const stream = new ReadableStream({
+      start(controller) {
+        const send = () => {
+          const frame = fixture(url);
+          if (!frame.owner) { controller.enqueue(new TextEncoder().encode('event: closed\ndata: {}\n\n')); clearInterval(timer); controller.close(); return; }
+          controller.enqueue(new TextEncoder().encode(`event: frame\ndata: ${JSON.stringify({ ...frame, image })}\n\n`));
+        };
+        timer = setInterval(send, 1000); send();
+      },
+      cancel() { clearInterval(timer); },
+    });
+    return new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } });
+  }
   if (method === "GET") {
     const sessionMatch = route.match(/^\/api\/sessions\/([^/]+)$/);
     if (sessionMatch && store.sessions[sessionMatch[1]]) return json(store.sessions[sessionMatch[1]]);
@@ -43,6 +63,16 @@ async function api(request, url) {
   }
   let body = {};
   try { body = await request.clone().json(); } catch (_) { /* form uploads and empty bodies */ }
+  const computerAction = route.match(/^\/api\/computer\/([^/]+)\/(takeover|handback|stop)$/);
+  if (computerAction && method === 'POST') {
+    const owner = decodeURIComponent(computerAction[1]);
+    state.takenOwners ||= []; state.stoppedOwners ||= [];
+    if (computerAction[2] === 'takeover' && !state.takenOwners.includes(owner)) state.takenOwners.push(owner);
+    if (computerAction[2] === 'handback') state.takenOwners = state.takenOwners.filter(item => item !== owner);
+    if (computerAction[2] === 'stop') state.stoppedOwners.push(owner);
+    return json({ ok: true });
+  }
+  if (route === '/api/settings/computer-use' && method === 'POST') { state.computerUse = body; return json({ ok: true }); }
   if (route === "/api/sessions" && method === "POST") {
     const id = "demo" + store.nextId++;
     const now = Date.now() / 1000;
@@ -79,9 +109,14 @@ const REPLY = "*Demo reply.* This is the Kairos interface running on sample data
 function reply(body) {
   const session = store.sessions[body.session_id];
   const now = Date.now() / 1000;
+  const usesComputer = /\b(?:open|browse|visit|website|computer)\b/i.test(body.message || '');
+  if (usesComputer) {
+    state.computerChat = body.session_id;
+    state.stoppedOwners = (state.stoppedOwners || []).filter(owner => owner !== 'chat:' + body.session_id);
+  }
   if (session) {
     session.messages.push({ role: "user", content: String(body.message || ""), ts: now });
-    session.messages.push({ role: "assistant", content: REPLY, ts: now + 1 });
+    session.messages.push({ role: "assistant", content: REPLY, ts: now + 1, ...(usesComputer ? { run_id: 'r-computer' } : {}) });
     if (session.title === "New chat") session.title = String(body.message || "New chat").slice(0, 48);
     const listed = data.sessions.find((s) => s.id === session.id);
     if (listed) { listed.title = session.title; listed.updated_at = now; }
@@ -90,9 +125,19 @@ function reply(body) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
+      const computerEvent = (kind, detail) => controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+        run_id: 'r-computer', tool_event: { at: now, kind, name: 'computer', ok: true, detail: JSON.stringify(detail) } })}\n\n`));
+      if (usesComputer) {
+        computerEvent('tool_started', { action: 'open', url: 'https://example.com/' });
+        computerEvent('tool_finished', { action: 'open', url: 'https://example.com/', image_url: '/static/img/computer-fixture.jpg' });
+      }
       for (const word of words) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ chunk: word })}\n\n`));
         await new Promise((r) => setTimeout(r, 28));
+      }
+      if (usesComputer) {
+        state.stoppedOwners ||= []; state.stoppedOwners.push('chat:' + body.session_id);
+        computerEvent('tool_finished', { action: 'done', url: 'https://example.com/' });
       }
       controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
       controller.close();

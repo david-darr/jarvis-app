@@ -866,7 +866,7 @@ input[type="checkbox"]:checked::after {
 .model-connection-sub { font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
 .model-add-item { margin-top: 4px; border-top: 1px solid var(--border); border-radius: 0 0 9px 9px; color: var(--text-dim); }
 /* The composer's model control: one pill, connection | model and reasoning. */
-.model-pill { display: inline-flex; align-items: center; height: 32px; border: 1px solid var(--hairline-soft); border-radius: 999px; background: rgba(var(--ink-rgb), .025); min-width: 0; }
+.model-pill { display: inline-flex; align-items: center; flex-shrink: 0; height: 32px; border: 1px solid var(--hairline-soft); border-radius: 999px; background: rgba(var(--ink-rgb), .025); min-width: 0; }
 .model-pill .model-picker-wrap { display: flex; min-width: 0; }
 .model-pill .model-picker-wrap + .model-picker-wrap { border-left: 1px solid var(--border); }
 .model-pill .model-picker-wrap:has(> .model-picker-btn[hidden]) { display: none; }
@@ -875,7 +875,8 @@ input[type="checkbox"]:checked::after {
 .model-pill-mark:empty { display: none; }
 .model-pill-mark .model-mark { margin: 0; }
 
-.chat-input-bottom { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; gap: 10px; }
+/* A narrow chat column wraps the controls instead of crushing the model pill. */
+.chat-input-bottom { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 8px; gap: 6px 10px; }
 /* Circular send button, matching the composer's rounded language. */
 #chat-send {
   width: 34px; height: 34px; padding: 0; border-radius: 50%;
@@ -1244,7 +1245,7 @@ input::placeholder, textarea::placeholder { color: var(--text-faint); opacity: .
 .session-item { display: block; width: 100%; text-align: left; border: none; background: transparent; font-family: inherit; line-height: 1.5; }
 .session-item.active { color: var(--text); background: rgba(var(--ink-rgb), .06); }
 .chat-new-btn { display: flex; align-items: center; gap: 8px; width: 100%; margin-bottom: 20px; text-align: left; background: transparent; border-color: transparent; color: var(--text-dim); padding: 9px 10px; }
-.chat-input-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.chat-input-right { display: flex; align-items: center; gap: 10px; min-width: 0; margin-left: auto; flex-shrink: 0; }
 .composer-hint { text-align: center; font-size: 10px; color: var(--text-faint); padding: 0 12px 16px; }
 .chat-input-bar .model-picker-btn { border-color: transparent; background: transparent; max-width: 230px; }
 .chat-input-bar .model-picker-btn:hover { background: rgba(var(--ink-rgb), .04); }
@@ -1670,11 +1671,6 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
   .chat-input-bar { width: 100%; margin: 0 0 8px; padding: 12px; border-radius: 18px; }
   .chat-input-bar .model-picker-btn { max-width: 160px; font-size: 10px; }
   .chat-input-right { gap: 4px; }
-  /* On a phone the model pill keeps its size; when the row is full, the
-     right-hand group drops to its own line instead of crushing the pill. */
-  .chat-input-bottom { flex-wrap: wrap; row-gap: 6px; }
-  .chat-input-right { margin-left: auto; flex-shrink: 0; }
-  .model-pill { flex-shrink: 0; }
   #chat-input { font-size: 16px; }
   .composer-hint { font-size: 9px; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
   .model-picker-menu { min-width: 200px; max-width: calc(100vw - 48px); }

@@ -90,11 +90,12 @@ class ExternalBrain:
             # Projects (David's ask 2026-09-12) appended the same way as
             # core/brain.py/core/codex_brain.py — see core/projects.py's
             # project_addendum().
-            seeded.insert(0, {"role": "system", "content": system_prompt.for_external(is_admin, allow_user_tab_source)
+            seeded.insert(0, {"role": "system", "content": system_prompt.for_external(is_admin, allow_user_tab_source, computer_available=bool(session_id or agent_id))
                              + (system_prompt.DEFERRED_TOOLS_ADDENDUM if self._deferred else "")
                              + projects.project_addendum(project_id)
                              + (f"\n\n{agent_prompt}" if agent_prompt else "")})
         self._messages: list[dict] = seeded
+        self._computer_prompt = system_prompt._computer_addendum(is_admin, bool(session_id or agent_id) and not helper)
         # Set on every completed turn that reported usage (David's ask
         # 2026-09-01, per-model token usage on Home) — best-effort, since
         # not every OpenAI-compatible endpoint returns it. Read by
@@ -243,6 +244,11 @@ class ExternalBrain:
 
     async def run_turn(self, user_text: str | list[dict]) -> str:
         self.turn_taint.reset()
+        guidance = system_prompt._computer_addendum(self.is_admin, bool(self.session_id or self.agent_id) and not self.helper)
+        if guidance != self._computer_prompt and self._messages and self._messages[0].get("role") == "system":
+            self._messages[0]["content"] = self._messages[0]["content"].replace(self._computer_prompt, "") if self._computer_prompt else self._messages[0]["content"]
+            self._messages[0]["content"] += guidance
+            self._computer_prompt = guidance
         if self.pending_reference_taint:
             self.turn_taint.mark("selected reference")
             self.pending_reference_taint = False
@@ -250,7 +256,7 @@ class ExternalBrain:
         self.last_tool_rounds = []
         reply = await openai_compatible.run_turn(
             self.base_url, self.model, self.api_key, self._messages,
-            tools=self.tools, tool_executor=self._execute_tool,
+            tools=self.tools, tool_executor=self._execute_tool, supports_images=self.supports_images,
             on_usage=lambda u: setattr(self, "last_usage", u), num_ctx=self.num_ctx,
             rounds=self.last_tool_rounds,
         )
@@ -269,6 +275,12 @@ class ExternalBrain:
         goes out, so it is current whatever the caller does after it.
         stream=False: plain requests, as run_turn makes (see turn_events)."""
         self.turn_taint.reset()
+        guidance = system_prompt._computer_addendum(self.is_admin, bool(self.session_id or self.agent_id) and not self.helper)
+        if guidance != self._computer_prompt and self._messages and self._messages[0].get("role") == "system":
+            if self._computer_prompt:
+                self._messages[0]["content"] = self._messages[0]["content"].replace(self._computer_prompt, "")
+            self._messages[0]["content"] += guidance
+            self._computer_prompt = guidance
         if self.pending_reference_taint:
             self.turn_taint.mark("selected reference")
             self.pending_reference_taint = False
@@ -278,7 +290,7 @@ class ExternalBrain:
         parts: list[str] = []
         async with contextlib.aclosing(openai_compatible.turn_events(
             self.base_url, self.model, self.api_key, self._messages,
-            tools=self.tools, tool_executor=self._execute_tool,
+            tools=self.tools, tool_executor=self._execute_tool, supports_images=self.supports_images,
             on_usage=lambda u: setattr(self, "last_usage", u), num_ctx=self.num_ctx,
             rounds=self.last_tool_rounds, stream=stream,
         )) as items:

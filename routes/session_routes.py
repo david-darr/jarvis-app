@@ -99,7 +99,7 @@ async def list_sessions(agent_id: Optional[str] = None, user: str = Depends(requ
 
 @router.post("")
 async def create_session(body: CreateSessionRequest, user: str = Depends(require_user)) -> dict:
-    return session_manager.create_session(body.title)
+    return session_manager.create_session(body.title, owner_user=user)
 
 
 @router.get("/{session_id}")
@@ -389,6 +389,8 @@ async def append_message(session_id: str, body: AppendMessageRequest, user: str 
 @router.delete("/{session_id}")
 @idle_session
 async def delete_session(session_id: str, user: str = Depends(require_user)) -> dict:
+    from core import computer
+    await computer.stop(f"chat:{session_id}")
     await chat_service.close_session_brain(session_id)
     session_manager.delete_session(session_id)
     return {"ok": True}

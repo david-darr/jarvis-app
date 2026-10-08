@@ -2,6 +2,8 @@ import { api, el, customSelect, toast, confirmDialog, emptyState } from "../api.
 import { ICONS } from "../icons.js";
 import { runHistory } from "../runHistory.js";
 import { mountAgentChat } from "../agentChat.js";
+import { mountComputerPanel } from "../computerPanel.js";
+import { toggle } from "../settingsKit.js";
 
 // Agents (2026-10-04, after xAI's Grok Bot and OpenAI's Dots): named workers
 // with a role, standing goals, their own memory and an inbox. Their work runs
@@ -26,7 +28,7 @@ export async function render(container, tabId, options = {}) {
     const swarm = await import("./swarm.js");
     return swarm.render(container, tabId, { ...options, embedded: true, systemId: options.team });
   }
-  if (options.agentId) await agentPage(root, options.agentId, schedule, cleanups, options.agentTab || "chat");
+  if (options.agentId) await agentPage(root, options.agentId, schedule, cleanups, options.agentTab || "chat", !!options.computerTakeover);
   else await listPage(root, schedule);
   return () => { clearTimeout(timer); cleanups.forEach((cleanup) => cleanup()); };
 }
@@ -192,6 +194,16 @@ function inboxItem(item, agent, refresh) {
     answer(item, choice, reply.value.trim(), refresh);
   };
   const actions = el("div", { class: "agent-inbox-actions" });
+  if (/^(Ready for you: press|Needs you: sign in|Needs you: embedded frame)/.test(item.title)) {
+    actions.append(button('Open computer', async () => {
+      const running = await api('/api/computer').catch(() => []);
+      if (!running.some(computer => computer.owner === `agent:${item.agent_id}`)) {
+        toast('This computer is closed.', 'error'); return;
+      }
+      document.dispatchEvent(new CustomEvent('jarvis:navigate',
+        { detail: { tab: 'agents', agentId: item.agent_id, agentTab: 'work', computerTakeover: true } }));
+    }, 'btn primary'));
+  }
   if (item.kind === "question") {
     actions.append(reply, button("Answer", send("reply"), "btn primary"), button("Dismiss", send("dismiss"), "btn quiet"));
   } else {
@@ -239,7 +251,7 @@ function reviewItem(card, agent, refresh) {
 
 // -- one agent ----------------------------------------------------------------
 
-async function agentPage(root, agentId, schedule, cleanups, tab = "chat") {
+async function agentPage(root, agentId, schedule, cleanups, tab = "chat", takeOver = false) {
   let detail;
   try {
     detail = await api(`/api/agents/${agentId}`);
@@ -260,6 +272,32 @@ async function agentPage(root, agentId, schedule, cleanups, tab = "chat") {
   const workTab = el("button", { type: "button", role: "tab", class: "agent-tab" });
   const chatHost = el("div", { role: "tabpanel", class: "agent-tab-panel agent-chat-host" });
   const workHost = el("div", { role: "tabpanel", class: "agent-tab-panel agent-work-host" });
+  const computerHost = el('div', { class: 'glass card agent-computer-section', hidden: true });
+  let computerView = null;
+  const syncComputer = async () => {
+    const running = (await api('/api/computer').catch(() => []))
+      .find(item => item.owner === `agent:${agentId}`);
+    if (!document.body.contains(root)) return;
+    if (workHost.hidden) {
+      if (computerView) { computerView.dispose(); computerView = null; computerHost.replaceChildren(); }
+      return;
+    }
+    computerHost.hidden = !running;
+    if (running && !computerView) {
+      computerHost.append(el('div', { class: 'title', text: 'Computer' }));
+      const content = el('div');
+      computerHost.append(content);
+      computerView = mountComputerPanel(content, `agent:${agentId}`, running,
+        { takeOver, onClose: () => { computerView?.dispose(); computerView = null; computerHost.replaceChildren(); computerHost.hidden = true; } });
+      takeOver = false;
+    } else if (!running && computerView) {
+      computerView.dispose(); computerView = null; computerHost.replaceChildren();
+    }
+    const forget = workHost.querySelector('.agent-forget-logins');
+    if (forget) forget.disabled = !!running;
+  };
+  const computerTimer = setInterval(syncComputer, 2000);
+  cleanups.push(() => { clearInterval(computerTimer); computerView?.dispose(); });
   let chatMounted = false;
   const show = (which) => {
     for (const [button, host, name] of [[chatTab, chatHost, "chat"], [workTab, workHost, "work"]]) {
@@ -271,6 +309,8 @@ async function agentPage(root, agentId, schedule, cleanups, tab = "chat") {
       chatMounted = true;
       mountAgentChat(chatHost, detail.agent).then((cleanup) => cleanups.push(cleanup));
     }
+    if (which === 'work') syncComputer();
+    else if (computerView) { computerView.dispose(); computerView = null; computerHost.replaceChildren(); }
   };
   chatTab.addEventListener("click", () => show("chat"));
   workTab.addEventListener("click", () => show("work"));
@@ -306,6 +346,7 @@ async function agentPage(root, agentId, schedule, cleanups, tab = "chat") {
     const byId = new Map([[agent.id, agent]]);
     workHost.replaceChildren(
       inboxPanel("Inbox", detail.inbox, reviews, byId, redraw),
+      computerHost,
       goalsPanel(agentId, detail.goals, redraw),
       workPanel(agentId, detail.cards, redraw),
       memoryPanel(agentId, detail.memory),
@@ -327,6 +368,7 @@ async function agentPage(root, agentId, schedule, cleanups, tab = "chat") {
   drawHeader(detail.agent);
   drawWork();
   show(tab);
+  syncComputer();
   if (detail.agent.status === "working") schedule(redraw);
 }
 
@@ -467,10 +509,12 @@ function settingsPanel(agent, models, channels, refresh) {
   const model = customSelect({}, modelOptions(models, agent.endpoint_id || ""));
   const channel = customSelect({}, channelOptions(channels, agent.deliver_to_channel || ""));
   const cap = el("input", { type: "number", min: "1", max: "200", value: String(agent.daily_run_cap) });
+  const keep = toggle({ checked: !!agent.keep_signed_in, label: 'Keep this agent signed in' });
   const save = async () => {
     try {
       await api(`/api/agents/${agent.id}`, { method: "PATCH", body: JSON.stringify({ role: role.value.trim(), instructions: instructions.value.trim(),
-        endpoint_id: model.value || null, deliver_to_channel: channel.value || null, daily_run_cap: parseInt(cap.value, 10) }) });
+        endpoint_id: model.value || null, deliver_to_channel: channel.value || null, daily_run_cap: parseInt(cap.value, 10),
+        keep_signed_in: keep.checked }) });
       toast("Saved", "success"); refresh();
     } catch (problem) { toast(problem.message, "error"); }
   };
@@ -489,6 +533,12 @@ function settingsPanel(agent, models, channels, refresh) {
     el("div", { class: "field" }, [el("label", { text: "Model" }), model]),
     el("div", { class: "field" }, [el("label", { text: "Tell me on" }), channel]),
     el("div", { class: "field field-sm" }, [el("label", { text: "Runs per day" }), cap]),
+    el('div', { class: 'field field-grow' }, [el('label', { text: 'Keep signed in' }), keep,
+      el('div', { class: 'meta', text: 'Keep this agent’s browser logins between runs.' })]),
+    el('button', { class: 'btn quiet agent-forget-logins', text: 'Forget logins', disabled: true, onclick: async () => {
+      await api(`/api/agents/${agent.id}/forget-logins`, { method: 'POST' });
+      toast('Logins forgotten', 'success'); refresh();
+    } }),
     el("button", { class: "btn primary", text: "Save", onclick: save }),
     el("button", { class: "btn danger", text: "Delete agent", onclick: remove }),
   ])]);

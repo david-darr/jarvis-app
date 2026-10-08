@@ -42,6 +42,21 @@ from core import image_gen
 from core.custom_tabs import USER_TAB_CODE_DIRS
 
 
+def computer_allowed(is_admin: bool) -> bool:
+    from core import settings
+    config = settings.get_setting("computer_use") or {}
+    return bool(config.get("enabled") and (is_admin or config.get("allow_non_admins")))
+
+
+def _computer_addendum(is_admin: bool, available: bool = True) -> str:
+    if not available or not computer_allowed(is_admin):
+        return ""
+    return ("\n\nTo open, visit, search or operate a website, use the computer tool. The person watches it live "
+            "in Kairos and can take over. Do not open pages on their desktop or browser with shell commands "
+            "(Start-Process, start, open, xdg-open, explorer or a browser executable) unless they explicitly "
+            "ask for their own browser. Buying, sending, posting, passwords and payment are left for the person.")
+
+
 # The missing half of the "files in chat" feature, found live 2026-09-12:
 # a model could already create a file and describe it in prose, but nothing
 # told it that a chat artifact card requires actually calling
@@ -84,8 +99,8 @@ _EXTERNAL_SHELL_ADDENDUM = """
 You also have a run_shell tool — admin-only (David's ask 2026-09-02), no restriction beyond that. Use it to actually run/verify code you wrote (a compile check, a test), not just read it."""
 
 
-def for_claude(is_admin: bool = False) -> str:
-    return _SHARED_CORE + _CLAUDE_ADDENDUM + (_SHELL_ADDENDUM if is_admin else "")
+def for_claude(is_admin: bool = False, computer_available: bool = True) -> str:
+    return _SHARED_CORE + _CLAUDE_ADDENDUM + (_SHELL_ADDENDUM if is_admin else "") + _computer_addendum(is_admin, computer_available)
 
 
 # A helper's whole system prompt (core/helpers.py, roadmap phase 5,
@@ -107,9 +122,9 @@ DEFERRED_TOOLS_ADDENDUM = (
     "with jarvis_tool_call.")
 
 
-def for_external(is_admin: bool = False, allow_user_tab_source: bool = False) -> str:
+def for_external(is_admin: bool = False, allow_user_tab_source: bool = False, computer_available: bool = True) -> str:
     tab_access = _EXTERNAL_CUSTOM_TABS_ADDENDUM if allow_user_tab_source else ""
-    return _SHARED_CORE + _EXTERNAL_ADDENDUM + tab_access + (_EXTERNAL_SHELL_ADDENDUM if is_admin else "")
+    return _SHARED_CORE + _EXTERNAL_ADDENDUM + tab_access + (_EXTERNAL_SHELL_ADDENDUM if is_admin else "") + _computer_addendum(is_admin, computer_available)
 
 
 # Codex CLI, Phase 1 (added 2026-09-11): full hive-mind tool parity via a
@@ -175,7 +190,7 @@ _CODEX_GOOGLE_ADDENDUM = "\nGoogle Workspace (connect an account in Library firs
 
 
 def for_codex(python_exe: str, cli_script: str, is_admin: bool = False, full_access: bool = False,
-              agent: bool = False) -> str:
+              agent: bool = False, computer_available: bool = True) -> str:
     return (_codex_core(python_exe, cli_script, full_access, is_admin, agent)
             + (_CODEX_ADMIN_ADDENDUM if is_admin and not full_access else "")
-            + (_CODEX_GOOGLE_ADDENDUM if is_admin else ""))
+            + (_CODEX_GOOGLE_ADDENDUM if is_admin else "") + _computer_addendum(is_admin, computer_available))

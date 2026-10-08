@@ -31,6 +31,7 @@ websockets>=17,<18
 # Tested on 2.1.1 and on 2.2.0, the version the packaged runtime ships.
 mcp>=2.1,<3
 python-pptx>=1.0,<2  # Office file generation skill (David's ask 2026-09-10) — MIT licensed, pure Python, no LibreOffice/Node needed. Also reads slides back for the chat preview panel (2026-09-15).
+pillow>=12.3,<13  # Bounded computer thumbnails and retained JPEG frames; already in the runtime lock through python-pptx.
 # Read-only Office previews in chat (David's ask 2026-09-15) — see
 # core/office_preview.py. Both are pure Python with no system dependency, so
 # the preview runs locally and no document is ever uploaded to an external

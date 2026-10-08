@@ -25,6 +25,7 @@ class AgentBody(BaseModel):
     daily_run_cap: Optional[int] = None
     deliver_to_channel: Optional[str] = None
     integration_ids: Optional[list[str]] = None
+    keep_signed_in: Optional[bool] = None
 
 
 class MemoryBody(BaseModel):
@@ -173,12 +174,24 @@ async def delete_agent(agent_id: str, user: str = Depends(require_admin)) -> dic
     if any(t.get("status") == "running" for t in _owned(agent_id) if t["schedule_kind"] == "card"):
         raise HTTPException(status_code=409, detail="this agent is working on something; wait for it to finish")
     from core.session_manager import session_manager
+    from core import computer
+    await computer.stop(f"agent:{agent_id}")
     removed = task_service.delete_agent_work(agent_id)
     session_manager.release_agent_chats(agent_id)
     agent_service.delete(agent_id)
     # Its team seats stay, as ordinary teammates under the same name.
     _team_change({"id": agent_id}, deleted=True)
     return {"ok": True, "removed_work": removed}
+
+
+@router.post("/{agent_id}/forget-logins")
+async def forget_logins(agent_id: str, user: str = Depends(require_admin)) -> dict:
+    _require(agent_id)
+    try:
+        agent_service.forget_logins(agent_id)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"ok": True}
 
 
 @router.post("/{agent_id}/chat")

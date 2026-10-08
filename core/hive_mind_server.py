@@ -29,17 +29,23 @@ Since 2026-09-23 the tools themselves live in core/tool_registry.py, shared
 with the OpenAI-compatible brain; this module only turns the registry's
 Claude tools into an in-process MCP server.
 """
+import base64
+
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from core import tool_registry
+from core import tool_registry, system_prompt
 
 
 def _handler(name: str, ctx: tool_registry.ToolContext):
     async def run(args: dict) -> dict:
-        text = await tool_registry.call(name, args, ctx, tool_registry.CLAUDE)
+        result = await tool_registry.call(name, args, ctx, tool_registry.CLAUDE)
         if ctx.turn_taint:
             ctx.turn_taint.mark(f"MCP result: {name}")
-        return {"content": [{"type": "text", "text": text}]}
+        if isinstance(result, tool_registry.ToolResult):
+            return {"content": [{"type": "text", "text": result.text}] +
+                    [{"type": "image", "data": base64.b64encode(image).decode(), "mimeType": "image/png"}
+                     for image in result.images]}
+        return {"content": [{"type": "text", "text": result}]}
     return run
 
 
@@ -53,4 +59,16 @@ def get_hive_mind_server(exclude_session_id: str | None = None, is_admin: bool =
                                     agent_id=agent_id)
     tools = [tool(spec.name, spec.description, spec.schema)(_handler(spec.name, ctx))
              for spec in tool_registry.specs(tool_registry.CLAUDE, is_admin, agent=bool(agent_id))]
-    return create_sdk_mcp_server(name="hive_mind", tools=tools)
+    server = create_sdk_mcp_server(name="hive_mind", tools=tools)
+    if system_prompt.computer_allowed(is_admin) and (exclude_session_id or agent_id):
+        from mcp import types
+        # Exempt only computer from Claude Code's deferred tool search.
+        definitions = [types.Tool(name=spec.name, description=spec.description, inputSchema=spec.schema,
+                       _meta={"anthropic/alwaysLoad": True} if spec.name == "computer" else None)
+                       for spec in tool_registry.specs(tool_registry.CLAUDE, is_admin, agent=bool(agent_id))]
+
+        async def list_tools(context, params):
+            return types.ListToolsResult(tools=definitions)
+
+        server["instance"].add_request_handler("tools/list", types.PaginatedRequestParams, list_tools)
+    return server

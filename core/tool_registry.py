@@ -33,11 +33,12 @@ A helper (core/helpers.py, roadmap phase 5, 2026-10-06) gets only the read
 tools and `browse`: helper_tool() is the rule, applied both to its tool list
 and again by call(), so a helper cannot reach a write tool even by naming one.
 
-A handler takes the tool's arguments and a ToolContext and returns the text
-the model reads. Errors come back as text too: a tool failing must not end
-the turn. dispatch() is call() with the person's lifecycle hooks around it,
-for a surface whose brain does not hook its tools itself.
+A handler takes the tool's arguments and a ToolContext and returns text, or
+ToolResult when it also has images. Errors come back as text: a tool failing
+must not end the turn. dispatch() adds the person's lifecycle hooks.
 """
+from __future__ import annotations
+
 import dataclasses
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
@@ -86,13 +87,20 @@ class ToolSpec:
     name: str
     description: str
     schema: dict
-    handler: Callable[[dict, ToolContext], Awaitable[str]]
+    handler: Callable[[dict, ToolContext], Awaitable[str | "ToolResult"]]
     surfaces: frozenset = ALL
     admin_only: bool = False
     agent_only: bool = False
     effect: str = READ
     # Always shown, even to a small-window model (see the module docstring).
     core: bool = False
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    text: str
+    images: list[bytes]
+    audit_url: str | None = None
 
 
 def _object(properties: Optional[dict] = None, required: tuple = ()) -> dict:
@@ -137,36 +145,66 @@ def specs(surface: str, is_admin: bool = False, agent: bool = False, helper: boo
             and (agent or not s.agent_only) and (not helper or helper_tool(s))]
 
 
-async def call(name: str, args: dict, ctx: ToolContext, surface: str) -> str:
+async def call(name: str, args: dict, ctx: ToolContext, surface: str) -> str | ToolResult:
     spec = _REGISTRY.get(name)
     if (spec is None or surface not in spec.surfaces or (spec.admin_only and not ctx.is_admin)
             or (spec.agent_only and not ctx.agent_id) or (ctx.helper and not helper_tool(spec))):
         return f"Unknown tool: {name}"
     ctx = dataclasses.replace(ctx, surface=surface)
+    computer_detail = None
+    if name == "computer":
+        from core import computer, runs, system_prompt
+        if system_prompt.computer_allowed(ctx.is_admin) and (ctx.session_id or ctx.agent_id):
+            owner = f"agent:{ctx.agent_id}" if ctx.agent_id else f"chat:{ctx.session_id}"
+            current = next((item["url"] for item in computer.running() if item["owner"] == owner), "about:blank")
+            computer_detail = {"action": args.get("action") or "", "url": args.get("url") or current}
+            runs.computer_event(ctx.session_id, "tool_started", computer_detail)
     try:
         result = await spec.handler(dict(args or {}), ctx)
     except Exception as e:
         result = f"Tool error: {e}"
     if spec.effect != READ:
         _audit(spec, args, ctx, result)
+    if computer_detail is not None:
+        from core.computer_history import thumbnail
+        text = result.text if isinstance(result, ToolResult) else result
+        url = result.audit_url if isinstance(result, ToolResult) else None
+        url = url or (text.split("URL: ", 1)[1].split(" |", 1)[0] if "URL: " in text else computer_detail["url"])
+        detail = {**computer_detail, "url": url, "text": text.split("\n", 1)[0][:300]}
+        if isinstance(result, ToolResult) and result.images:
+            image = thumbnail(result.images[0])
+            if image:
+                detail["image"] = image
+        runs.computer_event(ctx.session_id, "tool_finished", detail, ok=not text.startswith(("Not ", "Stopped", "Tool error:")))
     return result
 
 
-def _audit(spec: ToolSpec, args: dict, ctx: ToolContext, result: str) -> None:
+def _audit(spec: ToolSpec, args: dict, ctx: ToolContext, result: str | ToolResult) -> None:
     """Every call that changes something, runs code or reaches another
     service, in the permission audit. Never fails the call."""
     from core import permissions
-    outcome = ("tool refused" if str(result).startswith(("Not run:", "Not opened:")) else
-               "tool failed" if str(result).startswith("Tool error:") else "tool used")
+    text = result.text if isinstance(result, ToolResult) else result
+    outcome = ("tool refused" if text.startswith(("Not run:", "Not opened:", "Not pressed:", "Not typed:", "Stopped:", "Stopped before pressing")) else
+               "tool failed" if text.startswith("Tool error:") else "tool used")
     try:
-        permissions.record_tool_use(outcome, spec.name, spec.effect, args if isinstance(args, dict) else {},
+        if spec.name == "computer":
+            url = result.audit_url if isinstance(result, ToolResult) else None
+            url = url or (text.split("URL: ", 1)[1].split(" |", 1)[0] if "URL: " in text else args.get("url", ""))
+            if not url:
+                from core import computer
+                owner = f"agent:{ctx.agent_id}" if ctx.agent_id else f"chat:{ctx.session_id}"
+                url = next((item["url"] for item in computer.running() if item["owner"] == owner), "")
+            safe_args = {"url": url, "action": args.get("action")}
+        else:
+            safe_args = args if isinstance(args, dict) else {}
+        permissions.record_tool_use(outcome, spec.name, spec.effect, safe_args,
                                     by=f"{ctx.surface} {ctx.permission_surface}".strip())
     except Exception:
         import logging
         logging.getLogger(__name__).exception("tool audit failed for %s", spec.name)
 
 
-async def dispatch(name: str, args: dict, ctx: ToolContext, surface: str) -> str:
+async def dispatch(name: str, args: dict, ctx: ToolContext, surface: str) -> str | ToolResult:
     """call() with the person's lifecycle hooks around it
     (services/hook_service.py): a before-tool hook can block it."""
     from services.hook_service import hook_service
@@ -802,6 +840,41 @@ async def _browse(args, ctx):
         return f"Could not read {page['url']}: {page['error']}"
     links = "\n".join(f"- {l['text'] or '(no text)'}: {l['url']}" for l in page["links"]) or "(none)"
     return f"Title: {page['title']}\nURL: {page['url']}\n\n{page['text']}\n\nLinks:\n{links}"
+
+
+@register(
+    "computer",
+    "Operate your contained browser. Start with open using a full URL, look at each screenshot or use read for "
+    "the title, URL, visible text and numbered clickable/typeable refs, then click, type, scroll or use keys. "
+    "Call done when finished. Buying, sending, posting, passwords, codes and payment details require the person to take over. "
+    "If screenshots are unavailable, use read after each step.",
+    _object({"action": {"type": "string", "enum": ["open", "screenshot", "read", "click", "type", "key",
+                "scroll", "back", "wait", "done"]},
+             "url": _str("Full URL for open"), "x": {"type": "integer"}, "y": {"type": "integer"},
+             "ref": _str("Element number from read"), "text": _str("Text to enter"),
+             "key": _str("Key or combination, e.g. Enter, Tab, Control+a"),
+             "dx": {"type": "integer"}, "dy": {"type": "integer"},
+             "seconds": {"type": "number", "description": "Wait at most 10 seconds"}}, ("action",)),
+    surfaces=ALL, effect=EXTERNAL,
+)
+async def _computer(args, ctx):
+    from core import computer, sandbox, settings
+    config = settings.get_setting("computer_use") or {}
+    if not config.get("enabled"):
+        return "Not opened: computer use is off. An admin can switch it on in Settings > Computer use."
+    if not ctx.is_admin and not config.get("allow_non_admins"):
+        return "Not opened: computer use is limited to admins. An admin can allow others in Settings > Computer use."
+    owner = f"agent:{ctx.agent_id}" if ctx.agent_id else f"chat:{ctx.session_id}" if ctx.session_id else ""
+    if not owner:
+        return "Not opened: this turn has no chat or agent owner."
+    try:
+        answer = await computer.manager.act(owner, args.get("action") or "", args, ctx)
+    except sandbox.SandboxUnavailable as e:
+        return f"Not opened: the sandbox is unavailable ({e})."
+    except ValueError as e:
+        return f"Not run: {e}"
+    current = next((item["url"] for item in computer.manager.running() if item["owner"] == owner), None)
+    return ToolResult(answer["text"], answer["images"], audit_url=current)
 
 
 # Google Workspace uses one permission decision per mutation, inside the

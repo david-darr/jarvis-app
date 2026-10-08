@@ -342,6 +342,7 @@ class BrowseTests(unittest.TestCase):
         self.assertTrue(page["text"].endswith("page text cut here"))
         self.assertLessEqual(len(page["links"]), 60)
 
+
     def test_browse_is_offered_to_every_model_but_codex_and_claude_needs_no_prompt(self):
         from core.brain import Brain
         from core.external_brain import ExternalBrain
@@ -375,6 +376,69 @@ class BrowseTests(unittest.TestCase):
                 offline = call({"command": "echo offline"})
             not_asked.assert_not_called()
         self.assertIn("offline", offline)
+
+
+@unittest.skipUnless(DOCKER_UP, "Docker is not running")
+class ComputerLiveTests(unittest.TestCase):
+    """The long-lived browser uses the same sealed network as browse."""
+
+    def test_container_seal_and_filtered_egress(self):
+        from core import computer
+        async def check():
+            manager = computer.ComputerManager()
+            try:
+                c = await manager._get("chat:live-seal")
+                # `docker run` returns before the container exists; the driver's
+                # first answer proves it is up.
+                await manager._command(c, "state")
+                inspect = subprocess.run(["docker", "inspect", c.name], capture_output=True, text=True, check=True)
+                data = __import__("json").loads(inspect.stdout)[0]
+                self.assertEqual(data["Mounts"], [], "a blank chat mounts no host path")
+                self.assertFalse(data["HostConfig"]["PortBindings"])
+                self.assertTrue(data["HostConfig"]["ReadonlyRootfs"])
+                self.assertEqual(data["Config"]["User"], "65534:65534")
+                ports = subprocess.run(["docker", "port", c.name], capture_output=True, text=True)
+                self.assertEqual(ports.stdout.strip(), "")
+                for url in ("http://127.0.0.1/", "http://10.0.0.1/"):
+                    script = ("import http.client; c=http.client.HTTPConnection('jarvis-sbx-egress',8888,timeout=10); "
+                              f"c.request('GET',{url!r}); print(c.getresponse().status)")
+                    attempt = subprocess.run(["docker", "exec", c.name, "python3", "-c", script],
+                                             capture_output=True, text=True, timeout=20)
+                    self.assertEqual(attempt.returncode, 0, attempt.stderr)
+                    self.assertEqual(attempt.stdout.strip(), "403", url)
+                from services.agent_service import agent_service
+                agent = agent_service.create("Live profile check", keep_signed_in=True)
+                kept = await manager._get("agent:" + agent["id"])
+                await manager._command(kept, "state")
+                profile = subprocess.run(["docker", "inspect", kept.name], capture_output=True, text=True, check=True)
+                mounts = __import__("json").loads(profile.stdout)[0]["Mounts"]
+                self.assertEqual(len(mounts), 1)
+                self.assertEqual(mounts[0]["Source"], str(computer.PROFILES / agent["id"]))
+                await manager.stop("agent:" + agent["id"])
+                agent_service.delete(agent["id"])
+            finally:
+                await manager.close_all()
+        asyncio.run(check())
+
+    def test_open_read_click_done(self):
+        from core import computer, permissions
+        from core.turn_taint import TurnTaint
+        async def check():
+            manager = computer.ComputerManager()
+            ctx = tool_registry.ToolContext(session_id="live-computer", is_admin=True, turn_taint=TurnTaint())
+            try:
+                with patch("core.computer.permissions.decide", return_value=permissions.Decision("allow")):
+                    await manager.act("chat:live-computer", "open", {"url": "https://example.com/"}, ctx)
+                    read = await manager.act("chat:live-computer", "read", {}, ctx)
+                    self.assertIn("Example Domain", read["text"])
+                    self.assertIn("[1]", read["text"])
+                    clicked = await manager.act("chat:live-computer", "click", {"ref": "1"}, ctx)
+                    self.assertNotIn("URL: https://example.com/ |", clicked["text"])
+                    await manager.act("chat:live-computer", "done", {}, ctx)
+                    self.assertEqual(manager.running(), [])
+            finally:
+                await manager.close_all()
+        asyncio.run(check())
 
 
 class ChangeSetTests(unittest.TestCase):

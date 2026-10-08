@@ -145,8 +145,10 @@ def record_tool_use(outcome: str, tool: str, effect: str, arguments: dict, by: s
     """A JARVIS tool that changed something, ran code or reached another
     service (core/tool_registry.py), in the same audit as the decisions."""
     data = _load()
+    content = (f"{arguments.get('action', '')} {arguments.get('url', '')}".strip()
+               if tool == "computer" else derive_target(tool, arguments))
     _record(data, {"decision": outcome, "tool": tool, "effect": effect,
-                   "content": derive_target(tool, arguments), "by": by})
+                   "content": content, "by": by})
     _save(data)
 
 

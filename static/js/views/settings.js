@@ -66,6 +66,7 @@ const NAV_ICONS = {
   logs: I('<path d="M6 3h9l5 5v13H6V3z"/><path d="M9 12h7M9 16h7M9 8h3"/>'),
   runs: I('<circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><path d="M5 8v8"/><path d="M10 6h10M10 12h10M10 18h10"/>'),
   "sandbox-changes": I('<path d="M8 6l-5 6 5 6M16 6l5 6-5 6"/>'),
+  "computer-use": I('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 20v2M16 20v2M8 10h8M8 14h5"/>'),
   "file-checkpoints": I('<path d="M3 12a9 9 0 109-9 9 9 0 00-6.4 2.6L3 8"/><path d="M3 3v5h5M12 8v4l3 2"/>'),
   "custom-tabs": I('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v5"/>'),
 };
@@ -120,6 +121,9 @@ const SECTION_GROUPS = [
   },
   {
     id: "administration", label: "Administration", admin: true, sections: [
+      { id: "computer-use", label: "Computer use", render: renderComputerUsePanel,
+        description: "Chats and agents can browse in a contained browser on this computer. Buying, sending, posting, passwords and payment are always done by the person.",
+        keywords: ["browser", "computer", "take over", "docker", "profiles", "logins"] },
       { id: "agent-tools", label: "Agent Tools", render: renderAgentToolsPanel,
         description: "Tools every chat may use. Open chats pick up a change on their next message.",
         keywords: ["bash", "shell", "disabled tools", "allowed tools", "capabilities"] },
@@ -153,6 +157,49 @@ const SECTION_GROUPS = [
     ],
   },
 ];
+
+async function renderComputerUsePanel(body) {
+  const [settings, status, running] = await Promise.all([
+    api('/api/settings'), api('/api/computer/status'), api('/api/computer'),
+  ]);
+  const config = settings.computer_use || { enabled: false, allow_non_admins: false };
+  const save = async (change) => {
+    const value = { ...config, ...change };
+    await api('/api/settings/computer-use', { method: 'POST', body: JSON.stringify(value) });
+    Object.assign(config, value);
+  };
+  body.replaceChildren(
+    group({ title: 'Access' }, [
+      row({ title: 'Computer use', description: 'Allow chats and agents to open contained browsers.',
+        control: toggle({ checked: config.enabled, label: 'Computer use', onChange: on => save({ enabled: on }) }) }),
+      row({ title: 'Allow non-admins', description: 'Let other signed-in users use computers in their own chats.',
+        control: toggle({ checked: config.allow_non_admins, label: 'Allow non-admins',
+          onChange: on => save({ allow_non_admins: on }) }) }),
+      row({ title: 'Let the computer like, follow and react for you',
+        description: 'Off: it stops before Like, Follow and similar buttons and asks you to press them. Buying, sending and posting always stay with you.',
+        control: toggle({ checked: !!config.allow_reactions, label: 'Let the computer like, follow and react for you',
+          onChange: on => save({ allow_reactions: on }) }) }),
+    ]),
+    group({ title: 'Docker' }, [row({ title: status.docker_available ? 'Ready' : 'Unavailable',
+      description: status.docker_available ? (status.image_ready ? 'Computer image is ready.' : 'The computer image will be prepared on first use.')
+        : status.docker_reason || 'Start Docker to use contained browsers.' })]),
+    group({ title: 'Kept profiles' }, status.profiles.length ? status.profiles.map(profile => row({
+      title: profile.name, description: 'Saved browser logins',
+      control: el('button', { type: 'button', class: 'btn danger', text: 'Delete', disabled: profile.running,
+        onclick: async () => {
+          await api(`/api/agents/${encodeURIComponent(profile.id)}/forget-logins`, { method: 'POST' });
+          renderComputerUsePanel(body);
+        } }),
+    })) : [empty('No kept profiles')]),
+    group({ title: 'Running computers' }, running.length ? running.map(item => row({
+      title: item.title || item.owner, description: `${item.owner} · ${item.url}`,
+      control: el('button', { type: 'button', class: 'btn danger', text: 'Stop', onclick: async () => {
+        await api(`/api/computer/${encodeURIComponent(item.owner)}/stop`, { method: 'POST' });
+        renderComputerUsePanel(body);
+      } }),
+    })) : [empty('No computers running')]),
+  );
+}
 
 let modalEl = null;
 let pillEl = null;

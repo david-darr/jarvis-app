@@ -48,6 +48,7 @@ turn. Appended as they happen, not at the end, so a stopped turn still
 records the tools that actually ran.
 """
 import asyncio
+import base64
 import contextlib
 import json
 import re
@@ -56,7 +57,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from core import ollama_client, runs
+from core import ollama_client, runs, tool_registry
 from core.providers import native_api
 
 TIMEOUT_SECONDS = 120
@@ -306,7 +307,7 @@ async def _post_chat(client: httpx.AsyncClient, base_url: str, api_key: Optional
 async def run_turn(base_url: str, model: str, api_key: Optional[str], messages: list[dict],
                     tools: Optional[list[dict]] = None, tool_executor: Optional[Callable[[str, dict], Awaitable[str]]] = None,
                     on_usage: Optional[Callable[[dict], None]] = None, num_ctx: Optional[int] = None,
-                    rounds: Optional[list[dict]] = None) -> str:
+                    rounds: Optional[list[dict]] = None, supports_images: bool = False) -> str:
     """Non-streaming chat completion, with an optional bounded tool-calling
     loop (David's ask 2026-08-31 — see module docstring): the whole reply of
     turn_events(stream=False). Without `tools`, one plain request.
@@ -322,7 +323,7 @@ async def run_turn(base_url: str, model: str, api_key: Optional[str], messages: 
     parts: list[str] = []
     async with contextlib.aclosing(turn_events(base_url, model, api_key, messages, tools=tools,
                                                tool_executor=tool_executor, on_usage=on_usage, num_ctx=num_ctx,
-                                               rounds=rounds, stream=False)) as items:
+                                               rounds=rounds, stream=False, supports_images=supports_images)) as items:
         async for item in items:
             if item.kind is runs.EventKind.TEXT:
                 parts.append(item.data["text"])
@@ -332,23 +333,43 @@ async def run_turn(base_url: str, model: str, api_key: Optional[str], messages: 
 def run_turn_stream(base_url: str, model: str, api_key: Optional[str], messages: list[dict],
                     tools: Optional[list[dict]] = None, tool_executor: Optional[Callable[[str, dict], Awaitable[str]]] = None,
                     on_usage: Optional[Callable[[dict], None]] = None, num_ctx: Optional[int] = None,
-                    rounds: Optional[list[dict]] = None) -> AsyncIterator[str]:
+                    rounds: Optional[list[dict]] = None, supports_images: bool = False) -> AsyncIterator[str]:
     """Streaming variant: the text of turn_events()."""
     return runs.text_only(turn_events(base_url, model, api_key, messages, tools=tools, tool_executor=tool_executor,
-                                      on_usage=on_usage, num_ctx=num_ctx, rounds=rounds))
+                                      on_usage=on_usage, num_ctx=num_ctx, rounds=rounds,
+                                      supports_images=supports_images))
 
 
 def _tool_ok(result) -> bool:
     """JARVIS's own tools answer "Not run: ..." when they refuse, and an MCP
     call that fails answers "Tool error: ..."; anything else is a result."""
-    return not str(result).startswith(("Not run:", "Tool error:"))
+    text = result.text if isinstance(result, tool_registry.ToolResult) else str(result)
+    return not text.startswith(("Not run:", "Not opened:", "Not pressed:", "Not typed:",
+                                "Stopped before pressing", "Tool error:"))
+
+
+def _tool_messages(result, supports_images: bool, provider: str | None) -> tuple[str, list[dict]]:
+    if not isinstance(result, tool_registry.ToolResult):
+        return str(result), []
+    if not result.images or not supports_images:
+        suffix = "\nScreenshots unavailable on this connection; use computer read." if result.images else ""
+        return result.text + suffix, []
+    images = [base64.b64encode(image).decode() for image in result.images]
+    if provider == "anthropic":
+        parts = [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}}
+                 for data in images]
+    elif provider == "openai":
+        parts = [{"type": "input_image", "image_url": f"data:image/png;base64,{data}"} for data in images]
+    else:
+        parts = [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{data}"}} for data in images]
+    return result.text, [{"role": "user", "content": parts}]
 
 
 async def turn_events(base_url: str, model: str, api_key: Optional[str], messages: list[dict],
                       tools: Optional[list[dict]] = None, tool_executor: Optional[Callable[[str, dict], Awaitable[str]]] = None,
                       on_usage: Optional[Callable[[dict], None]] = None, num_ctx: Optional[int] = None,
                       rounds: Optional[list[dict]] = None, stream: bool = True,
-                      _tally: Optional[dict] = None) -> AsyncIterator[runs.RunEvent]:
+                      _tally: Optional[dict] = None, supports_images: bool = False) -> AsyncIterator[runs.RunEvent]:
     """One turn as typed events (core/runs.py): text, each tool call started
     and finished, one usage event per provider call that reported usage
     (2026-10-05: a turn used to keep only its last call's, so tool turns
@@ -440,7 +461,8 @@ async def turn_events(base_url: str, model: str, api_key: Optional[str], message
                     # once, plain, rather than failing the turn outright.
                     async with contextlib.aclosing(turn_events(
                             base_url, model, api_key, _without_tool_rounds(working_messages),
-                            tools=None, on_usage=on_usage, num_ctx=num_ctx, stream=stream, _tally=tally)) as plain:
+                            tools=None, on_usage=on_usage, num_ctx=num_ctx, stream=stream, _tally=tally,
+                            supports_images=supports_images)) as plain:
                         async for item in plain:
                             yield item
                     return
@@ -474,13 +496,16 @@ async def turn_events(base_url: str, model: str, api_key: Optional[str], message
                     running = True
                     result = await tool_executor(fn["name"], args)
                     running = False
+                    answer_text, image_messages = _tool_messages(result, supports_images, native_api.mode(base_url))
                     _record(working_messages, rounds, {
                         "role": "tool",
                         "tool_call_id": call["id"],
-                        "content": result,
+                        "content": answer_text,
                     })
+                    for image_message in image_messages:
+                        _record(working_messages, rounds, image_message)
                     answered += 1
-                    yield runs.tool_finished(call_id, _tool_ok(result), result)
+                    yield runs.tool_finished(call_id, _tool_ok(result), answer_text)
             except (asyncio.CancelledError, GeneratorExit):
                 # Stopped mid-round. Every call the model made still gets an
                 # answer in the kept history, saying what is known, so the

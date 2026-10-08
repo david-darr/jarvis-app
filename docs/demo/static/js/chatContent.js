@@ -185,6 +185,7 @@ function renderDeck(content, actions, data) {
 export async function openArtifact(sessionId, url, name, opener) {
   closeArtifact();
   import('./chatFilesPane.js').then(m => m.closeChatFiles()).catch(() => {});
+  import('./chatComputerPane.js').then(m => m.closeChatComputer()).catch(() => {});
   // One right-hand pane at a time. In the desktop app the browser's page is
   // a native layer composited above the HTML, so leaving it open would paint
   // straight over this preview regardless of stacking.

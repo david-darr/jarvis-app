@@ -1,9 +1,12 @@
 import { api, el, toast, confirmDialog, modelMark } from "../api.js";
+import { ICONS } from "../icons.js";
 import { runSlashCommand } from "../slashCommands.js";
 import * as chatStream from "../chatStream.js";
 import { renderMessageBody, copyText, closeArtifact } from "../chatContent.js";
 import { openBrowser, closeBrowser, suppressBrowser, releaseBrowser } from "../browserPane.js";
 import { openChatFiles, closeChatFiles, refreshChatFiles } from "../chatFilesPane.js";
+import { openChatComputer, closeChatComputer, updateChatComputer } from "../chatComputerPane.js";
+import { mountComputerHistory, computerDetail } from '../runTimeline.js';
 import { createRecorder, transcribeBlob, getSpeechStatus, isRecordingSupported } from "../voiceInput.js";
 import { createOpenMic } from "../openMic.js";
 import { createChatActivity } from '../chatActivity.js';
@@ -118,6 +121,9 @@ function addRewindActions(messages, session) {
   if (cards.length !== history.length) return; // not a plain rendering of this history
   const lastAssistant = history.map((m) => m.role).lastIndexOf('assistant');
   history.forEach((msg, index) => {
+    if (msg.role === 'assistant' && msg.run_id && !cards[index].querySelector('.chat-computer-step')) {
+      mountComputerHistory(cards[index], session.id, msg.run_id);
+    }
     const row = cards[index].querySelector('.msg-actions');
     if (!row) return;
     row.prepend(el('button', { type: 'button', class: 'msg-action-btn msg-fork',
@@ -537,6 +543,7 @@ function renderWelcome(messages) {
 export async function render(container, tabId, options = {}) {
   closeDocumentsMenu?.();
   closeChatFiles();
+  closeChatComputer();
   container.innerHTML = "";
   container.classList.add("chat-layout");
   clearStagedAttachments();
@@ -693,6 +700,49 @@ export async function render(container, tabId, options = {}) {
     title: "Files in this chat", "aria-label": "Files in this chat",
     onclick: () => activeSessionId ? openChatFiles(activeSessionId) : toast("Open a chat to see its files", "error") });
   filesBtn.insertAdjacentHTML("beforeend", ICON_DOC);
+  let computerInfo = null;
+  const dismissComputer = () => {
+    const entry = chatStream.getInFlight(activeSessionId);
+    if (entry) entry.computerDismissed = true;
+  };
+  const showComputer = () => {
+    if (activeSessionId && computerInfo) openChatComputer(activeSessionId, computerInfo, { onDismiss: dismissComputer });
+  };
+  const computerBtn = el('button', { type: 'button', class: 'input-icon-btn chat-computer-toggle',
+    title: 'Computer', 'aria-label': 'Computer', hidden: true, onclick: showComputer });
+  computerBtn.insertAdjacentHTML('beforeend', ICONS.computer);
+  const computerWatch = el('button', { type: 'button', class: 'btn quiet computer-watch',
+    text: 'Computer is open - watch', hidden: true, onclick: showComputer });
+  const computerTurn = (sessionId, entry) => {
+    if (sessionId !== activeSessionId || !entry?.toolEvents?.some(step => computerDetail(step))) return;
+    const latest = computerDetail(entry.toolEvents.at(-1));
+    const done = latest?.action === 'done' && entry.toolEvents.at(-1).kind === 'tool_finished';
+    if (!computerInfo) computerInfo = { owner: `chat:${sessionId}`, url: latest?.url, image: latest?.image,
+      closed_at: done ? Date.now() / 1000 : null };
+    computerBtn.hidden = false;
+    computerWatch.hidden = !matchMedia('(max-width: 768px)').matches;
+    computerWatch.textContent = done || computerInfo.closed_at ? 'Computer closed - view' : 'Computer is open - watch';
+    if (!entry.computerOpened && !entry.computerDismissed) {
+      entry.computerOpened = true;
+      if (!matchMedia('(max-width: 768px)').matches) showComputer();
+    }
+  };
+  const detachComputer = chatStream.subscribeAll(computerTurn);
+  const syncComputer = async () => {
+    const sessionId = activeSessionId;
+    if (!sessionId) return;
+    const rows = await api('/api/computer').catch(() => []);
+    const running = rows.find(row => row.owner === `chat:${sessionId}`);
+    const info = running ? { ...running, closed_at: null } : await api(`/api/computer/${encodeURIComponent('chat:' + sessionId)}/last`).catch(() => null);
+    if (sessionId !== activeSessionId) return;
+    computerInfo = info;
+    computerBtn.hidden = !computerInfo;
+    if (info) updateChatComputer(sessionId, info);
+    computerWatch.hidden = !info || !matchMedia('(max-width: 768px)').matches;
+    computerWatch.textContent = info?.closed_at ? 'Computer closed - view' : 'Computer is open - watch';
+    computerTurn(sessionId, chatStream.getInFlight(sessionId));
+  };
+  const computerTimer = setInterval(syncComputer, 2000);
   const autoModeOption = el('option', { value: 'auto', text: 'Auto', disabled: true });
   const permissionMode = el('select', { id: 'chat-permission-mode', 'aria-label': 'Chat permission mode',
     title: 'Base uses current permissions. Auto approves chat tool requests; Codex Auto also removes its workspace sandbox. Admin only.' }, [
@@ -738,7 +788,7 @@ export async function render(container, tabId, options = {}) {
   const captureBtn = el("button", { type: "button", class: "input-icon-btn", title: "Capture screen",
     "aria-label": "Capture from this device", onclick: () => captureScreenshot(attachStrip) });
   captureBtn.insertAdjacentHTML("beforeend", ICON_CAPTURE);
-  const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, captureBtn, filesBtn, permissionControl, workspacePill, contextPill, compactBtn]);
+  const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, captureBtn, filesBtn, computerBtn, computerWatch, permissionControl, workspacePill, contextPill, compactBtn]);
   // Dictation (David's ask 2026-09-15). Hidden outright when the browser
   // cannot record, rather than offered and then failing on click.
   const micBtn = el("button", { type: "button", class: "input-icon-btn chat-mic-btn", id: "chat-mic", title: "Dictate", "aria-label": "Dictate a message" });
@@ -788,6 +838,10 @@ export async function render(container, tabId, options = {}) {
     activeImagePreview?.();
     activeWebCapture?.();
     closeChatFiles();
+    closeChatComputer();
+    computerInfo = null;
+    computerBtn.hidden = true;
+    computerWatch.hidden = true;
     activeUnsubscribers.forEach(unsub => unsub());
     activeUnsubscribers.length = 0;
     activeSessionId = null;
@@ -890,6 +944,9 @@ export async function render(container, tabId, options = {}) {
     activeImagePreview?.();
     activeWebCapture?.();
     closeChatFiles();
+    closeChatComputer();
+    clearInterval(computerTimer);
+    detachComputer();
     closeBrowser();
     // A live microphone must never outlive the view that owns it.
     if (openMic) { openMic.stop(); openMic = null; }
@@ -2196,6 +2253,7 @@ async function openSession(sessionId, sessionsList, messages) {
   activeImagePreview?.();
   activeWebCapture?.();
   closeChatFiles();
+  closeChatComputer();
   chatReferences?.clear();
   // Disposed on session switch, not carried across: the pane belongs to the
   // conversation it was opened from, and in the desktop app leaving it

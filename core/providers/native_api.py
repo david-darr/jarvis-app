@@ -42,7 +42,9 @@ def _anthropic_messages(messages: list[dict]) -> tuple[str, list[dict]]:
                 converted.append({"role": role, "content": message["_anthropic_content"]})
                 continue
             blocks: list[dict] = []
-            if content:
+            if isinstance(content, list):
+                blocks.extend(content)
+            elif content:
                 blocks.append({"type": "text", "text": str(content)})
             for call in message.get("tool_calls") or []:
                 fn = call.get("function") or {}

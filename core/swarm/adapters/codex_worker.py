@@ -17,6 +17,8 @@ import tempfile
 import time
 import uuid
 
+from core.codex_features import DISABLED_CODEX_FEATURES
+
 from . import LEAD_MAX_TURNS, MAX_TURNS, role_prompt, task_prompt
 from ..models import EventKind, WorkerEvent
 from ..tools import ToolRejected
@@ -231,8 +233,7 @@ class CodexWorker:
             "features.hooks": False, "features.multi_agent": False,
             "agents.enabled": False,
             "features.multi_agent_v2": False, "features.code_mode": False,
-            "features.code_mode_host": True, "features.browser_use": False,
-            "features.computer_use": False, "features.image_generation": False,
+            "features.code_mode_host": True, "features.image_generation": False,
             "features.view_image": False,
             "features.memories": False, "features.skill_search": False,
             "features.skip_host_skill_discovery": True,
@@ -251,6 +252,7 @@ class CodexWorker:
             "mcp_servers.swarm.startup_timeout_sec": 15,
             "mcp_servers.swarm.tool_timeout_sec": 65,
         }
+        values.update(dict.fromkeys(DISABLED_CODEX_FEATURES, False))
         if self.context.effort:
             values["model_reasoning_effort"] = self.context.effort
         args = [codex, "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",

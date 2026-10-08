@@ -118,6 +118,12 @@ async function _runTurn(sessionId, entry, text, attachmentIds, references) {
           entry.permission = payload.permission;
           _notify(sessionId);
         }
+        if (payload.tool_event) {
+          entry.runId = payload.run_id;
+          entry.toolEvents ||= [];
+          entry.toolEvents.push(payload.tool_event);
+          _notify(sessionId);
+        }
       }
       if (done) break;
     }

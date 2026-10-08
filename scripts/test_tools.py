@@ -13,16 +13,18 @@
 import asyncio
 import json
 import os
+import shutil
 import sys
-import tempfile
 import time
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-environment = tempfile.TemporaryDirectory(prefix="jarvis-tools-")
-os.environ["JARVIS_DATA_DIR"] = environment.name
+environment = Path(__file__).resolve().parents[1] / (".tools-test-" + uuid.uuid4().hex[:12])
+environment.mkdir()
+os.environ["JARVIS_DATA_DIR"] = str(environment)
 
 import httpx  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
@@ -45,7 +47,7 @@ CLAUDE_APPROVED_BEFORE = {f"mcp__hive_mind__{name}" for name in (
     "create_task update_task delete_task create_event update_event delete_event save_generated_image run_code "
     "browse save_generated_file google_drive google_sheets google_forms agent_remember agent_ask "
     # Helpers (roadmap phase 5, 2026-10-06): delegate and collect.
-    "delegate helper_results").split()}
+    "delegate helper_results computer").split()}
 
 
 def load_cli():
@@ -137,11 +139,13 @@ class RouteTests(unittest.TestCase):
     def test_a_hook_blocks_a_codex_tool_and_changes_are_audited(self):
         token = tool_access.issue(self.sid, is_admin=False, model="codex-model")
         before = len(notes_service.list_notes())
-        script = Path(environment.name) / "block.py"
+        script = environment / "block.py"
         script.write_text("import json, sys\njson.load(sys.stdin)\nsys.stderr.write('no notes from codex')\nsys.exit(2)\n")
         hook = hook_service.create("Guard", event="tool.before", action="command", tool_pattern="create_note",
                                    config={"command": f'"{sys.executable}" "{script}"'})
         blocked = self.call(token, "create_note", text="blocked one").json()["result"]
+        if any("WinError 5" in entry.get("detail", "") for entry in hook_service.get(hook["id"])["log"]):
+            self.skipTest("this sandbox cannot start the hook subprocess")
         self.assertEqual(blocked, "Not run: blocked by a hook: no notes from codex")
         self.assertEqual(len(notes_service.list_notes()), before)
         hook_service.delete(hook["id"])
@@ -160,7 +164,7 @@ class RouteTests(unittest.TestCase):
 
     def test_a_codex_file_comes_only_from_its_own_workspace(self):
         token = tool_access.issue(self.sid, is_admin=False)
-        outside = Path(environment.name) / "secret.txt"
+        outside = environment / "secret.txt"
         outside.write_text("x")
         result = self.call(token, "save_generated_file", path=str(outside), description="x").json()["result"]
         self.assertTrue(result.startswith("Couldn't save that file"), result)
@@ -212,12 +216,14 @@ class SmallWindowTests(unittest.IsolatedAsyncioTestCase):
             "name": "Water the plants", "prompt": "remind me", "schedule_kind": "card"}})
         self.assertTrue(made.startswith("Created task "), made)
         self.assertEqual((permissions.audit()[-1]["tool"], permissions.audit()[-1]["decision"]), ("create_task", "tool used"))
-        script = Path(environment.name) / "block_tasks.py"
+        script = environment / "block_tasks.py"
         script.write_text("import json, sys\njson.load(sys.stdin)\nsys.stderr.write('no new tasks')\nsys.exit(2)\n")
-        hook_service.create("No tasks", event="tool.before", action="command", tool_pattern="create_task",
-                            config={"command": f'"{sys.executable}" "{script}"'})
+        hook = hook_service.create("No tasks", event="tool.before", action="command", tool_pattern="create_task",
+                                   config={"command": f'"{sys.executable}" "{script}"'})
         blocked = await brain._execute_tool("jarvis_tool_call", {"name": "create_task", "arguments": {
             "name": "x", "prompt": "y", "schedule_kind": "card"}})
+        if any("WinError 5" in entry.get("detail", "") for entry in hook_service.get(hook["id"])["log"]):
+            self.skipTest("this sandbox cannot start the hook subprocess")
         self.assertEqual(blocked, "Not run: blocked by a hook: no new tasks", "hooks see the real tool behind the bridge")
         self.assertFalse(brain.turn_taint.tainted, "JARVIS's own tool list is not untrusted text")
 
@@ -347,6 +353,8 @@ def tearDownModule():
     # Windows will not delete a database that is still open.
     from core import session_manager_store
     session_manager_store.close()
+    assert Path(__file__).resolve().parents[1] in environment.resolve().parents
+    shutil.rmtree(environment)
 
 
 if __name__ == "__main__":

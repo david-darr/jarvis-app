@@ -283,7 +283,7 @@ class Brain:
     @staticmethod
     def _fingerprint(disabled: list[str], allowed_tools: list[str], mcp_servers: dict) -> str:
         # A digest, never the config itself: MCP entries carry decrypted keys.
-        blob = json.dumps([disabled, allowed_tools, mcp_servers], sort_keys=True, default=str)
+        blob = json.dumps([disabled, allowed_tools, mcp_servers, settings_store.get_setting("computer_use")], sort_keys=True, default=str)
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
     def tool_config_changed(self) -> bool:
@@ -357,7 +357,7 @@ class Brain:
             # conventions aren't lost) rather than relying purely on tool
             # *descriptions* to imply a model should proactively check
             # memory.
-            system_prompt={"type": "preset", "preset": "claude_code", "append": system_prompt.for_claude(self.is_admin) + projects.project_addendum(self.project_id) + _agent_addendum(self.agent_prompt)},
+            system_prompt={"type": "preset", "preset": "claude_code", "append": system_prompt.for_claude(self.is_admin, computer_available=bool(self.session_id or self.agent_id)) + projects.project_addendum(self.project_id) + _agent_addendum(self.agent_prompt)},
             # Lifecycle hooks (services/hook_service.py). Through the SDK's
             # own tool hooks, not can_use_tool: pre-approved tools never
             # reach can_use_tool, and a hook must see every call.

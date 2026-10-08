@@ -1,4 +1,5 @@
 import { el } from './api.js';
+import { stepRow } from './runTimeline.js';
 
 // This is transport progress, not a model's private reasoning. Each state
 // comes from the real stream and survives view remounts through chatStream.
@@ -13,7 +14,13 @@ export function createChatActivity() {
   });
   const node = el('details', { class: 'chat-activity' }, [summary, list]);
   let previous = '';
+  let computerCount = 0;
   function update(entry) {
+    for (const step of (entry.toolEvents || []).slice(computerCount)) {
+      list.append(el('li', { class: 'chat-computer-step' }, [stepRow(step)]));
+      node.open = true;
+    }
+    computerCount = (entry.toolEvents || []).length;
     const state = entry.status === 'failed' ? 'failed' : entry.status === 'stopped' ? 'stopped' : entry.status === 'done' ? 'done' : entry.text ? 'responding' : entry.connected ? 'waiting' : 'sending';
     if (state === previous) return;
     previous = state; node.dataset.state = state;

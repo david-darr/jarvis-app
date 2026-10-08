@@ -16,6 +16,7 @@ import logging
 import subprocess
 import time
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import httpx
 
@@ -190,6 +191,58 @@ class ChatTests(unittest.TestCase):
             chunks = [chunk async for chunk in brain.run_turn_stream('test')]
             self.assertEqual(chunks, ['Hello ', 'world', '\n\n', 'Fallback block'])
         asyncio.run(run())
+
+    def test_every_codex_launch_disables_computer_and_browser_use(self):
+        from core.codex_features import DISABLED_CODEX_FEATURES
+        from core.swarm.adapters.codex_worker import CodexWorker
+        from core.swarm import architect
+        from services import chat_summary
+
+        launches = {}
+        chat = CodexBrain(vault_dir=str(self.root))
+        launches["chat"] = chat._build_args("codex")
+        chat.thread_id = "thread-1"
+        launches["chat resume"] = chat._build_args("codex")
+        auto = CodexBrain(vault_dir=str(self.root), is_admin=True)
+        auto.permission_mode = "auto"
+        launches["auto"] = auto._build_args("codex")
+        auto.thread_id = "thread-2"
+        launches["auto resume"] = auto._build_args("codex")
+        launches["agent"] = CodexBrain(vault_dir=str(self.root), agent_auto=True)._build_args("codex")
+
+        worker_context = SimpleNamespace(model="test-model", endpoint={}, effort=None,
+                                         tool_service=SimpleNamespace(definitions={}))
+        with patch("core.swarm.adapters.codex_worker.model_record", return_value={"slug": "test-model"}):
+            launches["swarm worker"] = CodexWorker(worker_context)._args(
+                "codex", str(self.root), SimpleNamespace(max_units=100))
+
+        class FinishedProcess:
+            returncode = 0
+
+            async def communicate(self, _input):
+                return b"", b""
+
+        one_shots = iter(("chat summary", "swarm draft"))
+
+        async def capture(*args, **_kwargs):
+            launches[next(one_shots)] = args
+            return FinishedProcess()
+
+        async def run_one_shots():
+            with patch("shutil.which", return_value="codex"), \
+                 patch("asyncio.create_subprocess_exec", side_effect=capture):
+                await chat_summary._codex_summary("summary", None)
+                await architect._ask_codex({}, "draft a team")
+
+        asyncio.run(run_one_shots())
+        self.assertEqual(len(launches), 8)
+        for name, args in launches.items():
+            overrides = [args[i + 1] for i, arg in enumerate(args[:-1]) if arg == "-c"]
+            for feature in DISABLED_CODEX_FEATURES:
+                with self.subTest(launch=name, feature=feature):
+                    self.assertEqual(overrides.count(f"{feature}=false"), 1)
+            if name in ("chat", "chat resume", "auto", "auto resume"):
+                self.assertNotIn("features.view_image=false", overrides)
 
     def test_codex_reports_failure_not_success_text(self):
         async def run():

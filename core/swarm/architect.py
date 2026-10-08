@@ -29,6 +29,7 @@ import tempfile
 import httpx
 
 from core import ollama_client
+from core.codex_features import disabled_feature_args
 
 MAX_SPECIALISTS = 5
 MAX_OUTPUT_TOKENS = 1200
@@ -185,7 +186,8 @@ async def _ask_codex(endpoint: dict, goal: str) -> str:
     if not binary:
         raise DraftFailed("The Codex CLI is not on PATH.")
     scratch = tempfile.mkdtemp(prefix="jarvis-swarm-architect-")
-    args = [binary, "exec", "--json", "--skip-git-repo-check", "-s", "read-only", "-C", scratch]
+    args = [binary, "exec", *disabled_feature_args(), "--json", "--skip-git-repo-check",
+            "-s", "read-only", "-C", scratch]
     if endpoint.get("model"):
         args += ["-m", endpoint["model"]]
     args.append("-")

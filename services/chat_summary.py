@@ -15,6 +15,7 @@ from fastapi import HTTPException
 
 from core import model_endpoints
 from core.codex_brain import _kill_process_tree
+from core.codex_features import disabled_feature_args
 from core.providers import openai_compatible
 from core.session_manager import session_manager
 from services import chat_service
@@ -126,7 +127,7 @@ async def _codex_summary(prompt: str, model: str | None) -> str:
     with tempfile.TemporaryDirectory(prefix="jarvis-summary-") as cwd:
         # Codex's native tools cannot be removed through the CLI. Keep this
         # detached run ephemeral and read-only in an empty working directory.
-        args = [codex, "exec", "--json", "--skip-git-repo-check", "--ephemeral",
+        args = [codex, "exec", *disabled_feature_args(), "--json", "--skip-git-repo-check", "--ephemeral",
                 "--ignore-user-config", "--ignore-rules", "-c", 'approval_policy="never"',
                 "-s", "read-only", "-C", cwd]
         if model:

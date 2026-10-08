@@ -47,6 +47,7 @@ from routes import (
     checkpoint_routes,
     agent_routes,
     connector_routes,
+    computer_routes,
     trigger_routes,
     hook_routes,
     tool_routes,
@@ -112,6 +113,8 @@ async def lifespan(_app: FastAPI):
     # Vault <-> Notes reconciliation before anything reads Notes (David's ask
     # 2026-09-03: the app reported "no priorities" while the connected vault
     # was full of them). See core/vault_sync.py.
+    from core import tool_access
+    tool_access.sweep_screens()
     vault_sync.sync_on_startup()
     if _RESTORED:  # a backup swapped in before the imports (core/backup.py)
         from core import events
@@ -150,6 +153,8 @@ async def lifespan(_app: FastAPI):
         try:
             await swarm_service.shutdown(_app)
         finally:
+            from core import computer
+            await computer.manager.close_all()
             await remote_access.stop()
             task_scheduler.stop()
             await discord_channel.stop()
@@ -189,6 +194,7 @@ app.include_router(permission_routes.router)
 app.include_router(sandbox_routes.router)
 app.include_router(checkpoint_routes.router)
 app.include_router(agent_routes.router)
+app.include_router(computer_routes.router)
 app.include_router(connector_routes.router)
 app.include_router(trigger_routes.router)
 app.include_router(hook_routes.router)

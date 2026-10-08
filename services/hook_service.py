@@ -304,7 +304,7 @@ class HookService:
 
     def after_tool(self, tool: str, arguments, result, **context) -> None:
         self.emit("tool.after", {"tool": tool, "input": arguments if isinstance(arguments, dict) else {"value": arguments},
-                                 "result": str(result)[:TEXT_LIMIT], **context})
+                                 "result": str(getattr(result, "text", result))[:TEXT_LIMIT], **context})
 
     def _spawn(self, hook: dict, payload: dict) -> None:
         try:

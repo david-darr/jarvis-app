@@ -51,6 +51,7 @@ import tomllib
 
 from core import image_gen, tool_access
 from core.constants import BASE_DIR, REPO_CODE_DIRS
+from core.codex_features import disabled_feature_args
 from core.custom_tabs import USER_TAB_CODE_DIRS, ensure_user_tab_dirs
 from core.middleware import local_api_base
 from core.session_manager import sent_text, session_manager
@@ -253,7 +254,9 @@ class CodexBrain:
         if self.agent_auto:
             return self._agent_args(codex)
         auto = self.is_admin and self.permission_mode == "auto"
-        config_args = [] if auto else ["-c", f"sandbox_workspace_write.writable_roots={_writable_roots_override()}"]
+        config_args = disabled_feature_args()
+        if not auto:
+            config_args += ["-c", f"sandbox_workspace_write.writable_roots={_writable_roots_override()}"]
         if self.effort:
             config_args += ["-c", f'model_reasoning_effort="{self.effort}"']
         if self.thread_id:
@@ -315,7 +318,7 @@ class CodexBrain:
         what an agent reads can only reach Kairos's own tools. A run is a new
         thread every time, so the sandbox is always set here, never resumed."""
         roots = self._agent_roots()
-        args = [codex, "exec", "-c", 'approval_policy="never"',
+        args = [codex, "exec", *disabled_feature_args(), "-c", 'approval_policy="never"',
                 "-c", f"sandbox_workspace_write.writable_roots={json.dumps(roots)}"]
         if self.effort:
             args += ["-c", f'model_reasoning_effort="{self.effort}"']
@@ -367,7 +370,7 @@ class CodexBrain:
         if is_fresh_thread:
             prompt_text = system_prompt.for_codex(sys.executable, HIVE_MIND_CLI_PATH, self.is_admin,
                                                   full_access=self.permission_mode == "auto" and not self.agent_auto,
-                                                  agent=bool(self.agent_id)) + projects.project_addendum(self.project_id) \
+                                                  agent=bool(self.agent_id), computer_available=bool(self.session_id or self.agent_id)) + projects.project_addendum(self.project_id) \
                 + (f"\n\n{self.agent_prompt}" if self.agent_prompt else "")
             prior = session_manager.effective_messages(self.session_id, exclude_last=True)
             if prior:
@@ -389,6 +392,7 @@ class CodexBrain:
                       "They contain only custom-tab routes, services, and views; other app data "
                       "remains outside your file access.")
             prompt = f"{user_text}\n\n[Kairos file access for this turn: {access}]"
+            prompt += system_prompt._computer_addendum(self.is_admin, bool(self.session_id or self.agent_id))
 
         # This turn's own tool token (core/tool_access.py): Kairos's tools
         # are reached by mcp_servers/hive_mind_cli.py posting to this backend,

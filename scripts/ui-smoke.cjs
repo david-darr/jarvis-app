@@ -18,12 +18,14 @@ let sessionDelay = 0;
 const writes = [];
 const now = Date.now() / 1000;
 const { fixture } = require("../demo/fixtures.js")({ now, state: demoState });
+const computerImage = fs.readFileSync(path.join(root, 'static', 'img', 'computer-fixture.jpg')).toString('base64');
+demoState.computerImage = computerImage;
 const errors = [];
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   // The site (docs/) may read GitHub's public release data; nothing else leaves.
   const site = url.pathname.startsWith("/docs/") || url.pathname.startsWith("/kairos/");
-  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src 'self' https:" + (site ? "; connect-src 'self' https://api.github.com" : ""));
+  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src 'self' https:; img-src 'self' data: blob:" + (site ? "; connect-src 'self' https://api.github.com" : ""));
   if (url.pathname === "/__github-latest") {
     // Stands in for api.github.com/repos/david-darr/kairos/releases/latest.
     res.setHeader("Content-Type", "application/json"); res.setHeader("Access-Control-Allow-Origin", "*");
@@ -34,12 +36,52 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (url.pathname.startsWith("/api/")) {
+    if (url.pathname === '/api/chat/stream' && req.method === 'POST' && demoState.computerTurn) {
+      let body = ''; for await (const chunk of req) body += chunk;
+      writes.push({ path: url.pathname, method: req.method, body });
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
+      const send = (kind, detail) => res.write(`data: ${JSON.stringify({ run_id: 'r-computer', tool_event: {
+        at: now, kind, name: 'computer', ok: true, detail: JSON.stringify(detail) } })}\n\n`);
+      send('tool_started', { action: 'open', url: 'https://example.com/' });
+      send('tool_finished', { action: 'open', url: 'https://example.com/', image: computerImage });
+      let extra = false;
+      const timer = setInterval(() => {
+        if (demoState.moreComputerActions && !extra) { extra = true; send('tool_started', { action: 'read', url: 'https://example.com/' }); }
+        if ((demoState.stoppedOwners || []).includes('chat:s1')) {
+          send('tool_finished', { action: 'done', url: 'https://example.com/' });
+          res.write('data: {"done":true}\n\n'); res.end(); clearInterval(timer);
+        }
+      }, 100);
+      res.on('close', () => clearInterval(timer));
+      return;
+    }
+    if (/^\/api\/computer\/[^/]+\/frames$/.test(url.pathname) && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
+      const send = () => {
+        const frame = fixture(url);
+        if (!frame.owner) { res.write('event: closed\ndata: {}\n\n'); res.end(); clearInterval(timer); return; }
+        res.write(`event: frame\ndata: ${JSON.stringify({ ...frame, image: computerImage })}\n\n`);
+      };
+      const timer = setInterval(send, 500);
+      req.on('close', () => clearInterval(timer));
+      send();
+      return;
+    }
     if (url.pathname === "/api/sessions" && sessionDelay) await delay(sessionDelay);
     res.setHeader("Content-Type", "application/json");
     if (unavailable && url.pathname === "/api/system/status") { res.writeHead(503); res.end('{"detail":"Unavailable"}'); return; }
     if (req.method !== "GET") {
       let body = ""; for await (const chunk of req) body += chunk;
       writes.push({ path: url.pathname, method: req.method, body });
+      const action = url.pathname.match(/^\/api\/computer\/([^/]+)\/(takeover|handback|stop)$/);
+      if (action) {
+        const owner = decodeURIComponent(action[1]);
+        demoState.takenOwners ||= []; demoState.stoppedOwners ||= [];
+        if (action[2] === 'takeover' && !demoState.takenOwners.includes(owner)) demoState.takenOwners.push(owner);
+        if (action[2] === 'handback') demoState.takenOwners = demoState.takenOwners.filter(item => item !== owner);
+        if (action[2] === 'stop') demoState.stoppedOwners.push(owner);
+      }
+      if (url.pathname === '/api/settings/computer-use') demoState.computerUse = JSON.parse(body);
       res.end('{"ok":true}'); return;
     }
     try { res.end(JSON.stringify(fixture(url))); }
@@ -156,12 +198,67 @@ app.whenReady().then(async () => {
     assert.equal(await railWidth(), 204, "Keyboard expands sidebar");
     await js("document.activeElement.blur()");
     for (const [label, width, height] of [["desktop", 1440, 900], ["mobile", 390, 844]]) {
+      demoState.stoppedOwners = [];
+      demoState.takenOwners = [];
       win.setContentSize(width, height);
       await delay(100);
       for (const tab of ["home", "chat", "notes", "library", "calendar", "tasks", "email", "tool-store", "agents", "cookbook", "school"]) {
         await navigate(tab);
         if (tab === "chat") {
           assert.ok(await js("getComputedStyle(document.querySelector('.chat-layout')).backgroundImage.includes('kairos-sky.jpg')"), label + " default Chat uses the Kairos sky");
+          await waitFor("!!document.querySelector('.session-item[data-session-id=s1]')");
+          await js("document.querySelector('.session-item[data-session-id=s1]').click()");
+          await waitFor("!!document.querySelector('.chat-computer-toggle:not([hidden])')");
+          const chatComputerStart = writes.length;
+          await waitFor("document.querySelector('.chat-computer-history .computer-thumbnail')?.naturalWidth > 0");
+          await capture(label + '-chat-computer-history');
+          await js("document.querySelector('.chat-computer-history .computer-shot summary').click()");
+          assert.ok(await js("document.querySelector('.chat-computer-history .computer-shot').open"), label + ' screenshot expands');
+          await capture(label + '-chat-computer-history-expanded');
+          await js("document.querySelector('.chat-computer-history .computer-shot summary').click()");
+          demoState.computerTurn = true; demoState.moreComputerActions = false;
+          await js("import('/static/js/chatStream.js').then(stream => { stream.startTurn('s1', 'Computer demo', 'Open example.com', []); })");
+          if (width <= 768) {
+            await waitFor("document.querySelector('.computer-watch:not([hidden])')?.textContent === 'Computer is open - watch'");
+            assert.ok(await js("!document.querySelector('.chat-computer-pane')"), 'Phone does not force the drawer open');
+            await capture(label + '-chat-computer-watch');
+            await js("document.querySelector('.computer-watch').click()");
+          } else {
+            await waitFor("!!document.querySelector('.chat-computer-pane')");
+            await capture(label + '-chat-computer-auto');
+            await js("document.querySelector('[aria-label=\"Close computer pane\"]').click()");
+            demoState.moreComputerActions = true;
+            await delay(300);
+            assert.ok(await js("!document.querySelector('.chat-computer-pane')"), 'A dismissed pane does not reopen in the same turn');
+          }
+          await js("document.querySelector('.chat-computer-toggle').click()");
+          await waitFor("document.querySelector('.computer-frame')?.complete && document.querySelector('.computer-frame')?.naturalWidth > 0");
+          await capture(label + '-chat-computer');
+          await js("document.querySelector('.computer-actions button:nth-child(1)').click()");
+          await waitFor("document.querySelector('.computer-state')?.textContent.includes('You have control')");
+          await capture(label + '-chat-computer-takeover');
+          await js("{ const f=document.querySelector('.computer-frame'), r=f.getBoundingClientRect(); f.dispatchEvent(new MouseEvent('click', { bubbles:true, clientX:r.left+r.width/2, clientY:r.top+r.height/2 })); }");
+          await waitFor("document.querySelector('.computer-state')?.textContent.includes('model is waiting')");
+          // The click's request is asynchronous; wait for it. Chromium truncates
+          // mouse positions to whole CSS pixels, and one CSS pixel of this
+          // ~516 px wide panel spans ~2.5 page pixels, so the centre is 640,400 ± 3.
+          const centreClick = w => w.path === '/api/computer/chat%3As1/input' && JSON.parse(w.body).kind === 'click';
+          for (let i = 0; i < 40 && !writes.some(centreClick); i++) await delay(50);
+          const sent = JSON.parse((writes.find(centreClick) || { body: '{}' }).body);
+          assert.ok(Math.abs(sent.x - 640) <= 3 && Math.abs(sent.y - 400) <= 3,
+            `${label} computer click maps to page coordinates (sent ${sent.x},${sent.y})`);
+          await js("document.querySelector('.computer-actions button:nth-child(2)').click()");
+          await waitFor("document.querySelector('.computer-state')?.textContent === 'Computer closed'");
+          assert.ok(await js("document.querySelector('.computer-frame')?.naturalWidth > 0"), label + ' last frame remains after close');
+          await capture(label + '-chat-computer-closed');
+          await js("document.querySelector('[aria-label=\"Close computer pane\"]').click()");
+          await waitFor("!document.querySelector('.chat-computer-pane')");
+          assert.ok(writes.some(w => w.path === '/api/computer/chat%3As1/stop'), label + ' Stop calls the computer route');
+          // Checked: drop these requests and reset the fixture, so the later
+          // "nothing was written" checks and the next pass start clean.
+          writes.splice(chatComputerStart);
+          demoState.stoppedOwners = []; demoState.takenOwners = [];
+          demoState.computerTurn = false; demoState.moreComputerActions = false;
         }
         if (tab === "home") {
           await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
@@ -200,8 +297,12 @@ app.whenReady().then(async () => {
           await capture(label + "-agent-chat");
           await js("[...document.querySelectorAll('.agent-tab')][1].click()");
           await waitFor("!document.querySelector('.agent-work-host').hidden");
+          await waitFor("document.querySelector('.agent-computer-section .computer-frame')?.naturalWidth > 0");
           const titles = await js("[...document.querySelectorAll('.agent-work-host > .glass > .title')].map(n => n.textContent)");
-          assert.deepEqual(titles, ["Inbox", "Standing goals", "Work", "Memory", "History", "Teams", "Triggers"], label + " agent work sections");
+          assert.deepEqual(titles, ["Inbox", "Computer", "Standing goals", "Work", "Memory", "History", "Teams", "Triggers"], label + " agent work sections");
+          assert.equal(await js("document.querySelector('.agent-work-host [aria-label=\"Keep this agent signed in\"]').getAttribute('aria-checked')"), 'true');
+          assert.ok(await js("document.querySelector('.agent-forget-logins').disabled"), label + ' logins cannot be forgotten while running');
+          await capture(label + '-agent-computer');
           assert.ok(await js("document.querySelector('.agent-triggers-panel').textContent.includes('GitHub pushes · asks you first')"), label + " the triggers that start this agent's work");
           assert.ok(await js("document.querySelector('.agent-teams-panel').textContent.includes('Launch team · teammate · Working')"), label + " the agent's teams");
           assert.ok(await js("document.querySelector('.agent-memory').value.includes('remote roles only')"), label + " memory shown");
@@ -210,6 +311,16 @@ app.whenReady().then(async () => {
           await capture(label + "-agent-page");
           await navigate("agents");
           await waitFor("document.querySelectorAll('.agent-tile:not(.team-tile)').length === 2");
+          const agentComputerStart = writes.length;
+          await js("[...document.querySelectorAll('.agent-inbox-question button')].find(b => b.textContent === 'Open computer').click()");
+          await waitFor("document.querySelector('.agent-work-host:not([hidden]) .computer-state')?.textContent.includes('You have control')");
+          await capture(label + '-agent-computer-takeover');
+          await js("document.querySelector('.agent-computer-section .computer-actions button:first-child').click()");
+          for (let i = 0; i < 40 && !writes.slice(agentComputerStart).some(w => w.path.endsWith('/handback')); i++) await delay(50);
+          assert.ok(writes.slice(agentComputerStart).some(w => w.path === '/api/computer/agent%3Aa1/handback'), label + ' Hand back calls the computer route');
+          writes.splice(agentComputerStart);
+          demoState.stoppedOwners = []; demoState.takenOwners = [];
+          await navigate('agents');
         }
         if (tab === "tool-store" && !demoState.empty) {
           // Roadmap phase 6: server health, a tool held for review, and an
@@ -497,13 +608,15 @@ app.whenReady().then(async () => {
         label + " a blocking command shows only its own fields");
       assert.deepEqual(await overflow(), [], label + " add hook overflow");
       await capture(label + "-hook-add");
+      // Counted from here: the computer panel's requests earlier in the run are expected.
+      const hookWriteStart = writes.length;
       await js("[...document.querySelectorAll('.hook-form .btn')].find(b => b.textContent === 'Add hook').click()");
       await waitFor("!!document.querySelector('.confirm-panel')");
       assert.ok(await js("document.querySelector('.confirm-panel').textContent.includes(\"$d -match 'Remove-Item\")"), label + " the exact command is shown before it is saved");
       await capture(label + "-hook-confirm");
       await js("[...document.querySelectorAll('.confirm-panel .btn')].find(b => b.textContent === 'Cancel').click()");
       await waitFor("!document.querySelector('.confirm-panel')");
-      assert.equal(writes.length, 0, label + " cancelling saves nothing");
+      assert.equal(writes.length, hookWriteStart, label + " cancelling saves nothing");
       await js("document.querySelector('#settings-content .set-back').click()");
       await waitFor("document.querySelectorAll('.hook-row').length === 2");
       await js("document.querySelector('[data-section=vault]').click()");
@@ -521,6 +634,25 @@ app.whenReady().then(async () => {
       await js("{ const s=document.querySelector('.settings-search'); s.value=''; s.dispatchEvent(new Event('input')); }");
       await waitFor("[...document.querySelectorAll('.settings-nav-item')].filter(i=>!i.hidden).length>5");
       await capture(label + "-settings");
+      await js("document.querySelector('[data-section=computer-use]').click()");
+      await waitFor("document.querySelector('.set-page[data-page=computer-use] .set-switch')");
+      await capture(label + '-settings-computer-use');
+      const computerWriteStart = writes.length;
+      await js("document.querySelector('.set-page[data-page=computer-use] .set-switch').click()");
+      await waitFor("document.querySelector('.set-page[data-page=computer-use] .set-switch').getAttribute('aria-checked')==='false'");
+      for (let i = 0; i < 40 && !writes.slice(computerWriteStart).some(w => w.path === '/api/settings/computer-use' && JSON.parse(w.body).enabled === false); i++) await delay(50);
+      assert.ok(writes.slice(computerWriteStart).some(w => w.path === '/api/settings/computer-use' && JSON.parse(w.body).enabled === false), label + ' computer switch saves');
+      await js("document.querySelector('.set-page[data-page=computer-use] .set-switch').click()");
+      for (let i = 0; i < 40 && !writes.slice(computerWriteStart).some(w => w.path === '/api/settings/computer-use' && JSON.parse(w.body).enabled === true); i++) await delay(50);
+      const reactionSwitch = "document.querySelector('.set-page[data-page=computer-use] [aria-label=\"Let the computer like, follow and react for you\"]')";
+      assert.equal(await js(`${reactionSwitch}?.getAttribute('aria-checked')`), 'false', label + ' reactions stay with the person by default');
+      await js(`${reactionSwitch}.click()`);
+      for (let i = 0; i < 40 && !writes.slice(computerWriteStart).some(w => w.path === '/api/settings/computer-use' && JSON.parse(w.body).allow_reactions === true); i++) await delay(50);
+      assert.ok(writes.slice(computerWriteStart).some(w => w.path === '/api/settings/computer-use' && JSON.parse(w.body).allow_reactions === true), label + ' reactions switch saves');
+      await js(`${reactionSwitch}.click()`);
+      for (let i = 0; i < 40 && !writes.slice(computerWriteStart).some(w => w.path === '/api/settings/computer-use' && JSON.parse(w.body).allow_reactions === false); i++) await delay(50);
+      demoState.computerUse = null;
+      writes.splice(computerWriteStart);
       // Every page opens in the same frame (redesign 2026-10-05): its own
       // title in the header, real content under it, nothing wider than the
       // pane. A page that throws leaves the header without content.

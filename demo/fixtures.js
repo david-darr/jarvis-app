@@ -64,14 +64,14 @@
   const agentsFixture = [
     { id: "a1", name: "Scout", role: "Watches job postings and applications", instructions: "Be brief.", color: "#d9b260",
       endpoint_id: null, enabled: true, daily_run_cap: 12, deliver_to_channel: null, status: "needs_you", status_detail: "",
-      needs_you: 2, runs_today: 3 },
+      needs_you: 2, runs_today: 3, keep_signed_in: true },
     { id: "a2", name: "Archivist", role: "Files and tidies notes", instructions: "", color: "#b9d2e3", endpoint_id: "m3",
       enabled: true, daily_run_cap: 12, deliver_to_channel: null, status: "working", status_detail: "Sort inbox notes",
-      needs_you: 0, runs_today: 1 },
+      needs_you: 0, runs_today: 1, keep_signed_in: false },
   ];
   const agentInbox = [
-    { id: "i1", agent_id: "a1", kind: "question", status: "open", created_at: now - 300, title: "Remote only, or hybrid too?",
-      body: "Three hybrid roles in Ashburn also match." },
+    { id: "i1", agent_id: "a1", kind: "question", status: "open", created_at: now - 300, title: "Ready for you: press 'Send' at example.com",
+      body: "The computer is ready at https://example.com/." },
     { id: "i2", agent_id: "a1", kind: "report", status: "open", created_at: now - 3600, title: "New postings",
       body: "Two new remote roles match: Backend Engineer at Acme, Platform Engineer at Initech." },
   ];
@@ -104,7 +104,31 @@
     const route = url.pathname;
     const list = (data) => state.empty ? [] : data;
     if (route === "/api/auth/status") return { auth_enabled: false, setup_required: false, username: "Alex", is_admin: true, instance: state.empty ? "dev" : "" };
-    if (route === "/api/settings") return { onboarding_complete: true, developer_mode_enabled: false, vault_dir: "C:\\Users\\Alex\\Documents\\Vault" };
+    if (route === "/api/settings") return { onboarding_complete: true, developer_mode_enabled: false, vault_dir: "C:\\Users\\Alex\\Documents\\Vault",
+      computer_use: state.computerUse || { enabled: true, allow_non_admins: false } };
+    const computers = state.empty ? [] : [
+      { owner: 'chat:' + (state.computerChat || 's1'), url: 'https://example.com/', title: 'Example Domain', last_action: now - 20,
+        taken_over: (state.takenOwners || []).includes('chat:' + (state.computerChat || 's1')), waiting_model: (state.takenOwners || []).includes('chat:' + (state.computerChat || 's1')) },
+      { owner: 'agent:a1', url: 'https://example.com/', title: 'Example Domain', last_action: now - 20,
+        taken_over: (state.takenOwners || []).includes('agent:a1'), waiting_model: (state.takenOwners || []).includes('agent:a1') },
+    ].filter(item => !(state.stoppedOwners || []).includes(item.owner));
+    if (route === '/api/computer') return computers;
+    if (route === '/api/computer/status') return { docker_available: true, docker_reason: '', image_ready: true,
+      profiles: state.empty ? [] : [{ id: 'a1', name: 'Scout', running: !(state.stoppedOwners || []).includes('agent:a1') }] };
+    if (/^\/api\/computer\/[^/]+\/frames$/.test(route)) {
+      return { ...computers.find(item => item.owner === decodeURIComponent(route.split('/')[3])),
+        image_url: '/static/img/computer-fixture.jpg' };
+    }
+    if (/^\/api\/computer\/[^/]+\/last$/.test(route)) {
+      const owner = decodeURIComponent(route.split('/')[3]);
+      return (state.stoppedOwners || []).includes(owner) ? { owner, url: 'https://example.com/', title: 'Example Domain',
+        closed_at: now, taken_over: false, image_url: '/static/img/computer-fixture.jpg' } : null;
+    }
+    if (/^\/api\/computer\/[^/]+\/history$/.test(route)) return { steps: url.searchParams.get('run_id') === 'r-computer' ? [
+      { at: now - 25, kind: 'tool_started', name: 'computer', detail: JSON.stringify({ action: 'open', url: 'https://example.com/' }) },
+      { at: now - 20, kind: 'tool_finished', name: 'computer', ok: true, detail: JSON.stringify({ action: 'open', url: 'https://example.com/',
+        text: 'open completed.', ...(state.computerImage ? { image: state.computerImage } : { image_url: '/static/img/computer-fixture.jpg' }) }) },
+    ] : [] };
     // The rest of Settings (redesign 2026-10-05), so every page can be opened.
     if (route === "/api/remote/status") return { installed: true, logged_in: true, firewall_ok: false, auth_ready: false, has_any_users: false,
       running_now: false, hostname: "workstation.tail1234.ts.net", port: 8443, url: null };
@@ -153,7 +177,7 @@
     // Must precede the generic /api/sessions/ match below, which would
     // otherwise swallow this and return a whole session object.
     if (route.endsWith("/context")) return { available: true, used_tokens: 48200, capacity_tokens: 258400, percent: 18.7, estimated_capacity: false, capacity_source: "cli_cache", model: "synthetic-model" };
-    if (route.startsWith("/api/sessions/")) return { ...sessions[0], id: route.split("/")[3], model_endpoint_id: "m1", messages: [{ role: "user", content: "Let's make the workspace feel more focused.", ts: now - 100 }, { role: "assistant", content: "## A clearer direction\n\nStart with **what matters most**: clear navigation, a calm reading space, and useful connections between your work.\n\n- Keep the next step easy to find.\n- Bring the files into the conversation.\n- Give every thought room to breathe.\n\n```python\nworkspace = {\n    \"focus\": \"the work that matters\"\n}\n```\n\n[Project brief](/generated-files/012345abcdef_project-brief.md)", ts: now - 90 }] };
+    if (route.startsWith("/api/sessions/")) return { ...sessions[0], id: route.split("/")[3], model_endpoint_id: "m1", messages: [{ role: "user", content: "Let's make the workspace feel more focused.", ts: now - 100 }, { role: "assistant", run_id: "r-computer", content: "## A clearer direction\n\nStart with **what matters most**: clear navigation, a calm reading space, and useful connections between your work.\n\n- Keep the next step easy to find.\n- Bring the files into the conversation.\n- Give every thought room to breathe.\n\n```python\nworkspace = {\n    \"focus\": \"the work that matters\"\n}\n```\n\n[Project brief](/generated-files/012345abcdef_project-brief.md)", ts: now - 90 }] };
     if (route === "/api/projects") return list(projects);
     if (route.startsWith("/api/projects/")) return projects[0];
     if (route === "/api/notes") return list(url.searchParams.get("include_completed") === "false" ? notes.filter(n => !n.completed) : notes);
