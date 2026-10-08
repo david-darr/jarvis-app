@@ -28,23 +28,61 @@ DOCKERFILE = (
 )
 BUILD_SECONDS = 600
 _lock = asyncio.Lock()
+_desktop_lock = asyncio.Lock()
+DESKTOP_BUILD_SECONDS = 900
+DESKTOP_APPS = {
+    "files": ("pcmanfm", "/profile/Documents"),
+    "editor": ("mousepad",),
+    "pdf": ("atril",),
+    "images": ("ristretto",),
+    "writer": ("libreoffice", "--writer"),
+    "calc": ("libreoffice", "--calc"),
+    "impress": ("libreoffice", "--impress"),
+}
 
 
-def image_tag(dockerfile: str | None = None) -> str:
-    dockerfile = DOCKERFILE if dockerfile is None else dockerfile
-    return "kairos-computer:" + hashlib.sha256(dockerfile.encode()).hexdigest()[:12]
+def desktop_dockerfile() -> str:
+    requirements = (*REQUIREMENTS,
+        "pillow==12.3.0 --hash=sha256:78cb2c6865a35ab8ff8b75fd122f6033b92a62c82801110e48ddd6c936a45d91 "
+        "--hash=sha256:d9c7f76c0673154f044e9d78c8655fb4213f6ca31a836df48b40fe5d187717b9")
+    return (
+        f"FROM {sandbox_browser.BROWSER_IMAGE}\n"
+        "RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources \\\n"
+        "    && printf '%s\\n' 'Types: deb' \\\n"
+        "    'URIs: https://snapshot.ubuntu.com/ubuntu/20261007T000000Z' \\\n"
+        "    'Suites: noble noble-updates noble-security' \\\n"
+        "    'Components: main universe' \\\n"
+        "    'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \\\n"
+        "    'Check-Valid-Until: no' > /etc/apt/sources.list.d/ubuntu.sources \\\n"
+        "    && apt-get update \\\n"
+        "    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\\n"
+        "    openbox xdotool pcmanfm mousepad atril ristretto \\\n"
+        "    libreoffice-writer libreoffice-calc libreoffice-impress fonts-dejavu-core \\\n"
+        "    && rm -rf /var/lib/apt/lists/*\n"
+        "RUN printf '%s\\n' \\\n"
+        + "".join(f"    '{requirement}' \\\n" for requirement in requirements)
+        + "    > /tmp/computer-requirements.txt \\\n"
+        "    && python3 -m pip install --no-cache-dir --only-binary=:all: --require-hashes "
+        "-r /tmp/computer-requirements.txt\n"
+    )
 
 
-async def image_ready() -> bool:
+def image_tag(dockerfile: str | None = None, desktop: bool = False) -> str:
+    dockerfile = (desktop_dockerfile() if desktop else DOCKERFILE) if dockerfile is None else dockerfile
+    prefix = "kairos-computer-desktop:" if desktop else "kairos-computer:"
+    return prefix + hashlib.sha256(dockerfile.encode()).hexdigest()[:12]
+
+
+async def image_ready(desktop: bool = False) -> bool:
     """Check the local image cache without building or pulling anything."""
     try:
-        code, _, _ = await sandbox._docker("image", "inspect", image_tag())
+        code, _, _ = await sandbox._docker("image", "inspect", image_tag(desktop=desktop))
         return code == 0
     except (sandbox.SandboxUnavailable, OSError):
         return False
 
 
-async def _build(tag: str) -> None:
+async def _build(tag: str, desktop: bool = False) -> None:
     try:
         proc = await asyncio.create_subprocess_exec(
             "docker", "build", "-t", tag, "-",
@@ -53,7 +91,9 @@ async def _build(tag: str) -> None:
     except OSError as e:
         raise sandbox.SandboxUnavailable(f"couldn't prepare the contained computer: {e}") from e
     try:
-        out, err = await asyncio.wait_for(proc.communicate(DOCKERFILE.encode()), BUILD_SECONDS)
+        recipe = desktop_dockerfile() if desktop else DOCKERFILE
+        out, err = await asyncio.wait_for(proc.communicate(recipe.encode()),
+                                         DESKTOP_BUILD_SECONDS if desktop else BUILD_SECONDS)
     except asyncio.TimeoutError as e:
         proc.kill()
         await proc.wait()
@@ -64,9 +104,12 @@ async def _build(tag: str) -> None:
         raise sandbox.SandboxUnavailable(f"couldn't prepare the contained computer: {reason}")
 
 
-async def ensure_image() -> str:
+async def ensure_image(desktop: bool = False) -> str:
     """Return the cached image tag, building it once if it is missing."""
-    async with _lock:
-        if not await image_ready():
-            await _build(image_tag())
-        return image_tag()
+    async with _desktop_lock if desktop else _lock:
+        if not await image_ready(desktop=desktop):
+            if desktop:
+                await _build(image_tag(desktop=True), desktop=True)
+            else:
+                await _build(image_tag())
+        return image_tag(desktop=desktop)

@@ -51,6 +51,7 @@ class Computer:
     owner: str
     proc: object
     name: str
+    desktop: bool = False
     url: str = "about:blank"
     title: str = ""
     last_action: float = field(default_factory=time.monotonic)
@@ -88,7 +89,7 @@ class ComputerManager:
 
     def running(self) -> list[dict]:
         return [{"owner": c.owner, "url": c.url, "title": c.title, "last_action": c.last_action_at,
-                 "taken_over": c.taken_over, "waiting_model": c.waiting_model}
+                 "taken_over": c.taken_over, "waiting_model": c.waiting_model, "desktop": c.desktop}
                 for c in self._computers.values()]
 
     def screenshot(self, owner: str) -> bytes | None:
@@ -115,7 +116,8 @@ class ComputerManager:
         while line := await proc.stderr.readline():
             logger.debug("computer driver: %s", line.decode(errors="replace").rstrip())
 
-    async def _start(self, owner: str) -> Computer:
+    async def _start(self, owner: str, is_admin: bool = True) -> Computer:
+        desktop = is_admin and _desktop_enabled()
         ok, why = await sandbox.available()
         if not ok:
             raise sandbox.SandboxUnavailable(why)
@@ -123,7 +125,7 @@ class ComputerManager:
             await sandbox_egress.ensure(sandbox_browser.BROWSER_IMAGE)
         except RuntimeError as e:
             raise sandbox.SandboxUnavailable(f"no filtered network: {e}") from e
-        image = await computer_image.ensure_image()
+        image = await computer_image.ensure_image(desktop=desktop)
         profile_args = ["--tmpfs", "/profile:rw,nosuid,nodev,size=256m"]
         if owner.startswith("agent:"):
             from services.agent_service import agent_service
@@ -143,9 +145,10 @@ class ComputerManager:
                 profile_args = ["--mount", f"type=bind,src={target},dst=/profile"]
         name = "jarvis-computer-" + uuid.uuid4().hex[:12]
         args = ["docker", "run", "-i", "--rm", "--name", name, "--label", sandbox.LABEL,
-                *sandbox.hardening_args("1g", "1", 512, network=True), *profile_args,
+                *sandbox.hardening_args("2g" if desktop else "1g", "1", 512, network=True), *profile_args,
                 "-e", "HOME=/profile", "-e", "PYTHONDONTWRITEBYTECODE=1",
                 "-e", f"KAIROS_COMPUTER_PROXY={sandbox_egress.PROXY_URL}",
+                "-e", f"KAIROS_COMPUTER_DESKTOP={int(desktop)}",
                 image, "python3", "-u", "-c", SOURCE]
         try:
             # A reply carries a whole screenshot on one line, far past asyncio's
@@ -155,7 +158,7 @@ class ComputerManager:
                                               limit=REPLY_LIMIT)
         except (FileNotFoundError, OSError) as e:
             raise sandbox.SandboxUnavailable(f"Docker did not start: {e}") from e
-        c = Computer(owner, proc, name, last_action=self.clock())
+        c = Computer(owner, proc, name, desktop=desktop, last_action=self.clock())
         c.stderr_task = asyncio.create_task(self._drain_stderr(proc))
         c.reader_task = asyncio.create_task(self._read(c))
         return c
@@ -187,14 +190,14 @@ class ComputerManager:
             c.pending.clear()
             c.frame_changed.set()
 
-    async def _get(self, owner: str) -> Computer:
+    async def _get(self, owner: str, is_admin: bool = True) -> Computer:
         async with self._lock:
             await self._close_idle()
             if owner not in self._computers:
                 if len(self._computers) >= MAX_RUNNING:
                     oldest = min(self._computers.values(), key=lambda c: c.last_action)
                     await self._stop(oldest.owner)
-                self._computers[owner] = await self._start(owner)
+                self._computers[owner] = await self._start(owner, is_admin=is_admin)
                 self.forget(owner)
                 if self._idle_task is None or self._idle_task.done():
                     self._idle_task = asyncio.create_task(self._idle_loop())
@@ -234,6 +237,7 @@ class ComputerManager:
         self._closed[owner] = (self.clock() + IDLE_SECONDS, {
             "owner": owner, "url": c.url, "title": c.title, "last_action": c.last_action_at,
             "closed_at": time.time(), "taken_over": False, "waiting_model": False,
+            "desktop": c.desktop,
             "image": base64.b64encode(image).decode() if image else "",
         })
         c.taken_over = False
@@ -329,7 +333,15 @@ class ComputerManager:
             url = previous.url if previous else "about:blank"
             await self.stop(owner)
             return {"text": f"URL: {url} | Computer closed.", "images": []}
-        c = await self._get(owner)
+        wants_desktop = action in ("launch", "windows") or args.get("desktop") is True
+        if wants_desktop and not (existing.desktop if existing else _desktop_enabled() and ctx.is_admin):
+            return {"text": "Not run: the agent desktop is off. An admin can switch it on in Settings > Computer use; the change applies at the next start.", "images": []}
+        c = await self._get(owner, is_admin=ctx.is_admin)
+        if c.desktop and not ctx.is_admin:
+            return {"text": "Not run: the agent desktop is limited to admins.", "images": []}
+        desktop_action = wants_desktop or action == "screenshot" and c.desktop and args.get("desktop") is not False
+        if desktop_action and action not in ("launch", "windows", "click", "type", "key", "scroll", "screenshot"):
+            return {"text": "Not run: desktop coordinates apply to click, type, key, scroll or screenshot.", "images": []}
         command = {}
         if action != "open":
             current = await self._command(c, "state")
@@ -345,6 +357,12 @@ class ComputerManager:
                     return {"text": f"Not opened: {reason} URL: {url}", "images": []}
             c.url, c.title = url, current.get("title") or ""
             command["expected_url"] = url
+        if desktop_action:
+            try:
+                return await self._desktop_act(c, action, args, ctx)
+            except sandbox.SandboxUnavailable:
+                await self.stop(owner)
+                raise
         if action == "open":
             url = sandbox_browser._check_url(args.get("url") or "")
             if urlsplit(url).username or urlsplit(url).password:
@@ -425,6 +443,46 @@ class ComputerManager:
             ctx.turn_taint.mark("computer page")
         return {"text": detail, "images": [c.screenshot]}
 
+    async def _desktop_act(self, c: Computer, action: str, args: dict, ctx) -> dict:
+        if action == "launch" and args.get("app") not in computer_image.DESKTOP_APPS:
+            return {"text": "Not run: choose files, editor, pdf, images, writer, calc or impress.", "images": []}
+        async with c.lock:
+            if action in ("click", "type", "key", "scroll"):
+                values = {k: args[k] for k in ("x", "y", "text", "key", "dx", "dy") if k in args}
+                if action in ("click", "scroll"):
+                    info = await self._send(c, "window_at", expected_url=c.url, **{k: values[k] for k in ("x", "y") if k in values})
+                else:
+                    info = await self._send(c, "focused_window", expected_url=c.url)
+                info = {k: (info.get("window") or {}).get(k, "") for k in ("id", "class", "title")}
+                if any(word in info["class"].lower() for word in ("chromium", "chrome", "kairos-computer-browser")):
+                    return {"text": "Not run: That is the browser window: use the computer's web actions (open, read, click by ref) so its safety checks apply.", "images": []}
+                if not info["class"]:
+                    return {"text": "Not run: could not identify the desktop window; ask the person to take over.", "images": []}
+                if c.taken_over:
+                    return {"text": "Not run: the person has control of the computer.", "images": []}
+                reply = await self._send(c, "desktop_input", kind=action, expected_window=info, expected_url=c.url, **values)
+            else:
+                reply = await self._send(c, "desktop_screenshot" if action == "screenshot" else action,
+                                         expected_url=c.url, **({"app": args["app"]} if action == "launch" else {}))
+        c.last_action = self.clock()
+        c.last_action_at = time.time()
+        new_url = reply.get("url") or c.url
+        if urlsplit(new_url).scheme not in ("http", "https") and new_url != "about:blank":
+            await self._retreat(c)
+            return {"text": f"Not opened: the computer only opens web addresses. URL: {c.url}", "images": []}
+        new_host = urlsplit(new_url).hostname
+        if new_host and new_host.lower() not in c.hosts:
+            allowed, reason = await self._site(c, new_host.lower(), ctx)
+            if not allowed:
+                await self._retreat(c)
+                return {"text": f"Not opened: {reason}", "images": []}
+        c.url, c.title = new_url, reply.get("title") or ""
+        c.screenshot = base64.b64decode(reply["screenshot"])
+        detail = f"URL: {c.url} | Desktop {action} completed."
+        if action == "windows": detail += "\n" + json.dumps(reply.get("windows", []))
+        if ctx.turn_taint: ctx.turn_taint.mark("computer desktop")
+        return {"text": detail, "images": [c.screenshot]}
+
     def takeover(self, owner: str) -> bool:
         c = self._computers.get(owner)
         if not c:
@@ -459,7 +517,7 @@ class ComputerManager:
         c = self._computers.get(owner)
         if not c or not c.taken_over:
             raise ValueError("take over the computer first")
-        reply = await self._command(c, "person_" + kind, **values)
+        reply = await self._command(c, "desktop_input", kind=kind, person=True, **values) if c.desktop else await self._command(c, "person_" + kind, **values)
         c.url, c.title = reply.get("url") or c.url, reply.get("title") or c.title
         if reply.get("screenshot"):
             c.screenshot = base64.b64decode(reply["screenshot"])
@@ -481,6 +539,7 @@ class ComputerManager:
         if self._computers.get(owner) is not c:
             return None
         return {"owner": owner, "url": c.url, "title": c.title, "last_action": c.last_action_at,
+                "desktop": c.desktop,
                 "taken_over": c.taken_over, "waiting_model": c.waiting_model,
                 "image": base64.b64encode(c.frame_jpeg).decode() if c.frame_jpeg else ""}
 
@@ -526,6 +585,7 @@ class ComputerManager:
             if c.frame_jpeg and self._computers.get(owner) is c:
                 last_image = time.monotonic()
                 yield {"owner": owner, "url": c.url, "title": c.title, "last_action": c.last_action_at,
+                       "desktop": c.desktop,
                        "taken_over": c.taken_over, "waiting_model": c.waiting_model,
                        "image": base64.b64encode(c.frame_jpeg).decode()}
             while self._computers.get(owner) is c:
@@ -546,6 +606,7 @@ class ComputerManager:
                         if self._computers.get(owner) is not c:
                             return
                 state = {"owner": owner, "url": c.url, "title": c.title, "last_action": c.last_action_at,
+                         "desktop": c.desktop,
                          "taken_over": c.taken_over, "waiting_model": c.waiting_model}
                 if c.frame_seq != sent and c.frame_jpeg:
                     sent = c.frame_seq
@@ -597,6 +658,11 @@ class ComputerManager:
                         description=f"Press '{shown}' on {c.url}", choices=DELETE_CHOICES, is_admin=ctx.is_admin)
                     return None if decision.behavior == "allow" else f"Not pressed: {decision.reason} URL: {c.url}"
         return None
+
+
+def _desktop_enabled() -> bool:
+    from core import settings
+    return bool((settings.get_setting("computer_use") or {}).get("desktop"))
 
 
 def _reactions_allowed() -> bool:

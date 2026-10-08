@@ -5,6 +5,7 @@ export function mountComputerPanel(host, owner, initial = {}, { onClose, takeOve
   const endpoint = `/api/computer/${encodeURIComponent(owner)}`;
   let active = true;
   let control = !!initial.taken_over;
+  let desktop = !!initial.desktop;
   let closed = !!initial.closed_at;
   let stream = null;
   let retry = null;
@@ -31,11 +32,13 @@ export function mountComputerPanel(host, owner, initial = {}, { onClose, takeOve
     if (info.url != null) url.textContent = info.url;
     if (info.last_action) time.textContent = `Last action ${new Date(info.last_action * 1000).toLocaleTimeString()}`;
     if (info.taken_over != null) control = !!info.taken_over;
+    if (info.desktop != null) desktop = !!info.desktop;
     if (closed) control = false;
     root.classList.toggle('is-taken-over', control);
     toggle.textContent = control ? 'Hand back' : 'Take over';
     state.textContent = closed ? 'Computer closed' : control ? (info.waiting_model ? 'You have control. The model is waiting.' : 'You have control.')
       : 'The model has control.';
+    if (control && desktop) state.textContent += ' Ctrl+Esc opens desktop apps.';
     toggle.disabled = closed;
     stop.disabled = closed;
     if (info.image) frame.src = `data:image/jpeg;base64,${info.image}`;

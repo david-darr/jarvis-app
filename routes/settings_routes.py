@@ -104,6 +104,7 @@ class SetComputerUseRequest(BaseModel):
     enabled: bool
     allow_non_admins: bool = False
     allow_reactions: bool = False
+    desktop: bool = False
 
 
 @router.post("/computer-use")

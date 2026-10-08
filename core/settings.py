@@ -36,7 +36,7 @@ DEFAULTS: dict[str, Any] = {
     # Compact a local/API chat near a full context window before its next
     # message (roadmap phase 3, 2026-10-05; services/chat_service.py).
     "auto_compact": True,
-    "computer_use": {"enabled": False, "allow_non_admins": False, "allow_reactions": False},
+    "computer_use": {"enabled": False, "allow_non_admins": False, "allow_reactions": False, "desktop": False},
     # The connection helpers run on (core/helpers.py, roadmap phase 5,
     # 2026-10-06): None = the first local one, "off", or a local or API
     # connection's id.

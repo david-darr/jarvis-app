@@ -123,7 +123,7 @@ const SECTION_GROUPS = [
     id: "administration", label: "Administration", admin: true, sections: [
       { id: "computer-use", label: "Computer use", render: renderComputerUsePanel,
         description: "Chats and agents can browse in a contained browser on this computer. Buying, sending, posting, passwords and payment are always done by the person.",
-        keywords: ["browser", "computer", "take over", "docker", "profiles", "logins"] },
+        keywords: ["browser", "computer", "take over", "docker", "profiles", "logins", "agent desktop", "libreoffice"] },
       { id: "agent-tools", label: "Agent Tools", render: renderAgentToolsPanel,
         description: "Tools every chat may use. Open chats pick up a change on their next message.",
         keywords: ["bash", "shell", "disabled tools", "allowed tools", "capabilities"] },
@@ -162,11 +162,18 @@ async function renderComputerUsePanel(body) {
   const [settings, status, running] = await Promise.all([
     api('/api/settings'), api('/api/computer/status'), api('/api/computer'),
   ]);
-  const config = settings.computer_use || { enabled: false, allow_non_admins: false };
+  const config = settings.computer_use || { enabled: false, allow_non_admins: false, desktop: false };
+  // Applied before the request, so two quick switches build on each other
+  // instead of the second resending the first's old value; undone on failure.
   const save = async (change) => {
-    const value = { ...config, ...change };
-    await api('/api/settings/computer-use', { method: 'POST', body: JSON.stringify(value) });
-    Object.assign(config, value);
+    const before = { ...config };
+    Object.assign(config, change);
+    try {
+      await api('/api/settings/computer-use', { method: 'POST', body: JSON.stringify({ ...config }) });
+    } catch (error) {
+      Object.assign(config, before);
+      throw error;
+    }
   };
   body.replaceChildren(
     group({ title: 'Access' }, [
@@ -175,13 +182,17 @@ async function renderComputerUsePanel(body) {
       row({ title: 'Allow non-admins', description: 'Let other signed-in users use computers in their own chats.',
         control: toggle({ checked: config.allow_non_admins, label: 'Allow non-admins',
           onChange: on => save({ allow_non_admins: on }) }) }),
+      row({ title: 'Agent desktop',
+        description: 'A desktop with a file manager, editor, PDF viewer and LibreOffice beside the browser, for admins. Larger download; built the first time it is used. Applies when a computer next starts.',
+        control: toggle({ checked: !!config.desktop, label: 'Agent desktop', onChange: on => save({ desktop: on }) }) }),
       row({ title: 'Let the computer like, follow and react for you',
         description: 'Off: it stops before Like, Follow and similar buttons and asks you to press them. Buying, sending and posting always stay with you.',
         control: toggle({ checked: !!config.allow_reactions, label: 'Let the computer like, follow and react for you',
           onChange: on => save({ allow_reactions: on }) }) }),
     ]),
     group({ title: 'Docker' }, [row({ title: status.docker_available ? 'Ready' : 'Unavailable',
-      description: status.docker_available ? (status.image_ready ? 'Computer image is ready.' : 'The computer image will be prepared on first use.')
+      description: status.docker_available ? ((status.image_ready ? 'Computer image is ready.' : 'The computer image will be prepared on first use.')
+        + (status.desktop_image_ready ? ' Desktop image is ready.' : ' The desktop image will be prepared on first use.'))
         : status.docker_reason || 'Start Docker to use contained browsers.' })]),
     group({ title: 'Kept profiles' }, status.profiles.length ? status.profiles.map(profile => row({
       title: profile.name, description: 'Saved browser logins',
@@ -192,7 +203,7 @@ async function renderComputerUsePanel(body) {
         } }),
     })) : [empty('No kept profiles')]),
     group({ title: 'Running computers' }, running.length ? running.map(item => row({
-      title: item.title || item.owner, description: `${item.owner} · ${item.url}`,
+      title: item.title || item.owner, description: `${item.owner} · ${item.url} · ${item.desktop ? 'Desktop' : 'Browser'}`,
       control: el('button', { type: 'button', class: 'btn danger', text: 'Stop', onclick: async () => {
         await api(`/api/computer/${encodeURIComponent(item.owner)}/stop`, { method: 'POST' });
         renderComputerUsePanel(body);

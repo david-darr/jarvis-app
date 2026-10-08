@@ -105,7 +105,7 @@
     const list = (data) => state.empty ? [] : data;
     if (route === "/api/auth/status") return { auth_enabled: false, setup_required: false, username: "Alex", is_admin: true, instance: state.empty ? "dev" : "" };
     if (route === "/api/settings") return { onboarding_complete: true, developer_mode_enabled: false, vault_dir: "C:\\Users\\Alex\\Documents\\Vault",
-      computer_use: state.computerUse || { enabled: true, allow_non_admins: false } };
+      computer_use: state.computerUse || { enabled: true, allow_non_admins: false, allow_reactions: false, desktop: false } };
     const computers = state.empty ? [] : [
       { owner: 'chat:' + (state.computerChat || 's1'), url: 'https://example.com/', title: 'Example Domain', last_action: now - 20,
         taken_over: (state.takenOwners || []).includes('chat:' + (state.computerChat || 's1')), waiting_model: (state.takenOwners || []).includes('chat:' + (state.computerChat || 's1')) },
@@ -113,7 +113,7 @@
         taken_over: (state.takenOwners || []).includes('agent:a1'), waiting_model: (state.takenOwners || []).includes('agent:a1') },
     ].filter(item => !(state.stoppedOwners || []).includes(item.owner));
     if (route === '/api/computer') return computers;
-    if (route === '/api/computer/status') return { docker_available: true, docker_reason: '', image_ready: true,
+    if (route === '/api/computer/status') return { docker_available: true, docker_reason: '', image_ready: true, desktop_image_ready: false,
       profiles: state.empty ? [] : [{ id: 'a1', name: 'Scout', running: !(state.stoppedOwners || []).includes('agent:a1') }] };
     if (/^\/api\/computer\/[^/]+\/frames$/.test(route)) {
       return { ...computers.find(item => item.owner === decodeURIComponent(route.split('/')[3])),

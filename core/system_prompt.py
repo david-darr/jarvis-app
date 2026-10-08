@@ -51,10 +51,15 @@ def computer_allowed(is_admin: bool) -> bool:
 def _computer_addendum(is_admin: bool, available: bool = True) -> str:
     if not available or not computer_allowed(is_admin):
         return ""
-    return ("\n\nTo open, visit, search or operate a website, use the computer tool. The person watches it live "
+    guidance = ("\n\nTo open, visit, search or operate a website, use the computer tool. The person watches it live "
             "in Kairos and can take over. Do not open pages on their desktop or browser with shell commands "
             "(Start-Process, start, open, xdg-open, explorer or a browser executable) unless they explicitly "
             "ask for their own browser. Buying, sending, posting, passwords and payment are left for the person.")
+    from core import settings
+    if is_admin and (settings.get_setting("computer_use") or {}).get("desktop"):
+        guidance += (" The computer also has a desktop with a file manager, text editor, PDF viewer, image viewer "
+                     "and LibreOffice Writer, Calc and Impress (launch them with launch); files stay in its Documents folder.")
+    return guidance
 
 
 # The missing half of the "files in chat" feature, found live 2026-09-12:

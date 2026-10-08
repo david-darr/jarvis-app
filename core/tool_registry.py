@@ -847,9 +847,13 @@ async def _browse(args, ctx):
     "Operate your contained browser. Start with open using a full URL, look at each screenshot or use read for "
     "the title, URL, visible text and numbered clickable/typeable refs, then click, type, scroll or use keys. "
     "Call done when finished. Buying, sending, posting, passwords, codes and payment details require the person to take over. "
-    "If screenshots are unavailable, use read after each step.",
+    "If screenshots are unavailable, use read after each step. With Agent desktop enabled (admins only), "
+    "launch an app or list windows; desktop=true uses desktop coordinates for click/type/key/scroll. "
+    "Screenshots default to the whole desktop. Browser windows always require web actions. Files stay in Documents.",
     _object({"action": {"type": "string", "enum": ["open", "screenshot", "read", "click", "type", "key",
-                "scroll", "back", "wait", "done"]},
+                "scroll", "back", "wait", "done", "launch", "windows"]},
+             "app": {"type": "string", "enum": ["files", "editor", "pdf", "images", "writer", "calc", "impress"]},
+             "desktop": {"type": "boolean", "description": "Desktop input or screenshot; false selects the browser screenshot"},
              "url": _str("Full URL for open"), "x": {"type": "integer"}, "y": {"type": "integer"},
              "ref": _str("Element number from read"), "text": _str("Text to enter"),
              "key": _str("Key or combination, e.g. Enter, Tab, Control+a"),

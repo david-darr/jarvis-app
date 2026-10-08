@@ -638,19 +638,34 @@ app.whenReady().then(async () => {
       await waitFor("document.querySelector('.set-page[data-page=computer-use] .set-switch')");
       await capture(label + '-settings-computer-use');
       const computerWriteStart = writes.length;
-      await js("document.querySelector('.set-page[data-page=computer-use] .set-switch').click()");
-      await waitFor("document.querySelector('.set-page[data-page=computer-use] .set-switch').getAttribute('aria-checked')==='false'");
-      for (let i = 0; i < 40 && !writes.slice(computerWriteStart).some(w => w.path === '/api/settings/computer-use' && JSON.parse(w.body).enabled === false); i++) await delay(50);
-      assert.ok(writes.slice(computerWriteStart).some(w => w.path === '/api/settings/computer-use' && JSON.parse(w.body).enabled === false), label + ' computer switch saves');
-      await js("document.querySelector('.set-page[data-page=computer-use] .set-switch').click()");
-      for (let i = 0; i < 40 && !writes.slice(computerWriteStart).some(w => w.path === '/api/settings/computer-use' && JSON.parse(w.body).enabled === true); i++) await delay(50);
+      // Each click waits for its own save: a click that lands while the last
+      // save is in flight, or a wait satisfied by an older request, would let
+      // a late write leak into the next pass.
+      const toggleSaves = async (selector, key, value, what) => {
+        await waitFor(`!${selector}?.disabled`);
+        const start = writes.length;
+        await js(`${selector}.click()`);
+        const saved = () => writes.slice(start).some(w => w.path === '/api/settings/computer-use' && JSON.parse(w.body)[key] === value);
+        for (let i = 0; i < 60 && !saved(); i++) await delay(50);
+        assert.ok(saved(), `${label} ${what}`);
+        await waitFor(`${selector}?.getAttribute('aria-checked') === '${value}'`);
+      };
+      const mainSwitch = "document.querySelector('.set-page[data-page=computer-use] .set-switch')";
+      await toggleSaves(mainSwitch, 'enabled', false, 'computer switch saves');
+      await toggleSaves(mainSwitch, 'enabled', true, 'computer switch saves on');
       const reactionSwitch = "document.querySelector('.set-page[data-page=computer-use] [aria-label=\"Let the computer like, follow and react for you\"]')";
       assert.equal(await js(`${reactionSwitch}?.getAttribute('aria-checked')`), 'false', label + ' reactions stay with the person by default');
-      await js(`${reactionSwitch}.click()`);
-      for (let i = 0; i < 40 && !writes.slice(computerWriteStart).some(w => w.path === '/api/settings/computer-use' && JSON.parse(w.body).allow_reactions === true); i++) await delay(50);
-      assert.ok(writes.slice(computerWriteStart).some(w => w.path === '/api/settings/computer-use' && JSON.parse(w.body).allow_reactions === true), label + ' reactions switch saves');
-      await js(`${reactionSwitch}.click()`);
-      for (let i = 0; i < 40 && !writes.slice(computerWriteStart).some(w => w.path === '/api/settings/computer-use' && JSON.parse(w.body).allow_reactions === false); i++) await delay(50);
+      await toggleSaves(reactionSwitch, 'allow_reactions', true, 'reactions switch saves');
+      await toggleSaves(reactionSwitch, 'allow_reactions', false, 'reactions switch saves off');
+      const desktopSwitch = "document.querySelector('.set-page[data-page=computer-use] [aria-label=\"Agent desktop\"]')";
+      assert.equal(await js(`${desktopSwitch}?.getAttribute('aria-checked')`), 'false', label + ' agent desktop is opt-in');
+      assert.ok(await js("document.querySelector('.set-page[data-page=computer-use]').textContent.includes('The desktop image will be prepared on first use.')"), label + ' desktop image status renders');
+      await toggleSaves(desktopSwitch, 'desktop', true, 'agent desktop switch saves');
+      await js("document.querySelector('[data-section=vault]').click()");
+      await waitFor("document.querySelector('.set-page')?.dataset.page === 'vault'");
+      await js("document.querySelector('[data-section=computer-use]').click()");
+      await waitFor(`${desktopSwitch}?.getAttribute('aria-checked') === 'true'`);
+      await toggleSaves(desktopSwitch, 'desktop', false, 'agent desktop switch saves off');
       demoState.computerUse = null;
       writes.splice(computerWriteStart);
       // Every page opens in the same frame (redesign 2026-10-05): its own

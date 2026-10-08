@@ -441,6 +441,105 @@ class ComputerLiveTests(unittest.TestCase):
         asyncio.run(check())
 
 
+@unittest.skipUnless(DOCKER_UP, "Docker is not running")
+class DesktopLiveTests(ComputerLiveTests):
+    """The desktop inherits the browser's profile and containment checks."""
+
+    def setUp(self):
+        desktop = patch("core.computer._desktop_enabled", return_value=True)
+        desktop.start()
+        self.addCleanup(desktop.stop)
+
+    def test_editor_documents_display_and_web_hard_stop(self):
+        from core import computer, permissions
+        from core.computer_driver import SOURCE
+        fixture = SOURCE.replace("        refs = {}", "        await page.route('https://example.com/**', "
+            "lambda route: route.fulfill(body=\"<button>Place order</button><button style='position:absolute;right:0;bottom:0' "
+            "onclick='this.textContent=String(12345)'>Safe</button>\"))\n        refs = {}", 1)
+
+        async def check():
+            manager = computer.ComputerManager()
+            ctx = tool_registry.ToolContext(session_id="live-desktop", is_admin=True)
+            owner = "chat:live-desktop"
+            try:
+                with patch("core.computer.SOURCE", fixture), \
+                     patch("core.computer.permissions.decide", return_value=permissions.Decision("allow")):
+                    await manager.act(owner, "open", {"url": "https://example.com/"}, ctx)
+                    c = manager._computers[owner]
+                    self.assertTrue(manager.running()[0]["desktop"])
+                    read = await manager.act(owner, "read", {}, ctx)
+                    self.assertIn("Place order", read["text"])
+                    stopped = await manager.act(owner, "click", {"ref": "1"}, ctx)
+                    self.assertIn("Stopped before pressing 'Place order'", stopped["text"])
+                    screen = await manager._command(c, "desktop_screenshot")
+                    import base64, io
+                    from PIL import Image
+                    with Image.open(io.BytesIO(base64.b64decode(screen["screenshot"]))) as image:
+                        self.assertEqual(image.format, "PNG")
+                        self.assertEqual(image.size, (1280, 800))
+                    page_screen = await manager._command(c, "screenshot")
+                    with Image.open(io.BytesIO(base64.b64decode(page_screen["screenshot"]))) as image:
+                        width, height = image.size
+                    self.assertLessEqual(width, 1280)
+                    self.assertLess(height, 800)
+                    clicked = await manager.act(owner, "click", {"x": width - 10, "y": height - 10}, ctx)
+                    self.assertNotIn("Stopped", clicked["text"])
+                    self.assertIn("12345", (await manager.act(owner, "read", {}, ctx))["text"])
+                    display = subprocess.run(["docker", "exec", "-e", "DISPLAY=:99", c.name, "xdotool", "getdisplaygeometry"],
+                        capture_output=True, text=True, timeout=10)
+                    self.assertEqual(display.returncode, 0, display.stderr)
+                    self.assertEqual(display.stdout.strip(), "1280 800")
+                    await manager.act(owner, "launch", {"app": "editor"}, ctx)
+                    for _ in range(100):
+                        window = (await manager._command(c, "focused_window"))["window"]
+                        if "mousepad" in window["class"].lower(): break
+                        await asyncio.sleep(0.1)
+                    else: self.fail("the editor did not become the focused window")
+                    windows = await manager._command(c, "windows")
+                    self.assertTrue(any("mousepad" in item["class"].lower() and item["geometry"]["width"] > 0
+                                        for item in windows["windows"]))
+                    for kind, values in (("type", {"text": "Kairos desktop document"}), ("key", {"key": "Control+s"}),
+                                         ("type", {"text": "/profile/Documents/desktop-check.txt"}), ("key", {"key": "Enter"})):
+                        await manager._command(c, "desktop_input", kind=kind, person=True, **values)
+                        await asyncio.sleep(0.3)
+                    for _ in range(50):
+                        saved = subprocess.run(["docker", "exec", c.name, "cat", "/profile/Documents/desktop-check.txt"],
+                            capture_output=True, text=True, timeout=10)
+                        if saved.returncode == 0: break
+                        await asyncio.sleep(0.1)
+                    self.assertEqual(saved.returncode, 0, saved.stderr)
+                    self.assertEqual(saved.stdout.strip(), "Kairos desktop document")
+                    await manager.act(owner, "launch", {"app": "calc"}, ctx)
+                    for _ in range(100):
+                        windows = (await manager._command(c, "windows"))["windows"]
+                        if any("calc" in item["title"].lower() for item in windows): break
+                        await asyncio.sleep(0.1)
+                    else: self.fail("Calc did not open")
+                    # Allow startup dialogs time to appear before checking the seed.
+                    await asyncio.sleep(1)
+                    windows = (await manager._command(c, "windows"))["windows"]
+                    self.assertFalse(any("tip of the day" in item["title"].lower() for item in windows))
+                    browsers = [item for item in windows if any(name in item["class"].lower()
+                                for name in ("chromium", "chrome", "kairos-computer-browser"))]
+                    self.assertTrue(browsers)
+                    for item in browsers:
+                        geometry = item["geometry"]
+                        self.assertGreaterEqual(geometry["x"], 0)
+                        self.assertGreaterEqual(geometry["y"], 0)
+                        self.assertLessEqual(geometry["x"] + geometry["width"], 1280)
+                        self.assertLessEqual(geometry["y"] + geometry["height"], 800)
+                    root = subprocess.run(["docker", "exec", c.name, "sh", "-c",
+                        "id -u; touch /etc/owned 2>/dev/null && echo WRITABLE; test -d /profile/Documents"],
+                        capture_output=True, text=True, timeout=10)
+                    self.assertEqual(root.stdout.strip(), "65534")
+                    inspect = subprocess.run(["docker", "inspect", c.name], capture_output=True, text=True, check=True)
+                    data = __import__("json").loads(inspect.stdout)[0]
+                    self.assertEqual(data["HostConfig"]["Memory"], 2 * 1024 ** 3)
+            finally:
+                await manager.close_all()
+        asyncio.run(check())
+
+
 class ChangeSetTests(unittest.TestCase):
     """Sandbox edits to a folder wait as change sets until an admin applies
     them (core/sandbox_changes.py). Applies happen in a throwaway folder,

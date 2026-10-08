@@ -4,16 +4,20 @@ No Docker or real subprocess is needed. Live containment lives in
 scripts/test_sandbox.py and is run separately when Docker is available.
 """
 import asyncio
+import ast
 import base64
 from dataclasses import replace
 import json
 import io
 import os
+import re
 import shutil
 import sys
 import unittest
 import uuid
+import xml.etree.ElementTree as ET
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -25,7 +29,7 @@ from core import computer, computer_image, permissions, sandbox_browser, tool_ac
 from core.computer_driver import SOURCE  # noqa: E402
 from core.providers import native_api, openai_compatible  # noqa: E402
 from core.turn_taint import TurnTaint  # noqa: E402
-from routes import computer_routes, tool_routes  # noqa: E402
+from routes import computer_routes, settings_routes, tool_routes  # noqa: E402
 from services.agent_service import agent_service  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -66,12 +70,15 @@ class FakeProc:
         self.element = {}
         self.next_url = None
         self.mouse_clicks = []
+        self.window = {"id": "123", "class": "Mousepad", "title": "Untitled"}
 
     def reply(self, cmd):
         action = cmd["action"]
         result = {"id": cmd["id"]}
         if action in ("inspect", "focused"):
             result["element"] = self.element
+        elif action in ("window_at", "focused_window"):
+            result["window"] = self.window
         elif action == "done":
             result["done"] = True
         else:
@@ -79,10 +86,12 @@ class FakeProc:
             elif action == "click":
                 if "x" in cmd and "y" in cmd: self.mouse_clicks.append((cmd["x"], cmd["y"]))
                 if self.next_url: self.url = self.next_url
+            elif action == "desktop_input" and self.next_url: self.url = self.next_url
             elif action == "back": self.url = "https://example.com/"
             result.update(url=self.url, title="Example", screenshot=base64.b64encode(PNG).decode())
             if action == "read":
                 result.update(text="Example Domain", elements=[{"ref": "1", "tag": "a", "label": "More", "href": "https://other.com/"}])
+            if action == "windows": result["windows"] = [{**self.window, "geometry": {"x": 0, "y": 0, "width": 800, "height": 600}}]
         return result
 
     async def wait(self):
@@ -92,7 +101,161 @@ class FakeProc:
         self.returncode = -9
 
 
+class DriverDesktopTests(unittest.IsolatedAsyncioTestCase):
+    def driver(self, names):
+        module = ast.parse(SOURCE)
+        functions = [node for node in module.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names]
+        namespace = {"asyncio": asyncio, "re": re}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), "desktop driver functions", "exec"), namespace)
+        return namespace
+
+    def test_libreoffice_seed_uses_installed_product_version(self):
+        driver = self.driver({"seed_libreoffice"})
+        driver.update(Path=Path, ET=ET)
+        home = environment / "office-new"
+        registry = environment / "office-registry"
+        registry.mkdir()
+        (registry / "main.xcd").write_text('<oor:data xmlns:oor="http://openoffice.org/2001/registry">'
+            '<oor:component-schema oor:name="Setup" oor:package="org.openoffice"><component>'
+            '<group oor:name="Product"><prop oor:name="ooSetupVersion"><value/></prop></group>'
+            '</component></oor:component-schema></oor:data>', encoding="utf-8")
+        (registry / "brand.xcd").write_text('<oor:data xmlns:oor="http://openoffice.org/2001/registry">'
+            '<oor:component-data oor:name="Setup" oor:package="org.openoffice"><node oor:name="Product">'
+            '<prop oor:name="ooSetupVersionAboutBox"><value>24.2.7.2</value></prop>'
+            '<prop oor:name="ooSetupVersion"><value>24.2</value></prop></node></oor:component-data></oor:data>',
+            encoding="utf-8")
+        with patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}):
+            driver["seed_libreoffice"](registry=registry)
+        config = home / ".config/libreoffice/4/user/registrymodifications.xcu"
+        name = "{http://openoffice.org/2001/registry}"
+        settings = {(item.get(name + "path"), prop.get(name + "name")): prop.findtext("value")
+                    for item in ET.parse(config).getroot() for prop in item}
+        self.assertEqual(settings, {
+            ("/org.openoffice.Office.Common/Misc", "ShowTipOfTheDay"): "false",
+            ("/org.openoffice.Office.Common/Misc", "FirstRun"): "false",
+            ("/org.openoffice.Setup/Product", "ooSetupLastVersion"): "24.2"})
+
+    def test_libreoffice_seed_preserves_existing_profile(self):
+        driver = self.driver({"seed_libreoffice"})
+        driver.update(Path=Path, ET=ET)
+        home = environment / "office-kept"
+        config = home / ".config/libreoffice/4/user/registrymodifications.xcu"
+        config.parent.mkdir(parents=True)
+        original = b'<person-settings>keep my tips</person-settings>\n'
+        config.write_bytes(original)
+        with patch.object(ET, "parse", side_effect=AssertionError("existing profiles need no version lookup")):
+            driver["seed_libreoffice"](home=home, registry=environment / "absent-registry")
+        self.assertEqual(config.read_bytes(), original)
+
+    def test_browser_launch_options_for_desktop_and_headless(self):
+        driver = self.driver({"browser_launch_options"})
+        driver["PROXY"] = "http://proxy:8080"
+        desktop = driver["browser_launch_options"](True)
+        self.assertFalse(desktop["headless"])
+        self.assertTrue(desktop["no_viewport"])
+        self.assertNotIn("viewport", desktop)
+        self.assertIn("--window-position=0,0", desktop["args"])
+        self.assertIn("--window-size=1280,800", desktop["args"])
+        headless = driver["browser_launch_options"](False)
+        self.assertTrue(headless["headless"])
+        self.assertEqual(headless["viewport"], {"width": 1280, "height": 800})
+        self.assertNotIn("no_viewport", headless)
+        self.assertFalse(any(arg.startswith("--window-") for arg in headless["args"]))
+        for options in (desktop, headless):
+            self.assertEqual(options["proxy"], {"server": "http://proxy:8080", "bypass": ""})
+            self.assertIn("--proxy-bypass-list=<-loopback>", options["args"])
+            self.assertFalse(options["accept_downloads"])
+
+    async def test_driver_rechecks_browser_and_changed_window_before_input(self):
+        driver = self.driver({"desktop_input", "browser_window", "point"})
+        window = {"id": "123", "class": "Chromium", "title": "Browser"}
+        driver.update(window_at=AsyncMock(return_value=window), focused_window=AsyncMock(return_value=window),
+                      xdo=AsyncMock(), BROWSER_REFUSAL="That is the browser window")
+        for kind in ("click", "type", "key", "scroll"):
+            with self.assertRaisesRegex(ValueError, "browser window"):
+                await driver["desktop_input"]({"kind": kind, "x": 10, "y": 20, "text": "secret", "key": "Enter"})
+        driver["xdo"].assert_not_awaited()
+        window["class"] = "Mousepad"
+        with self.assertRaisesRegex(ValueError, "window changed"):
+            await driver["desktop_input"]({"kind": "type", "text": "secret", "expected_window": {**window, "id": "456"}})
+        driver["xdo"].assert_not_awaited()
+        window["class"] = ""
+        with self.assertRaisesRegex(ValueError, "could not identify"):
+            await driver["desktop_input"]({"kind": "click", "x": 10, "y": 20, "expected_window": window})
+
+    async def test_driver_person_input_and_key_translation(self):
+        driver = self.driver({"desktop_input", "browser_window", "point"})
+        window = {"id": "123", "class": "Chromium", "title": "Browser"}
+        driver.update(window_at=AsyncMock(return_value=window), focused_window=AsyncMock(return_value=window),
+                      xdo=AsyncMock(), BROWSER_REFUSAL="browser window")
+        for kind, values in (("click", {"x": 10, "y": 20}), ("type", {"text": "--private"}),
+                             ("key", {"key": "Control+Enter"}), ("scroll", {"dy": 200})):
+            await driver["desktop_input"]({"kind": kind, "person": True, **values})
+        calls = [call.args for call in driver["xdo"].await_args_list]
+        self.assertIn(('type', '--clearmodifiers', '--delay', '0', '--', '--private'), calls)
+        self.assertIn(('key', '--clearmodifiers', 'ctrl+Return'), calls)
+        for key in ("exec", "exec sh", "--window 123", "a\nexec"):
+            with self.assertRaises(ValueError):
+                await driver["desktop_input"]({"kind": "key", "person": True, "key": key})
+
+    async def test_driver_launch_allowlist_and_window_reply_preserve_protocol_id(self):
+        driver = self.driver({"main", "browser_launch_options"})
+        class Playwright:
+            async def __aenter__(self): return SimpleNamespace(chromium=SimpleNamespace(launch_persistent_context=launch))
+            async def __aexit__(self, *args): pass
+        page = SimpleNamespace(url="about:blank", title=AsyncMock(return_value=""))
+        context = SimpleNamespace(pages=[page], add_init_script=AsyncMock(), close=AsyncMock())
+        launch = AsyncMock(return_value=context)
+        commands = [{"id": 1, "action": "launch", "app": "sh"}, {"id": 2, "action": "window_at", "x": 10, "y": 20},
+                    {"id": 3, "action": "done"}]
+        replies = []
+        driver.update(DESKTOP=True, PROXY="proxy", DOTS="private script", APPS=computer_image.DESKTOP_APPS,
+                      MAX_FPS=30, time=__import__("time"), json=json, sys=SimpleNamespace(stdin=io.StringIO(
+                          "".join(json.dumps(cmd) + "\n" for cmd in commands))),
+                      async_playwright=Playwright, start_desktop=AsyncMock(), emit=replies.append,
+                      window_at=AsyncMock(return_value={"id": "123", "class": "Mousepad", "title": "Editor"}))
+        with patch.object(asyncio, "create_subprocess_exec", new=AsyncMock()) as spawn:
+            await driver["main"]()
+        spawn.assert_not_awaited()
+        self.assertIn("choose files", replies[0]["error"])
+        self.assertEqual(replies[1]["id"], 2)
+        self.assertEqual(replies[1]["window"]["id"], "123")
+        self.assertFalse(launch.await_args.kwargs["headless"])
+        self.assertIn('--class=kairos-computer-browser', launch.await_args.kwargs["args"])
+        context.add_init_script.assert_awaited_once_with(script="private script")
+
+
 class ImageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_desktop_recipe_pins_and_separate_tag(self):
+        recipe = computer_image.desktop_dockerfile()
+        self.assertTrue(recipe.startswith(f"FROM {sandbox_browser.BROWSER_IMAGE}\n"))
+        for value in ("https://snapshot.ubuntu.com/ubuntu/20261007T000000Z", "noble noble-updates noble-security",
+                      "openbox xdotool pcmanfm mousepad atril ristretto",
+                      "libreoffice-writer libreoffice-calc libreoffice-impress fonts-dejavu-core",
+                      "--no-install-recommends", "--require-hashes", "--only-binary=:all:", "pillow==12.3.0",
+                      "78cb2c6865a35ab8ff8b75fd122f6033b92a62c82801110e48ddd6c936a45d91",
+                      "d9c7f76c0673154f044e9d78c8655fb4213f6ca31a836df48b40fe5d187717b9"):
+            self.assertIn(value, recipe)
+        for requirement in computer_image.REQUIREMENTS: self.assertIn(requirement, recipe)
+        self.assertNotIn("pillow", computer_image.DOCKERFILE)
+        self.assertTrue(computer_image.image_tag(desktop=True).startswith("kairos-computer-desktop:"))
+        self.assertNotEqual(computer_image.image_tag(desktop=True), computer_image.image_tag())
+        self.assertIsNot(computer_image._lock, computer_image._desktop_lock)
+
+    async def test_desktop_build_uses_its_recipe_and_timeout(self):
+        proc = AsyncMock(returncode=0)
+        proc.communicate.return_value = (b"", b"")
+        with patch.object(computer_image.asyncio, "create_subprocess_exec", new=AsyncMock(return_value=proc)), \
+             patch.object(computer_image.asyncio, "wait_for", wraps=asyncio.wait_for) as wait:
+            await computer_image._build(computer_image.image_tag(desktop=True), desktop=True)
+        proc.communicate.assert_awaited_once_with(computer_image.desktop_dockerfile().encode())
+        self.assertEqual(wait.call_args.args[1], 900)
+        with patch.object(computer_image, "image_ready", new=AsyncMock(return_value=False)) as ready, \
+             patch.object(computer_image, "_build", new=AsyncMock()) as build:
+            self.assertEqual(await computer_image.ensure_image(desktop=True), computer_image.image_tag(desktop=True))
+        ready.assert_awaited_once_with(desktop=True)
+        build.assert_awaited_once_with(computer_image.image_tag(desktop=True), desktop=True)
+
     async def test_dockerfile_is_pinned_and_hash_checked(self):
         recipe = computer_image.DOCKERFILE
         self.assertTrue(recipe.startswith(f"FROM {sandbox_browser.BROWSER_IMAGE}\n"))
@@ -177,6 +340,113 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
 
     async def open(self, owner="chat:s1", ctx=None):
         return await self.manager.act(owner, "open", {"url": "https://example.com/"}, ctx or self.ctx)
+
+    async def desktop(self):
+        with patch("core.computer._desktop_enabled", return_value=True):
+            await self.open()
+        return self.manager._computers["chat:s1"]
+
+    async def test_desktop_mode_is_fixed_at_start_and_reports_hardening(self):
+        await self.desktop()
+        self.assertTrue(self.manager.running()[0]["desktop"])
+        self.assertIn("KAIROS_COMPUTER_DESKTOP=1", self.argv[0])
+        self.assertEqual(self.argv[0][self.argv[0].index("--memory") + 1], "2g")
+        self.assertIn("--read-only", self.argv[0])
+        self.assertNotIn("--mount", self.argv[0])
+        with patch("core.computer._desktop_enabled", return_value=False):
+            result = await self.manager.act("chat:s1", "screenshot", {}, self.ctx)
+            self.assertIn("Desktop screenshot", result["text"])
+            self.assertEqual(self.procs[0].calls[-1]["action"], "desktop_screenshot")
+            await self.manager.stop("chat:s1")
+            await self.open()
+        self.assertFalse(self.manager.running()[0]["desktop"])
+        self.assertEqual(self.argv[1][self.argv[1].index("--memory") + 1], "1g")
+        with patch("core.computer._desktop_enabled", return_value=True):
+            self.assertIn("desktop is off", (await self.manager.act("chat:s1", "launch", {"app": "editor"}, self.ctx))["text"])
+
+    async def test_desktop_launch_allowlist_and_windows(self):
+        await self.desktop()
+        for app in ("terminal", "mail", "chat", "sh", "mousepad; sh", "../../bin/sh", ""):
+            count = len(self.procs[0].calls)
+            result = await self.manager.act("chat:s1", "launch", {"app": app}, self.ctx)
+            self.assertIn("Not run", result["text"])
+            self.assertFalse(any(c["action"] == "launch" for c in self.procs[0].calls[count:]))
+        for app in computer_image.DESKTOP_APPS:
+            await self.manager.act("chat:s1", "launch", {"app": app}, self.ctx)
+            self.assertEqual(self.procs[0].calls[-1]["app"], app)
+        result = await self.manager.act("chat:s1", "windows", {}, self.ctx)
+        self.assertIn('"class": "Mousepad"', result["text"])
+        self.assertIn('"geometry"', result["text"])
+
+    async def test_model_desktop_input_refuses_browser_and_unknown_windows(self):
+        await self.desktop()
+        proc = self.procs[0]
+        for cls in ("Chromium", "Google-chrome", "kairos-computer-browser", ""):
+            proc.window["class"] = cls
+            for action, values in (("click", {"x": 20, "y": 30}), ("type", {"text": "private"}),
+                                   ("key", {"key": "Enter"}), ("scroll", {"dy": 100})):
+                count = len(proc.calls)
+                result = await self.manager.act("chat:s1", action, {"desktop": True, **values}, self.ctx)
+                self.assertTrue(result["text"].startswith("Not run:"))
+                self.assertFalse(any(c["action"] == "desktop_input" for c in proc.calls[count:]))
+                self.assertEqual(proc.calls[-1]["action"], "window_at" if action in ("click", "scroll") else "focused_window")
+                if cls: self.assertIn("That is the browser window: use the computer's web actions", result["text"])
+        proc.window["class"] = "Mousepad"
+        await self.manager.act("chat:s1", "click", {"desktop": True, "x": 20, "y": 30}, self.ctx)
+        self.assertEqual(proc.calls[-1]["action"], "desktop_input")
+        self.assertEqual(proc.calls[-1]["expected_window"], proc.window)
+        self.assertNotIn("person", proc.calls[-1])
+
+    async def test_person_desktop_input_goes_to_browser_and_desktop(self):
+        await self.desktop()
+        self.manager.takeover("chat:s1")
+        for cls in ("Chromium", "Mousepad", ""):
+            self.procs[0].window["class"] = cls
+            for kind, values in (("click", {"x": 10, "y": 20}), ("type", {"text": "private"}),
+                                 ("key", {"key": "Enter"}), ("scroll", {"dy": 100})):
+                await self.manager.person_input("chat:s1", kind, values)
+                command = self.procs[0].calls[-1]
+                self.assertEqual(command["action"], "desktop_input")
+                self.assertEqual(command["kind"], kind)
+                self.assertTrue(command["person"])
+                self.assertNotIn("expected_window", command)
+
+    async def test_desktop_off_refuses_without_starting_and_non_admin_stays_browser(self):
+        with patch("core.computer._desktop_enabled", return_value=False):
+            for action, values in (("launch", {"app": "editor"}), ("windows", {}), ("click", {"desktop": True}),
+                                   ("screenshot", {"desktop": True})):
+                self.assertIn("desktop is off", (await self.manager.act("chat:s1", action, values, self.ctx))["text"])
+        self.assertEqual(self.argv, [])
+        ctx = tool_registry.ToolContext(session_id="s1", is_admin=False)
+        with patch("core.computer._desktop_enabled", return_value=True):
+            self.assertIn("desktop is off", (await self.manager.act("chat:s1", "windows", {}, ctx))["text"])
+            await self.open(ctx=ctx)
+        self.assertFalse(self.manager.running()[0]["desktop"])
+
+    async def test_web_guards_and_browser_screenshot_still_apply_with_desktop(self):
+        await self.desktop()
+        self.procs[0].element = {"tag": "button", "signals": ["Place order"], "label": "Place order"}
+        result = await self.manager.act("chat:s1", "click", {"ref": "1"}, self.ctx)
+        self.assertIn("Stopped before pressing 'Place order'", result["text"])
+        self.assertFalse(any(c["action"] in ("click", "desktop_input") for c in self.procs[0].calls))
+        await self.manager.act("chat:s1", "screenshot", {"desktop": False}, self.ctx)
+        self.assertEqual(self.procs[0].calls[-1]["action"], "screenshot")
+
+    async def test_desktop_keeps_site_checks_before_and_after_input(self):
+        await self.desktop()
+        self.procs[0].next_url = "https://other.com/"
+        self.ask.return_value = permissions.Decision("deny", "No")
+        result = await self.manager.act("chat:s1", "click", {"desktop": True, "x": 20, "y": 30}, self.ctx)
+        self.assertIn("Not opened", result["text"])
+        self.assertEqual(result["images"], [])
+        self.assertEqual(self.procs[0].calls[-1]["action"], "back")
+        sent = next(cmd for cmd in self.procs[0].calls if cmd["action"] == "desktop_input")
+        self.assertEqual(sent["expected_url"], "https://example.com/")
+        self.procs[0].url = "https://third.com/"
+        count = len(self.procs[0].calls)
+        result = await self.manager.act("chat:s1", "screenshot", {}, self.ctx)
+        self.assertIn("Not opened", result["text"])
+        self.assertFalse(any(cmd["action"] == "desktop_screenshot" for cmd in self.procs[0].calls[count:]))
 
     async def test_protocol_taint_read_and_done(self):
         result = await self.open()
@@ -482,6 +752,34 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RouteTests(unittest.TestCase):
+    def test_desktop_setting_round_trips_and_defaults_off(self):
+        from core import settings
+        self.app.include_router(settings_routes.router)
+        self.app.dependency_overrides[settings_routes.require_admin] = lambda: "alice"
+        saved = settings.get_setting("computer_use")
+        try:
+            self.assertFalse(settings.DEFAULTS["computer_use"]["desktop"])
+            for desktop in (True, False):
+                value = {"enabled": True, "allow_non_admins": False, "allow_reactions": False, "desktop": desktop}
+                response = self.client.post("/api/settings/computer-use", json=value)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()["computer_use"], value)
+                self.assertEqual(self.client.get("/api/settings").json()["computer_use"], value)
+            self.assertFalse(self.client.post("/api/settings/computer-use", json={"enabled": True}).json()["computer_use"]["desktop"])
+        finally:
+            settings.update_settings(computer_use=saved)
+
+    def test_status_checks_desktop_image_without_building(self):
+        with patch.object(computer_routes.sandbox, "available", new=AsyncMock(return_value=(True, ""))), \
+             patch.object(computer_routes.computer_image, "image_ready", new=AsyncMock(side_effect=[True, False])) as ready, \
+             patch.object(computer_routes.computer_image, "ensure_image", new=AsyncMock()) as build, \
+             patch.object(computer_routes.agent_service, "list_agents", return_value=[]):
+            response = self.client.get("/api/computer/status")
+        self.assertTrue(response.json()["image_ready"])
+        self.assertFalse(response.json()["desktop_image_ready"])
+        self.assertEqual(ready.await_args_list[-1].kwargs, {"desktop": True})
+        build.assert_not_called()
+
     def setUp(self):
         app = FastAPI(); app.include_router(computer_routes.router)
         app.dependency_overrides[computer_routes.require_user] = lambda: "alice"
@@ -666,6 +964,14 @@ class WatchTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RenderingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_desktop_prompt_sentence_only_for_enabled_admin_desktop(self):
+        from core import system_prompt
+        for enabled, desktop, admin in ((True, True, True), (True, False, True), (False, True, True), (True, True, False)):
+            with patch("core.settings.get_setting", return_value={"enabled": enabled, "desktop": desktop, "allow_non_admins": True}):
+                for prompt in (system_prompt.for_claude(admin), system_prompt.for_external(admin), system_prompt.for_codex("python", "cli", admin)):
+                    self.assertEqual("files stay in its Documents folder" in prompt, enabled and desktop and admin)
+                self.assertNotIn("files stay in its Documents folder", system_prompt.for_external(admin, computer_available=False))
+
     async def test_computer_guidance_is_gated_on_every_surface(self):
         from core import system_prompt
         instruction = "To open, visit, search or operate a website, use the computer tool."

@@ -60,6 +60,7 @@ async def status(user: str = Depends(require_admin)) -> dict:
                 for agent in agent_service.list_agents() if (computer.PROFILES / agent["id"]).is_dir()]
     return {"docker_available": available, "docker_reason": reason,
             "image_ready": await computer_image.image_ready() if available else False,
+            "desktop_image_ready": await computer_image.image_ready(desktop=True) if available else False,
             "profiles": profiles}
 
 
