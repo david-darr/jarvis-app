@@ -89,8 +89,10 @@ Module functions (call as `tab_api.<name>`):
 - `wrap_untrusted(label, text)`: delimit external text before giving it to a model.
 - `list_models()`: list endpoint `id`, `name`, `kind`, and `model`, without secrets.
 - `model_context_size(endpoint_id)`: configured local input window, or `None` for other kinds.
-- `await complete(endpoint_id, system, prompt, timeout=180)`: tool-free completion; Codex CLI is unsupported.
+- `await model_choices(endpoint_id)`: account-scoped model choices as `[{"id", "name"}]`; no catalog gives `[]`, never keys.
+- `await complete(endpoint_id, system, prompt, timeout=180, model=None)`: tool-free completion; Claude accepts an offered model ID, local/API accept only their configured model or None; Codex CLI is unsupported.
 - `email_accounts()`: connected mail account IDs, emails and names, without credentials.
+- `send_email(user, account_id, to, subject, body, in_reply_to=None)`: one plain-text email; admin only, and only from a button the person pressed after confirming the recipient. Never from background work or a model's say.
 - `open_mailbox(account_id, folder)`: read-only IMAP context manager; UID search, fetch of `RFC822.SIZE`/`BODY.PEEK[]`, and `response("UIDVALIDITY")` only.
 - `message_time(value)`: parse an RFC mail timestamp with timezone, or return `None`.
 - `message_connections()`: connection kind, ID and label for supported messaging sources.
@@ -110,7 +112,7 @@ Bound handle members (call as `api.<name>`):
 - `adopt_data_file(old_name)`: migrate only this tab's legacy `<slug>.json`, including old tab-owned encrypted values.
 - `encrypt(text)`: encrypt this tab's own secret with authenticated tab ownership.
 - `decrypt(token)`: decrypt only this tab's tokens, refusing app credentials and other tabs' values.
-- `chat_session(key, title)`: get/create a persistent tab chat session.
+- `chat_session(key, title, untrusted=None, model_endpoint_id=None)`: get/create a persistent tab chat; pass `untrusted="<what>"` whenever you put outside text in it (shell commands then ask first).
 - `append_chat_message(session_id, role, text)`: append context to chat history without a model turn.
 - `register_sync(name, fn)`: register an async daily-sync provider that runs only while the tab is on; app removal unregisters it.
 
@@ -153,7 +155,9 @@ absolute app URL: `import { api, el } from "/static/js/api.js"`; relative
 `../api.js` resolves incorrectly. `api(path, options)` parses JSON and throws
 on network/non-2xx failures; `el(tag, attrs, children)` builds DOM (`text`
 sets textContent; `onclick` etc. wire listeners). Use relative imports for
-local JS helpers. Use existing `.view-constrained`, `.view-header`, `.card`,
+local JS helpers. To show a tab chat, use `mountSessionChat(host, { sessionId,
+modelPicker: true, openInChats: true })` from `/static/js/sessionChat.js`;
+it streams and shows permission prompts. Give `host` a fixed height. Use existing `.view-constrained`, `.view-header`, `.card`,
 `.title`, `.meta`, `.btn`, `.btn.primary`, `.btn.quiet`, `.disclosure-panel`
 and theme tokens such as `--text`, `--bg-panel`, `--border`, `--accent`.
 Use currentColor stroke SVGs; the manifest icon needs no shared icon edit.

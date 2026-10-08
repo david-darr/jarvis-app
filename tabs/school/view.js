@@ -1,4 +1,5 @@
 import { api, el } from "/static/js/api.js";
+import { mountSessionChat } from "/static/js/sessionChat.js";
 
 // School: Canvas assignments grouped by course. Three states in one view
 // (no routing) — overview (upcoming-across-everything + course cards, a mix
@@ -247,122 +248,38 @@ async function renderAssignmentWorkspace(body) {
   await renderCoursePanel(chatCard, a.course, a.id);
 }
 
-// A compact chat panel bound to the course's persistent session — same
-// message-card/composer shape as static/js/views/chat.js, scoped down (no
-// attachments/workspace/integrations, this is meant to live in half a
-// column) since this session's whole point is accumulating course memory,
-// not being a general-purpose chat.
-function messageCard(role, text, ts) {
-  const time = new Date((ts || Date.now() / 1000) * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  // Header row (status dot + role + timestamp) dropped to match the main
-  // chat's Claude-style redesign (2026-09-03) — the two views share these
-  // classes, so they'd otherwise diverge visually. Timestamp moved to the
-  // hover row, same as chat.js.
-  return el("div", { class: `msg ${role}` }, [
-    el("div", { class: "msg-body", text }),
-    el("div", { class: "msg-actions" }, [el("span", { class: "msg-time", text: time })]),
-  ]);
-}
-
+// The course's persistent chat, on the app's shared embedded chat
+// (/static/js/sessionChat.js): streaming, Stop, model choice and the
+// permission prompts a course chat needs, since its history carries Canvas
+// text and so asks before shell commands. Sync memory pushes the current
+// draft into the chat right away instead of waiting for the autosave.
 async function renderCoursePanel(chatCard, course, assignmentId) {
   const { session_id: sessionId } = await api(`/api/tab-school/courses/session?course=${encodeURIComponent(course)}`);
-  const session = await api(`/api/sessions/${sessionId}`);
-
-  const modelBtn = el("button", { type: "button", class: "model-picker-btn" }, [el("span", { id: "school-model-label" })]);
-  const modelMenu = el("div", { class: "model-picker-menu hidden" });
-  const modelWrap = el("div", { class: "model-picker-wrap", style: "position:relative;" }, [modelBtn, modelMenu]);
-  modelBtn.addEventListener("click", (e) => { e.stopPropagation(); modelMenu.classList.toggle("hidden"); });
-  document.addEventListener("click", () => modelMenu.classList.add("hidden"));
-  await refreshCourseModelPicker(sessionId, modelBtn.querySelector("span"), modelMenu);
-
-  // Manual push (David's ask, follow-up) — the debounced autosave already
-  // syncs the draft into memory 1.2s after typing stops, but this lets you
-  // force it immediately (e.g. right before asking a question about work
-  // you just finished) without waiting or making a throwaway edit.
-  const syncBtn = el("button", { type: "button", class: "btn", style: "font-size:11px;padding:5px 9px;", text: "Sync memory" });
+  const syncBtn = el("button", { type: "button", class: "btn quiet", text: "Sync memory" });
+  const host = el("div", { class: "school-course-chat", style: "flex:1;display:flex;flex-direction:column;min-height:0;height:460px;" });
+  let close = () => {};
+  const mount = async () => {
+    close();
+    close = await mountSessionChat(host, { sessionId, title: `School — ${course}`, placeholder: "Ask about this course...",
+      emptyTitle: `${course} chat`, emptyText: "Ask about this assignment or the course. Your work syncs in as you write.",
+      modelPicker: true, openInChats: true });
+  };
   syncBtn.addEventListener("click", async () => {
     syncBtn.disabled = true;
     const original = syncBtn.textContent;
-    const res = await api(`/api/tab-school/assignments/${assignmentId}/sync-memory`, { method: "POST" });
-    syncBtn.textContent = res.updated ? "Synced" : "Already current";
+    try {
+      const res = await api(`/api/tab-school/assignments/${assignmentId}/sync-memory`, { method: "POST" });
+      syncBtn.textContent = res.updated ? "Synced" : "Already current";
+      if (res.updated) await mount();
+    } catch (error) { syncBtn.textContent = "Sync failed"; }
     setTimeout(() => { syncBtn.textContent = original; syncBtn.disabled = false; }, 1500);
   });
-
-  const messages = el("div", { style: "flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;margin:8px 0;" });
-  for (const msg of session.messages) messages.appendChild(messageCard(msg.role, msg.content, msg.ts));
-  messages.scrollTop = messages.scrollHeight;
-
-  const input = el("textarea", { rows: "2", placeholder: "Ask about this course...", style: "flex:1;background:transparent;color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:inherit;font-size:13px;resize:none;" });
-  const sendBtn = el("button", { class: "btn", text: "Send" });
-  const composer = el("div", { class: "card-row", style: "align-items:flex-end;gap:8px;" }, [input, sendBtn]);
-
-  async function send() {
-    const text = input.value.trim();
-    if (!text) return;
-    input.value = "";
-    sendBtn.disabled = true;
-    messages.appendChild(messageCard("user", text));
-    const replyCard = messageCard("assistant", "");
-    const replyBody = replyCard.querySelector(".msg-body");
-    messages.appendChild(replyCard);
-    messages.scrollTop = messages.scrollHeight;
-
-    const res = await fetch("/api/chat/stream", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, message: text, attachment_ids: [] }),
-    });
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n\n");
-      buffer = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const payload = JSON.parse(line.slice(6));
-        if (payload.chunk) { replyBody.textContent += payload.chunk; messages.scrollTop = messages.scrollHeight; }
-      }
-    }
-    sendBtn.disabled = false;
-    input.focus();
-  }
-  sendBtn.addEventListener("click", send);
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
-
   chatCard.append(
     el("div", { class: "card-row", style: "margin-bottom:4px;" }, [
       el("div", { class: "title", text: `${course} — Course Chat` }),
-      el("div", { class: "card-row", style: "gap:8px;" }, [syncBtn, modelWrap]),
+      syncBtn,
     ]),
-    messages,
-    composer,
+    host,
   );
-}
-
-async function refreshCourseModelPicker(sessionId, label, menu) {
-  const endpoints = await api("/api/models");
-  const session = await api(`/api/sessions/${sessionId}`);
-  menu.innerHTML = "";
-  if (endpoints.length === 0) {
-    menu.appendChild(el("div", { class: "model-picker-item", text: "No models added yet — see Settings" }));
-  }
-  for (const ep of endpoints) {
-    const name = ep.kind === "claude_cli" || ep.kind === "codex_cli" ? `${ep.name} (${ep.model || "CLI default"})` : `${ep.name} (${ep.model})`;
-    menu.appendChild(el("div", {
-      class: "model-picker-item" + (ep.id === session.model_endpoint_id ? " active" : ""),
-      text: name,
-      onclick: async (e) => {
-        e.stopPropagation();
-        await api(`/api/sessions/${sessionId}/model`, { method: "POST", body: JSON.stringify({ model_endpoint_id: ep.id }) });
-        label.textContent = name;
-        menu.classList.add("hidden");
-      },
-    }));
-  }
-  const active = endpoints.find((e) => e.id === session.model_endpoint_id);
-  label.textContent = active ? (active.kind === "claude_cli" || active.kind === "codex_cli" ? `${active.name} (${active.model || "CLI default"})` : `${active.name} (${active.model})`) : "No model — add one in Settings";
+  await mount();
 }

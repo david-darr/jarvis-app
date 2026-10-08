@@ -279,7 +279,7 @@ class SchoolService:
 
     # -- per-course chat memory -----------------------------------------------
     def get_course_session_id(self, course: str) -> str:
-        return api.chat_session(course, f"School — {course}")
+        return api.chat_session(course, f"School — {course}", untrusted="course material from Canvas")
 
     def sync_course_memory(self, assignment_id: str) -> Optional[dict]:
         a = self.get_assignment(assignment_id)
@@ -299,7 +299,7 @@ class SchoolService:
         if a.get("url"):
             lines.append(f'Link: {a["url"]}')
         if a.get("description"):
-            lines.append(f'Details: {a["description"]}')
+            lines.append(tab_api.wrap_untrusted("assignment details from Canvas", a["description"]))
         if draft.strip():
             lines.append(f"Current draft/work so far:\n{draft}")
         api.append_chat_message(session_id, "user", "\n".join(lines))

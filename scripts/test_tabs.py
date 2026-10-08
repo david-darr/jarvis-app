@@ -1070,6 +1070,63 @@ def calendar_items(user, start, end):
             with self.assertRaises(ValueError): memory_tools._resolve_repo_path(name)
 
 
+class TabWorkTests(unittest.TestCase):
+    """tab_api pieces for working on records: email replies and chats that
+    carry outside text (2026-10-08)."""
+
+    def send(self, *args, admin=True, **kwargs):
+        sent = []
+        accounts = [{"id": "acct", "email": "me@example.com", "name": "Me"}]
+        from services.email_service import email_service
+        with patch.object(tab_api, "is_admin", return_value=admin), \
+             patch.object(tab_api, "email_accounts", return_value=accounts), \
+             patch.object(email_service, "send_message", lambda *a, **k: sent.append((a, k))):
+            tab_api.send_email(*args, **kwargs)
+        return sent
+
+    def test_send_email_is_admin_only_and_threads_the_reply(self):
+        sent = self.send("alice", "acct", "bob@example.com", "Re: Proposal", "Thanks", in_reply_to="<m1@example.com>")
+        self.assertEqual(sent, [(("acct", "bob@example.com", "Re: Proposal", "Thanks"), {"in_reply_to": "<m1@example.com>"})])
+        with self.assertRaises(PermissionError):
+            self.send("bob", "acct", "bob@example.com", "Hi", "Body", admin=False)
+
+    def test_send_email_refuses_header_injection_and_odd_recipients(self):
+        for to, subject, reply in (("bob@example.com\nBcc: x@example.com", "Hi", None),
+                                   ("bob@example.com", "Hi\r\nBcc: x@example.com", None),
+                                   ("bob@example.com", "Hi", "<a>\nBcc: x"),
+                                   ("bob@example.com, eve@example.com", "Hi", None),
+                                   ("not an address", "Hi", None)):
+            with self.assertRaises(ValueError):
+                self.send("alice", "acct", to, subject, "Body", in_reply_to=reply)
+        with self.assertRaises(ValueError):
+            self.send("alice", "other", "bob@example.com", "Hi", "Body")
+        with self.assertRaises(ValueError):
+            self.send("alice", "acct", "bob@example.com", "Hi", "   ")
+
+    def test_untrusted_tab_chat_taints_every_turn(self):
+        from core.session_manager import session_manager
+        from core.external_brain import ExternalBrain
+        from services import chat_service
+        handle = tab_api.TabAPI("worktab", {})
+        marked = handle.chat_session("record-1", "Work chat", untrusted="source messages")
+        self.assertEqual(handle.chat_session("record-1", "Work chat", untrusted="source messages"), marked)
+        self.assertEqual(session_manager.get_session(marked)["untrusted_context"], "worktab tab: source messages")
+        plain = handle.chat_session("record-2", "Plain chat")
+        brain = ExternalBrain.__new__(ExternalBrain)
+        for session_id, reference, expected in ((marked, "", "worktab tab: source messages"),
+                                                (plain, "", False), (plain, "picked note", True)):
+            brain.pending_reference_taint = False
+            chat_service._taint_turn(session_id, brain, reference)
+            self.assertEqual(brain.pending_reference_taint, expected)
+
+    def test_tab_chat_model_applies_only_to_a_known_endpoint(self):
+        from core.session_manager import session_manager
+        handle = tab_api.TabAPI("worktab", {})
+        with patch.object(tab_api.model_endpoints, "get_endpoint", return_value=None):
+            chat = handle.chat_session("record-3", "Chat", model_endpoint_id="missing")
+        self.assertIsNone(session_manager.get_session(chat)["model_endpoint_id"])
+
+
 if __name__ == "__main__":
     try:
         unittest.main()

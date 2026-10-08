@@ -189,6 +189,21 @@ app.whenReady().then(async () => {
           const marks = await js("[...document.querySelectorAll('.dashboard-row > .model-mark')].map(n => n.getAttribute('aria-label'))");
           assert.deepEqual(marks, ["Claude", "Codex"], label + " home model logos");
         }
+        if (tab === "school" && !demoState.empty && label === "desktop") {
+          // An assignment's course chat is the shared embedded chat
+          // (sessionChat.js): model choice, composer, Open in Chats.
+          // Opening an assignment syncs your work into the course chat on purpose.
+          const schoolWrites = writes.length;
+          await waitFor("[...document.querySelectorAll('.card-row .title')].some(t=>t.textContent==='Review the project brief')");
+          await js("[...document.querySelectorAll('.card-row .title')].find(t=>t.textContent==='Review the project brief').closest('.card-row').click()");
+          await waitFor("!!document.querySelector('.school-course-chat .session-chat .side-chat-input')");
+          await waitFor("document.querySelectorAll('.school-course-chat .msg').length > 0");
+          assert.ok(await js("!!document.querySelector('.school-course-chat .session-chat-models .custom-select') && [...document.querySelectorAll('.school-course-chat button')].some(b=>b.textContent==='Open in Chats')"), label + " School course chat has model choice and Open in Chats");
+          assert.deepEqual(await overflow(), [], label + " School assignment overflow");
+          await capture(label + "-school-assignment");
+          assert.ok(writes.slice(schoolWrites).every(w => w.path.startsWith('/api/tab-school/assignments/a1/')), label + ' School writes only its own sync');
+          writes.splice(schoolWrites);
+        }
         if (tab === "agents" && !demoState.empty) {
           // Agents: the list, the cross-agent inbox with its answers, the badge.
           await waitFor("document.querySelectorAll('.agent-tile:not(.team-tile)').length === 2");
@@ -207,7 +222,7 @@ app.whenReady().then(async () => {
           await waitFor("document.querySelectorAll('.agent-chat-item').length === 1");
           assert.equal(await js("document.querySelector('.agent-tab.active').textContent"), "Chat", label + " opens on Chat");
           assert.equal(await js("[...document.querySelectorAll('.agent-tab')][1].textContent"), "Work (2)", label + " work tab counts what waits");
-          await waitFor("document.querySelectorAll('.agent-chat-messages .msg').length > 0");
+          await waitFor("document.querySelectorAll('.agent-chat-main .session-chat-messages .msg').length > 0");
           assert.ok(await js("document.querySelector('.agent-chat-item.active')?.textContent.includes('Chat with Scout')"), label + " last chat open");
           assert.ok(await js("!!document.querySelector('.agent-chat-main .side-chat-input')"), label + " composer");
           assert.ok(await js("document.querySelector('.agent-work-host').hidden"), label + " work hidden on chat tab");
@@ -257,6 +272,8 @@ app.whenReady().then(async () => {
           assert.ok(await js("document.querySelector('[data-tab-slug=crm] .tool-store-card-foot button').classList.contains('primary') && document.querySelector('[data-tab-slug=project_tracker] .tool-store-card-foot button').classList.contains('primary')"), label + " Add and Approve are primary buttons");
           assert.ok(await js("[...document.querySelectorAll('[data-tab-slug=project_tracker] .tool-store-card-foot button')].some(b=>b.textContent==='Export' && b.classList.contains('quiet')) && !!document.querySelector('[data-tab-slug=project_tracker] .btn.quiet.danger')"), label + " Export and Remove are styled buttons");
           assert.ok(await js("document.querySelector('[data-tab-slug=crm] .set-pill-muted')?.textContent === 'Off' && document.querySelector('[data-tab-slug=project_tracker] .set-pill-warn')?.textContent === 'Needs approval'"), label + " shared status tones");
+          assert.ok(await js("[...document.querySelectorAll('.tool-store-manage button')].find(b=>b.textContent==='Build a tab').classList.contains('primary')"), label + " Build a tab is the primary header action");
+          assert.ok(await js("document.querySelector('.tool-store-build-card')?.textContent.includes('Build your own tab') && !!document.querySelector('.tool-store-build-card .btn.primary')"), label + " Yours ends with a Build your own tab card");
           await js("document.getElementById('view-content').scrollTop=0");
           await capture(label + "-tool-store-tabs");
           await js("document.querySelector('[data-tab-slug=project_tracker] .disclosure-panel').open=true; document.querySelector('[data-tab-slug=project_tracker]').scrollIntoView({block:'start'})");
@@ -266,7 +283,8 @@ app.whenReady().then(async () => {
           await capture(label + "-tool-store-tabs-review");
           if (label === "desktop") {
             await waitFor("!!document.querySelector('.tab-build-form')");
-            await js("[...document.querySelectorAll('.tool-store-manage button')].find(b=>b.textContent==='Build a tab').click()");
+            // The card at the end of Yours opens the same brief as the header button.
+            await js("document.querySelector('.tool-store-build-card button').click()");
             await waitFor("!document.querySelector('.tab-build-form').closest('details').hidden");
             await js("document.querySelector('.tab-build-form input').value='Research'; document.querySelector('.tab-build-form textarea').value='Track my sources'; document.querySelector('.tab-build-build-btn').click()");
             await waitFor("document.querySelector('.nav-item[data-tab=chat]').classList.contains('active')");

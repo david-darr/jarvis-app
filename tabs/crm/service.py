@@ -20,8 +20,10 @@ api = tab_api.for_tab(__package__)
 api.adopt_data_file("crm.json")
 STATUSES = ("active", "in_progress", "waiting", "needs_review", "done", "dismissed")
 PRIORITIES = ("urgent", "high", "normal", "low")
-DEFAULTS = {"endpoint_id": None, "timezone": "UTC", "review_all": False,
-            "auto_scan": False, "interval_minutes": 30, "lookback_days": 14, "max_messages": 40}
+DEFAULTS = {"endpoint_id": None, "model": None, "timezone": "UTC", "review_all": False,
+            "auto_scan": False, "interval_minutes": 30, "lookback_days": 14, "max_messages": 40,
+            "schedule_mode": "interval", "schedule_times": ["09:00"], "schedule_days": list(range(7)),
+            "schedule_since": 0}
 
 
 def key(value):
@@ -64,7 +66,7 @@ class CRMService:
 
     def settings(self, owner):
         with self._lock:
-            return {**DEFAULTS, **self._data["settings"].get(owner, {})}
+            return copy.deepcopy({**DEFAULTS, **self._data["settings"].get(owner, {})})
 
     def owners(self):
         with self._lock:
@@ -73,6 +75,21 @@ class CRMService:
     def configure(self, owner, fields):
         values = {**self.settings(owner), **fields}
         ZoneInfo(values["timezone"])
+        if values["schedule_mode"] not in ("interval", "times"):
+            raise ValueError("Choose a scan schedule")
+        times, days = values["schedule_times"], values["schedule_days"]
+        if (not isinstance(times, list) or not 1 <= len(times) <= 6
+                or any(not isinstance(t, str) or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", t) for t in times)
+                or len(set(times)) != len(times)):
+            raise ValueError("Choose 1 to 6 unique scan times in HH:MM format")
+        if (not isinstance(days, list) or not days
+                or any(type(d) is not int or not 0 <= d <= 6 for d in days)):
+            raise ValueError("Choose at least one scan day")
+        values["schedule_times"], values["schedule_days"] = sorted(times), sorted(set(days))
+        previous = self.settings(owner)
+        if any(values[k] != previous[k] for k in ("auto_scan", "schedule_mode", "schedule_times", "schedule_days", "timezone")):
+            # Slots before this moment never trigger a catch-up scan.
+            values["schedule_since"] = time.time()
         for name, lo, hi in (("interval_minutes", 5, 1440), ("lookback_days", 1, 90), ("max_messages", 1, 100)):
             if not lo <= values[name] <= hi:
                 raise ValueError(f"{name} must be between {lo} and {hi}")
@@ -277,6 +294,43 @@ class CRMService:
         with self.transaction():
             m = self._data["messages"][message_id]
             m.update(state="failed", attempts=m["attempts"] + 1, error=reason)
+
+    # Reply and chat bookkeeping. Kept out of update_task: these aren't the
+    # person's edits, so they must not land in a task's overrides.
+    _WORK_FIELDS = ("reply_draft", "last_reply", "chat_session_id", "chat_evidence_count")
+
+    def set_work(self, owner, task_id, **fields):
+        self.task(owner, task_id)
+        if set(fields) - set(self._WORK_FIELDS):
+            raise ValueError("Unknown task work field")
+        with self.transaction():
+            self._data["tasks"][task_id].update(fields)
+        return self.task(owner, task_id)
+
+    def reply_target(self, owner, task_id):
+        """Where a reply goes: the newest email evidence's sender, from the
+        account that received it. None for non-email tasks, a source that was
+        removed, or mail the account itself sent."""
+        task = self.task(owner, task_id)
+        with self._lock:
+            found = []
+            for evidence in task["evidence"]:
+                message = self._data["messages"].get(evidence["message_id"])
+                if not message or message["owner"] != owner or message.get("source_kind") != "email":
+                    continue
+                source = self._data["sources"].get(message["source_id"])
+                if source and source["owner"] == owner:
+                    found.append((message.get("sent_at") or "", message, source))
+        if not found:
+            return None
+        _, message, source = max(found, key=lambda row: row[0])
+        sender, account = (message.get("sender") or "").strip(), (message.get("account") or "").strip()
+        if not sender or sender.casefold() == account.casefold():
+            return None
+        subject = message.get("subject") or task["title"]
+        return {"account_id": source["connection_id"], "account": account, "to": sender,
+                "subject": subject if subject.lower().startswith("re:") else "Re: " + subject,
+                "in_reply_to": message.get("message_id") or None, "message_id": message["id"]}
 
     def attach_card(self, owner, task_id, card_id):
         self.task(owner, task_id)

@@ -31,6 +31,9 @@
 .crm-pair > .btn { margin-bottom: 12px; }
 .crm-check { display: flex; align-items: center; gap: 8px; margin: 5px 0 14px; font-size: 12px; }
 .crm-check input { flex: none; }
+.crm-schedule-times { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.crm-schedule-times input { min-width: 0; max-width: 100%; }
+.crm-settings .segmented-tabs { flex-wrap: wrap; max-width: 100%; }
 .crm-detail > .crm-actions { margin: 14px 0; }
 .crm-review { color: var(--warn); font-size: 12px; overflow-wrap: anywhere; }
 .crm-proposal { border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 12px; margin: 12px 0; font-size: 12px; }
@@ -52,3 +55,9 @@
   .crm-source { align-items: flex-start; flex-wrap: wrap; }
   .crm-pair { grid-template-columns: 1fr; gap: 0; }
 }
+.crm-work { margin-top: 12px; }
+.crm-work-body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; min-width: 0; }
+.crm-work-body > textarea { width: 100%; min-height: 140px; resize: vertical; }
+.crm-work-body p { margin: 0; overflow-wrap: anywhere; }
+.crm-chat { display: flex; flex-direction: column; height: 460px; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); overflow: hidden; }
+@media (max-width: 768px) { .crm-chat { height: 64vh; } }

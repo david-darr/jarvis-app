@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 class TemporaryDirectory:
-    def __init__(self, prefix=".tab-test-", dir=None):
+    def __init__(self, prefix=".tab-test-", dir=None, ignore_cleanup_errors=False):
         if not prefix.startswith(".tab-test-"):
             prefix = ".tab-test-" + prefix
         parent = Path(dir) if dir else Path(__file__).resolve().parent

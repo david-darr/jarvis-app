@@ -145,7 +145,8 @@ class EmailService:
                 })
         return messages
 
-    def send_message(self, account_id: str, to: str, subject: str, body: str) -> None:
+    def send_message(self, account_id: str, to: str, subject: str, body: str,
+                     in_reply_to: str | None = None) -> None:
         account = self.get_account(account_id, decrypted=True)
         if account is None:
             raise KeyError(f"no such account: {account_id}")
@@ -155,6 +156,10 @@ class EmailService:
         msg["From"] = account["email"]
         msg["To"] = to
         msg["Subject"] = subject
+        if in_reply_to:
+            # Threads the reply under the original in the recipient's client.
+            msg["In-Reply-To"] = in_reply_to
+            msg["References"] = in_reply_to
 
         if account["smtp_security"] == "ssl":
             smtp = smtplib.SMTP_SSL(account["smtp_host"], account["smtp_port"], timeout=10)

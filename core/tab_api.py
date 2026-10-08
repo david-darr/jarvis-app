@@ -54,7 +54,20 @@ def model_context_size(endpoint_id):
     return (endpoint.get("num_ctx") or 16384) if endpoint.get("kind") == "local" else None
 
 
-async def complete(endpoint_id, system, prompt, timeout=180):
+_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,127}")
+
+
+async def model_choices(endpoint_id):
+    """Connection-scoped picker metadata, never credentials or provider URLs."""
+    from core import model_discovery
+    endpoint = model_endpoints.get_endpoint(endpoint_id)
+    if endpoint is None:
+        raise ValueError("Choose a completion model")
+    return [{"id": row["id"], "name": row.get("display_name") or row["id"]}
+            for row in await model_discovery.list_for_endpoint(endpoint)]
+
+
+async def complete(endpoint_id, system, prompt, timeout=180, model=None):
     async def run():
         endpoint = model_endpoints.get_endpoint(endpoint_id)
         if endpoint is None:
@@ -62,30 +75,72 @@ async def complete(endpoint_id, system, prompt, timeout=180):
         if endpoint["kind"] == "codex_cli":
             raise ValueError("Select Claude CLI, a local model or an API model for tool-free completion")
         if endpoint["kind"] == "claude_cli":
+            # Callers check membership against model_choices() when the choice
+            # is saved; re-listing here would fail every call while the live
+            # catalog is unreachable. Only the id's shape is checked per call.
+            if model is not None and not _MODEL_ID.fullmatch(model):
+                raise ValueError("Choose a model this connection offers")
             from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
             from core import claude_cli
-            with tempfile.TemporaryDirectory(prefix="kairos-tab-reader-") as directory:
+            directory = tempfile.TemporaryDirectory(prefix="kairos-tab-reader-", ignore_cleanup_errors=True)
+            try:
                 options = ClaudeAgentOptions(tools=[], mcp_servers={}, strict_mcp_config=True,
-                    setting_sources=[], skills=[], plugins=[], cwd=directory, max_turns=1,
+                    setting_sources=[], skills=[], plugins=[], cwd=directory.name, max_turns=1,
                     cli_path=claude_cli.preferred_cli_path(),
-                    model=endpoint.get("model") or None, system_prompt=system,
+                    model=model if model is not None else endpoint.get("model") or None, system_prompt=system,
                     extra_args={"no-session-persistence": None, "disable-slash-commands": None})
+                result = None
                 async for message in query(prompt=prompt, options=options):
                     if isinstance(message, ResultMessage):
-                        if message.is_error:
-                            raise ValueError("The completion model failed")
+                        result = message
                         if message.usage:
                             token_usage.record_usage(endpoint_id, message.usage)
-                        return message.result or ""
-            raise ValueError("The completion model did not return a result")
+                # Drain the stream so the CLI releases its Windows working directory.
+                if result is None:
+                    raise ValueError("The completion model did not return a result")
+                if result.is_error:
+                    raise ValueError("The completion model failed")
+                return result.result or ""
+            finally:
+                try:
+                    directory.cleanup()
+                except OSError:
+                    # A transient filesystem lock must not discard the model result.
+                    pass
+        if model is not None and model != endpoint.get("model"):
+            raise ValueError("Choose a model this connection offers")
         from core.providers.openai_compatible import run_turn
-        base, model, api_key, num_ctx = model_endpoints.resolve_runtime(endpoint_id)
+        base, configured_model, api_key, num_ctx = model_endpoints.resolve_runtime(endpoint_id)
         def usage(value):
             token_usage.record_usage(endpoint_id, value)
-        return await run_turn(base, model, api_key,
+        return await run_turn(base, configured_model, api_key,
             [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
             tools=None, tool_executor=None, num_ctx=num_ctx, on_usage=usage)
     return await asyncio.wait_for(run(), timeout)
+
+
+_HEADER_UNSAFE = re.compile(r"[\r\n\x00]")
+
+
+def send_email(user, account_id, to, subject, body, in_reply_to=None):
+    """Send one plain-text email from a connected account, for an admin's
+    explicit action only (a button the person pressed, after confirming the
+    recipient). Never call it from background work or on a model's say."""
+    from email.utils import parseaddr
+    from services.email_service import email_service
+    if not is_admin(user):
+        raise PermissionError("Only an admin can send email")
+    if not any(a.get("id") == account_id for a in email_accounts()):
+        raise ValueError("The email account is not connected")
+    for value in (to, subject, in_reply_to or ""):
+        if not isinstance(value, str) or _HEADER_UNSAFE.search(value):
+            raise ValueError("Invalid email header")
+    address = parseaddr(to)[1]
+    if "@" not in address or address != to.strip():
+        raise ValueError("Enter one recipient address")
+    if not body.strip() or len(body) > 50_000:
+        raise ValueError("The message must be 1 to 50,000 characters")
+    email_service.send_message(account_id, address, subject[:300], body, in_reply_to=in_reply_to or None)
 
 
 def email_accounts():
@@ -258,10 +313,22 @@ class TabAPI:
             raise ValueError("Encrypted value does not belong to this tab")
         return plain[len(prefix):]
 
-    def chat_session(self, key, title):
+    def chat_session(self, key, title, untrusted=None, model_endpoint_id=None):
+        """Get/create this tab's persistent chat for ``key``.
+
+        ``untrusted``: a short label for outside text the tab places in the
+        chat (e.g. "CRM source messages"). The chat is then marked so every
+        turn treats its history as untrusted and shell commands ask first.
+        ``model_endpoint_id`` picks the model for a newly created chat only.
+        """
         from core.session_manager import session_manager
+        if model_endpoint_id is not None and model_endpoints.get_endpoint(model_endpoint_id) is None:
+            model_endpoint_id = None
         # Preserve the original slug:key identity of existing tab chats.
-        return session_manager.get_or_create_channel_session(f"{self.slug}:{key}", title)
+        session_id = session_manager.get_or_create_channel_session(f"{self.slug}:{key}", title, model_endpoint_id)
+        if untrusted:
+            session_manager.set_untrusted_context(session_id, f"{self.slug} tab: {str(untrusted)[:80]}")
+        return session_id
 
     def append_chat_message(self, session_id, role, text):
         from core.session_manager import session_manager

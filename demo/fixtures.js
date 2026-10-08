@@ -312,6 +312,10 @@
     if (route === "/api/cookbook/engine/downloaded") return [];
     if (route === "/api/tab-school/settings") return { canvas_base_url: "", ics_url: "", canvas_api_token_configured: false };
     if (route === "/api/tab-school/courses") return list([{ name: "Software Design", upcoming_count: 2, overdue_count: 0, assignment_count: 8 }]);
+    if (route === "/api/tab-school/assignments/a1") return { id: "a1", course: "Software Design", title: "Review the project brief", due: future(40), completed: false,
+      attachment_links: [], url: "", description: "Read the brief and list three questions for the kickoff." };
+    if (route === "/api/tab-school/assignments/a1/draft") return { content: "" };
+    if (route === "/api/tab-school/courses/session") return { session_id: "school-course" };
     if (route === "/api/tab-school/assignments") return url.searchParams.has("overdue") ? [] : list([{ id: "a1", course: "Software Design", title: "Review the project brief", due: future(40), completed: false, attachment_links: [] }]);
     if (route === "/api/integrations") return [
       // Roadmap phase 6: a working server with a tool held for review, one

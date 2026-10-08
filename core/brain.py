@@ -503,7 +503,8 @@ class Brain:
 
         self.turn_taint.reset()
         if self.pending_reference_taint:
-            self.turn_taint.mark("selected reference")
+            self.turn_taint.mark(self.pending_reference_taint if isinstance(self.pending_reference_taint, str)
+                                 else "selected reference")
             self.pending_reference_taint = False
         await self._client.query(user_text)
 

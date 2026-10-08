@@ -16,7 +16,7 @@ export async function render(container) {
   const count = el("span", { class: "meta", "aria-live": "polite" });
   const manageSkills = el("button", { type: "button", class: "btn quiet", text: "Manage skills" });
   const manageTools = el("button", { type: "button", class: "btn quiet", text: "Add MCP server", disabled: true });
-  const buildTab = el("button", { type: "button", class: "btn quiet", text: "Build a tab", hidden: true, "aria-expanded": "false" });
+  const buildTab = el("button", { type: "button", class: "btn primary", text: "Build a tab", hidden: true, "aria-expanded": "false" });
   const installTab = el("button", { type: "button", class: "btn quiet", text: "Install a tab", hidden: true, "aria-expanded": "false" });
   const remoteInstall = el("details", { class: "disclosure-panel tool-store-install", hidden: true });
   const customServer = el("details", { class: "disclosure-panel tool-store-install", hidden: true });
@@ -25,6 +25,12 @@ export async function render(container) {
   const managerHost = el("div", { class: "tool-store-manager", hidden: true });
   manageSkills.addEventListener("click", () => showSkillManager());
   manageTools.addEventListener("click", () => { customServer.open = true; customServer.scrollIntoView({ block: "nearest" }); });
+  // The "Build your own tab" card in Yours opens the same brief as the header button.
+  const openTabBuilder = () => {
+    tabBuilder.open = true;
+    tabBuilder.hidden = false;
+    tabBuilder.scrollIntoView({ block: "nearest" });
+  };
   for (const [button, panel] of [[buildTab, tabBuilder], [installTab, tabInstaller]]) {
     button.addEventListener("click", () => {
       panel.open = !panel.open;
@@ -250,10 +256,13 @@ export async function render(container) {
     }
     for (const [kind, label] of [["prebuilt", "Prebuilt"], ["user", "Yours"]]) {
       const entries = tabs.filter((item) => item.kind === kind);
-      if (!entries.length) continue;
+      // Yours always ends with the way to build one, and is that card alone when empty.
+      const offerBuild = kind === "user" && state.kind === "tabs" && !q;
+      if (!entries.length && !offerBuild) continue;
       results.append(el("h3", { class: "tool-store-heading", text: `${label} · ${entries.length}` }));
       const grid = el("div", { class: "tool-store-grid" });
       for (const item of entries) grid.append(tabCard(item));
+      if (offerBuild) grid.append(buildTabCard());
       results.append(grid);
     }
     if (["all", "tabs"].includes(state.kind) && state.tabsError) results.append(el("div", { class: "tool-store-notice", text: state.tabsError }));
@@ -273,6 +282,16 @@ export async function render(container) {
     state.tabs = await api("/api/system/tabs");
     state.tabsError = "";
     draw();
+  }
+
+  function buildTabCard() {
+    return el("div", { class: "tool-store-card tool-store-build-card" }, [
+      el("h4", { text: "Build your own tab" }),
+      el("p", { text: "Describe what it should do and Kairos builds it in a chat. It lives in your data folder, survives updates and runs once an admin approves it." }),
+      el("div", { class: "tool-store-card-foot" }, [
+        el("button", { type: "button", class: "btn primary", text: "Start building", onclick: openTabBuilder }),
+      ]),
+    ]);
   }
 
   function tabCard(item) {

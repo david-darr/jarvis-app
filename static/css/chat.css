@@ -450,6 +450,14 @@
   line-height: 1.5; max-height: 160px; padding: 4px 6px; }
 .side-chat-input:focus { outline: none; box-shadow: none; }
 .side-chat-send { flex-shrink: 0; font-size: 12px; padding: 6px 12px; }
+/* sessionChat.js: one embedded conversation (Agents, tab chats). It fills
+   whatever box its host gives it; the host sets the height. */
+.session-chat { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; }
+.session-chat-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.session-chat-tools[hidden] { display: none; }
+.session-chat-models { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; flex: 1; }
+.session-chat-models .custom-select { flex: 1 1 140px; min-width: 0; max-width: 220px; }
+.session-chat-status:empty { display: none; }
 .side-chat-send[data-mode='stop'] { color: var(--danger); }
 .side-chat-drop-hint {
   position: absolute; top: 12px; right: 12px; bottom: 12px; width: calc(50% - 18px); z-index: 5; pointer-events: none;

@@ -1,4 +1,5 @@
-import { api, el, customSelect, toast, emptyState } from "/static/js/api.js";
+import { api, el, customSelect, toast, emptyState, confirmDialog } from "/static/js/api.js";
+import { mountSessionChat } from "/static/js/sessionChat.js";
 import { ICONS } from "/static/js/icons.js";
 
 const BASE = "/api/tab-crm";
@@ -50,7 +51,8 @@ export async function render(container) {
 
   let data, connections = { connections: [], models: [] }, agents = [];
   let mode = "tasks", filter = "open", query = "", contactFilter = "", projectFilter = "", sourceFilter = "", priorityFilter = "";
-  let selected = null, disposed = false, pollTimer = null, editing = false, closeSource = null;
+  let selected = null, disposed = false, pollTimer = null, editing = false, closeSource = null, closeChat = () => {};
+  const openWork = new Set();
   const wrap = el("div", { class: "view-constrained crm-view" });
   const heading = el("div", { class: "view-header" }, [el("div", {}, [
     el("h2", { text: "CRM" }), el("div", { class: "sub", text: "Follow through on the work your conversations create." }),
@@ -99,6 +101,7 @@ export async function render(container) {
     scanButton.setAttribute("aria-busy", String(data.scanning));
     scanButton.disabled = data.scanning || !data.settings.endpoint_id || !data.sources.some((s) => s.enabled);
     content.replaceChildren();
+    closeChat(); closeChat = () => {};
     if (mode === "sources") return drawSources();
     if (mode === "contacts") return drawContacts();
     drawTasks();
@@ -234,6 +237,7 @@ export async function render(container) {
       host.append(el("div", { class: "crm-evidence" }, [el("div", { class: "meta", text: evidence.label + (evidence.sent_at ? " · " + dueLabel(evidence.sent_at) : "") }),
         el("blockquote", { text: evidence.quote }), button("Open source", () => showSource(evidence), "quiet")]));
     }
+    host.append(workPanel(task, "draft", "Draft a reply", drawReply), workPanel(task, "chat", "Chat about this task", drawChat));
     if (data.can_connect && agents.length && !closed(task)) {
       const agent = select(agents.map((a) => [a.id, a.name]), agents[0].id, "Agent to assign");
       host.append(el("details", { class: "disclosure-panel" }, [el("summary", { text: "Assign to an agent" }),
@@ -244,6 +248,72 @@ export async function render(container) {
           await load();
         })]));
     }
+  }
+
+  // Draft and chat sections load only when opened, and stay open across the
+  // redraws a save or a scan poll causes.
+  function workPanel(task, kind, title, drawBody) {
+    const body = el("div", { class: "crm-work-body" });
+    const panel = el("details", { class: "disclosure-panel crm-work", "data-work": kind }, [el("summary", { text: title }), body]);
+    const key = task.id + ":" + kind;
+    const show = () => drawBody(body, task).catch((error) => {
+      if (!body.isConnected) return;
+      body.replaceChildren(el("p", { class: "crm-review", text: error.message }),
+        button("Try again", () => show(), "quiet"));
+    });
+    panel.addEventListener("toggle", () => {
+      if (panel.open) { openWork.add(key); show(); }
+      else { openWork.delete(key); if (kind === "chat") { closeChat(); body.replaceChildren(); } }
+    });
+    if (openWork.has(key)) { panel.open = true; show(); }
+    return panel;
+  }
+
+  async function drawReply(body, task) {
+    body.replaceChildren(el("p", { class: "meta", text: "Loading…" }));
+    const state = await api(BASE + `/tasks/${task.id}/reply`);
+    if (!body.isConnected) return;
+    const draft = el("textarea", { rows: "8", "aria-label": "Reply draft", placeholder: "Draft a reply with AI, or write one yourself." });
+    draft.value = state.draft;
+    draft.addEventListener("change", () => api(BASE + `/tasks/${task.id}/reply`, { method: "PUT", body: JSON.stringify({ draft: draft.value }) })
+      .catch((error) => toast(error.message, "error")));
+    const where = state.target
+      ? `Replies to ${state.target.to} from ${state.target.account} · ${state.target.subject}`
+      : "This task has no email to reply to. Copy the draft and send it where the conversation is.";
+    const actions = el("div", { class: "crm-actions" }, [
+      button(state.draft ? "Redraft with AI" : "Draft with AI", async () => {
+        if (draft.value.trim() && !await confirmDialog({ title: "Replace this draft?", message: "The AI draft replaces what's in the box.", confirmLabel: "Replace", danger: false })) return;
+        body.querySelector(".crm-work-status").textContent = "Drafting…";
+        try { await api(BASE + `/tasks/${task.id}/draft`, { method: "POST" }); }
+        finally { if (body.isConnected) body.querySelector(".crm-work-status").textContent = ""; }
+        if (body.isConnected) await drawReply(body, task);
+      }, "primary"),
+      button("Copy", async () => { await navigator.clipboard.writeText(draft.value); toast("Draft copied", "success"); }, "quiet"),
+    ]);
+    if (state.can_send) {
+      actions.append(button("Send", async () => {
+        if (!draft.value.trim()) throw new Error("Write or draft a reply first");
+        if (!await confirmDialog({ title: "Send this reply?", message: `To ${state.target.to}, from ${state.target.account}, subject “${state.target.subject}”.`, confirmLabel: "Send email", danger: false })) return;
+        await api(BASE + `/tasks/${task.id}/send`, { method: "POST", body: JSON.stringify({ draft: draft.value }) });
+        toast(`Reply sent to ${state.target.to}`, "success");
+        if (body.isConnected) await drawReply(body, task);
+      }));
+    }
+    body.replaceChildren(el("p", { class: "meta", text: where }), draft, actions,
+      el("p", { class: "meta crm-work-status", role: "status" }),
+      state.last_reply ? el("p", { class: "meta", text: `Last reply sent to ${state.last_reply.to} · ${dueLabel(new Date(state.last_reply.at * 1000).toISOString())}` }) : "",
+      el("p", { class: "meta", text: "Drafts use the model chosen in Sources and see this task's notes and source messages." }));
+  }
+
+  async function drawChat(body, task) {
+    closeChat();
+    body.replaceChildren(el("p", { class: "meta", text: "Opening the chat…" }));
+    const { session_id: sessionId } = await api(BASE + `/tasks/${task.id}/chat`, { method: "POST" });
+    if (!body.isConnected) return;
+    const host = el("div", { class: "crm-chat" });
+    body.replaceChildren(el("p", { class: "meta", text: "A Kairos chat that starts with this task's context. Its source messages are untrusted, so shell commands ask you first." }), host);
+    closeChat = await mountSessionChat(host, { sessionId, title: "CRM: " + task.title, placeholder: "Ask Kairos about this task",
+      emptyTitle: "Work on this task", emptyText: "Ask for a plan, a reply, research or a summary.", modelPicker: true, openInChats: true });
   }
 
   async function mutateTask(task, fields) {
@@ -309,21 +379,116 @@ export async function render(container) {
     content.append(el("p", { class: "meta", text: "Scan only the connections you select. Messaging sources capture new messages admitted by Kairos; they do not import private account history." }));
     if (data.can_connect) {
       const model = select([["", "Choose an extraction model"], ...connections.models.map((m) => [m.id, m.name])], data.settings.endpoint_id, "Extraction model");
+      let specificModel = select([["", "Connection default"]], "", "Model");
+      const modelField = el("div", {}, [field("Model", specificModel)]);
+      const modelStatus = el("p", { class: "meta", role: "status" });
+      let modelRequest = 0;
+      async function loadModels(selected = null) {
+        const request = ++modelRequest;
+        const endpointId = model.value;
+        specificModel = select([["", "Connection default"]], "", "Model");
+        specificModel.disabled = !!endpointId;
+        modelField.replaceChildren(field("Model", specificModel), modelStatus);
+        modelStatus.textContent = endpointId ? "Loading models…" : "Choose a connection to see its models.";
+        if (!endpointId) return;
+        try {
+          const choices = await api(BASE + "/models/" + encodeURIComponent(endpointId));
+          if (disposed || !modelField.isConnected || request !== modelRequest) return;
+          specificModel = select([["", "Connection default"], ...choices.map((m) => [m.id, m.name])],
+            choices.some((m) => m.id === selected) ? selected : "", "Model");
+          specificModel.addEventListener("change", () => { editing = true; });
+          modelField.replaceChildren(field("Model", specificModel), modelStatus);
+          const kind = connections.models.find((m) => m.id === endpointId)?.kind;
+          modelStatus.textContent = ["local", "api"].includes(kind) ? "Local/API model selection is configured in Settings." : "";
+        } catch {
+          if (disposed || !modelField.isConnected || request !== modelRequest) return;
+          specificModel.disabled = false;
+          modelStatus.textContent = "The model list couldn't load. Using Connection default; reselect the connection to retry.";
+        }
+      }
+      model.addEventListener("change", () => { editing = true; void loadModels(); });
       const timezone = el("input", { value: data.settings.endpoint_id ? data.settings.timezone : Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" });
       const lookback = el("input", { type: "number", min: "1", max: "90", value: String(data.settings.lookback_days) });
       const cadence = el("input", { type: "number", min: "5", max: "1440", value: String(data.settings.interval_minutes) });
       const review = el("input", { type: "checkbox", checked: data.settings.review_all });
       const auto = el("input", { type: "checkbox", checked: data.settings.auto_scan });
+      let scheduleMode = data.settings.schedule_mode || "interval";
+      let scheduleTimes = [...(data.settings.schedule_times || ["09:00"])];
+      const scheduleDays = new Set(data.settings.schedule_days || [0, 1, 2, 3, 4, 5, 6]);
+      const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      const schedule = el("div");
+      const scheduleSummary = el("p", { class: "meta", "aria-live": "polite" });
+      const settingsError = el("p", { class: "crm-review", role: "alert" });
+      function summary() {
+        const clocks = [...scheduleTimes].sort().map((t) => {
+          if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) return "an unset time";
+          const [h, m] = t.split(":").map(Number);
+          return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+        });
+        const days = [...scheduleDays].sort();
+        const when = days.length === 7 ? "every day" : days.join() === "0,1,2,3,4" ? "on weekdays" : "on " + days.map((d) => dayNames[d]).join(", ");
+        scheduleSummary.textContent = scheduleMode === "interval" ? `Scans every ${cadence.value} minutes while Kairos is running` :
+          `Scans at ${clocks.join(clocks.length === 2 ? " and " : ", ")} ${when} (${timezone.value})`;
+      }
+      function drawSchedule() {
+        schedule.replaceChildren();
+        const modes = el("div", { class: "segmented-tabs", role: "group", "aria-label": "Scan schedule" });
+        for (const [value, label] of [["interval", "Every N minutes"], ["times", "At set times"]]) {
+          modes.append(button(label, () => { editing = true; scheduleMode = value; drawSchedule(); },
+            "segmented-tab" + (scheduleMode === value ? " active" : "")));
+        }
+        schedule.append(modes);
+        if (scheduleMode === "interval") schedule.append(field("Check every (minutes)", cadence));
+        else {
+          const times = el("div", { class: "crm-schedule-times" });
+          scheduleTimes.forEach((value, index) => {
+            const input = el("input", { type: "time", value, required: true, "aria-label": `Scan time ${index + 1}` });
+            input.addEventListener("input", () => { scheduleTimes[index] = input.value; summary(); });
+            const remove = button("Remove", () => { editing = true; scheduleTimes.splice(index, 1); drawSchedule(); }, "quiet");
+            remove.disabled = scheduleTimes.length === 1;
+            times.append(el("div", { class: "crm-actions" }, [input, remove]));
+          });
+          const add = button("Add time", () => { editing = true; scheduleTimes.push(""); drawSchedule(); }, "quiet");
+          add.disabled = scheduleTimes.length >= 6;
+          schedule.append(times, add);
+          const days = el("div", { class: "tab-build-chips", role: "group", "aria-label": "Scan days" });
+          dayNames.forEach((label, index) => {
+            const chip = button(label, () => {
+              editing = true;
+              if (scheduleDays.has(index)) scheduleDays.delete(index); else scheduleDays.add(index);
+              drawSchedule();
+            }, "tab-build-chip" + (scheduleDays.has(index) ? " active" : ""));
+            chip.setAttribute("aria-pressed", String(scheduleDays.has(index)));
+            days.append(chip);
+          });
+          days.append(button("Every day", () => { editing = true; dayNames.forEach((_, i) => scheduleDays.add(i)); drawSchedule(); }, "quiet"));
+          schedule.append(el("p", { class: "meta", text: "Days and times use the timezone above." }), days);
+        }
+        summary();
+      }
+      cadence.addEventListener("input", summary);
+      timezone.addEventListener("input", summary);
+      drawSchedule();
       content.append(el("div", { class: "glass card crm-settings" }, [el("h3", { text: "Scanning" }),
-        el("div", { class: "crm-pair" }, [field("Extraction model", model), field("Timezone", timezone), field("Email lookback (days)", lookback), field("Check every (minutes)", cadence)]),
-        el("label", { class: "crm-check" }, [auto, "Scan automatically while Kairos is running"]),
+        el("div", { class: "crm-pair" }, [field("Extraction model", model), modelField, field("Timezone", timezone), field("Email lookback (days)", lookback)]),
+        el("label", { class: "crm-check" }, [auto, "Auto scan"]), schedule, scheduleSummary,
         el("label", { class: "crm-check" }, [review, "Review every extracted task before adding it to active work"]),
         el("p", { class: "meta", text: "Scanning uses your selected model. Claude CLI and local/API models run without action tools. Codex CLI is not offered for unattended extraction." }),
-        button("Save scanning settings", async () => {
-          await api(BASE + "/settings", { method: "PUT", body: JSON.stringify({ endpoint_id: model.value || null,
-            timezone: timezone.value, lookback_days: Number(lookback.value), interval_minutes: Number(cadence.value), auto_scan: auto.checked, review_all: review.checked }) });
-          await load(); toast("Scanning settings saved", "success");
+        settingsError, button("Save scanning settings", async () => {
+          settingsError.textContent = "";
+          if (scheduleMode === "times" && (!scheduleDays.size || scheduleTimes.length < 1 || scheduleTimes.length > 6 ||
+              scheduleTimes.some((t) => !/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) || new Set(scheduleTimes).size !== scheduleTimes.length)) {
+            settingsError.textContent = "Choose at least one day and 1 to 6 unique scan times.";
+            return;
+          }
+          try {
+            await api(BASE + "/settings", { method: "PUT", body: JSON.stringify({ endpoint_id: model.value || null, model: specificModel.value || null,
+              timezone: timezone.value, lookback_days: Number(lookback.value), interval_minutes: Number(cadence.value), auto_scan: auto.checked, review_all: review.checked,
+              schedule_mode: scheduleMode, schedule_times: [...scheduleTimes].sort(), schedule_days: [...scheduleDays].sort() }) });
+            await load(); toast("Scanning settings saved", "success");
+          } catch (error) { settingsError.textContent = error.message; }
         }, "primary")]));
+      void loadModels(data.settings.model);
       const connection = select([["", "Select a connected account or document"], ...connections.connections.map((c) => [c.kind + ":" + c.id, c.label])], "", "CRM connection");
       const folder = el("input", { value: "INBOX" });
       const scope = el("input", { placeholder: "Optional channel/chat IDs, separated by commas" });
@@ -357,5 +522,5 @@ export async function render(container) {
 
   try { await load(); }
   catch (error) { content.replaceChildren(el("p", { class: "crm-review", text: "Could not load CRM: " + error.message }), button("Retry", load)); }
-  return () => { disposed = true; clearTimeout(pollTimer); closeSource?.(); };
+  return () => { disposed = true; clearTimeout(pollTimer); closeSource?.(); closeChat(); };
 }

@@ -156,8 +156,8 @@ def validate_output(raw, message, context, existing, settings):
     return validated
 
 
-async def extract(endpoint_id, prompt):
-    return await tab_api.complete(endpoint_id, SYSTEM, prompt)
+async def extract(endpoint_id, prompt, model=None):
+    return await tab_api.complete(endpoint_id, SYSTEM, prompt, model=model)
 
 
 def extraction_input(message, existing, settings):
@@ -233,7 +233,7 @@ async def scan(owner, retry=False):
                                 and t.get("thread_id") == message.get("thread_id")]
                     try:
                         prompt, context, bounded_message, existing = extraction_input(message, existing, settings)
-                        raw = await asyncio.wait_for(extract(settings["endpoint_id"], prompt), timeout=180)
+                        raw = await asyncio.wait_for(extract(settings["endpoint_id"], prompt, model=settings.get("model")), timeout=180)
                         if not api.is_on or not crm_service.source(owner, source["id"])["enabled"] or not tab_api.is_admin(owner):
                             result["error"] = "Scanning paused; queued messages were kept."
                             break
@@ -242,8 +242,9 @@ async def scan(owner, retry=False):
                         result["scanned"] += 1
                     except asyncio.CancelledError:
                         raise
-                    except Exception:
+                    except Exception as problem:
                         # Never store provider error text: it can include request URLs/keys.
+                        logger.warning("CRM extraction failed: %s", type(problem).__name__)
                         crm_service.fail_message(owner, message["id"], "Extraction failed or returned invalid evidence; retry the scan.")
                         result["error"] = "Some messages could not be extracted. Use Retry failed to try again."
                 result["remaining"] += max(0, len(pending) - settings["max_messages"])
@@ -300,6 +301,32 @@ def begin_scan(owner, retry=False):
     return {"started": True}
 
 
+def latest_scheduled_slot(now, zone, times, days):
+    """Latest slot as a Unix timestamp. Fall-back runs once (first occurrence);
+    a missing spring-forward time shifts forward by the DST gap.
+    """
+    tz = ZoneInfo(zone)
+    today = datetime.fromtimestamp(now, tz).date()
+    slots = []
+    for offset in range(8):
+        day = today - timedelta(days=offset)
+        if day.weekday() not in days:
+            continue
+        for clock in times:
+            hour, minute = map(int, clock.split(":"))
+            slot = datetime.combine(day, datetime.min.time(), tz).replace(hour=hour, minute=minute, fold=0).timestamp()
+            if slot <= now:
+                slots.append(slot)
+    return max(slots) if slots else None
+
+
+def scan_due(settings, latest, now):
+    if settings.get("schedule_mode", "interval") == "times":
+        slot = latest_scheduled_slot(now, settings["timezone"], settings["schedule_times"], settings["schedule_days"])
+        return slot is not None and slot > max(latest, settings.get("schedule_since", 0))
+    return now - latest >= settings["interval_minutes"] * 60
+
+
 async def _loop():
     while True:
         await asyncio.sleep(30)
@@ -310,7 +337,7 @@ async def _loop():
             if not settings["auto_scan"] or not settings["endpoint_id"]:
                 continue
             latest = max((r["at"] for r in crm_service.snapshot(owner)["runs"]), default=0)
-            if time.time() - latest >= settings["interval_minutes"] * 60:
+            if any(s["enabled"] for s in crm_service.sources(owner)) and scan_due(settings, latest, time.time()):
                 try:
                     await scan(owner)
                 except ValueError:

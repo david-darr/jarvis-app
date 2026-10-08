@@ -19,22 +19,41 @@ const original = { id: 'task1', owner: 'local', title: 'Send revised proposal', 
 const state = { tasks: [structuredClone(original)], sources: [{ id: 'source1', label: 'Work inbox', kind: 'email', enabled: true, last_scan_at: now }],
   settings: { endpoint_id: 'model1', timezone: 'America/New_York', review_all: false, auto_scan: false, lookback_days: 14, interval_minutes: 30 },
   runs: [], failed_messages: 0, can_connect: true, scanning: false };
+const reply = { draft: '', last_reply: null };
+const replyState = () => ({ ...reply, can_send: true,
+  target: { to: 'customer@example.com', subject: 'Re: Proposal', account: 'work@example.com' } });
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname.startsWith('/api/')) {
     res.setHeader('Content-Type', 'application/json');
     let value;
     if (url.pathname === '/api/system/custom-tabs') value = [{ id: 'crm', label: 'CRM', icon_svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>', user_tab: false, format: 'folder', view_url: '/tab-files/crm/view.js', style_url: '/tab-files/crm/view.css' }];
-    else if (url.pathname === '/api/tab-crm/connections') value = { connections: [{ kind: 'email', id: 'email1', label: 'Work inbox' }], models: [{ id: 'model1', name: 'Local extraction', kind: 'local' }] };
+    else if (url.pathname === '/api/tab-crm/connections') value = { connections: [{ kind: 'email', id: 'email1', label: 'Work inbox' }], models: [{ id: 'model1', name: 'Claude', kind: 'claude_cli' }] };
+    else if (url.pathname === '/api/tab-crm/models/model1') value = [{ id: 'claude-haiku-5-5', name: 'Haiku 5.5' }, { id: 'claude-sonnet-5', name: 'Sonnet 5' }];
     else if (url.pathname === '/api/agents') value = [];
     else if (url.pathname === '/api/tab-crm/messages/message1') value = { subject: 'Proposal', sender: 'customer@example.com', account: 'work@example.com',
       sent_at: new Date().toISOString(), body: 'Please send the revised proposal by Friday.\n<script>steal()</script><img src="https://example.com/tracker">', url: null };
     else if (url.pathname === '/api/tab-crm' && req.method === 'GET') value = state;
+    else if (url.pathname === '/api/tab-crm/tasks/task1/reply' && req.method === 'GET') value = replyState();
+    else if (url.pathname === '/api/sessions/crm-session') value = { id: 'crm-session', title: 'CRM: Send revised proposal', model_endpoint_id: 'm1',
+      messages: [{ role: 'user', content: 'Context for this chat, from my CRM task. Help me work on it.\n\nTask: Send revised proposal', ts: now }] };
+    else if (url.pathname === '/api/chat/stream' && req.method === 'POST') {
+      let body = ''; for await (const chunk of req) body += chunk;
+      writes.push({ path: url.pathname, fields: JSON.parse(body) });
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.write(`data: ${JSON.stringify({ chunk: 'Here is a plan for the proposal.' })}\n\n`);
+      res.end(`data: ${JSON.stringify({ done: true })}\n\n`);
+      return;
+    }
     else if (url.pathname.startsWith('/api/tab-crm/') && req.method !== 'GET') {
       let body = ''; for await (const chunk of req) body += chunk;
       const fields = body ? JSON.parse(body) : {};
       writes.push({ path: url.pathname, fields });
-      if (url.pathname === '/api/tab-crm/tasks' && req.method === 'POST') {
+      if (url.pathname === '/api/tab-crm/tasks/task1/draft') { reply.draft = 'Thanks, I will send the revised proposal by Friday.'; value = replyState(); }
+      else if (url.pathname === '/api/tab-crm/tasks/task1/reply') { reply.draft = fields.draft; value = replyState(); }
+      else if (url.pathname === '/api/tab-crm/tasks/task1/send') { reply.draft = ''; reply.last_reply = { at: now, to: 'customer@example.com' }; value = replyState(); }
+      else if (url.pathname === '/api/tab-crm/tasks/task1/chat') value = { session_id: 'crm-session' };
+      else if (url.pathname === '/api/tab-crm/tasks' && req.method === 'POST') {
         value = { ...original, ...fields, id: 'created-' + writes.length, evidence: [], source_id: null };
         state.tasks.push(value);
       } else if (url.pathname.startsWith('/api/tab-crm/tasks/')) {
@@ -103,6 +122,31 @@ app.whenReady().then(async () => {
     assert.equal(state.tasks[0].status, 'done');
     await click('Reopen');
     assert.equal(state.tasks[0].status, 'active');
+    // Draft a reply with AI, then send it after confirming where it goes.
+    const sentBefore = writes.length;
+    await js("document.querySelector('[data-work=draft]').open=true");
+    await wait("!!document.querySelector('[data-work=draft] textarea')");
+    assert.ok(await js("document.querySelector('[data-work=draft]').textContent.includes('Replies to customer@example.com from work@example.com')"));
+    await click('Draft with AI');
+    await wait("document.querySelector('[data-work=draft] textarea')?.value.includes('by Friday')");
+    await click('Send');
+    await wait("!!document.querySelector('.confirm-panel')");
+    assert.ok(await js("document.querySelector('.confirm-panel').textContent.includes('customer@example.com')"), 'confirm names the recipient');
+    await js("[...document.querySelectorAll('.confirm-panel button')].find((b)=>b.textContent==='Send email').click()");
+    for (let i = 0; i < 60 && !writes.slice(sentBefore).some((w) => w.path === '/api/tab-crm/tasks/task1/send'); i++) await delay(50);
+    const sent = writes.slice(sentBefore).find((w) => w.path === '/api/tab-crm/tasks/task1/send');
+    assert.deepEqual(sent?.fields, { draft: 'Thanks, I will send the revised proposal by Friday.' }, 'only the text is sent; the server picks the recipient');
+    await wait("document.querySelector('[data-work=draft]').textContent.includes('Last reply sent to customer@example.com')");
+    // The task's chat: its context, a model choice, and a streamed reply.
+    await js("document.querySelector('[data-work=chat]').open=true");
+    await wait("document.querySelectorAll('.crm-chat .msg').length===1");
+    assert.ok(await js("document.querySelector('.crm-chat .msg.user').textContent.includes('Context for this chat')"));
+    assert.ok(await js("!!document.querySelector('.crm-chat .session-chat-models .custom-select') && [...document.querySelectorAll('.crm-chat button')].some((b)=>b.textContent==='Open in Chats')"));
+    await js("{ const t=document.querySelector('.crm-chat textarea'); t.value='Make me a plan'; t.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('.crm-chat .side-chat-send').click(); }");
+    await wait("[...document.querySelectorAll('.crm-chat .msg.assistant')].some((m)=>m.textContent.includes('Here is a plan'))");
+    assert.equal(writes.filter((w) => w.path === '/api/chat/stream').pop()?.fields.session_id, 'crm-session');
+    await js("document.querySelector('[data-work=draft]').scrollIntoView({block:'start'})");
+    await capture('desktop-task-work');
     await click('Add task');
     await wait("document.querySelector('.crm-detail h3').textContent==='New task'");
     await js("document.querySelector('.crm-detail input').value='Call the client'; document.querySelector('.crm-detail input').dispatchEvent(new Event('input',{bubbles:true}))");
@@ -113,9 +157,27 @@ app.whenReady().then(async () => {
     await capture('desktop-contacts');
     await click('Sources');
     await wait("document.querySelector('.crm-settings')");
+    // The Model select loads the connection's choices; pick one the way a person does.
+    const modelButton = "[...document.querySelectorAll('.crm-settings .field')].find((f)=>f.querySelector('label')?.textContent==='Model')?.querySelector('.custom-select-btn')";
+    await wait(`${modelButton} && !${modelButton}.disabled`);
+    await js(`${modelButton}.click()`);
+    await wait("[...document.querySelectorAll('.custom-select-item')].some((o)=>o.textContent==='Haiku 5.5')");
+    await js("[...document.querySelectorAll('.custom-select-item')].find((o)=>o.textContent==='Haiku 5.5').click()");
+    await wait(`${modelButton}.textContent.includes('Haiku 5.5')`);
+    await click('At set times');
+    await wait("!!document.querySelector('.crm-schedule-times input[type=time]')");
+    await click('Sat'); await click('Sun');
+    await click('Add time');
+    await js("const t=document.querySelectorAll('.crm-schedule-times input[type=time]')[1]; t.value='17:00'; t.dispatchEvent(new Event('input',{bubbles:true}))");
+    await wait("document.querySelector('.crm-settings [aria-live=polite]').textContent.includes('9:00 AM and 5:00 PM on weekdays')");
     await capture('desktop-sources');
     await click('Save scanning settings');
-    assert.ok(writes.some((w) => w.path === '/api/tab-crm/settings'));
+    const saved = writes.filter((w) => w.path === '/api/tab-crm/settings').pop();
+    assert.ok(saved, 'settings saved');
+    assert.equal(saved.fields.model, 'claude-haiku-5-5');
+    assert.equal(saved.fields.schedule_mode, 'times');
+    assert.deepEqual(saved.fields.schedule_times, ['09:00', '17:00']);
+    assert.deepEqual(saved.fields.schedule_days, [0, 1, 2, 3, 4]);
     win.setContentSize(390, 844); await delay(200);
     await capture('mobile-sources');
     assert.equal(await overflow(), false, 'Sources fit a phone');
