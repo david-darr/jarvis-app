@@ -2,6 +2,7 @@ import { api, el, customSelect, toast, confirmDialog, modelMark } from "../api.j
 import { suppressBrowser, releaseBrowser } from "../browserPane.js";
 import { renderSpeechPanel } from "./speechPanel.js";
 import { renderAppearancePanel } from './appearancePanel.js';
+import { renderLayoutPanel } from './layoutPanel.js';
 import { renderChannelsPanel } from "./settingsChannels.js";
 import { runSummary, surfaceLabel, toggleRunTimeline } from "../runTimeline.js";
 import { renderHooksPanel } from "./settingsHooks.js";
@@ -56,6 +57,7 @@ const NAV_ICONS = {
   vault: I('<path d="M4 6a2 2 0 012-2h4l2 2h6a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/>'),
   speech: I('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/>'),
   appearance: I('<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 000 18z" fill="currentColor" stroke="none" opacity=".35"/>'),
+  layout: I('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M13 9h5M13 13h5"/>'),
   account: I('<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/>'),
   shortcuts: I('<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>'),
   "agent-tools": I('<path d="M14.7 6.3a4 4 0 00-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.6 2.6-2.4-.6-.6-2.4 2.6-2.6z"/>'),
@@ -110,6 +112,9 @@ const SECTION_GROUPS = [
       { id: "appearance", label: "Appearance", render: renderAppearancePanel,
         description: "A workspace that feels like yours. Saved for you on this device only.",
         keywords: ["theme", "background", "image", "color", "shader", "flow", "tint", "swirl", "grain", "motion"] },
+      { id: "layout", label: "Layout", render: renderLayoutPanel,
+        description: "The order of your sidebar and Home, and what they show. Saved for you on this device only.",
+        keywords: ["sidebar", "tabs", "order", "reorder", "hide", "home", "panels", "arrange", "navigation"] },
       { id: "account", label: "Account", render: renderAccountPanel,
         description: "Your sign-in, password and two-factor authentication.",
         keywords: ["password", "2fa", "two factor", "totp", "authenticator", "username", "sign out", "security"] },

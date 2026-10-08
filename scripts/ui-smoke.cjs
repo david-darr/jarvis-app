@@ -533,7 +533,7 @@ app.whenReady().then(async () => {
       for (const id of await js("[...document.querySelectorAll('.settings-nav-item')].map(i => i.dataset.section)")) {
         await js(`document.querySelector('[data-section="${id}"]').click()`);
         await waitFor(`document.querySelector('.set-page')?.dataset.page === '${id}' && document.querySelector('#settings-content .set-title')?.textContent === document.querySelector('[data-section="${id}"]').textContent
-          && !!document.querySelector('#settings-content .set-body').querySelector('.set-row, .set-empty, .appearance-panel, .log-entry, .logs-status, .sandbox-change, .run-item')`);
+          && !!document.querySelector('#settings-content .set-body').querySelector('.set-row, .set-empty, .appearance-panel, .layout-list, .log-entry, .logs-status, .sandbox-change, .run-item')`);
         assert.deepEqual(await overflow(), [], `${label} ${id} overflow`);
         await capture(`${label}-settings-${id}`);
       }
@@ -766,6 +766,24 @@ app.whenReady().then(async () => {
     await navigate("home");
     assert.equal(await js("window.__viewTransitions"), 2, "Chat to Home runs a view transition");
     await waitFor("document.querySelector('.dashboard-core')?.classList.contains('is-dithered')");
+    // The halftone switch (appearance.js): two-tone in Color, transitions kept;
+    // off means no chat halftone, no transition and a plain Home card; Image
+    // and Shader don't offer it.
+    const appearance = (patch) => js("import('/static/js/appearance.js').then(m => { m.updateAppearance(" + JSON.stringify(patch) + "); return document.documentElement.dataset.halftone; })");
+    assert.equal(await appearance({ mode: "color", color: "#233447", halftone: true }), "on", "Color offers the halftone");
+    await navigate("chat");
+    assert.equal(await js("window.__viewTransitions"), 3, "Color keeps the Home to Chat transition");
+    await waitFor("Number(document.querySelector('.chat-backdrop')?.dataset.drawMs) >= 0");
+    assert.ok(await js("(() => { const c = document.querySelector('.chat-backdrop canvas:last-child'); const [r, g, b] = c.getContext('2d').getImageData(4, 4, 1, 1).data; return b > r + 12; })()"), "Color's halftone is drawn in the theme's colors (cool Ocean, not the painting's warm tones)");
+    await capture("desktop-chat-halftone-color");
+    assert.equal(await appearance({ halftone: false }), "off", "The halftone switch turns off");
+    assert.equal(await js("getComputedStyle(document.querySelector('.chat-backdrop')).display"), "none", "No chat halftone when off");
+    await navigate("home");
+    assert.equal(await js("window.__viewTransitions"), 3, "No transition when off");
+    assert.equal(await js("getComputedStyle(document.querySelector('.dashboard-core canvas') || document.body).display === 'none' && getComputedStyle(document.querySelector('.dashboard-core')).backgroundImage"), "none", "A plain Home card when off");
+    assert.equal(await appearance({ mode: "shader", halftone: true }), "none", "Shader doesn't offer the halftone");
+    assert.equal(await appearance({ mode: "default", halftone: true }), "on", "Back to Kairos");
+    await waitFor("document.querySelector('.dashboard-core')?.classList.contains('is-dithered')");
     await navigate("chat");
     assert.equal(await js("getComputedStyle(document.querySelector('.border-beam'),'::before').animationName"), "border-orbit");
     await js("document.querySelector('.border-beam').dataset.active='false'");
@@ -779,6 +797,49 @@ app.whenReady().then(async () => {
     await navigate("chat");
     assert.equal(await js("window.__viewTransitions"), transitionsBefore, "Reduced motion skips the Home and Chat transitions");
     await js("document.startViewTransition = window.__startViewTransition; true");
+    // Home's "Your models" shows each subscription's limits as the overlay does
+    // (quotaReadings.js), once per account, with signed-out and stale states.
+    await navigate("home");
+    await waitFor("document.querySelectorAll('.dashboard-quota').length === 2");
+    assert.ok(await js("(() => { const c = document.querySelector('.dashboard-quota[data-provider=claude]'); return c.querySelectorAll('.dashboard-quota-window').length === 2 && c.textContent.includes('34% Used · 66% left') && c.textContent.includes('Resets') && !!c.querySelector('.tone-ample'); })()"), "Claude's limits show on Home");
+    assert.ok(await js("!!document.querySelector('.dashboard-quota[data-provider=codex] .tone-crit')"), "A limit past 80% shows as critical");
+    await capture("desktop-home-limits");
+    demoState.quotas = { providers: [
+      { provider: "claude", status: "needs_sign_in", updated_at: 0, note: "", windows: [] },
+      { provider: "codex", status: "ok", updated_at: Math.floor(Date.now() / 1000) - 3600, note: "", windows: [{ name: "5-hour", used_percent: 40, resets_at: Math.floor(Date.now() / 1000) + 600 }] },
+    ], recorded: [] };
+    await navigate("home");
+    await waitFor("document.querySelector('.dashboard-quota[data-provider=claude]')?.textContent.includes('Sign in to Claude Code')");
+    assert.ok(await js("document.querySelector('.dashboard-quota[data-provider=codex]').textContent.includes('Updated 1h ago')"), "A stale reading says how old it is");
+    delete demoState.quotas;
+
+    // Layout (layout.js): Agents sits third by default; a moved and a hidden
+    // tab, and Home's order, apply live and survive a reload; resets restore.
+    const navOrder = () => js("[...document.querySelectorAll('#nav .nav-item[data-tab]')].map(n => n.dataset.tab)");
+    assert.deepEqual((await navOrder()).slice(0, 3), ["home", "chat", "agents"], "Agents sits with Home and Chats");
+    await js(`import('/static/js/layout.js').then(m => { const l = m.getLayout(); l.groups.main = ['home', 'notes', 'chat', 'agents']; l.groups.workspace = l.groups.workspace.filter(t => t !== 'notes'); l.hiddenTabs = ['cookbook']; l.home = ['models', 'stats', 'chats', 'schedule', 'projects', 'activity', 'system']; l.hiddenHome = ['projects']; m.saveLayout(l); })`);
+    await waitFor("document.querySelectorAll('#nav .nav-item[data-tab]')[1]?.dataset.tab === 'notes'");
+    assert.ok(await js("!document.querySelector('#nav .nav-item[data-tab=cookbook]') && document.querySelector('.dashboard-grid').firstElementChild === document.querySelector('.dashboard-grid .dashboard-section:has(.dashboard-quota)') && document.querySelectorAll('.dashboard-grid > .dashboard-section').length === 5"), "Layout changes apply live");
+    await win.loadURL(base);
+    await waitFor("document.querySelectorAll('#nav .nav-item[data-tab]').length >= 10");
+    assert.deepEqual((await navOrder()).slice(0, 4), ["home", "notes", "chat", "agents"], "The sidebar layout survives a reload");
+    await waitFor("document.querySelectorAll('.dashboard-grid > *').length === 6");
+    assert.ok(await js("!document.querySelector('#nav .nav-item[data-tab=cookbook]') && document.querySelector('.dashboard-grid').firstElementChild.querySelector('.dashboard-section-header h2').textContent === 'Your models'"), "Home's layout survives a reload");
+    // The Layout page lists every tab, with Home's switch locked on.
+    await js("document.querySelector('.sidebar-settings-btn').click()");
+    await waitFor("!!document.querySelector('.settings-nav-item[data-section=layout]')");
+    await js("document.querySelector('.settings-nav-item[data-section=layout]').click()");
+    await waitFor("document.querySelectorAll('.layout-item').length >= 17");
+    assert.ok(await js("document.querySelector('.layout-item[data-id=home] .set-switch').disabled && document.querySelector('.layout-item[data-id=cookbook]').classList.contains('is-hidden')"), "The Layout page shows the layout, Home locked on");
+    await capture("desktop-settings-layout");
+    await js("document.querySelector('.layout-item[data-id=notes] .layout-move:nth-of-type(2)').click()");
+    await waitFor("document.querySelectorAll('#nav .nav-item[data-tab]')[2]?.dataset.tab === 'notes'");
+    await js("[...document.querySelectorAll('.set-section .btn')].filter(b => /^Reset (sidebar|Home)$/.test(b.textContent)).forEach(b => b.click())");
+    await waitFor("[...document.querySelectorAll('#nav .nav-item[data-tab]')].slice(0, 3).map(n => n.dataset.tab).join() === 'home,chat,agents'");
+    assert.ok(await js("!!document.querySelector('#nav .nav-item[data-tab=cookbook]')"), "Reset shows hidden tabs again");
+    await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
+    await navigate("home");
+    assert.equal(await js("document.querySelector('.dashboard-grid').firstElementChild.className"), "dashboard-stats", "Reset restores Home");
     await navigate("home");
     await waitFor("document.querySelector('.dashboard-core')?.classList.contains('is-dithered')");
     await capture("desktop-reduced-motion");

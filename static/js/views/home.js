@@ -1,6 +1,9 @@
 import { api, el, modelMark } from "../api.js";
 import { ICONS } from "../icons.js";
 import { mountDither } from "../dither.js";
+import { halftonePalette } from "../appearance.js";
+import { homeLayout } from "../layout.js";
+import { SIGN_IN, toSnap, toneOf, usedCopy, resetCopy, ago, staleOf } from "../quotaReadings.js";
 
 const navigate = (tab, options = {}) => document.dispatchEvent(new CustomEvent("jarvis:navigate", { detail: { tab, ...options } }));
 function icon(name) {
@@ -52,6 +55,35 @@ function usageLabel(endpoint, usage) {
     text: `${compactTokens(spent)} tokens via Kairos${cached}`,
     title: "Tokens this Kairos install sent and received through this model: new input, cache writes and output. Not a quota.",
   };
+}
+
+// A subscription's account limits, as the desktop overlay shows them (David,
+// 2026-10-07): each window's bar, how much is used and left, and when it
+// resets; or why there's no reading. Shared wording: quotaReadings.js.
+const QUOTA_PROVIDER = { claude_cli: "claude", codex_cli: "codex" };
+function quotaBlock(providerId, reading) {
+  const snap = toSnap(reading);
+  const block = el("div", { class: "dashboard-quota", "data-provider": providerId });
+  if (staleOf(snap) && snap.fetched_at) block.append(el("span", { class: "dashboard-quota-note", text: "Updated " + ago(snap.fetched_at) }));
+  if (snap.status === "needsAuth") {
+    block.append(el("span", { class: "dashboard-quota-note", text: [SIGN_IN[providerId], snap.note].filter(Boolean).join(" ") }));
+    return block;
+  }
+  if (!snap.windows.length) {
+    block.append(el("span", { class: "dashboard-quota-note", text: snap.note || "Waiting for the first reading…" }));
+    return block;
+  }
+  for (const w of snap.windows) {
+    const percent = Math.min(w.used, 1) * 100;
+    block.append(el("div", { class: "dashboard-quota-window" }, [
+      el("div", { class: "dashboard-quota-head" }, [el("span", { text: w.label }), el("span", { class: "dashboard-quota-reset", text: resetCopy(w.resets_at) })]),
+      el("div", { class: "dashboard-quota-track", role: "meter", "aria-label": w.label, "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(percent)) }, [
+        el("span", { class: "dashboard-quota-fill tone-" + toneOf(w.used), style: `width:${percent.toFixed(0)}%` }),
+      ]),
+      el("span", { class: "dashboard-quota-used", text: usedCopy(w) }),
+    ]));
+  }
+  return block;
 }
 
 function relativeTime(timestamp) {
@@ -116,10 +148,32 @@ export function render(container, tabId, options = {}) {
   const activity = section("Recent activity", "Tasks ↗", "tasks");
   const system = section("Connected systems", "Settings ↗", "settings");
   const models = section("Your models", "Manage ↗", "settings");
-  content.append(hero, stats, el("div", { class: "dashboard-grid" }, [chats.panel, schedule.panel, projects.panel, models.panel, activity.panel, system.panel]));
+  // Order and visibility below the card: Settings > Layout (layout.js). The
+  // numbers strip spans the grid; hidden parts still refresh, unseen.
+  const parts = { stats, chats: chats.panel, schedule: schedule.panel, projects: projects.panel, models: models.panel, activity: activity.panel, system: system.panel };
+  const grid = el("div", { class: "dashboard-grid" });
+  const arrange = () => {
+    const { order, hidden } = homeLayout();
+    grid.replaceChildren(...order.filter((id) => !hidden.includes(id)).map((id) => parts[id]));
+  };
+  arrange();
+  document.addEventListener("kairos:layout", arrange);
+  content.append(hero, grid);
   container.appendChild(content);
-  // Chat to Home (app.js switchTab) waits for the banner before animating into it.
-  const disposeBanner = mountDither(banner, "/static/img/home-figure.webp", { cell: 4, fade: [0.86, 1.0], focusX: 0.7, focusY: 0.4, onReady: options.transitionReady });
+  // Chat to Home (app.js switchTab) waits for the banner before animating
+  // into it. It's drawn in the appearance's halftone colors and redrawn when
+  // those change.
+  const bannerOptions = { cell: 4, fade: [0.86, 1.0], focusX: 0.7, focusY: 0.4 };
+  let bannerPalette = JSON.stringify(halftonePalette());
+  let disposeBanner = mountDither(banner, "/static/img/home-figure.webp", { ...bannerOptions, palette: halftonePalette(), onReady: options.transitionReady });
+  const onAppearance = () => {
+    const next = JSON.stringify(halftonePalette());
+    if (next === bannerPalette || disposed) return;
+    bannerPalette = next;
+    disposeBanner();
+    disposeBanner = mountDither(banner, "/static/img/home-figure.webp", { ...bannerOptions, palette: halftonePalette() });
+  };
+  document.addEventListener("kairos:appearance", onAppearance);
   for (const item of [chats, schedule, projects, activity, system, models]) {
     item.body.append(el("div", { class: "skeleton skeleton-line" }), el("div", { class: "skeleton skeleton-line" }));
   }
@@ -134,11 +188,11 @@ export function render(container, tabId, options = {}) {
     refreshing = true;
     const start = new Date(); start.setHours(0, 0, 0, 0);
     const end = new Date(start); end.setDate(end.getDate() + 7);
-    const paths = ["/api/sessions", "/api/notes?include_completed=false", "/api/tasks", "/api/calendar/events?start=" + start.toISOString() + "&end=" + end.toISOString(), "/api/projects", "/api/models", "/api/models/usage", "/api/system/status", "/api/system/events?limit=5"];
+    const paths = ["/api/sessions", "/api/notes?include_completed=false", "/api/tasks", "/api/calendar/events?start=" + start.toISOString() + "&end=" + end.toISOString(), "/api/projects", "/api/models", "/api/models/usage", "/api/system/status", "/api/system/events?limit=5", "/api/models/quotas"];
     const results = await Promise.allSettled(paths.map((path) => api(path)));
     refreshing = false;
     if (disposed) return;
-    const [sessions, notes, tasks, events, projectList, endpoints, usage, status, feed] = results.map((result) => result.status === "fulfilled" ? result.value : null);
+    const [sessions, notes, tasks, events, projectList, endpoints, usage, status, feed, quotas] = results.map((result) => result.status === "fulfilled" ? result.value : null);
     systemStatus = status;
     statusDot.className = "status-dot " + (!status ? "warn" : !status.vault_ok || !status.scheduler_running ? "err" : "ok");
     statusLabel.textContent = !status ? "Status unavailable" : !status.vault_ok || !status.scheduler_running ? "Needs attention" : "Systems operational";
@@ -164,7 +218,7 @@ export function render(container, tabId, options = {}) {
     else projectList.slice(0, 3).forEach((p) => projects.body.append(row(p.name, (p.document_ids?.length || 0) + " shared documents", "library", () => navigate("chat", { projectId: p.id }))));
     models.body.replaceChildren();
     if (!endpoints?.length) empty(models.body, "Connect a model in Settings to get started.", endpoints === null);
-    else endpoints.forEach((endpoint) => {
+    else { const quotaShown = new Set(); endpoints.forEach((endpoint) => {
       const modelRow = row(endpoint.name, endpoint.model || endpoint.kind.replaceAll("_", " "), "brain", () => navigate("settings"));
       // The provider's own logo in place of the generic brain icon, when one is known
       const mark = modelMark(endpoint.mark, endpoint.name);
@@ -172,7 +226,11 @@ export function render(container, tabId, options = {}) {
       const label = usageLabel(endpoint, usage?.[endpoint.id]);
       if (label) modelRow.append(el("span", { class: "dashboard-model-usage", text: label.text, title: label.title }));
       models.body.append(modelRow);
-    });
+      // An account's limits once, under its first connection.
+      const providerId = QUOTA_PROVIDER[endpoint.kind];
+      const reading = providerId && quotas?.providers?.find((p) => p.provider === providerId);
+      if (reading && !quotaShown.has(providerId)) { quotaShown.add(providerId); models.body.append(quotaBlock(providerId, reading)); }
+    }); }
     activity.body.replaceChildren();
     if (!feed?.length) empty(activity.body, "Task runs and channel activity will appear here.", feed === null);
     else feed.forEach((event) => activity.body.append(el("div", { class: "dashboard-activity" }, [
@@ -199,5 +257,5 @@ export function render(container, tabId, options = {}) {
   refresh();
   const refreshTimer = setInterval(() => { if (!document.hidden) refresh(); }, 30000);
   const countdownTimer = setInterval(updateCountdown, 1000);
-  return () => { disposed = true; disposeBanner(); clearInterval(refreshTimer); clearInterval(countdownTimer); };
+  return () => { disposed = true; disposeBanner(); document.removeEventListener("kairos:appearance", onAppearance); document.removeEventListener("kairos:layout", arrange); clearInterval(refreshTimer); clearInterval(countdownTimer); };
 }

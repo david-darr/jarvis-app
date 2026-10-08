@@ -59,7 +59,10 @@ function sampler(w, h) {
 export function drawDither(canvas, img, W, H, opts = {}) {
   const cell = opts.cell || 4, levels = opts.levels || 10, dotRadius = opts.dotRadius || 0.4;
   const gapShade = opts.gapShade || 0.86, fade = opts.fade || null;
-  const fadeColor = opts.fadeColor || [243, 234, 219];  // --k-parchment
+  const fadeColor = opts.palette?.base || opts.fadeColor || [243, 234, 219];  // --k-parchment
+  // opts.palette { ink, base }: two-tone, each cell's brightness mapped from
+  // the theme's ink (dark parts) to its base (light parts).
+  const palette = opts.palette || null;
   const started = performance.now();
   const ctx = canvas.getContext("2d");
   canvas.width = W; canvas.height = H;
@@ -85,6 +88,16 @@ export function drawDither(canvas, img, W, H, opts = {}) {
       let R = px[i] / 255, G = px[i + 1] / 255, B = px[i + 2] / 255;
       const L = 0.299 * R + 0.587 * G + 0.114 * B;
       const Lq = Math.floor(L * (levels - 1) + t) / (levels - 1);
+      if (palette) {
+        const tone = palette.ink.map((v, n) => v + (palette.base[n] - v) * Lq);
+        ctx.fillStyle = `rgb(${tone.map((v, n) => v + (palette.ink[n] - v) * 0.12)})`;
+        ctx.fillRect(x * c, y * c, c, c);
+        ctx.fillStyle = `rgb(${tone})`;
+        ctx.beginPath();
+        ctx.arc(x * c + c / 2, y * c + c / 2, r, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
       const k = (Lq + 0.02) / (L + 0.02);
       R = Math.min(1, R * k); G = Math.min(1, G * k); B = Math.min(1, B * k);
       ctx.fillStyle = `rgb(${R * gapShade * 255},${G * gapShade * 255},${B * gapShade * 255})`;

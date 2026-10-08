@@ -44,6 +44,8 @@
   /* Parchment as numbers, for washes over brand imagery (always light,
      whatever the appearance). */
   --parchment-rgb: 243, 234, 219;
+  /* The halftone washes' color: parchment, or a Color theme's base (appearance.js). */
+  --wash-rgb: var(--parchment-rgb);
   /* The gold point of the mark: the one gilded thing. */
   --point: var(--k-gold);
   /* Categorical colors for charts and graphs (the vault map): mid-tones that
@@ -572,20 +574,20 @@ input[type="checkbox"]:checked::after {
    under its own parchment wash, which crossfades with the dot dissolve.
    Other appearances draw their own background instead. */
 .chat-layout { position: relative; isolation: isolate; }
-.chat-backdrop { position: absolute; inset: 0; z-index: -1; overflow: hidden; background: var(--k-parchment); }
+.chat-backdrop { position: absolute; inset: 0; z-index: -1; overflow: hidden; background: rgb(var(--wash-rgb)); }
 .chat-backdrop .dither-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .chat-backdrop::before, .chat-backdrop::after { content: ""; position: absolute; inset: 0; z-index: 1; transition: opacity 700ms ease; }
 /* Figure: the composer and greeting sit centre-left; the figure shows right. */
 .chat-backdrop::before { opacity: 0; background:
-  radial-gradient(ellipse 46% 40% at 42% 50%, rgba(var(--parchment-rgb), .9), rgba(var(--parchment-rgb), .55) 60%, rgba(var(--parchment-rgb), 0) 100%),
-  linear-gradient(90deg, rgba(var(--parchment-rgb), .62), rgba(var(--parchment-rgb), .3) 55%, rgba(var(--parchment-rgb), .08)); }
+  radial-gradient(ellipse 46% 40% at 42% 50%, rgba(var(--wash-rgb), .9), rgba(var(--wash-rgb), .55) 60%, rgba(var(--wash-rgb), 0) 100%),
+  linear-gradient(90deg, rgba(var(--wash-rgb), .62), rgba(var(--wash-rgb), .3) 55%, rgba(var(--wash-rgb), .08)); }
 /* Sky: the same wash the photo had, so messages read as before. */
-.chat-backdrop::after { opacity: 0; background: linear-gradient(color-mix(in srgb, var(--k-parchment) 66%, transparent), color-mix(in srgb, var(--k-parchment) 76%, transparent)); }
+.chat-backdrop::after { opacity: 0; background: linear-gradient(color-mix(in srgb, rgb(var(--wash-rgb)) 66%, transparent), color-mix(in srgb, rgb(var(--wash-rgb)) 76%, transparent)); }
 .chat-backdrop[data-scene='figure']::before, .chat-backdrop[data-scene='sky']::after { opacity: 1; }
-:root:not([data-appearance='default']) .chat-backdrop { display: none; }
+:root:not([data-halftone='on']) .chat-backdrop { display: none; }
 @media (max-width: 768px) {
   /* On a phone the composer spans the width and the figure sits behind it. */
-  .chat-backdrop::before { background: linear-gradient(180deg, rgba(var(--parchment-rgb), .5), rgba(var(--parchment-rgb), .84) 40%, rgba(var(--parchment-rgb), .84) 66%, rgba(var(--parchment-rgb), .45)); }
+  .chat-backdrop::before { background: linear-gradient(180deg, rgba(var(--wash-rgb), .5), rgba(var(--wash-rgb), .84) 40%, rgba(var(--wash-rgb), .84) 66%, rgba(var(--wash-rgb), .45)); }
 }
 
 /* Home and Chat (app.js switchTab): Home's card grows into this background
@@ -1503,7 +1505,7 @@ input[type="checkbox"]:checked::after { border-color: var(--text); }
 .eyebrow { font-size: 10px; font-weight: 500; letter-spacing: .13em; text-transform: uppercase; color: var(--text-faint); }
 .dashboard-header p { font-size: 12px; color: var(--text-dim); margin: 5px 0 0; }
 .dashboard-system-pill { display: inline-flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-dim); white-space: nowrap;
-  padding: 5px 11px; border-radius: 999px; background: rgba(var(--parchment-rgb), .92); border: 1px solid var(--border); }
+  padding: 5px 11px; border-radius: 999px; background: rgba(var(--wash-rgb), .92); border: 1px solid var(--border); }
 .dashboard-intro h1 span { display: block; color: var(--text-dim); }
 .dashboard-hero { position: relative; display: flex; flex-direction: column; min-height: 400px; padding: 24px 30px; margin: 0 0 16px; border: 1px solid var(--hairline-soft); border-radius: var(--radius); overflow: hidden; background: var(--bg-panel); }
 .dashboard-intro { position: relative; z-index: 1; flex: 1; max-width: 510px; padding: 36px 0 20px; }
@@ -1515,10 +1517,14 @@ input[type="checkbox"]:checked::after { border-color: var(--text); }
 /* Home's banner: the Kairos figure as halftone (static/js/dither.js), with
    the plain painting underneath until it draws. A parchment wash keeps the
    text side readable. */
-.dashboard-core { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; background: var(--k-parchment) url('../img/home-figure.webp') 70% 40% / cover no-repeat; }
+.dashboard-core { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; background: rgb(var(--wash-rgb)) url('../img/home-figure.webp') 70% 40% / cover no-repeat; }
 .dashboard-core.is-dithered { background-image: none; }
+/* Halftone switched off: a plain card. In Color its painting fallback would
+   clash too, so it goes with the dots. */
+:root[data-halftone='off'] .dashboard-core { background: none; }
+:root[data-halftone='off'] .dashboard-core > .dither-canvas, :root[data-halftone='off'] .dashboard-core::after { display: none; }
 .dashboard-core .dither-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-.dashboard-core::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(var(--parchment-rgb), .95) 0%, rgba(var(--parchment-rgb), .86) 34%, rgba(var(--parchment-rgb), 0) 64%); }
+.dashboard-core::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(var(--wash-rgb), .95) 0%, rgba(var(--wash-rgb), .86) 34%, rgba(var(--wash-rgb), 0) 64%); }
 .dashboard-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 22px 0; margin-bottom: 30px; }
 .dashboard-stat { border: none; border-right: 1px solid var(--border); background: none; color: var(--text); display: grid; grid-template-columns: 20px 1fr; gap: 4px 12px; text-align: left; padding: 2px 24px; cursor: pointer; border-radius: 0; }
 .dashboard-stat:first-child { padding-left: 0; }
@@ -1530,13 +1536,16 @@ input[type="checkbox"]:checked::after { border-color: var(--text); }
 .dashboard-icon { color: var(--text-faint); flex-shrink: 0; display: flex; align-items: center; }
 .dashboard-icon svg { width: 16px; height: 16px; }
 .dashboard-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 24px 36px; }
+/* The numbers strip sits in the grid too (its place is in Settings > Layout), across both columns. */
+.dashboard-grid > .dashboard-stats { grid-column: 1 / -1; margin-bottom: 6px; }
 /* Home's first fill: each panel's contents fade in, 40 ms after the last. */
 .is-filled .dashboard-section-body { animation: home-fill 320ms ease-out both; }
-.is-filled .dashboard-section:nth-child(2) .dashboard-section-body { animation-delay: 40ms; }
-.is-filled .dashboard-section:nth-child(3) .dashboard-section-body { animation-delay: 80ms; }
-.is-filled .dashboard-section:nth-child(4) .dashboard-section-body { animation-delay: 120ms; }
-.is-filled .dashboard-section:nth-child(5) .dashboard-section-body { animation-delay: 160ms; }
-.is-filled .dashboard-section:nth-child(6) .dashboard-section-body { animation-delay: 200ms; }
+.is-filled .dashboard-grid > :nth-child(2) .dashboard-section-body { animation-delay: 40ms; }
+.is-filled .dashboard-grid > :nth-child(3) .dashboard-section-body { animation-delay: 80ms; }
+.is-filled .dashboard-grid > :nth-child(4) .dashboard-section-body { animation-delay: 120ms; }
+.is-filled .dashboard-grid > :nth-child(5) .dashboard-section-body { animation-delay: 160ms; }
+.is-filled .dashboard-grid > :nth-child(6) .dashboard-section-body { animation-delay: 200ms; }
+.is-filled .dashboard-grid > :nth-child(7) .dashboard-section-body { animation-delay: 240ms; }
 @keyframes home-fill { from { opacity: 0; transform: translateY(4px); } }
 /* A completed note: the strike draws across, the text dims. */
 /* Inline, so the strike runs under the words on each line, not the row. */
@@ -1561,6 +1570,18 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
 .dashboard-row:hover .dashboard-row-arrow, .dashboard-row:focus-visible .dashboard-row-arrow { opacity: 1; }
 .dashboard-empty { font-size: 12px; line-height: 1.7; color: var(--text-faint); padding: 20px 8px; min-height: 74px; }
 .dashboard-model-usage { font-size: 10px; white-space: nowrap; }
+/* A subscription's limits under its row, as the desktop overlay shows them:
+   calm below half, amber from half, red from 80%, in the theme's own
+   status colors. */
+.dashboard-quota { display: grid; gap: 10px; padding: 2px 8px 12px 38px; }
+.dashboard-quota-window { display: grid; gap: 4px; }
+.dashboard-quota-head { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; color: var(--text-dim); }
+.dashboard-quota-reset, .dashboard-quota-used, .dashboard-quota-note { font-size: 10px; color: var(--text-faint); }
+.dashboard-quota-track { height: 4px; border-radius: 999px; background: rgba(var(--ink-rgb), .08); overflow: hidden; }
+.dashboard-quota-fill { display: block; height: 100%; border-radius: inherit; transition: width 400ms ease; }
+.dashboard-quota-fill.tone-ample { background: var(--success); }
+.dashboard-quota-fill.tone-watch { background: var(--warn); }
+.dashboard-quota-fill.tone-crit { background: var(--danger); }
 .dashboard-activity { display: flex; align-items: baseline; gap: 10px; padding: 10px 0; font-size: 11px; }
 .dashboard-activity > span:nth-child(2) { flex: 1; color: var(--text-dim); overflow-wrap: anywhere; }
 .dashboard-activity .status-dot { align-self: center; width: 5px; height: 5px; }
@@ -1721,7 +1742,7 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
   .dashboard-header { align-items: flex-start; gap: 12px; }
   .dashboard-system-pill { font-size: 9px; padding-top: 2px; gap: 5px; }
   .dashboard-hero { min-height: 0; padding: 18px; margin-top: 0; }
-  .dashboard-core::after { background: linear-gradient(180deg, rgba(var(--parchment-rgb), .94), rgba(var(--parchment-rgb), .84) 72%, rgba(var(--parchment-rgb), .5)); }
+  .dashboard-core::after { background: linear-gradient(180deg, rgba(var(--wash-rgb), .94), rgba(var(--wash-rgb), .84) 72%, rgba(var(--wash-rgb), .5)); }
   .dashboard-intro { padding: 34px 0 48px; }
   .dashboard-intro h1 { font-size: 38px; margin: 12px 0 16px; }
   .dashboard-intro > p { max-width: 100%; }
