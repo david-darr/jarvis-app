@@ -54,6 +54,7 @@ const NAV_ICONS = {
   channels: I('<path d="M4 5h16v11H9l-5 4V5z"/><path d="M8 10h8M8 13h5"/>'),
   remote: I('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/>'),
   vault: I('<path d="M4 6a2 2 0 012-2h4l2 2h6a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/>'),
+  forge: I('<path d="M8 5l-6 7 6 7M16 5l6 7-6 7M14 3l-4 18"/>'),
   speech: I('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/>'),
   appearance: I('<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 000 18z" fill="currentColor" stroke="none" opacity=".35"/>'),
   layout: I('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M13 9h5M13 13h5"/>'),
@@ -98,6 +99,8 @@ const SECTION_GROUPS = [
   },
   {
     id: "workspace", label: "Workspace", sections: [
+      { id: "forge", label: "Forge", render: renderForgePanel, admin: true,
+        description: "The root folder for new and cloned Forge projects.", keywords: ["projects", "git", "clone", "root", "folder"] },
       { id: "vault", label: "Vault", render: renderVaultPanel,
         description: "The notes folder Kairos reads and writes as its memory.",
         keywords: ["obsidian", "notes folder", "memory", "path", "sync", "location"] },
@@ -474,6 +477,7 @@ function attachResizeHandles(panel) {
 function visibleSections() {
   return SECTION_GROUPS
     .filter((group) => !group.admin || cachedStatus.is_admin)
+    .map((group) => ({ ...group, sections: group.sections.filter((section) => !section.admin || cachedStatus.is_admin) }))
     .filter((group) => group.sections.length);
 }
 
@@ -1094,6 +1098,19 @@ function renderMcpServerForm(host, rerender) {
       await rerender();
     },
   });
+}
+
+// -- Forge --------------------------------------------------------------
+async function renderForgePanel(body) {
+  const root = await api('/api/forge/root');
+  const input = el('input', { value: root.path, 'aria-label': 'Forge root folder', style: 'width:100%;min-width:0' });
+  const save = el('button', { type: 'button', class: 'btn', text: 'Save folder', onclick: async () => {
+    save.disabled = true;
+    try { const result = await api('/api/forge/root', { method: 'PUT', body: JSON.stringify({ path: input.value }) }); input.value = result.path; toast('Forge root updated', 'success'); }
+    catch { /* api displays the mutation error. */ }
+    finally { save.disabled = false; }
+  } });
+  body.replaceChildren(group({}, [row({ title: 'Forge root folder', description: 'New and cloned projects get their own folder here. Created on first use.', control: save, below: input })]));
 }
 
 // -- Vault --------------------------------------------------------------

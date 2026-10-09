@@ -43,6 +43,24 @@ const NAV = [
 // still the honest place a future genuinely-deferred tab would go, matching
 // the project's "no fake UI" rule.
 const STUB_TABS = new Set();
+const FORGE_NAV = [
+  { id: 'forgeHome', label: 'Home', icon: 'home' },
+  { id: 'forgeProjects', label: 'Projects', icon: 'library' },
+];
+let forgeAdmin = false;
+let appMode = 'kairos';
+try { appMode = localStorage.getItem('kairos:app-mode') === 'forge' ? 'forge' : 'kairos'; } catch { /* Device storage is optional. */ }
+function rememberMode(mode) {
+  appMode = mode;
+  document.documentElement.dataset.appMode = mode;
+  try { localStorage.setItem('kairos:app-mode', mode); } catch { /* Device storage is optional. */ }
+}
+export async function switchMode(mode) {
+  if (mode === 'forge' && !forgeAdmin) return;
+  rememberMode(mode === 'forge' ? 'forge' : 'kairos');
+  await buildSidebar();
+  return switchTab(appMode === 'forge' ? 'forgeHome' : 'home');
+}
 
 const modules = {};
 // Folder views come from /tab-files; old split views use /custom-views.
@@ -115,6 +133,9 @@ export function switchTab(tabId, options = {}) {
 }
 
 async function performSwitch(tabId, options = {}) {
+  const mode = FORGE_NAV.some(item => item.id === tabId) ? 'forge' : 'kairos';
+  if (mode === 'forge' && !forgeAdmin) return;
+  if (mode !== appMode) { rememberMode(mode); await buildSidebar(); }
   const version = ++navigationVersion;
   // The side browser's chrome lives in the Chat view's DOM, but in the
   // desktop app the page itself is a NATIVE view owned by the main process.
@@ -210,6 +231,31 @@ async function refreshAgentBadge() {
 document.addEventListener("jarvis:agents-changed", refreshAgentBadge);
 
 async function buildSidebar() {
+  const identity = await api('/api/auth/status').catch(() => null);
+  forgeAdmin = !!identity?.is_admin;
+  if (!forgeAdmin) rememberMode('kairos');
+  document.getElementById('forge-mode-switch')?.remove();
+  if (forgeAdmin) {
+    const control = document.createElement('div');
+    control.id = 'forge-mode-switch';
+    control.className = 'forge-mode-switch';
+    control.setAttribute('role', 'group');
+    control.setAttribute('aria-label', 'App mode');
+    for (const [mode, label] of [['kairos', 'Kairos'], ['forge', 'Forge']]) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'segmented-tab'; button.dataset.mode = mode;
+      button.setAttribute('aria-pressed', String(appMode === mode));
+      button.classList.toggle('active', appMode === mode); button.textContent = label;
+      if (mode === 'forge') { const badge = document.createElement('small'); badge.textContent = 'Preview'; button.append(badge); }
+      button.onclick = () => switchMode(mode);
+      control.append(button);
+    }
+    const rail = document.createElement('button'); rail.type = 'button'; rail.className = 'forge-mode-rail';
+    rail.setAttribute('aria-label', appMode === 'forge' ? 'Switch to Kairos' : 'Switch to Forge Preview');
+    rail.title = rail.getAttribute('aria-label'); rail.innerHTML = ICONS.agents;
+    rail.onclick = () => switchMode(appMode === 'forge' ? 'kairos' : 'forge'); control.append(rail);
+    document.querySelector('.sidebar-header').after(control);
+  }
   const brand = document.getElementById("brand");
   brand.innerHTML = WORDMARK;
   brand.firstElementChild.classList.add("brand-wordmark");
@@ -244,7 +290,9 @@ async function buildSidebar() {
   }
   setKnownTabs([...items.values()]);
   // Groups, order and hidden tabs: Settings > Layout (layout.js).
-  for (const group of sidebarLayout([...items.keys()])) {
+  const groups = appMode === 'forge' ? [{ ids: FORGE_NAV.map(item => item.id) }] : sidebarLayout([...items.keys()]);
+  if (appMode === 'forge') for (const item of FORGE_NAV) items.set(item.id, { ...item, svg: ICONS[item.icon] });
+  for (const group of groups) {
     if (!group.ids.length) continue;
     if (group.label) {
       const label = document.createElement("div");
@@ -443,7 +491,7 @@ async function startApp() {
   document.addEventListener("jarvis:tabs-changed", async () => {
     for (const id of Object.keys(customViewUrls)) delete modules[id];
     const tabs = await buildSidebar();
-    if (activeTab && !NAV.some((item) => item.id === activeTab) && !tabs.some((item) => item.id === activeTab)) switchTab("home");
+    if (activeTab && ![...NAV, ...FORGE_NAV].some((item) => item.id === activeTab) && !tabs.some((item) => item.id === activeTab)) switchTab("home");
   });
   document.addEventListener("kairos:layout", () => { buildSidebar(); });
   commandPalette.init({ nav: NAV, customTabs: customTabs || [], switchTab, openSettings });
@@ -475,7 +523,7 @@ async function startApp() {
       window.jarvis.screenGrab.replyQuickDraft(draft.requestId, { ok: false, error: error.message });
     }
   });
-  await switchTab("home");
+  await switchTab(appMode === 'forge' ? 'forgeHome' : 'home');
 }
 
 useAppMenusForSelects();

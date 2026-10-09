@@ -33,6 +33,7 @@ from routes import (
     model_routes,
     speech_routes,
     workspace_routes,
+    forge_routes,
     system_routes,
     store_routes,
     integrations_routes,
@@ -187,6 +188,7 @@ app.include_router(settings_routes.router)
 app.include_router(model_routes.router)
 app.include_router(speech_routes.router)
 app.include_router(workspace_routes.router)
+app.include_router(forge_routes.router)
 app.include_router(system_routes.router)
 app.include_router(store_routes.router)
 app.include_router(integrations_routes.router)

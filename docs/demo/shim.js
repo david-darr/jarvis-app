@@ -80,6 +80,11 @@
     let body = {};
     try { if (typeof rawBody === "string") body = JSON.parse(rawBody); } catch (_) { /* not JSON */ }
     if (path === "/api/settings/computer-use") { state.computerUse = body; return json({ ok: true }); }
+    const workspaceMatch = path.match(/^\/api\/sessions\/([^/]+)\/workspace$/);
+    if (workspaceMatch) {
+      if (store.sessions[workspaceMatch[1]]) store.sessions[workspaceMatch[1]].workspace_dir = body.path;
+      return json({ workspace_dir: body.path });
+    }
     if (path === '/api/chat/stream' && body.references?.some(ref => ref.kind === 'agent') && store.sessions[body.session_id]) {
       state.handoffSessions ||= {};
       state.handoffSessions[body.session_id] ||= store.sessions[body.session_id];

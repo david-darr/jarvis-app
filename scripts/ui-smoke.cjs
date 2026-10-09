@@ -211,6 +211,94 @@ app.whenReady().then(async () => {
     await capture('mobile-onboarding');
     win.setContentSize(1440, 900); await delay(350);
     await js("document.getElementById('onboarding-overlay').classList.add('hidden')");
+    // Forge Preview uses the same fixture backend, navigation and popup checks.
+    const forgeWrites = writes.length;
+    for (const [label, width, height] of [['desktop', 1440, 900], ['mobile', 390, 844]]) {
+      win.setContentSize(width, height); await delay(100);
+      await navigate('home');
+      if (label === 'mobile') await js("document.querySelector('#mobile-menu-btn').click()");
+      await js("document.querySelector('#forge-mode-switch [data-mode=forge]').click()");
+      await waitFor("document.querySelectorAll('.forge-stats .forge-stat').length === 5 && document.querySelectorAll('.forge-widget-grid > section').length === 4");
+      assert.deepEqual(await js("[...document.querySelectorAll('#nav [data-tab]')].map(n => n.dataset.tab)"), ['forgeHome', 'forgeProjects'], label + ' Forge nav has only Home and Projects');
+      assert.deepEqual(await js("[...document.querySelectorAll('.forge-widget-grid > section > header h2')].map(n => n.textContent)"), ['Working now', 'Git activity', 'Recent projects', 'Repo lifespan']);
+      await waitFor("!!document.querySelector('.forge-banner canvas') && document.querySelectorAll('.forge-ranked tbody tr').length === 4");
+      assert.ok(await js("document.querySelector('.forge-donut svg').getAttribute('role') === 'img' && !!document.querySelector('.forge-heatmap svg[aria-label]')"), label + ' accessible charts');
+      await js("document.querySelector('.forge-bar').focus()");
+      assert.ok(await js("!document.querySelector('.forge-chart-tooltip').hidden"), label + ' keyboard bar tooltip');
+      await js("document.activeElement.blur(); document.getElementById('view-content').scrollTop = 0");
+      assert.deepEqual(await overflow(), [], label + ' Forge Home overflow');
+      await capture(label + '-forge-home');
+      await win.loadURL(base);
+      await waitFor("document.querySelectorAll('.forge-stats .forge-stat').length === 5");
+      assert.equal(await js("localStorage.getItem('kairos:app-mode')"), 'forge', label + ' mode survives reload');
+      const customizeOpener = "document.querySelector('.forge-toolbar button')";
+      const customizeReady = "!!document.querySelector('[data-widget-toggle=working]')";
+      await openPopup(customizeOpener, customizeReady, label + ' Customize');
+      await js("document.querySelector('[data-widget-toggle=working]').click()");
+      await closePopup('button', label + ' Customize');
+      await win.loadURL(base);
+      await waitFor("document.querySelectorAll('.forge-widget-grid > section').length === 3 && document.querySelectorAll('.forge-stats .forge-stat').length === 5");
+      assert.ok(await js("![...document.querySelectorAll('.forge-widget-grid > section > header h2')].some(n => n.textContent === 'Working now')"), label + ' hidden widget survives reload');
+      await openPopup(customizeOpener, customizeReady, label + ' Customize restore');
+      await js("document.querySelector('[data-widget-toggle=working]').click()");
+      await closePopup('escape', label + ' Customize restore');
+      await js("document.querySelector('[aria-label=\"Repository for lifespan\"]').parentElement.value = 'fp2'; document.querySelector('[aria-label=\"Repository for lifespan\"]').parentElement.dispatchEvent(new Event('change'))");
+      await waitFor("document.querySelector('.forge-lifespan .forge-widget-body').textContent === 'Not a git repository'");
+      await navigate('forgeProjects');
+      await waitFor("document.querySelectorAll('[data-forge-project]').length === 2");
+      assert.deepEqual(await overflow(), [], label + ' Forge Projects overflow');
+      await capture(label + '-forge-projects');
+      for (const kind of ['existing', 'clone', 'new']) await popupDismissals(
+        `document.querySelector('[data-forge-add=${kind}]')`, `!!document.querySelector('[data-forge-form=${kind}] input')`, label + ' Forge ' + kind);
+      await js("document.querySelector('[data-forge-project=fp1] button').click()");
+      await waitFor("document.querySelectorAll('.forge-stats .forge-stat').length === 5");
+      assert.equal(await js("document.querySelector('[aria-label=\"Project for new chat\"]').parentElement.value"), 'fp1', label + ' Open on Home selects project');
+      // A selected folder and model must reach the session before handoff sends.
+      const handoffStart = writes.length; // per pass: the desktop pass sends the same message
+      await js(`document.querySelector('[aria-label="Model for new chat"]').parentElement.value = 'm2'; document.querySelector('#forge-message').value = 'Build the Forge fixture'; document.querySelector('.forge-composer').requestSubmit()`);
+      await waitFor("document.getElementById('view-content').dataset.view === 'chat' && !sessionStorage.getItem('jarvis:pendingChatHandoff')");
+      for (let i = 0; i < 80 && !writes.slice(handoffStart).some(w => w.path === '/api/chat/stream' && JSON.parse(w.body).message === 'Build the Forge fixture'); i++) await delay(50);
+      const handoffWrites = writes.slice(handoffStart);
+      const workspaceWrite = handoffWrites.findLast(w => /\/workspace$/.test(w.path));
+      const modelWrite = handoffWrites.findLast(w => /\/model$/.test(w.path));
+      const streamWrite = handoffWrites.findLast(w => w.path === '/api/chat/stream');
+      assert.ok(handoffWrites.some(w => w.path === '/api/sessions' && w.method === 'POST'), label + ' creates chat');
+      assert.equal(JSON.parse(workspaceWrite.body).path, 'C:\\Users\\Alex\\Documents\\Kairos Projects\\garden', label + ' pins workspace');
+      assert.equal(JSON.parse(modelWrite.body).model_endpoint_id, 'm2', label + ' sets selected model');
+      assert.equal(JSON.parse(streamWrite.body).message, 'Build the Forge fixture', label + ' sends handoff');
+      assert.ok(handoffWrites.indexOf(workspaceWrite) < handoffWrites.indexOf(streamWrite) && handoffWrites.indexOf(modelWrite) < handoffWrites.indexOf(streamWrite), label + ' configures chat before sending');
+      assert.equal(await js("document.documentElement.dataset.appMode"), 'kairos', label + ' composer returns to Kairos');
+      await navigate('home');
+      if (label === 'desktop') {
+        await js("document.querySelector('#sidebar-toggle').click()"); await delay(350);
+        await js("document.querySelector('.forge-mode-rail').click()");
+        await waitFor("!!document.querySelector('.forge-home') && document.querySelectorAll('#nav [data-tab]').length === 2");
+        assert.equal(await js("document.querySelector('.forge-mode-rail').getAttribute('aria-label')"), 'Switch to Kairos');
+        await capture('desktop-forge-switch-collapsed');
+        await js("document.querySelector('.forge-mode-rail').click()"); await waitFor("!!document.querySelector('.dashboard-hero')");
+        await js("document.querySelector('#sidebar-toggle').click()"); await delay(350);
+      } else {
+        // A phone retains the full switch even with the desktop rail preference.
+        await js("document.documentElement.classList.add('sidebar-collapsed'); document.querySelector('#mobile-menu-btn').click()"); await delay(300);
+        assert.equal(await js("getComputedStyle(document.querySelector('#forge-mode-switch [data-mode=forge]')).display"), 'block');
+        assert.equal(await js("getComputedStyle(document.querySelector('.forge-mode-rail')).display"), 'none');
+        await capture('mobile-forge-switch-collapsed');
+        await js("document.querySelector('#forge-mode-switch [data-mode=forge]').click()"); await waitFor("!!document.querySelector('.forge-home') && !document.querySelector('#sidebar').classList.contains('open')");
+        await js("document.querySelector('#mobile-menu-btn').click(); document.querySelector('#forge-mode-switch [data-mode=kairos]').click()");
+        await waitFor("!!document.querySelector('.dashboard-hero')");
+        await js("document.documentElement.classList.remove('sidebar-collapsed')");
+      }
+      demoState.isAdmin = false;
+      await js("localStorage.setItem('kairos:app-mode', 'forge')"); await win.loadURL(base);
+      await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
+      assert.ok(await js("!document.querySelector('#forge-mode-switch, #nav [data-tab=forgeHome], #nav [data-tab=forgeProjects]')"), label + ' non-admin sees no Forge switch');
+      await navigate('forgeHome');
+      assert.equal(await js("document.getElementById('view-content').dataset.view"), 'home', label + ' non-admin cannot route to Forge');
+      demoState.isAdmin = true; delete demoState.sessionFields;
+      await win.loadURL(base); await waitFor("!!document.querySelector('#forge-mode-switch') && document.querySelectorAll('.dashboard-stat').length === 4");
+    }
+    writes.splice(forgeWrites);
+    win.setContentSize(1440, 900); await delay(350);
     const railWidth = () => js("document.querySelector('#sidebar').getBoundingClientRect().width");
     assert.equal(await railWidth(), 204);
     await js("document.querySelector('#sidebar-toggle').click()");

@@ -23,6 +23,20 @@
     { id: "s3", title: "Connecting ideas across the vault", updated_at: now - 80000 },
   ];
   const projects = [{ id: "p1", name: "Workspace design", document_ids: ["d1", "d2"], instructions: "Keep it clear." }];
+  const forgeProjects = [
+    { id: 'fp1', name: 'Kairos garden', path: 'C:\\Users\\Alex\\Documents\\Kairos Projects\\garden', added_at: now - 90000, last_opened_at: now - 600 },
+    { id: 'fp2', name: 'Field notes', path: 'C:\\Users\\Alex\\Documents\\Kairos Projects\\field-notes', added_at: now - 80000, last_opened_at: now - 8000 },
+  ];
+  const forgeDays = Array.from({ length: 14 }, (_, i) => ({ date: dayForForge(i - 13), commits: [2, 4, 1, 0, 6, 3, 1][i % 7], added: (i + 1) * 17, removed: i * 3 }));
+  function dayForForge(offset) { const date = new Date(now * 1000); date.setDate(date.getDate() + offset); return date.toISOString().slice(0, 10); }
+  const forgeSummary = { state: 'ok', head: 'a'.repeat(40), branch: 'main', last_commit: { at: now - 1200, subject: 'Make room for the next idea', sha: 'a'.repeat(40) }, activity: forgeDays,
+    lifespan: { commits: 248, contributors: 4, added: 18742, removed: 3840, age_days: 210, first_commit: now - 210 * 86400, last_commit: now - 1200,
+      delta: { commits: 18, contributors: 1, added: 1840, removed: -120, age_days: 30 }, bucket: 'weekly',
+      buckets: Array.from({ length: 30 }, (_, i) => ({ date: dayForForge((i - 29) * 7), commits: (i * 7 + 3) % 19 })) },
+    languages: [{ name: '.js', bytes: 64000 }, { name: '.py', bytes: 28000 }, { name: '.css', bytes: 18000 }, { name: '.md', bytes: 8000 }],
+    rhythm: Array.from({ length: 7 }, (_, d) => Array.from({ length: 24 }, (_, h) => h > 7 && h < 18 ? (d * 3 + h) % 9 : 0)),
+    hotspots: [{ path: 'static/js/app.js', commits: 48, added: 620, removed: 80 }, { path: 'core/garden.py', commits: 32, added: 480, removed: 42 }],
+    contributors: [{ name: 'Alex', commits: 186, added: 14200, removed: 2980 }, { name: 'Morgan', commits: 62, added: 4542, removed: 860 }] };
   const notes = [
     { id: "n1", text: "Review the workspace design and collect feedback", completed: false, due_date: future(24) },
     { id: "n2", text: "Prepare notes for the project check-in", completed: false, due_date: future(48) },
@@ -161,6 +175,24 @@
     return { name: 'example-com-click', description, body, steps, labels, content: `---\ndescription: ${description}\n---\n\n${body}` };
   }
   function mutate(route, method, body = {}) {
+    if (route === '/api/forge/root' && method === 'PUT') { state.forgeRoot = body.path; return { path: body.path }; }
+    if (['/api/forge/projects', '/api/forge/projects/new', '/api/forge/projects/clone'].includes(route) && method === 'POST') {
+      const name = body.name || 'New project';
+      const item = { id: 'fp' + (forgeProjects.length + 1), name, path: body.path || (state.forgeRoot || 'C:\\Users\\Alex\\Documents\\Kairos Projects') + '\\' + name.replace(/[^a-z0-9]+/gi, '-'), added_at: now, last_opened_at: null };
+      forgeProjects.push(item); return item;
+    }
+    const forgeProject = route.match(/^\/api\/forge\/projects\/([^/]+)(\/opened)?$/);
+    if (forgeProject) {
+      const at = forgeProjects.findIndex(p => p.id === forgeProject[1]);
+      if (method === 'DELETE') { if (at >= 0) forgeProjects.splice(at, 1); return { ok: true }; }
+      if (forgeProject[2] && at >= 0) { forgeProjects[at].last_opened_at = now; return forgeProjects[at]; }
+    }
+    if (!options.demo && /^\/api\/sessions\/[^/]+\/(workspace|model)$/.test(route)) {
+      const id = route.split('/')[3]; state.sessionFields ||= {}; state.sessionFields[id] ||= {};
+      if (route.endsWith('/workspace')) { state.sessionFields[id].workspace_dir = body.path; return { workspace_dir: body.path }; }
+      state.sessionFields[id].model_endpoint_id = body.model_endpoint_id;
+      return { ok: true, model_override: body.model_override ?? null, effort: body.effort ?? null };
+    }
     if (route === '/api/store/github/start') { state.githubPending = true; return { user_code: 'KAIROS42', verification_uri: 'https://github.com/login/device', expires_in: 900, interval: 1 }; }
     if (route === '/api/store/github/poll') { state.githubSignedIn = true; state.githubPending = false; return { configured: true, signed_in: true, login: 'alex-demo', state: 'signed_in' }; }
     if (route === '/api/store/github/sign-out') { state.githubSignedIn = false; return { configured: true, signed_in: false, login: null }; }
@@ -386,7 +418,16 @@
     ];
     const route = url.pathname;
     const list = (data) => state.empty ? [] : data;
-    if (route === "/api/auth/status") return { auth_enabled: false, setup_required: false, username: "Alex", is_admin: true, instance: state.empty ? "dev" : "" };
+    if (route === "/api/auth/status") return { auth_enabled: false, setup_required: false, username: "Alex", is_admin: state.isAdmin !== false, instance: state.empty ? "dev" : "" };
+    if (route === '/api/forge/root') return { path: state.forgeRoot || 'C:\\Users\\Alex\\Documents\\Kairos Projects' };
+    if (route === '/api/forge/projects') return list(forgeProjects.map(p => ({ ...p, git: p.id === 'fp2' ? { state: 'not_git', message: 'Not a git repository' } : forgeSummary })));
+    if (/^\/api\/forge\/projects\/[^/]+\/summary$/.test(route)) return route.split('/')[4] === 'fp2' ? { state: 'not_git', message: 'Not a git repository' } : forgeSummary;
+    if (route === '/api/forge/workspaces/recent') return list(forgeProjects.map(({ path, name }) => ({ path, name })));
+    if (route === '/api/forge/activity') return { days: state.empty ? forgeDays.map(d => ({ ...d, commits: 0, added: 0, removed: 0 })) : forgeDays,
+      projects: list(forgeProjects.map(p => ({ id: p.id, name: p.name, state: p.id === 'fp2' ? 'not_git' : 'ok', message: p.id === 'fp2' ? 'Not a git repository' : null }))),
+      working: list([{ id: 's1', title: 'Tune the garden composer', project_name: 'Kairos garden' }]) };
+    if (route === '/api/workspace/vet') return { ok: true, path: url.searchParams.get('path') };
+    if (route === '/api/workspace/browse') return { path: 'C:\\Users\\Alex\\Documents', parent: 'C:\\Users\\Alex', selectable: true, dirs: forgeProjects.map(p => ({ name: p.name, path: p.path })), truncated: false };
     if (route === "/api/settings") return { onboarding_complete: true, vault_dir: "C:\\Users\\Alex\\Documents\\Vault",
       computer_use: state.computerUse || { enabled: true, allow_non_admins: false, allow_reactions: false, desktop: false } };
     const computers = state.empty ? [] : [
@@ -485,7 +526,7 @@
       { role: 'assistant', content: '[Weekly plan](/generated-files/fedcba987654_weekly-plan.md)', ts: now - 90 } ] };
     if (route.startsWith("/api/sessions/")) { const session = { ...sessions[0], id: route.split("/")[3], model_endpoint_id: "m1", messages: [{ role: "user", content: "Let's make the workspace feel more focused.", ts: now - 100 }, { role: "assistant", run_id: "r-computer", content: "## A clearer direction\n\nStart with **what matters most**: clear navigation, a calm reading space, and useful connections between your work.\n\n- Keep the next step easy to find.\n- Bring the files into the conversation.\n- Give every thought room to breathe.\n\n```python\nworkspace = {\n    \"focus\": \"the work that matters\"\n}\n```\n\n[Project brief](/generated-files/012345abcdef_project-brief.md)", ts: now - 90 }] };
       if (state.artifactReviewNewer && session.id === 's1') session.messages.push({ role: 'assistant', content: '[Updated brief](/generated-files/abcdef012345_project-brief.md)', ts: now });
-      return session;
+      return { ...session, ...(state.sessionFields?.[session.id] || {}) };
     }
     if (route === "/api/projects") return list(projects);
     if (route.startsWith("/api/projects/")) return projects[0];
