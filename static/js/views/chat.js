@@ -1,7 +1,7 @@
 import { api, el, toast, confirmDialog, modelMark } from "../api.js";
 import { openModelSetup } from "../modelSetup.js";
 import { ICONS } from "../icons.js";
-import { runSlashCommand } from "../slashCommands.js";
+import { runSlashCommand, mountSlashSuggestions } from "../slashCommands.js";
 import * as chatStream from "../chatStream.js";
 import { renderMessageBody, copyText, hideArtifact, mountArtifactPane, setArtifactContext, showArtifactPane } from "../chatContent.js";
 import { openBrowser, closeBrowser, suppressBrowser, releaseBrowser } from "../browserPane.js";
@@ -344,6 +344,7 @@ let activeProjectFilter = null; // David's ask 2026-09-12 — null = "All Chats"
 let stagedAttachments = []; // [{id, filename}]
 let activeImagePreview = null;
 let activeWebCapture = null;
+let activeCommandActions = null;
 let chatReferences = null;
 function clearStagedAttachments() {
   for (const item of stagedAttachments) if (item.preview) URL.revokeObjectURL(item.preview);
@@ -698,6 +699,8 @@ export async function render(container, tabId, options = {}) {
 
   const inputTop = el("div", { class: "chat-input-top" }, [input]);
   chatReferences = mountChatReferences(input, inputTop, () => activeSessionId);
+  let slashAdmin = false;
+  const slashSuggestions = mountSlashSuggestions(input, inputTop, { isAdmin: () => slashAdmin });
 
   // -- composer: bottom row (overflow "+" menu, workspace pill, send) --
   const overflowBtn = el("button", { type: "button", class: "input-icon-btn", id: "overflow-plus-btn", title: "More" });
@@ -794,7 +797,11 @@ export async function render(container, tabId, options = {}) {
   const permissionControl = el('label', { class: 'chat-permission-control', 'data-mode': 'base' }, [
     el('span', { text: 'Mode' }), permissionMode,
   ]);
-  api('/api/auth/status').then(status => { autoModeOption.disabled = !status.is_admin; }).catch(() => {});
+  api('/api/auth/status').then(status => {
+    autoModeOption.disabled = !status.is_admin;
+    slashAdmin = !!status.is_admin;
+    if (input.isConnected) slashSuggestions.update();
+  }).catch(() => {});
   permissionMode.addEventListener('change', async () => {
     const requested = permissionMode.value;
     const previous = permissionMode.dataset.saved || 'base';
@@ -838,7 +845,7 @@ export async function render(container, tabId, options = {}) {
   const dock = el('div', { class: 'chat-composer-dock' }, [queueHost, attachStrip, composer,
     el('div', { id: 'chat-permission-notice', class: 'chat-permission-notice', hidden: true,
       text: 'Auto approves chat permission requests, including after reading outside content. Codex Auto also removes its workspace sandbox.' }),
-    el("div", { class: "composer-hint", text: "@ to add a file, note, or chat · Enter to send · Shift + Enter for a new line" })]);
+    el("div", { class: "composer-hint", text: "/ for commands · @ to add a file, note, or chat · Enter to send · Shift + Enter for a new line" })]);
   composerRefs = { messages, input, sendBtn, attachStrip, queueHost };
   main.append(messages, dock);
   const timeline = mountChatTimeline(main, messages, () => activeSessionId);
@@ -951,7 +958,21 @@ export async function render(container, tabId, options = {}) {
   };
   document.addEventListener("click", dismissMenus);
   document.addEventListener("keydown", escapeMenus);
-  const disposeFind = mountChatFind(main, messages);
+  const chatFind = mountChatFind(main, messages);
+  const commandActions = {
+    isAdmin: () => slashAdmin,
+    setup: setupChatModel,
+    compact: () => runCompact(compactBtn),
+    capture: () => captureScreenshot(attachStrip),
+    computer: async () => {
+      await syncComputer();
+      if (!computerInfo) return 'This chat has no computer yet. Ask the agent to open a website, then type /computer.';
+      showComputer();
+    },
+    find: chatFind.open,
+    hideSuggestions: slashSuggestions.hide,
+  };
+  activeCommandActions = commandActions;
 
   let disposed = false;
   const onModelsChanged = () => {
@@ -969,7 +990,9 @@ export async function render(container, tabId, options = {}) {
     disposeSideChat();
     backdrop.dispose();
     if (activeBackdrop === backdrop) activeBackdrop = null;
-    disposeFind();
+    chatFind.dispose();
+    slashSuggestions.dispose();
+    if (activeCommandActions === commandActions) activeCommandActions = null;
     timeline.dispose();
     if (activeTimeline === timeline) activeTimeline = null;
     chatReferences?.dispose();
@@ -1736,7 +1759,8 @@ async function refreshContextMeter(sessionId) {
 // for where the "nothing is lost" guarantee actually lives.
 async function runCompact(button) {
   const sessionId = activeSessionId;
-  if (!sessionId || button.disabled) return;
+  if (!sessionId) return 'Open or create a chat first, then try /compact again.';
+  if (button.disabled) return 'This chat is already being compacted. Wait for it to finish.';
   button.disabled = true;
   const previousTitle = button.title;
   const label = button.querySelector('span');
@@ -1745,7 +1769,7 @@ async function runCompact(button) {
   label.textContent = 'Compacting…';
   try {
     await api('/api/chat/compact', { method: 'POST', body: JSON.stringify({ session_id: sessionId }) });
-    toast('Chat compacted — nothing was deleted, it’s all still above.', 'success');
+    toast('Chat compacted. The full conversation is still above.', 'success');
     if (activeSessionId === sessionId) {
       const sessionsList = document.getElementById('sessions-list');
       const messages = document.getElementById('chat-messages');
@@ -1753,6 +1777,7 @@ async function runCompact(button) {
     }
   } catch (error) {
     toast(error.message || 'Could not compact this chat.', 'error');
+    return error.message || 'Could not compact this chat.';
   } finally {
     button.disabled = false;
     button.title = previousTitle;
@@ -2448,10 +2473,14 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
     }
     input.value = "";
     input.style.height = "auto";
+    chatReferences?.hide();
+    activeCommandActions?.hideSuggestions();
+    input.focus();
     messages.appendChild(entering(messageCard("user", text)));
     syncChatLayout(messages);
     const sessionsList = document.getElementById("sessions-list");
     const { output } = await runSlashCommand(text, {
+      ...activeCommandActions,
       sessionId: () => activeSessionId,
       createSession,
       refreshSessions: () => refreshSessions(sessionsList, messages),
@@ -2471,7 +2500,6 @@ async function sendMessage(messages, input, sendBtn, attachStrip) {
       await api(`/api/sessions/${activeSessionId}/messages`, { method: "POST", body: JSON.stringify({ role: "assistant", content: output }) });
       await refreshSessions(sessionsList, messages);
     }
-    input.focus();
     return;
   }
 

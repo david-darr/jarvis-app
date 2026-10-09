@@ -239,6 +239,7 @@ app.whenReady().then(async () => {
     win.setContentSize(1440, 900); await delay(350);
     await js("document.getElementById('onboarding-overlay').classList.add('hidden')");
     await require('./model-setup-checks.cjs')({ js, win, waitFor, capture, delay, navigate, demoState, writes });
+    await require('./slash-help-checks.cjs')({ js, win, waitFor, capture, delay, navigate, demoState, writes });
     console.log('PASS: model setup desktop/phone onboarding, install approval/progress, sign-ins, API test, local background handoff, skip and re-entry.');
     // Forge Preview uses the same fixture backend, navigation and popup checks.
     const forgeWrites = writes.length;

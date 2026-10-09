@@ -137,7 +137,9 @@
     }
     const modelMatch = path.match(/^\/api\/sessions\/([^/]+)\/model$/);
     if (modelMatch) {
-      if (store.sessions[modelMatch[1]]) store.sessions[modelMatch[1]].model_endpoint_id = body.model_endpoint_id;
+      if (store.sessions[modelMatch[1]]) Object.assign(store.sessions[modelMatch[1]], {
+        model_endpoint_id: body.model_endpoint_id, model_override: body.model_override ?? null, model_effort: body.effort ?? null,
+      });
       return json({ ok: true, model_override: body.model_override ?? null, effort: body.effort ?? null });
     }
     return json({ ok: true });

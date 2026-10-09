@@ -35,14 +35,15 @@ export function mountChatReferences(input, inputTop, getSessionId) {
     ? { kind: item.kind, url: item.url, comment: item.comment, picks: [...item.picks], label: item.label }
     : { kind: item.kind, id: item.id, session_id: item.session_id, label: item.label, color: item.color });
   const hide = () => {
+    const wasOpen = !list.hidden;
     clearTimeout(timer);
     requestNumber++;
     list.hidden = true;
     list.replaceChildren();
     results = [];
     range = null;
-    input.removeAttribute('aria-activedescendant');
-    input.setAttribute('aria-expanded', 'false');
+    if (input.getAttribute('aria-activedescendant')?.startsWith(list.id)) input.removeAttribute('aria-activedescendant');
+    if (wasOpen) input.setAttribute('aria-expanded', 'false');
   };
   const paintChips = () => {
     chips.replaceChildren();

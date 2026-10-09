@@ -1,5 +1,6 @@
 import { api, el, customSelect, toast, confirmDialog, modelMark } from "../api.js";
 import { openModelSetup } from "../modelSetup.js";
+import { shortcutGroups, readQuickEntry } from '../shortcuts.js';
 import { suppressBrowser, releaseBrowser } from "../browserPane.js";
 import { renderSpeechPanel } from "./speechPanel.js";
 import { renderAppearancePanel } from './appearancePanel.js';
@@ -235,7 +236,7 @@ export async function render(container) {
 
 export async function openSettingsWindow(section) {
   mobile = null;
-  if (section === "integrations") activeSectionId = section;
+  if (SECTION_GROUPS.some(group => group.sections.some(item => item.id === section))) activeSectionId = section;
   if (pillEl) { pillEl.remove(); pillEl = null; }
   cachedStatus = await api("/api/auth/status");
   const modal = getModal();
@@ -1399,13 +1400,13 @@ async function renderTotpSection(host) {
 
 // -- Shortcuts --------------------------------------------------------------
 function renderShortcutsPanel(body) {
-  const shortcuts = [
-    ["Enter", "Send message"],
-    ["Shift + Enter", "New line in the composer"],
-    ["Right-click a chat", "Rename, star or delete it"],
-    ["/help in a chat", "List every slash command"],
-  ];
-  body.replaceChildren(group({}, shortcuts.map(([key, desc]) => row({ title: desc, control: el("span", { class: "set-kbd", text: key }) }))));
+  const draw = quickEntry => body.replaceChildren(...shortcutGroups(quickEntry).map(section => group({ title: section.title }, section.items.map(item => row({
+    title: item.description, description: item.details,
+    control: el('span', { class: 'set-kbd', text: item.keys }),
+  })))));
+  // Draw at once with the default Quick Entry key, then show the real one when the desktop app answers.
+  draw(null);
+  readQuickEntry().then(quickEntry => { if (quickEntry !== null && body.isConnected) draw(quickEntry); });
 }
 
 // -- Admin: Agent Tools -------------------------------------------------------

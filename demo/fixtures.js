@@ -347,6 +347,8 @@
       const id = route.split('/')[3]; state.sessionFields ||= {}; state.sessionFields[id] ||= {};
       if (route.endsWith('/workspace')) { state.sessionFields[id].workspace_dir = body.path; return { workspace_dir: body.path }; }
       state.sessionFields[id].model_endpoint_id = body.model_endpoint_id;
+      state.sessionFields[id].model_override = body.model_override ?? null;
+      state.sessionFields[id].model_effort = body.effort ?? null;
       return { ok: true, model_override: body.model_override ?? null, effort: body.effort ?? null };
     }
     if (route === '/api/store/github/start') { state.githubPending = true; return { user_code: 'KAIROS42', verification_uri: 'https://github.com/login/device', expires_in: 900, interval: 1 }; }

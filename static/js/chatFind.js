@@ -85,5 +85,5 @@ export function mountChatFind(main, messages) {
   };
   document.addEventListener('keydown', onKey);
 
-  return () => { document.removeEventListener('keydown', onKey); clearTimeout(pending); clear(); };
+  return { open, dispose() { document.removeEventListener('keydown', onKey); clearTimeout(pending); clear(); bar.remove(); } };
 }

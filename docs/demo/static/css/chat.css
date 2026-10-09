@@ -139,6 +139,11 @@
 .chat-reference-name { font-weight: 550; }
 .chat-reference-detail { grid-column: 2; color: var(--text-faint); font-size: 11px; }
 .chat-reference-empty { padding: 12px; color: var(--text-faint); font-size: 12px; }
+.slash-command-option { grid-template-columns: 90px minmax(0, 1fr); }
+/* Phone: stop short of the floating menu button at the top left. */
+@media (max-width: 768px) { .chat-reference-picker { max-height: min(280px, 34vh); } }
+.slash-command-option .chat-reference-name,
+.slash-command-option .chat-reference-detail { white-space: normal; overflow-wrap: anywhere; }
 .chat-reference-chips { display: flex; flex-basis: 100%; flex-wrap: wrap; gap: 6px; }
 .chat-reference-chips:empty { display: none; }
 .chat-reference-chip {
