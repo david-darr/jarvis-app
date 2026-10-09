@@ -98,8 +98,10 @@ class ForgeTests(unittest.TestCase):
             self.assertIn('.env', (folder / '.gitignore').read_text())
             with self.assertRaises(FileExistsError): self.projects.new('My garden / idea')
             result = forge_git.summary(project, now=NOW)
-            self.assertEqual(result['state'], 'empty')
-            self.assertEqual(result['lifespan']['commits'], 0)
+            self.assertEqual(result['state'], 'ok')
+            self.assertEqual(result['lifespan']['commits'], 1)
+            self.assertEqual(self.git('ls-tree', '--name-only', 'HEAD', cwd=folder).splitlines(), ['.gitignore', 'README.md'])
+            self.assertEqual(self.git('log', '-1', '--format=%s', cwd=folder), 'Initial commit')
         with patch.object(projects_module, 'update_settings') as save:
             self.assertEqual(projects_module.set_root(str(destination)), str(destination))
             save.assert_called_once_with(forge_root=str(destination))

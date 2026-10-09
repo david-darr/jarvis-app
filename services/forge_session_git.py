@@ -11,6 +11,38 @@ class ForgeSessionGit:
     def __init__(self, sessions=None):
         self.sessions = sessions or forge_sessions
 
+    def first_commit_target(self, project_id):
+        project, repo = self.sessions.project(project_id)
+        if forge_git.has_commits(repo, any_branch=True):
+            raise ValueError('This project already has commits.')
+        status = forge_git.run_git(repo, 'status')[1]
+        count = len(forge_git.status_files(status))
+        if not count:
+            raise ValueError('There are no files to commit.')
+        return dict(project_id=project_id, name=project['name'], folder=str(repo),
+                    files=count, status=status)
+
+    async def first_commit(self, project_id, surface):
+        import asyncio
+        with self.sessions.lock:
+            target = self.first_commit_target(project_id)
+        description = (f"Make the first commit for {target['name']} as Initial commit.\n"
+                       f"Project folder: {target['folder']}\n"
+                       f"Files to commit: {target['files']}\nFiles ignored by Git are excluded.")
+        decision = await permissions.decide(surface=surface, tool='forge_git_first_commit',
+            arguments=target, title='Make the first commit?', description=description,
+            target=description, is_admin=True, force_prompt=True, choices=CHOICES)
+        if decision.behavior != 'allow':
+            raise ValueError('The first commit was not approved.')
+
+        def execute():
+            with self.sessions.lock:
+                if self.first_commit_target(project_id) != target:
+                    raise ReviewConflict('The project or files changed during approval. Try again.')
+                forge_git.initial_commit(target['folder'])
+                return {'ok': True}
+        return await asyncio.to_thread(execute)
+
     def status(self, session_id):
         with self.sessions.lock:
             root = self.sessions.workspace(session_id)

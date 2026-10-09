@@ -11,7 +11,7 @@ from typing import Literal
 from core.middleware import require_admin
 from services import forge_git
 from services.forge_projects import forge_projects, forge_root, set_root, vet_project
-from services.forge_sessions import forge_sessions, ReviewConflict
+from services.forge_sessions import forge_sessions, ReviewConflict, NoCommits
 from core import file_checkpoints
 from services import chat_service
 from services.forge_project_files import project_files, project_file
@@ -46,7 +46,7 @@ class RootRequest(BaseModel):
 def call(fn, *args):
     try:
         return fn(*args)
-    except (ReviewConflict, file_checkpoints.Conflict) as error:
+    except (NoCommits, ReviewConflict, file_checkpoints.Conflict) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -323,6 +323,13 @@ def app_start_stream(session_id, restart=False):
     call(forge_sessions.workspace, session_id)
     return approval_stream(f'forge-app:{session_id}',
         lambda surface: (forge_apps.restart if restart else forge_apps.start)(session_id, True, surface))
+
+
+@router.post('/projects/{project_id}/first-commit')
+async def first_commit(project_id: str):
+    call(forge_session_git.first_commit_target, project_id)
+    return approval_stream(f'forge-first-commit:{project_id}',
+        lambda surface: forge_session_git.first_commit(project_id, surface))
 
 
 @router.post('/sessions/{session_id}/app/start')

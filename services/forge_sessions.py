@@ -20,6 +20,13 @@ class ReviewConflict(ValueError):
     """The review no longer matches the current worktree."""
 
 
+class NoCommits(ValueError):
+    """A session needs a first commit in the project repository."""
+
+    def __init__(self, name):
+        super().__init__(f'{name} has no commits yet. Make a first commit to start a session.')
+
+
 def _linked(path):
     return path.is_symlink() or (hasattr(path, 'is_junction') and path.is_junction())
 
@@ -152,6 +159,8 @@ class ForgeSessions:
                 raise ValueError('Enter a valid model ID (160 characters maximum).')
         with self.lock:
             project, repo = self.project(project_id)
+            if not forge_git.has_commits(repo):
+                raise NoCommits(project['name'])
             current = forge_git.run_git(repo, 'branch', check=False)[1].strip() or 'HEAD'
             base_branch = base_branch or current
             if isolation == 'in_place':

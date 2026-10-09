@@ -125,6 +125,27 @@ def init_repo(path):
     return _run(path, ['init', '--', str(Path(path).resolve())])
 
 
+def has_commits(path, *, any_branch=False):
+    if any_branch:
+        return bool(_run(path, ['rev-list', '--all', '--max-count=1'])[1].strip())
+    return run_git(path, 'head', check=False)[0] == 0
+
+
+def initial_commit(path, files=None):
+    """Internal first commit, with a one-command identity fallback and no hooks."""
+    if has_commits(path, any_branch=True):
+        raise GitError('This project already has commits.')
+    if not status_files(run_git(path, 'status')[1]):
+        raise GitError('There are no files to commit.')
+    identity = []
+    for key in ('user.name', 'user.email'):
+        code, value = _run(path, ['config', '--get', key], check=False)
+        if code or not value.strip():
+            identity = ['-c', 'user.name=Kairos', '-c', 'user.email=kairos@localhost']
+    _run(path, ['add', '-A', '--', *(files if files is not None else ['.'])])
+    return _run(path, [*identity, '-c', 'commit.gpgsign=false', 'commit', '-m', 'Initial commit'], timeout=120)
+
+
 def validate_branch(path, branch):
     if not isinstance(branch, str) or not branch or branch.startswith('-') or any(ord(c) < 32 for c in branch):
         raise GitError('Invalid branch name.')

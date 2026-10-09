@@ -5,6 +5,7 @@ import { bars, donut, heatmap, statCard, rankedTable } from '../forgeCharts.js';
 import { projectSessions, sessionRow, forgeRunning } from '../forgeUi.js';
 import { openProjectForm } from '../forgeProjectForms.js';
 import { subscribeAll } from '../chatStream.js';
+import { permissionAction } from '../forgeAppPreview.js';
 
 const navigate = (tab, options = {}) => document.dispatchEvent(new CustomEvent('jarvis:navigate', { detail: { tab, ...options } }));
 const widgetNames = { working: 'Working now', services: 'Running services', activity: 'Git activity', recent: 'Recent projects', lifespan: 'Repo lifespan' };
@@ -26,7 +27,10 @@ export function render(container, tabId, options = {}) {
   const pickers = el('div', { class: 'forge-composer-controls' });
   const send = el('button', { type: 'submit', class: 'btn primary', text: 'Start session', disabled: true });
   const locationNote = el('p', { class: 'meta forge-location-note', role: 'status' });
-  const composer = el('form', { class: 'forge-composer' }, [message, pickers, locationNote, el('div', { class: 'forge-composer-bottom' }, [send])]);
+  const firstCommitNote = el('p', { class: 'meta', role: 'status' });
+  const firstCommitButton = el('button', { type: 'button', class: 'btn', text: 'Make the first commit' });
+  const recovery = el('div', { class: 'forge-first-commit forge-warning', hidden: true }, [firstCommitNote, firstCommitButton]);
+  const composer = el('form', { class: 'forge-composer' }, [message, pickers, locationNote, recovery, el('div', { class: 'forge-composer-bottom' }, [send])]);
   const hero = el('section', { class: 'forge-hero' }, [banner, el('div', { class: 'forge-hero-copy' }, [
     el('div', { class: 'eyebrow' }, ['Forge ', el('small', { class: 'forge-preview', text: 'Preview' })]),
     el('h1', { text: 'What should your agents work on?' }), composer,
@@ -42,13 +46,21 @@ export function render(container, tabId, options = {}) {
   let models = [], variantSelect = null, variantVersion = 0;
   const variantField = el('label', { class: 'forge-picker-field', hidden: true });
   let isolationSelect, modeSelect, branchSelect, branchField, branchVersion = 0, starting = false, branchesReady = false, sessionGroups = [];
+  let pendingStart = null;
+  const approvalController = new AbortController();
   const drawWorking = () => {
     if (disposed) return;
     const running = sessionGroups.flatMap(({ project, sessions }) => sessions.filter(s => !s.forge.removed && forgeRunning(s.id)).map(s => sessionRow(s, project)));
     bodies.working.replaceChildren(...(running.length ? running : [el('p', { class: 'meta', text: 'No Forge sessions running.' })]));
   };
   const unsubscribe = subscribeAll(drawWorking);
-  const updateSend = () => { send.disabled = starting || !projectSelect?.value || !modelSelect?.value || (isolationSelect?.value === 'existing_branch' && (!branchesReady || !branchSelect?.value)); };
+  const updateSend = () => {
+    send.disabled = starting || !projectSelect?.value || !modelSelect?.value || (isolationSelect?.value === 'existing_branch' && (!branchesReady || !branchSelect?.value));
+    firstCommitButton.disabled = starting; message.readOnly = starting; pickers.inert = starting;
+  };
+  const clearRecovery = () => { if (!starting) { pendingStart = null; recovery.hidden = true; } };
+  composer.addEventListener('input', clearRecovery);
+  composer.addEventListener('change', clearRecovery, true);
   const field = (label, picker) => el('label', { class: 'forge-picker-field' }, [el('span', { class: 'meta', text: label }), picker]);
   async function locationChanged() {
     const version = ++branchVersion;
@@ -174,17 +186,40 @@ export function render(container, tabId, options = {}) {
       if (options.compose) message.focus();
     } catch { if (!disposed) grid.replaceChildren(el('p', { role: 'status', text: 'Forge could not load. Open Home again to retry.' })); }
   }
+  async function startSession(payload) {
+    try {
+      const session = await api('/api/forge/sessions', { method: 'POST', toast: false, body: JSON.stringify(payload) });
+      if (!disposed) navigate('forgeSession', { sessionId: session.id, initialMessage: payload.task });
+    } catch (error) {
+      if (disposed) return;
+      // The route's dedicated NoCommits error is HTTP 409 with this stable copy.
+      if (/^409: [\s\S]* has no commits yet\. Make a first commit to start a session\.$/.test(error.message)) {
+        pendingStart = payload; firstCommitNote.textContent = error.message.replace(/^409: /, ''); recovery.hidden = false;
+      } else toast(error.message.replace(/^\d+: /, ''), 'error');
+    }
+  }
+  firstCommitButton.onclick = async () => {
+    if (starting || !pendingStart) return;
+    const payload = pendingStart;
+    starting = true; updateSend();
+    try {
+      await permissionAction(`/api/forge/projects/${encodeURIComponent(payload.project_id)}/first-commit`, { signal: approvalController.signal, owner: page });
+      if (disposed) return;
+      pendingStart = null; recovery.hidden = true;
+      await startSession(payload);
+    } catch (error) { if (!disposed) toast(error.message.replace(/^\d+: /, ''), 'error'); }
+    finally { starting = false; updateSend(); }
+  };
   composer.onsubmit = async event => {
     event.preventDefault();
     if (send.disabled || !message.value.trim()) return;
     const project = projects.find(p => p.id === projectSelect.value), text = message.value.trim(), model = modelSelect.value;
     if (!project || !model) return;
+    clearRecovery();
+    const payload = { project_id: project.id, task: text, model_endpoint_id: model, model_override: variantSelect?.value || null, mode: modeSelect.value, isolation: isolationSelect.value, branch: isolationSelect.value === 'existing_branch' ? branchSelect.value : null };
     starting = true; updateSend();
     try {
-      const session = await api('/api/forge/sessions', { method: 'POST', body: JSON.stringify({ project_id: project.id, task: text, model_endpoint_id: model, model_override: variantSelect?.value || null, mode: modeSelect.value, isolation: isolationSelect.value, branch: isolationSelect.value === 'existing_branch' ? branchSelect.value : null }) });
-      if (!disposed) navigate('forgeSession', { sessionId: session.id, initialMessage: text });
-    } catch (error) {
-      toast('Could not start session. Your message is still here.', 'error');
+      await startSession(payload);
     } finally { starting = false; updateSend(); }
   };
   async function loadVariants() {
@@ -205,5 +240,5 @@ export function render(container, tabId, options = {}) {
   load();
   document.addEventListener('kairos:forge-apps', refreshActivity);
   const timer = setInterval(() => { if (!document.hidden) { refreshActivity(); lifespan(); } }, 30000);
-  return () => { disposed = true; ++summaryVersion; ++branchVersion; unsubscribe(); clearInterval(timer); disposeBanner(); dialog?.close(); document.removeEventListener('kairos:appearance', appearance); document.removeEventListener('kairos:forge-apps', refreshActivity); };
+  return () => { disposed = true; approvalController.abort(); ++summaryVersion; ++branchVersion; unsubscribe(); clearInterval(timer); disposeBanner(); dialog?.close(); document.removeEventListener('kairos:appearance', appearance); document.removeEventListener('kairos:forge-apps', refreshActivity); };
 }

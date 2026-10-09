@@ -1,7 +1,7 @@
 {
  "built": {
-  "app.js": "755889184423e49d310daa3f5a87b92a6984dba87b159ec1b1718488cb5a9547",
-  "fixtures.js": "92d445466ff9c93480aa72a0007d4752b39b8264c06b9d55ceee6a82972a1c0c",
+  "app.js": "60cd55f18dc0f47535195aec11c3a779e308e1ef08c0e15cf32b47b695c8c4f3",
+  "fixtures.js": "e4c8f6a6dac87c2b4fbce510f052e578e1e4a580f3537b4faaf9613d91e739a8",
   "index.html": "876b0a30cc72b90dee0b600154fb85b90eceac5bb0f113984c97bf512bd68803",
   "shim.js": "4384d706662fced4085406aa759bb1e784cbda2bf056df613d787ad4618e92cb",
   "static/css/appearance.css": "3330eb656e91e4e74388048fd201ea62a4a2d80befd8748b22689836793f2ca0",
@@ -252,7 +252,7 @@
   "tabs/crm/view.css": "692abfe0aaa1180fd651584cb447b87e827a018b4e1959f28a6cdc91c7b6672b"
  },
  "sources": {
-  "demo/fixtures.js": "92d445466ff9c93480aa72a0007d4752b39b8264c06b9d55ceee6a82972a1c0c",
+  "demo/fixtures.js": "e4c8f6a6dac87c2b4fbce510f052e578e1e4a580f3537b4faaf9613d91e739a8",
   "demo/shim.js": "4384d706662fced4085406aa759bb1e784cbda2bf056df613d787ad4618e92cb",
   "scripts/build_site_demo.py": "80b3f2480106464f946e4060af6c0fb24a24cead93757e3e131616ba67ba0005",
   "static/css/appearance.css": "3330eb656e91e4e74388048fd201ea62a4a2d80befd8748b22689836793f2ca0",
@@ -576,7 +576,7 @@
   "static/js/views/chat.js": "688b85791595bfdf370899ddd3c42ffe6ff211fa09937cf411d2cb3098aa96ba",
   "static/js/views/cookbook.js": "8cf45f197cb7aede27bbb7ece0534fa6d1745940e22d688ca2a69d7a25a21ad3",
   "static/js/views/email.js": "281c5c0dad613ea5898b76ec9e121d4a9659d0807c54c4ecf3f83e79109bc3d0",
-  "static/js/views/forgeHome.js": "7a625d482169e272137198dfe4ae8d932123d6db2e6f6f1af66f07d0fcea6ca6",
+  "static/js/views/forgeHome.js": "e49db78b7ce96d6afad387f27c6561513361f508482353c0d24b5fa3c42980ba",
   "static/js/views/forgeShell.js": "ffb32f4612ab9d5553383548305061b49e51de6d44cbe0bd887c65924e4a8f2f",
   "static/js/views/home.js": "b329ad602655013ba7f9f7ac7c499d1bba38776777db0306e6770ae36dbf1d1e",
   "static/js/views/layoutPanel.js": "6d60cb73baa7b7c1de31631b54702058d7aeae6e64fbbce83a83241c2e1afccd",

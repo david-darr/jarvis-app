@@ -332,7 +332,7 @@ app.whenReady().then(async () => {
       await capture(label + '-forge-home-composer');
       // This index belongs to this viewport pass, even when both send the same task.
       const handoffStart = writes.length;
-      await js("document.querySelector('.forge-composer').requestSubmit()");
+      await require('./forge-first-commit-checks.cjs')({ js, waitFor, capture, writes, demoState, label });
       await waitFor("document.getElementById('view-content').dataset.view === 'forgeShell' && !!document.querySelector('.forge-transcript-layout')");
       await waitFor("document.querySelector('.forge-work-label')?.textContent.includes('Working for')");
       assert.ok(await js("document.querySelector('[aria-label=\"Session mode\"]').disabled"), label + ' mode chip disabled while running');

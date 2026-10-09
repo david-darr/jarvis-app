@@ -177,6 +177,7 @@ class ForgeProjects:
             forge_git.init_repo(destination)
             (destination / 'README.md').write_text('# ' + name.strip().replace('\n', ' ') + '\n', encoding='utf-8')
             (destination / '.gitignore').write_text('.env\n.env.*\n!.env.example\n.venv/\n__pycache__/\n*.py[cod]\nnode_modules/\ndist/\nbuild/\n.DS_Store\nThumbs.db\n', encoding='utf-8')
+            forge_git.initial_commit(destination, ['README.md', '.gitignore'])
         except (OSError, forge_git.GitError):
             # Only the folder created just above; a retry can then reuse the name.
             forge_git.remove_reserved(destination)

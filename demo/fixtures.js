@@ -39,6 +39,8 @@
   const forgeCommands = state.forgeCommands ||= {};
   const forgeAppPending = state.forgeAppPending ||= {};
   const forgeAppAnswers = state.forgeAppAnswers ||= {};
+  // Tests can mark any registered Git project as having an unborn HEAD.
+  const forgeNoCommits = state.forgeNoCommits ||= {};
   const gardenSource = 'export const shortcut = "Enter";\n\nexport function composerHint() {\n  return "Build in a worktree";\n}\n';
   function forgeReview(id) {
     if (!forgeReviews[id]) {
@@ -84,6 +86,15 @@
     rhythm: Array.from({ length: 7 }, (_, d) => Array.from({ length: 24 }, (_, h) => h > 7 && h < 18 ? (d * 3 + h) % 9 : 0)),
     hotspots: [{ path: 'static/js/app.js', commits: 48, added: 620, removed: 80 }, { path: 'core/garden.py', commits: 32, added: 480, removed: 42 }],
     contributors: [{ name: 'Alex', commits: 186, added: 14200, removed: 2980 }, { name: 'Morgan', commits: 62, added: 4542, removed: 860 }] };
+  function forgeProjectSummary(id) {
+    if (id === 'fp2') return { state: 'not_git', message: 'Not a git repository' };
+    if (!forgeNoCommits[id]) return forgeSummary;
+    return { ...forgeSummary, state: 'empty', head: null, last_commit: null,
+      activity: forgeDays.map(d => ({ ...d, commits: 0, added: 0, removed: 0 })),
+      lifespan: { commits: 0, contributors: 0, added: 0, removed: 0, age_days: 0, first_commit: null, last_commit: null,
+        delta: { commits: 0, contributors: 0, added: 0, removed: 0, age_days: 0 }, bucket: 'weekly', buckets: [] },
+      languages: [], rhythm: forgeSummary.rhythm.map(row => row.map(() => 0)), hotspots: [], contributors: [] };
+  }
   const notes = [
     { id: "n1", text: "Review the workspace design and collect feedback", completed: false, due_date: future(24) },
     { id: "n2", text: "Prepare notes for the project check-in", completed: false, due_date: future(48) },
@@ -300,9 +311,27 @@
       if (option !== 'leave' || endRoute[2]) session.forge.removed = true;
       return endRoute[2] ? { _appStart: { status: { ok: true } } } : { ok: true };
     }
+    const firstCommitRoute = route.match(/^\/api\/forge\/projects\/([^/]+)\/first-commit(-approved)?$/);
+    if (firstCommitRoute && method === 'POST') {
+      const id = firstCommitRoute[1], project = forgeProjects.find(p => p.id === id);
+      if (!project) return { _status: 404, detail: 'Project not found.' };
+      if (!forgeNoCommits[id]) return { _status: 400, detail: 'This project already has commits.' };
+      if (firstCommitRoute[2]) {
+        delete forgeNoCommits[id];
+        return { _appStart: { status: { ok: true } } };
+      }
+      const requestId = 'forge-first-commit-' + id + '-' + Date.now();
+      forgeAppPending[requestId] = id;
+      return { _approvedPath: route + '-approved', _appStart: { permission: {
+        id: requestId, tool: 'forge_git_first_commit', title: 'Make the first commit?',
+        description: `Make the first commit for ${project.name} as Initial commit.\nProject folder: ${project.path}\nFiles to commit: 2\nFiles ignored by Git are excluded.`,
+        choices: [{ id: 'once', label: 'Approve', behavior: 'allow', scope: 'once' }, { id: 'reject', label: 'Cancel', behavior: 'deny', scope: 'once' }],
+      } } };
+    }
     if (route === '/api/forge/sessions' && method === 'POST') {
       const project = forgeProjects.find(p => p.id === body.project_id);
       if (!project || project.id === 'fp2') return { _status: 400, detail: 'Forge sessions require a Git repository root with an initial commit.' };
+      if (forgeNoCommits[project.id]) return { _status: 409, detail: `${project.name} has no commits yet. Make a first commit to start a session.` };
       const id = 'fs' + (Object.keys(forgeSessions).length + 1);
       const worktree = body.isolation === 'in_place' ? project.path : project.path + '-worktrees\\task-' + id;
       const session = { id, title: body.task.slice(0, 120), created_at: now, updated_at: now, model_endpoint_id: body.model_endpoint_id, model_override: body.model_override || null, workspace_dir: worktree, messages: [],
@@ -674,7 +703,7 @@
     if (route === "/api/auth/status") return { auth_enabled: false, setup_required: false, username: "Alex", is_admin: state.isAdmin !== false, instance: state.empty ? "dev" : "" };
     if (route === '/api/forge/terminal/settings') return { forge_terminal_remote: !!state.forgeTerminalRemote };
     if (route === '/api/forge/root') return { path: state.forgeRoot || 'C:\\Users\\Alex\\Documents\\Kairos Projects' };
-    if (route === '/api/forge/projects') return list(forgeProjects.map(p => ({ ...p, git: p.id === 'fp2' ? { state: 'not_git', message: 'Not a git repository' } : forgeSummary })));
+    if (route === '/api/forge/projects') return list(forgeProjects.map(p => ({ ...p, git: forgeProjectSummary(p.id) })));
     const projectFiles = route.match(/^\/api\/forge\/projects\/([^/]+)\/(files|file)$/);
     if (projectFiles) {
       const path = url.searchParams.get('path') || '';
@@ -683,7 +712,7 @@
         : path === 'src' ? [{ name: 'garden.js', path: 'src/garden.js', directory: false, changed: false }] : [] };
     }
     if (/^\/api\/forge\/projects\/[^/]+\/sessions$/.test(route)) return list(Object.values(forgeSessions).filter(s => s.forge.project_id === route.split('/')[4]).map(({ messages, ...header }) => ({ ...header, message_count: messages.length })));
-    if (/^\/api\/forge\/projects\/[^/]+\/branches$/.test(route)) return [{ name: 'main', worktree: forgeProjects[0].path }, { name: 'feature/garden', worktree: null }];
+    if (/^\/api\/forge\/projects\/[^/]+\/branches$/.test(route)) return forgeNoCommits[route.split('/')[4]] ? [] : [{ name: 'main', worktree: forgeProjects[0].path }, { name: 'feature/garden', worktree: null }];
     const forgeRoute = route.match(/^\/api\/forge\/sessions\/([^/]+)(?:\/(.*))?$/);
     if (forgeRoute) {
       const session = forgeSessions[forgeRoute[1]], action = forgeRoute[2];
@@ -717,10 +746,10 @@
         return { path, content: path === 'README.md' ? '# Kairos garden\n\nA calm place to build.\n' : content, binary: false, hash: 'fixture-open', mtime: '1' };
       }
     }
-    if (/^\/api\/forge\/projects\/[^/]+\/summary$/.test(route)) return route.split('/')[4] === 'fp2' ? { state: 'not_git', message: 'Not a git repository' } : forgeSummary;
+    if (/^\/api\/forge\/projects\/[^/]+\/summary$/.test(route)) return forgeProjectSummary(route.split('/')[4]);
     if (route === '/api/forge/workspaces/recent') return list(forgeProjects.map(({ path, name }) => ({ path, name })));
     if (route === '/api/forge/activity') return { days: state.empty ? forgeDays.map(d => ({ ...d, commits: 0, added: 0, removed: 0 })) : forgeDays,
-      projects: list(forgeProjects.map(p => ({ id: p.id, name: p.name, state: p.id === 'fp2' ? 'not_git' : 'ok', message: p.id === 'fp2' ? 'Not a git repository' : null }))),
+      projects: list(forgeProjects.map(p => ({ id: p.id, name: p.name, state: forgeProjectSummary(p.id).state, message: forgeProjectSummary(p.id).message || null }))),
       working: list([{ id: 's1', title: 'Tune the garden composer', project_name: 'Kairos garden' }]) };
     if (route === '/api/workspace/vet') return { ok: true, path: url.searchParams.get('path') };
     if (route === '/api/workspace/browse') return { path: 'C:\\Users\\Alex\\Documents', parent: 'C:\\Users\\Alex', selectable: true, dirs: forgeProjects.map(p => ({ name: p.name, path: p.path })), truncated: false };
