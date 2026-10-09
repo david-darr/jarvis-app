@@ -1,12 +1,12 @@
 # Frontend Style
 
-Last updated: 2026-10-08
+Last updated: 2.0.0, 2026-10-09
 
 ## Direction
 
 Kairos uses ink and gold on parchment: warm light grounds, clear hierarchy, soft shadows, and a single gilded hairline on featured surfaces. The ring's point is the only gilded part of the mark. The default is light; a person may still choose a dark custom base in Appearance. No tactical-HUD brackets, neon outlines, glowing dark-first surfaces, or whole-app recoloring for tab management.
 
-The brand package's `BRAND.md` defines the mark, palette and type. Its ceiling-painting reference supplies the cloud-ring sky; the UI uses the sky on Home, onboarding and the splash. Jost carries body and controls; Cormorant Garamond Italic is reserved for display headlines and the tagline. Both fonts are self-hosted.
+The brand package's `BRAND.md` defines the mark, palette and type. Its ceiling-painting reference supplies the sky and the Kairos figure. The splash shows the painted sky; Home's banner and the default chat background draw the figure and the sky as halftone (`dither.js`). Jost carries body and controls; Cormorant Garamond Italic is reserved for display headlines and the tagline. Both fonts are self-hosted.
 
 The chat-focused pass draws on [Zeron](https://github.com/zeronsh/zeron): minimal navigation, restrained header controls, soft user bubbles, and an uncluttered conversation canvas. [Libraries.dev](https://libraries.dev/) informs the border beam; [Obsidian UI](https://www.obsidianui.dev/) informs quiet hover/selection feedback. These are visual references, not copied application code or added React dependencies. Local development changes remain pending David's visual review.
 
@@ -53,13 +53,52 @@ The header's panel toggle collapses the desktop sidebar from `--sidebar-width: 2
 
 ## Home
 
-One full-width Home card holds the Overview header, serif tagline, conversation action, next task and quiet cloud-ring sky. A faint gradient keeps the copy legible over the sky. The sky drifts slightly; a small gold point moves only while work runs, warns on attention and dims offline. Pause stops movement, and the control is hidden when system reduced motion is active. A summary strip below the card and a two-column workspace expose conversations, open notes, enabled automations, the next seven days, projects, models, recent activity, and connected systems. On phones these stack in normal flow.
+One full-width Home card holds the Overview header with the date and system status, the serif tagline, conversation action and next task, over a still halftone banner of the Kairos figure in the appearance's halftone colors. A parchment wash on the left keeps the copy legible. Appearance can replace the banner with a custom picture and focus point. There is no motion or status point in the banner. A summary strip below the card and a two-column workspace expose conversations, open notes, enabled automations, the next seven days, projects, models, recent activity, and connected systems. On phones these stack in normal flow.
 
 Summary requests are read-only; missing data gets an unavailable state, not a fabricated zero. Home links use `jarvis:navigate` with a real session/project/Library section when applicable. Date-only calendar entries are local days. Clear countdown and refresh timers when leaving the view.
 
+## Model setup guide
+
+`static/js/modelSetup.js` supplies the same guide in onboarding, Settings > Add Models and empty-model states. Onboarding offers Skip for now. The popup uses `openPanelDialog` and `.model-setup-panel`; `.model-setup-cards` is a two-column grid that becomes one column below 600px. Each choice names what the person needs, the cost model and the current detected state. Keep the explanation of CLI, API key and local model in the native details disclosure, not in the main action labels.
+
+Claude needs sign-in to its bundled app; Codex offers installation with an approval prompt and bounded progress output before vendor sign-in. API setup tests the key. Local setup opens Cookbook. Waiting, errors and retry actions are visible in `.model-setup-screen` with a polite live region. Success tells the person to pick the connection above the chat box: setup never assigns a default model. Dispose polling, pending approval UI and the local-model view when leaving.
+
+## Forge (Preview)
+
+`app.js` owns the admin-only Kairos | Forge switch and its Preview label. The collapsed rail uses the Kairos circle mark to switch modes. Forge navigation has Home and a Projects list with a + menu for Open folder, Clone repo and New repo. Removing a project drops its listing and keeps its files. Forge Home retains its composer, project/model and Build/Plan choices, Git activity and repository charts. Widget visibility is device-local.
+
+`views/forgeShell.js` and `forgeRail.js` own the project layout, styled in `static/css/style.css`:
+
+- `.forge-project-sidebar` starts at 228px, resizes from 208 to 520px and resets on double-click. Sessions, Explorer, Changes and Git use tab/tabpanel roles and arrow-key navigation. The panel choice is remembered per project.
+- Sessions show the real model, branch, status and change totals. Explorer is lazy and keyboard accessible. Single-click opens an italic preview tab; double-click pins it. Changes opens a line-numbered diff against the session baseline and offers confirmed file reverts. Turn review bars offer checkpoint undo. The backend has a hunk-revert route, but the current diff viewer does not expose a hunk-revert control.
+- `.forge-surface-tabs` holds sessions, files, diffs, App Preview and terminals. One split can place a file or preview beside a session. On phones the project panel is a sheet and the main area shows one tab at a time.
+- `forgeTranscript.js` uses bordered prompt blocks and unboxed prose over the shared chat halftone. Paths, commands and output use monospace; prose uses the shared sans font. Tool activity comes from stream events and saved run timelines. Working becomes a Worked for disclosure; changed turns offer Undo, Keep and Review. The composer keeps path/branch, model and Build/Plan controls with Send, Stop and Queue. Plan is read-only for the agent. Forge file `@` suggestions are not implemented.
+
+### Editor, terminal, Git and App Preview
+
+`forgeEditor.js` loads bundled CodeMirror on demand, with shared theme tokens, line numbers, syntax highlighting, search and undo. `.forge-editor-toolbar` has Save and a Saved/Unsaved state; Ctrl/Cmd+S saves. Dirty files become pinned tabs and ask before closing. A disk conflict opens Overwrite or Reload, with one error presentation. Binary files remain read-only.
+
+`forgeTerminal.js` loads bundled xterm and its local stylesheet. `.forge-terminal-toolbar` offers New terminal, Copy and Paste, plus the phone keyboard note. Resize fits the visible pane; output reconnects from its cursor. Closing the tab closes its shell. Links open in the system browser. Colours follow shared tokens. Remote refusal stays a plain explanation pointing to Settings > Forge; Plan does not restrict the person's terminal.
+
+`forgeGitPanel.js` renders branch/upstream status, staged and unstaged files, commit controls, branch creation/switch, Push, fast-forward Pull and Merge back. Push and merge approvals name their destination. Ending offers merge-and-remove, keep-branch-and-remove or discard, with confirmation for uncommitted or unmerged work.
+
+`forgeAppPreview.js` owns the Run app approval and Preview tab. The toolbar has path navigation, Back/Forward/Reload, Open in browser and Desktop/Tablet/Phone widths. Logs expose Stop and Restart. The web fallback says it works only on the computer running Kairos. Running apps appear in the project panel and Home. Hide native views while modals cover them, and release views, listeners and process controls through their existing lifecycle.
+
+## Slash suggestions and Settings > Shortcuts
+
+`slashCommands.js` supplies suggestions only in the main Chat composer while its text starts with `/` and has no space after the command name. Reuse the reference popup's classes; each option shows the command, description and usage. It has listbox/option roles and an active descendant. Up/Down selects; Enter or Tab completes; a fully typed command runs on Enter. Escape closes. Hide admin-only commands for non-admins, and cap the popup height on phones.
+
+`shortcuts.js` supplies both `/help` and Settings > Shortcuts. The Settings kit groups rows into Anywhere, Composer, Chat and Documents. Show Cmd on macOS and Ctrl elsewhere. Draw immediately with the default Quick Entry key, then replace it with the desktop's actual configured key. Help for a chat-dependent command explains when a chat is needed.
+
+## Computer use pane
+
+`computerPanel.js` shares `.computer-panel` between chats and agents; styles live in `chat.css`. Show the title, wrapping URL, last action and control state above an 8:5 letterboxed live frame. Take over pauses model input and focuses a keyboard-operable stage; Hand back resumes. Stop closes the computer. Map pointer input to the drawn frame and send person inputs in order. A closed computer retains a labelled last frame rather than appearing live.
+
+Chats auto-open the pane on desktop and offer a watch chip on phones. Computer activity thumbnails sit under replies. Settings > Computer use shows the off-by-default enable, non-admin, reaction and desktop switches, Docker status, kept profiles and running computers. During takeover, Record exposes a red Recording state and Stop recording opens an editable skill review. No recording starts by itself. Dispose the frame stream, retries and review dialog on unmount.
+
 ## Chat and motion
 
-A new chat contains only the centered composer and a quiet header. The default Chat canvas uses the same cloud-ring sky as Home under a warm parchment wash; Color, Image and Flow keep their chosen backgrounds. No welcome artwork, headline, or starter chips. The first message moves the same live composer beneath a centered reading column with soft user bubbles and unboxed assistant responses. Its attachment strip, model controls, and keyboard hint travel together; no cloned input or draft-resetting remount. Layout changes use a 380ms position animation, skipped under reduced motion. A ResizeObserver keeps the Latest button above a growing composer and is disconnected on unmount.
+A new chat contains only the centered composer and a quiet header. In the default appearance the Chat canvas is halftone: the Kairos figure while a chat is empty and the sky once it has messages, dissolving dot by dot between them (`chatBackdrop.js`). Custom pictures from Appearance can replace either scene. Color, Image and Flow keep their chosen backgrounds. No welcome artwork, headline, or starter chips. The first message moves the same live composer beneath a centered reading column with soft user bubbles and unboxed assistant responses. Its attachment strip, model controls, and keyboard hint travel together; no cloned input or draft-resetting remount. Layout changes use a 380ms position animation, skipped under reduced motion. A ResizeObserver keeps the Latest button above a growing composer and is disconnected on unmount.
 
 Chat history is independently collapsible with the header's history button. Desktop starts tucked away unless the user saved an expanded preference under `jarvis:chat-history-collapsed`; this does not change the global sidebar preference. Its 236px panel transitions to zero width over 260ms. Hidden history is inert and excluded from keyboard navigation. At 768px and below, the same button opens the history drawer with a close action, Escape dismissal, bounded keyboard focus, and focus restoration. New chat clears the current draft and returns to the centered landing without creating a stored session. Opening an existing empty session also centers the composer. Choosing a model or sending the first message can create a session; both preserve staged attachments and the draft until send.
 
@@ -89,7 +128,7 @@ Documents belong to the Chat tab across conversations, new chats, and Home → C
 
 The tab strip's + uses `api.js`'s app option menu, extended with a labelled search input. This chat's files come first, followed by recent other-chat groups from `/api/chat/files/library`. Ctrl/Cmd-click and middle-click on file cards or file-list rows open background tabs without changing the active document; file groups offer Open all. At most 20 documents are open. Foreign documents show a small `from <chat title>` button in their header; it opens the origin chat, with “another chat” as the missing-title fallback.
 
-`jarvis:artifact-pane` stores tab origin IDs, exact URLs/names, the active index, Maximize and foreign comment drafts/notes/queues. Every storage access is guarded. Restart validates metadata in parallel, drops 400/404 tabs with one removal toast, and renders only the active document until others are selected. Temporary network/server failures keep tabs. Saved queues resume only after their tab validates.
+`jarvis:artifact-pane` stores tab origin IDs, exact URLs/names, the active index, Maximize and foreign comment drafts/notes/queues. Every storage access is guarded. Restart validates metadata in parallel, drops 400/404 tabs with one removal toast, and renders only the active document until others are selected. Temporary network/server failures keep tabs. A send queued before restart returns as a draft with a note; it never sends automatically at startup.
 
 Select in the toolbar, or S with the pane focused, turns on picking. Use accent outlines without moving the content; committed comments use dashed outlines while their composer chip exists. Click picks a part, modifier-click adds or removes, Shift-click extends text lines, and drag picks cells or an image/PDF region. Alt-click picks a slide shape's group. The comment box stays inside the pane and docks at the bottom on phones. Add to message stages an editable reference chip; sending remains the composer's action. Escape leaves Select before restoring or closing the pane. Comments have their own limit of ten alongside five ordinary references, and follow the same queue, edit and regenerate lifecycle.
 
@@ -107,7 +146,7 @@ Implementation references: [Codex CLI flags](https://learn.chatgpt.com/docs/deve
 
 The `.border-beam` composer implements the requested Libraries.dev-style border effect natively, without adding a React wrapper to this non-React app. A masked conic gradient animates a registered CSS angle around the border at 0.4 opacity, rising to 0.7 on focus. It must not intercept input or clip the model menu. It pauses while the document is hidden; reduced-motion makes it static. This is not the border-beam npm package and does not expose its React props.
 
-`kairosSky.js` mounts the Home sky and small status point with no Three.js dependency. It follows work and system status, supports pause and reduced motion, and removes its scene on unmount.
+`dither.js` draws a halftone scene from a source picture in the appearance's halftone colors; Home's banner and `chatBackdrop.js` use it, redraw when the picture or colors change, and release their canvases on unmount.
 
 The vault uses colored note triangles, folder circles, faint edges, and selective labels. Search and Browse vault provide keyboard-accessible alternatives to canvas interaction. It fits while settling, yields camera control when explored, and stops its simulation when settled. Preserve drag, zoom, browse, read, and edit behavior.
 
@@ -135,13 +174,19 @@ Durable work (roadmap phase 4, 2026-10-06):
 
 Named background workers (services/agent_service.py) in the sidebar under Intelligence, with a count of what waits on the person. The list shows each agent's avatar (its initial on its chosen color), role, status (Idle, Working, Needs you, Off, Done for today) and runs today, with the cross-agent inbox above. An agent's page has two tabs: **Chat** (default; the agent's own chats beside one conversation, `static/js/agentChat.js`, streaming through `chatStream.js`) and **Work** (inbox, standing goals, jobs, editable memory, run history, settings; its label carries the count). Only the header and Work redraw while the agent works, so an open chat is never rebuilt. Agent chats never appear in Chats, Home, Library's files by chat or `@` references; deleting an agent moves its chats into Chats.
 
-Agents always run in Auto on every model kind (David, 2026-10-05): nothing they do waits for approval, every decision is audited, Codex agents run without their workspace sandbox, and chats with an agent start in Auto. In exchange only admins can create and direct agents. The inbox therefore holds only questions, reports and results to review. A goal reports only when its reply is not `[SILENT]`.
+Agents run in Auto on every model kind: broker requests are automatically approved within their tool limits, but computer-use hard stops still require the person. Codex agents keep their workspace sandbox. Chats with an agent start in Auto. Only admins can create and direct agents. The inbox holds questions, reports and results to review. A goal reports only when its reply is not `[SILENT]`. An agent mention in an admin chat hands work over as a card; its status, questions and result return to that chat through `agentHandoff.js`.
 
 **Teams** (agents phase 5, 2026-10-05) are Swarm companies, listed below the agents and opened inside the Agents tab through `views/swarm.js` in its embedded mode (`jarvis:navigate` with `team: <id>`, or `team: "new"`); Swarm has no sidebar tab of its own. In a team's setup each teammate can be one of your agents ("Agent" picker, admin only): it takes the agent's name, role and model, and its prompt carries the agent's identity and notes, but on a team it works only with Swarm's tools, never its Auto tool set. The team page's middle pane is the **Team thread**: teammate messages, findings, proposals, revision notes, work handed in, reviews and endings in time order, with a "To" picker (the lead, everyone, or one teammate). What happens on a team comes back to the agents: a revision note lands in that agent's Corrections, a team that needs you asks through its lead's agent (or its first linked one), and a finished mission or shift is a report in every linked agent's inbox with one notification. An agent's Work tab lists its teams.
 
 ## Tasks > Triggers
 
 `static/js/views/taskTriggers.js`, built from the Settings kit (`settingsKit.js`): webhook triggers (services/trigger_service.py) as a list (source badge, what each does, last event, "Asks first" or "Runs straight away", an on/off switch), with anything waiting for approval above it (Approve, Skip). A trigger's page shows its address with a copy button, Behaviour (On, Run straight away with a plain warning), Filters and wording (events, one field condition, card title and instructions templates) and its recent events with an outcome pill each. The secret is shown only right after creating a trigger or making a new one, with the setup steps for GitHub or a generic sender. Board cards made by a trigger say "from trigger <name>", and an agent's Work tab lists the triggers that start its work.
+
+## Library > Google Drive and Calendar
+
+`googleWorkspace.js` uses a left rail for My Drive, Shared with me, Starred, Recent and Trash, a search toolbar and Grid/List buttons with pressed states. Thumbnails, multi-select actions, breadcrumbs and a details pane share the Library tokens. Opening a file uses an in-app viewer: Docs is read-only sanitized HTML, Slides/PDF uses the PDF viewer, and images/text have local rendering. Docs and Slides edits open in Google; Sheets and Forms retain their existing editors. Abort stale previews and release PDF workers when leaving. Google access remains admin-only.
+
+`views/calendar.js` and `googleCalendar.js` provide Month/Week views and coloured Google calendars beside local events and feeds. The calendar list controls visibility. Event dialogs show the target calendar, and Google changes write through to Google. A missing Calendar scope offers Reconnect to add Calendar rather than silently hiding events.
 
 ## Settings > Channels
 
@@ -158,9 +203,11 @@ Claude and Codex are never offered, because their built-in tools can't be limite
 
 ## Tool Store: health and review
 
+All, Skills, Tools, Tabs and Automations filters cover bundled and Community items. Community cards show the author, kind, version and install/update/revocation state. Reuse the existing scan/review dialog for installs and updates; an installed community automation starts off. Build with Kairos opens a brief tied to the appropriate bundled builder skill. Share to store uses `storePublish.js`: GitHub device sign-in, an exact public file preview, confirmation and a submission status. Never show sharing as an immediate publication.
+
 Tool Store > Tabs lists Prebuilt and Yours. Build a tab and Install a tab are header actions with forms above the cards. Card footers use real `.btn` buttons in one row: Add and Approve are primary, Remove is quiet danger, Export is quiet. Review files uses `.disclosure-panel`, with a wrapping file list and fingerprint. Status uses the shared `.set-pill` tones: On is ok, Off muted, approval/newer-API states warn, Invalid/Failed error. A failure reason is one line with the full text in its title. `ui-smoke` captures `desktop-tool-store-tabs` and `mobile-tool-store-tabs`.
 
-User tabs are folders in `data/tabs/<slug>/` (`custom-tabs/<slug>/` through file tools), containing `tab.json`, `routes.py`, and optional service, hooks, view, CSS and helpers. Python imports Kairos only through `core.tab_api`; endpoints own `/api/tab-<slug>/...`. Runtime JSON and encrypted tab secrets live in `data/tab-data/<slug>/`. New or changed user source needs an admin's fingerprint-bound approval in Yours. Approved folders load without editing app code or restarting and survive app updates. The old split layout remains supported for existing tabs; new builds use folders. Developer Mode and the New Tab sidebar entry are retired.
+User tabs are folders in `data/tabs/<slug>/` (`custom-tabs/<slug>/` through file tools), containing `tab.json`, `routes.py`, and optional service, hooks, view, CSS and helpers. Python imports Kairos only through `core.tab_api`; endpoints own `/api/tab-<slug>/...`. Runtime JSON and encrypted tab secrets live in `data/tab-data/<slug>/`. New or changed user source needs an admin's fingerprint-bound approval in Yours. New approved folders load without editing app code or restarting and survive app updates; changing already mounted source requires a restart. Removed, off or changed mounted tabs refuse requests rather than serving old code. The old split layout remains supported for existing tabs; new builds use folders. Developer Mode and the New Tab sidebar entry are retired.
 
 Roadmap phase 6 (2026-10-06): core/integrations.py and core/mcp_client.py. Every added MCP server's card shows a `.tool-store-health` line with a Check button:
 - **Working:** the usable tool count and when it was checked, in green.
@@ -185,11 +232,13 @@ Run `electron/node_modules/electron/dist/electron.exe scripts/ui-smoke.cjs` for 
 
 `docs/index.html`, `docs/style.css`, and `docs/site.js` are the static public website, with no build step or external font/runtime dependency. Match the Kairos parchment, bistre, ink-filled pill buttons, wordmark, local fonts, sky and motion preferences. Monospace is limited to short section labels. Preserve the download, source, and installation links; do not imply the development UI is already in the packaged release. The site screenshots come from isolated synthetic `ui-smoke` captures, never personal data.
 
-The five-button preview switches between Home, New chat, Conversation, Vault, and the collapsed sidebar. Use real buttons with a pressed state, keep the image's alternative text and full-size link synchronized, and keep the default screenshot usable without JavaScript. Maintain mobile navigation, keyboard focus, a skip link, image dimensions, and reduced-motion behavior.
+The website embeds the generated `docs/demo` app on sample data, with an Open full screen link. Keep its source generated rather than hand-editing it. Maintain mobile navigation, keyboard focus, a skip link, image dimensions, descriptive screenshot captions and reduced-motion behavior. Feature copy follows the implemented release; preserve existing image and card patterns.
 
 ## Appearance (Settings > Personal > Appearance)
 
 Four background modes: Kairos, Color, Image, Flow. Kairos is parchment. Flow warms a light custom base toward bistre and gold and keeps dark custom bases usable. The preview shows the tagline. Every setting is a local-device preference, stored per signed-in username in localStorage, with an uploaded image held as a Blob in IndexedDB. The `jarvis:` keys and `jarvis-appearance` database stay for existing preferences. Nothing is uploaded and no server setting exists; the panel says so, because "appearance" reading as an account-level setting would be misleading.
+
+`views/appearancePanel.js` also offers Home, New chat and Conversation halftone picture slots in Kairos and Color modes. Each thumbnail has Replace and Reset; clicking sets the crop focus. PNG/JPEG/WebP use the same local validation and downsizing as Image backgrounds, with a 12 MB limit. Pictures stay in IndexedDB on this device and use the same dots, palette and reduced-motion treatment as built-in art.
 
 The sidebar is always the chosen colour darkened by 18%, and foreground colours flip for light backgrounds so text stays readable against either. Content panels keep solid backgrounds regardless of mode: a shader or photo behind body text is not worth the legibility. Image mode accepts PNG/JPEG/WebP only, up to 12 MB and 40 megapixels, normalised to 2560px on the longest edge and decoded through `createImageBitmap` into a canvas, never assigned as an image URL, so the CSP stays unwidened.
 

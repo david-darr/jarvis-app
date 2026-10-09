@@ -73,12 +73,12 @@
 </section>
 
 <section class="section wrap" id="features" aria-labelledby="features-title">
-  <div class="section-heading"><p class="eyebrow">What it does</p><h2 id="features-title">One workspace. <span>Every model, all your memory.</span></h2></div>
+  <div class="section-heading"><p class="eyebrow">What it does in 2.0.0</p><h2 id="features-title">One workspace. <span>Your models, projects and memory.</span></h2></div>
   <div class="feature-grid">
     <article class="feature featured">
       <span class="feature-mark" aria-hidden="true">01</span>
-      <h3>Chat with any model</h3>
-      <p>Claude, Codex, local models through Ollama or the built-in engine, or any OpenAI-compatible API. Choose the model and its reasoning level for each conversation, and watch a meter of how full the context is.</p>
+      <h3>Start with a model guide</h3>
+      <p>Sign in to bundled Claude Code, install Codex with your permission, test an API key, or download a local model through Cookbook. There is no default model. Choose one for each chat.</p>
       <img src="img/feature-models.webp" width="1200" height="750" loading="lazy" alt="Settings listing connected models. Demo data.">
     </article>
     <article class="feature">
@@ -90,7 +90,7 @@
     <article class="feature">
       <span class="feature-mark" aria-hidden="true">03</span>
       <h3>Agents that remember</h3>
-      <p>Named agents with their own role, goals and memory. They work through a board of cards, ask you when they need a decision, and can team up on bigger jobs.</p>
+      <p>Named agents with their own role, goals and memory. Admins hand work to an agent with an @ mention and receive its result in chat. Agents approve tool requests automatically within their limits and can work in teams.</p>
       <img src="img/feature-agents.webp" width="1200" height="750" loading="lazy" alt="The Agents page with two agents and their status. Demo data.">
     </article>
     <article class="feature">
@@ -101,21 +101,21 @@
     </article>
     <article class="feature">
       <span class="feature-mark" aria-hidden="true">05</span>
-      <h3>Every run, step by step</h3>
-      <p>Open any chat, task or agent run and see what it did: each tool it called, how long it took, what failed and how it ended.</p>
+      <h3>Run history</h3>
+      <p>Review recorded tool calls, timings, errors and outcomes for chats, tasks and agents. Saved timelines help you follow the work.</p>
       <img src="img/feature-runs.webp" width="1200" height="750" loading="lazy" alt="A run opened to its timeline of tool calls. Demo data.">
     </article>
     <article class="feature">
       <span class="feature-mark" aria-hidden="true">06</span>
-      <h3>Back up everything</h3>
-      <p>One file holds your chats, notes, agents and settings. Restore it on any machine, with a safety copy of what was there. Saved passwords stay out unless you choose.</p>
+      <h3>Back up app data</h3>
+      <p>Export chats, notes, agents and settings in one archive. Restore with a safety copy of what was there. Encrypted credentials and their key are left out unless you choose to include them.</p>
       <img src="img/feature-backup.webp" width="1200" height="750" loading="lazy" alt="Backup settings with full backup and restore. Demo data.">
     </article>
   </div>
 </section>
 
 <section class="section everything-section" id="everything" aria-labelledby="everything-title"><div class="wrap">
-  <div class="section-heading"><p class="eyebrow">Everything in Kairos</p><h2 id="everything-title">The whole toolkit. <span>Nothing to bolt on.</span></h2></div>
+  <div class="section-heading"><p class="eyebrow">Everything in Kairos</p><h2 id="everything-title">The whole toolkit. <span>Choose what you use.</span></h2></div>
   <div class="everything-grid">
     <div class="capability">
       <h3>Conversation</h3>
@@ -123,12 +123,15 @@
         <li>Claude, Codex, local and API models, chosen per chat</li>
         <li>Attachments, folder-scoped workspaces and projects</li>
         <li>@ references to files, notes and other chats</li>
-        <li>Previews for documents, spreadsheets, slides, PDFs and code</li>
+        <li>A resizable document pane with tabs and version choices</li>
+        <li>Select slide shapes, cells, lines or page regions and comment in chat</li>
+        <li>Document requests return to the chat that made the file</li>
         <li>A side browser, sandboxed from the app</li>
         <li>Screen capture straight into a chat (Windows)</li>
         <li>Voice input and spoken replies</li>
         <li>Up to three read-only helpers working in parallel</li>
         <li>Find in chat, summaries and a terminal-style view</li>
+        <li>Type / for command suggestions; Settings > Shortcuts lists keyboard controls</li>
       </ul>
     </div>
     <div class="capability">
@@ -137,9 +140,10 @@
         <li>A Markdown vault with search and a linked map</li>
         <li>Notes and priorities, kept in sync with the vault</li>
         <li>Library for documents and chat files</li>
-        <li>Calendar with CalDAV and iCal sync</li>
+        <li>Calendar with Month and Week views, CalDAV and iCal sync</li>
         <li>Email through IMAP and SMTP</li>
-        <li>Google Workspace sign-in</li>
+        <li>Google Drive browsing with in-app file previews</li>
+        <li>Google Calendar events shown and edited in Calendar and chat</li>
         <li>A Home dashboard of what's next</li>
       </ul>
     </div>
@@ -155,14 +159,44 @@
       </ul>
     </div>
     <div class="capability">
-      <h3>Tools and skills</h3>
+      <h3>Kairos Store</h3>
       <ul>
-        <li>Tool Store for reusable skills</li>
-        <li>A catalog of MCP tool servers, with sign-in</li>
+        <li>Browse community tabs, skills, tools and automations in Tool Store</li>
+        <li>Admin installs use the existing scans and review gates</li>
+        <li>Community automations install turned off</li>
+        <li>Sign in to GitHub, review the public files and submit items for review</li>
+        <li>Build with Kairos follows bundled instructions for each kind of item</li>
+        <li>Connect MCP servers that give models additional tools</li>
         <li>Health checks, and new tools held until you approve them</li>
         <li>Cookbook to download and run local models</li>
         <li>Tabs from the Tool Store: add School or CRM, build your own, or install one</li>
         <li>New tab code runs only after an admin approves it, and updates leave your tabs alone</li>
+      </ul>
+    </div>
+    <div class="capability">
+      <h3>Forge (Preview)</h3>
+      <ul>
+        <li>Open a project folder, clone a repository or create one</li>
+        <li>Sessions use separate Git working folders by default</li>
+        <li>Build mode or read-only Plan mode for the agent</li>
+        <li>Changes review, file reverts and turn checkpoints</li>
+        <li>App Preview runs the project's server after approval</li>
+        <li>A file editor, real terminal and Git panel</li>
+        <li>Push and merge-back ask first; push never forces</li>
+        <li>Admin-only; the terminal is off over Remote Access by default</li>
+      </ul>
+    </div>
+    <div class="capability">
+      <h3>Computer use</h3>
+      <ul>
+        <li>A contained Docker browser for chats and agents</li>
+        <li>Live view, Stop, Take over and Hand back</li>
+        <li>An optional contained desktop with document apps</li>
+        <li>Record a task during takeover, then review and save a skill</li>
+        <li>Computer use and agent desktop start off</li>
+        <li>Agent logins are kept only when you opt in</li>
+        <li>Passwords and payment details require takeover</li>
+        <li>Inspected buy, send and post controls stop for the person, even with automatic approvals</li>
       </ul>
     </div>
     <div class="capability">
@@ -178,8 +212,8 @@
       <h3>Safety and control</h3>
       <ul>
         <li>App-wide permissions, asked once and remembered</li>
-        <li>Code runs in a sandbox, and you review its changes</li>
-        <li>Agents and tasks kept to their own folders</li>
+        <li>Workspace limits for agents and tasks</li>
+        <li>Sandboxed code tools with change review</li>
         <li>File checkpoints with rollback</li>
         <li>Saved passwords encrypted on your machine</li>
         <li>Optional accounts with two-factor sign-in</li>
@@ -206,7 +240,7 @@
       <a class="screenshot" href="img/tasks.png"><img src="img/tasks.png" width="1440" height="900" loading="lazy" alt="Scheduled tasks and the automation library. Demo data."></a>
     </article>
     <article class="tour-row reverse">
-      <div class="tour-copy"><span class="section-number">Your setup</span><h3>Bring what works for you.</h3><p>Connect Claude or Codex, a local model server, or an OpenAI-compatible provider, then choose the model inside each conversation.</p><p class="detail">No model is included by default. Accounts, usage and hardware are yours to choose.</p></div>
+      <div class="tour-copy"><span class="section-number">Your setup</span><h3>Choose how Kairos thinks.</h3><p>The first-run guide checks this computer and helps you sign in, install Codex, test an API key or start a local download.</p><p class="detail">Claude Code is bundled. No default model is selected. Reopen the guide from Settings > Add Models or type /setup.</p></div>
       <a class="screenshot" href="img/settings.png"><img src="img/settings.png" width="1440" height="900" loading="lazy" alt="Settings for connecting models. Empty example fields, no credentials."></a>
     </article>
   </div>
@@ -222,7 +256,7 @@
 </div></section>
 
 <section class="section wrap" id="download" aria-labelledby="download-title">
-  <div class="section-heading center"><p class="eyebrow">Download</p><h2 id="download-title">Your workspace starts here.</h2><p>The app includes its own Python runtime. Nothing else to install.</p></div>
+  <div class="section-heading center"><p class="eyebrow">Download</p><h2 id="download-title">Your workspace starts here.</h2><p>The app includes its own Python runtime and Claude Code. The model guide handles the next steps.</p></div>
   <div class="download-grid">
     <article class="download-card" data-platform="windows">
       <h3>Windows</h3><p class="meta">Windows 10 and 11</p>
@@ -245,8 +279,8 @@
   </div>
   <ol class="steps">
     <li><h3>Install Kairos</h3><p>Run the installer for your system.</p></li>
+    <li><h3>Connect a model</h3><p>Use the setup guide, then pick your model above the chat box.</p></li>
     <li><h3>Choose your vault</h3><p>Start fresh, or point Kairos at the Markdown notes you already keep.</p></li>
-    <li><h3>Connect a model</h3><p>Add a model in Settings, then start a conversation.</p></li>
   </ol>
   <details class="install-note"><summary>Before you install</summary><p>The installers aren't code-signed yet, so Windows SmartScreen and macOS Gatekeeper may ask you to approve the app the first time. The Mac build runs on Apple Silicon, not Intel Macs. Screenshots use demo data.</p><p>Kairos runs on your computer. When you choose a cloud model or connect an outside service, the data that request needs goes to that provider.</p></details>
 </section>
@@ -259,7 +293,7 @@
     <details><summary>Which models work?</summary><p>Claude through Claude Code, Codex through the Codex CLI, local models through Ollama or the built-in engine, and any OpenAI-compatible API. You can switch per conversation.</p></details>
     <details><summary>Does it update itself?</summary><p>On Windows, yes: updates download in the background and install when you quit. On macOS, download the new version from this page and replace the app.</p></details>
     <details><summary>Can I reach it from my phone?</summary><p>Yes, through Tailscale, set up in Settings. It's never exposed to the public internet: it serves HTTPS on your private network and requires a login.</p></details>
-    <details><summary>Can I back up and move my data?</summary><p>Yes. Settings has a full backup that captures everything in one file, and a restore that keeps a safety copy of what it replaces.</p></details>
+    <details><summary>Can I back up and move my data?</summary><p>Yes. Settings exports app data in one archive, and restore keeps a safety copy of what it replaces. Vault notes need their own backup. Logs and checkpoint history are left out.</p></details>
     <details><summary>What happened to JARVIS?</summary><p>JARVIS is now Kairos. The update keeps your install, your chats and your settings exactly where they were. On a Mac, after installing Kairos you can delete the old JARVIS app.</p></details>
   </div>
 </div></section>
