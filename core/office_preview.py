@@ -9,10 +9,9 @@ user's spreadsheet to a third party would quietly undo that.
 Pure-Python readers only (openpyxl / python-docx / python-pptx). LibreOffice
 is deliberately not a dependency: `soffice` is not on PATH here, and bundling
 it into the installer would add hundreds of megabytes to a download whose
-selling point is that it just works. The honest consequence is stated rather
-than hidden — PPTX comes back as slide structure and text, NOT as rendered
-images, so a slide's exact visual layout is not reproduced. The download
-button next to the preview remains the way to see the real thing.
+selling point is that it just works. PPTX supplies bounded geometry, text,
+and raster pictures for an approximate layout, not an exact Office render.
+The download button remains the way to see the exact slides.
 
 Nothing here executes anything
 ------------------------------
@@ -36,9 +35,12 @@ archive's own central directory and a hostile file can lie about them, so the
 per-extractor caps below are the real ceiling, not the header check.
 """
 import csv
+import base64
 import io
 import logging
+import math
 import zipfile
+from itertools import islice
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -65,6 +67,78 @@ MAX_SHAPES_PER_SLIDE = 60
 MAX_CELL_CHARS = 2000
 MAX_CSV_ROWS = 1000
 MAX_CSV_BYTES = 8 * 1024 * 1024
+MAX_IMAGE_BYTES = 1536 * 1024
+MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024
+MAX_IMAGE_PIXELS = 25_000_000
+
+
+class _ImageBudget:
+    """Count encoded data URI bytes, so JSON's image payload stays bounded."""
+    def __init__(self, enabled=True):
+        self.used = 0
+        self.enabled = enabled
+
+    def read(self, blob):
+        # Disabled for text-only callers (artifact comments), which would
+        # otherwise decode and re-encode every picture just to read text.
+        if not self.enabled or self.used >= MAX_TOTAL_IMAGE_BYTES:
+            return None
+        if blob.startswith(b"\x89PNG\r\n\x1a\n"):
+            expected = "PNG"
+        elif blob.startswith(b"\xff\xd8\xff"):
+            expected = "JPEG"
+        elif blob[:6] in (b"GIF87a", b"GIF89a"):
+            expected = "GIF"
+        elif blob[:4] == b"RIFF" and blob[8:12] == b"WEBP":
+            expected = "WEBP"
+        else:
+            return None
+        try:
+            from PIL import Image
+            with Image.open(io.BytesIO(blob)) as picture:
+                if picture.format != expected or picture.width * picture.height > MAX_IMAGE_PIXELS:
+                    return None
+                picture.seek(0)  # animated images are a static first-frame preview
+                picture = picture.convert("RGBA")
+                opaque = picture.getchannel("A").getextrema()[0] == 255
+                # A photo saved as PNG easily passes the per-image cap at 1600 px,
+                # so after the native format, fall back to JPEG when there is no
+                # transparency, then smaller sizes.
+                native = "JPEG" if expected == "JPEG" else "PNG"
+                fallback = "JPEG" if opaque else native
+                uri = None
+                for edge, fmt in ((1600, native), (1600, fallback), (1200, fallback), (800, fallback)):
+                    frame = picture.copy()
+                    frame.thumbnail((edge, edge))
+                    output = io.BytesIO()
+                    (frame.convert("RGB") if fmt == "JPEG" else frame).save(output, format=fmt, **({"quality": 85} if fmt == "JPEG" else {}))
+                    uri = "data:image/" + fmt.lower() + ";base64," + base64.b64encode(output.getvalue()).decode("ascii")
+                    if len(uri) <= MAX_IMAGE_BYTES:
+                        break
+            size = len(uri)
+            if size > MAX_IMAGE_BYTES or self.used + size > MAX_TOTAL_IMAGE_BYTES:
+                return None
+            self.used += size
+            return uri
+        except Exception:
+            return None
+
+
+def _rgb(color):
+    """Only literal RGB; unresolved theme/indexed colors remain unknown."""
+    try:
+        from pptx.enum.dml import MSO_COLOR_TYPE
+        return "#" + str(color.rgb).lower() if color.type == MSO_COLOR_TYPE.RGB else None
+    except Exception:
+        return None
+
+
+def _solid_fill(fill):
+    try:
+        from pptx.enum.dml import MSO_FILL_TYPE
+        return _rgb(fill.fore_color) if fill.type == MSO_FILL_TYPE.SOLID else None
+    except Exception:
+        return None
 
 
 def _guard_archive(path: Path) -> None:
@@ -97,6 +171,19 @@ def _cell_text(value) -> str:
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
     return _clip(str(value))
+
+
+def _table_text(rows):
+    # Do not join a potentially large grid just to clip its text excerpt.
+    parts, remaining = [], MAX_CELL_CHARS
+    for row_index, row in enumerate(rows):
+        for col_index, cell in enumerate(row):
+            value = ("\t" if col_index else "\n" if row_index else "") + cell
+            parts.append(value[:remaining])
+            remaining -= min(len(value), remaining)
+            if not remaining:
+                return "".join(parts)
+    return "".join(parts)
 
 
 def extract_xlsx(path: Path) -> dict:
@@ -148,11 +235,47 @@ def extract_xlsx(path: Path) -> dict:
     return {"kind": "xlsx", "sheets": sheets, "truncated_sheets": len(names) > MAX_SHEETS}
 
 
-def extract_docx(path: Path) -> dict:
+def _doc_list(paragraph, document):
+    from docx.oxml.ns import qn
+    props = paragraph._p.pPr
+    numbering = props.numPr if props is not None else None
+    style = paragraph.style
+    for _ in range(12):
+        if numbering is not None or style is None:
+            break
+        props = style.element.pPr
+        numbering = props.numPr if props is not None else None
+        style = style.base_style
+    name = paragraph.style.name if paragraph.style is not None else ""
+    if numbering is None:
+        if name.startswith(("List Bullet", "List Number")):
+            return ("number" if "Number" in name else "bullet"), 0
+        return None, 0
+    level = int(numbering.ilvl.val) if numbering.ilvl is not None else 0
+    kind = "bullet"
+    try:
+        num_id = numbering.numId.val
+        if num_id == 0:
+            return None, 0
+        root = document.part.numbering_part.element
+        num = next(n for n in root if n.tag == qn("w:num") and n.get(qn("w:numId")) == str(num_id))
+        abstract_id = num.find(qn("w:abstractNumId")).get(qn("w:val"))
+        abstract = next(n for n in root if n.tag == qn("w:abstractNum") and n.get(qn("w:abstractNumId")) == abstract_id)
+        lvl = next(n for n in abstract if n.tag == qn("w:lvl") and n.get(qn("w:ilvl")) == str(level))
+        fmt = lvl.find(qn("w:numFmt")).get(qn("w:val"))
+        kind = "bullet" if fmt == "bullet" else "number"
+    except Exception:
+        if "Number" in name:
+            kind = "number"
+    return kind, min(max(level, 0), 8)
+
+
+def extract_docx(path: Path, images: bool = True) -> dict:
     try:
         import docx
         from docx.table import Table
         from docx.text.paragraph import Paragraph
+        from docx.oxml.ns import qn
     except ImportError:
         raise PreviewUnavailable("Document previews need the python-docx package.")
     _guard_archive(path)
@@ -162,44 +285,96 @@ def extract_docx(path: Path) -> dict:
         logger.info("docx preview failed for %s: %s", path.name, e)
         raise PreviewUnavailable("This document couldn't be read.")
 
-    blocks, truncated = [], False
-    # Walking body children rather than document.paragraphs keeps paragraphs
-    # and tables in their real reading order; iterating the two collections
-    # separately would move every table to the end.
-    body = document.element.body
-    for child in body.iterchildren():
+    blocks, truncated, images = [], False, _ImageBudget(images)
+    def append(block):
+        nonlocal truncated
+        if len(blocks) < MAX_DOC_BLOCKS:
+            blocks.append(block)
+        else:
+            truncated = True
+    for child in document.element.body.iterchildren():
         if len(blocks) >= MAX_DOC_BLOCKS:
             truncated = True
             break
         tag = child.tag.split("}")[-1]
         if tag == "p":
             paragraph = Paragraph(child, document)
-            text = _clip(paragraph.text).strip()
-            if not text:
-                continue
             style = (paragraph.style.name if paragraph.style is not None else "") or ""
-            level = 0
-            if style.startswith("Heading"):
-                suffix = style.replace("Heading", "").strip()
-                level = int(suffix) if suffix.isdigit() else 1
-            blocks.append({
-                "type": "heading" if level else ("list" if style.startswith("List") else "paragraph"),
-                "level": min(level, 6),
-                "text": text,
-            })
+            heading = int(style[7:].strip()) if style.startswith("Heading") and style[7:].strip().isdigit() else 0
+            list_kind, level = _doc_list(paragraph, document)
+            runs, remaining = [], MAX_CELL_CHARS
+            def flush():
+                if runs:
+                    text = "".join(r["text"] for r in runs)
+                    append({"type": "heading" if heading else "list" if list_kind else "paragraph",
+                            "level": min(heading, 6) if heading else level, "list": list_kind,
+                            "text": text, "runs": list(runs)})
+                    runs.clear()
+            # Walk run children to retain text/picture/text order within a paragraph.
+            # Hyperlink runs are included, but external relationships are never fetched.
+            from docx.text.run import Run
+            for run_element in child.iter(qn("w:r")):
+                if truncated:
+                    break
+                run = Run(run_element, paragraph)
+                for element in run_element:
+                    if truncated:
+                        break
+                    tag = element.tag.split("}")[-1]
+                    value = (element.text or "") if tag == "t" else "\t" if tag == "tab" else "\n" if tag in ("br", "cr") else ""
+                    if value and remaining:
+                        value = _clip(value)[:remaining]
+                        remaining -= len(value)
+                        runs.append({"text": value, "bold": bool(run.bold), "italic": bool(run.italic), "underline": bool(run.underline)})
+                    if tag == "drawing":
+                        flush()
+                        for blip in element.iter(qn("a:blip")):
+                            if truncated:
+                                break
+                            rid = blip.get(qn("r:embed"))
+                            uri = None
+                            try:
+                                if rid:
+                                    uri = images.read(document.part.related_parts[rid].blob)
+                            except Exception:
+                                pass
+                            append({"type": "image", "text": "Inline picture" if uri else "Inline picture (unavailable)", "image": uri})
+            flush()
         elif tag == "tbl":
             table = Table(child, document)
-            rows = []
-            for row in table.rows[:MAX_ROWS]:
-                rows.append([_clip(cell.text).strip() for cell in row.cells[:MAX_COLS]])
+            rows = [[_clip(cell.text).strip() for cell in row.cells[:MAX_COLS]] for row in table.rows[:MAX_ROWS]]
             if rows:
-                blocks.append({"type": "table", "rows": rows})
+                append({"type": "table", "rows": rows, "text": _table_text(rows)})
     return {"kind": "docx", "blocks": blocks, "truncated": truncated}
 
 
-def extract_pptx(path: Path) -> dict:
+def _ppt_paragraphs(shape):
+    from pptx.enum.text import PP_ALIGN
+    if not getattr(shape, "has_text_frame", False):
+        return []
+    paragraphs, remaining = [], MAX_CELL_CHARS
+    aligns = {PP_ALIGN.LEFT: "left", PP_ALIGN.CENTER: "center", PP_ALIGN.RIGHT: "right", PP_ALIGN.JUSTIFY: "justify"}
+    for paragraph in shape.text_frame.paragraphs:
+        if remaining <= 0:
+            break
+        runs = []
+        for run in paragraph.runs:
+            text = _clip(run.text)[:remaining]
+            remaining -= len(text)
+            font = run.font
+            runs.append({"text": text, "size_pt": float(font.size.pt) if font.size else None,
+                         "bold": bool(font.bold), "italic": bool(font.italic), "underline": bool(font.underline), "color": _rgb(font.color)})
+            if remaining <= 0:
+                break
+        paragraphs.append({"align": aligns.get(paragraph.alignment), "level": min(max(paragraph.level, 0), 8), "runs": runs})
+        remaining -= 1
+    return paragraphs
+
+
+def extract_pptx(path: Path, images: bool = True) -> dict:
     try:
         from pptx import Presentation
+        from pptx.enum.shapes import MSO_SHAPE_TYPE
     except ImportError:
         raise PreviewUnavailable("Slide previews need the python-pptx package.")
     _guard_archive(path)
@@ -209,57 +384,98 @@ def extract_pptx(path: Path) -> dict:
         logger.info("pptx preview failed for %s: %s", path.name, e)
         raise PreviewUnavailable("This presentation couldn't be read.")
 
-    slides = []
+    slides, images = [], _ImageBudget(images)
     for index, slide in enumerate(deck.slides, start=1):
         if index > MAX_SLIDES:
             break
-        title, body, tables = "", [], []
-        # The title placeholder is identified structurally rather than by
-        # assuming the first shape is the title, which is often wrong.
+        title, body, tables, shapes, groups = "", [], [], [], []
         try:
             if slide.shapes.title is not None and slide.shapes.title.has_text_frame:
                 title = _clip(slide.shapes.title.text).strip()
         except Exception:
-            title = ""
-        for shape in list(slide.shapes)[:MAX_SHAPES_PER_SLIDE]:
-            try:
-                if getattr(shape, "has_table", False) and shape.has_table:
-                    # list() first: python-pptx's row and cell collections
-                    # index by int only, and slicing them raises TypeError —
-                    # which the guard below would swallow, dropping every
-                    # table from the preview without a trace.
-                    rows = [[_clip(cell.text).strip() for cell in list(row.cells)[:MAX_COLS]]
-                            for row in list(shape.table.rows)[:MAX_ROWS]]
-                    if rows:
-                        tables.append(rows)
-                    continue
-                if not getattr(shape, "has_text_frame", False) or not shape.has_text_frame:
-                    continue
-                text = _clip(shape.text).strip()
-                if not text or text == title:
-                    continue
-                for line in text.split("\n"):
-                    line = line.strip()
-                    if line:
-                        body.append(line)
-            except Exception:
-                # One malformed shape must not lose the whole slide.
-                continue
+            pass
+        visited = 0
+        def walk(collection, transform=(1, 0, 0, 1, 0, 0), group=None, rotation=0, depth=0):
+            nonlocal visited
+            # Affine transforms compose the OOXML group child coordinate space,
+            # including scaling, translation and rotation about the group center.
+            a, b, c, d, e, f = transform
+            for shape in collection:
+                if visited >= MAX_SHAPES_PER_SLIDE or depth > 12:
+                    break
+                visited += 1
+                try:
+                    x, y, w, h = map(float, (shape.left, shape.top, shape.width, shape.height))
+                    angle = float(shape.rotation)
+                    if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+                        xf = shape._element.grpSpPr.xfrm
+                        sx = w / xf.chExt.cx if xf.chExt.cx else 1
+                        sy = h / xf.chExt.cy if xf.chExt.cy else 1
+                        theta = math.radians(angle)
+                        cos, sin = math.cos(theta), math.sin(theta)
+                        ga, gb, gc, gd = cos * sx, sin * sx, -sin * sy, cos * sy
+                        ge = x + w / 2 - cos * w / 2 + sin * h / 2 - ga * xf.chOff.x - gc * xf.chOff.y
+                        gf = y + h / 2 - sin * w / 2 - cos * h / 2 - gb * xf.chOff.x - gd * xf.chOff.y
+                        composed = (a*ga+c*gb, b*ga+d*gb, a*gc+c*gd, b*gc+d*gd, a*ge+c*gf+e, b*ge+d*gf+f)
+                        start = len(shapes)
+                        walk(shape.shapes, composed, shape.shape_id, rotation + angle, depth + 1)
+                        groups.append({"id": shape.shape_id, "name": _clip(shape.name), "kind": "group",
+                                       "children": [s["id"] for s in shapes[start:]]})
+                        continue
+                    cx, cy = a*(x+w/2)+c*(y+h/2)+e, b*(x+w/2)+d*(y+h/2)+f
+                    aw, ah = w*math.hypot(a,b), h*math.hypot(c,d)
+                    kind = "other"
+                    # Template photo slots are placeholders that hold a picture.
+                    if shape.shape_type == MSO_SHAPE_TYPE.PICTURE or (shape.is_placeholder and hasattr(shape, "image")):
+                        kind = "picture"
+                    elif shape.has_table:
+                        kind = "table"
+                    elif shape.has_chart:
+                        kind = "chart"
+                    elif shape.is_placeholder:
+                        kind = "placeholder"
+                    elif shape.has_text_frame:
+                        kind = "text"
+                    item = {"id": shape.shape_id, "name": _clip(shape.name), "kind": kind,
+                            "x": round(cx-aw/2), "y": round(cy-ah/2), "w": round(aw), "h": round(ah),
+                            "rotation": (angle + rotation) % 360, "z": len(shapes),
+                            "fill": _solid_fill(getattr(shape, "fill", None)), "line": None,
+                            "paragraphs": _ppt_paragraphs(shape), "rows": [], "image": None}
+                    if group is not None:
+                        item["group"] = group
+                    try:
+                        item["line"] = _rgb(shape.line.color)
+                    except Exception:
+                        pass
+                    if kind == "picture":
+                        try:
+                            item["image"] = images.read(shape.image.blob)
+                        except Exception:
+                            pass
+                    if kind == "table":
+                        rows = [[_clip(cell.text).strip() for cell in islice(row.cells, MAX_COLS)] for row in islice(shape.table.rows, MAX_ROWS)]
+                        item["rows"] = rows
+                        if rows:
+                            tables.append(rows)
+                    if shape.has_text_frame:
+                        text = _clip(shape.text).strip()
+                        if text and text != title:
+                            body.extend(line.strip() for line in text.split("\n") if line.strip())
+                    shapes.append(item)
+                except Exception:
+                    continue  # one malformed shape must not lose a slide
+        walk(slide.shapes)
         notes = ""
         try:
             if slide.has_notes_slide and slide.notes_slide.notes_text_frame is not None:
                 notes = _clip(slide.notes_slide.notes_text_frame.text).strip()
         except Exception:
-            notes = ""
-        slides.append({"index": index, "title": title, "body": body, "tables": tables, "notes": notes})
-    return {
-        "kind": "pptx",
-        "slides": slides,
-        "truncated": len(deck.slides._sldIdLst) > MAX_SLIDES if hasattr(deck.slides, "_sldIdLst") else False,
-        # Surfaced in the UI. Text and structure are real; visual layout,
-        # theming, and images are not reproduced without a renderer.
-        "layout_fidelity": False,
-    }
+            pass
+        slides.append({"index": index, "title": title, "body": body, "tables": tables, "notes": notes,
+                       "shapes": shapes, "groups": groups, "background": _solid_fill(slide.background.fill),
+                       "truncated_shapes": visited >= MAX_SHAPES_PER_SLIDE})
+    return {"kind": "pptx", "slides": slides, "slide_width": int(deck.slide_width), "slide_height": int(deck.slide_height),
+            "truncated": len(deck.slides) > MAX_SLIDES, "layout_fidelity": False}
 
 
 def extract_csv(path: Path) -> dict:
@@ -306,8 +522,10 @@ _EXTRACTORS = {
 PREVIEWABLE = frozenset(_EXTRACTORS)
 
 
-def extract(path: Path, extension: str) -> dict:
+def extract(path: Path, extension: str, images: bool = True) -> dict:
     extractor = _EXTRACTORS.get(extension.lower())
     if extractor is None:
         raise PreviewUnavailable("This file type has no structured preview.")
+    if extractor in (extract_pptx, extract_docx):
+        return extractor(Path(path), images=images)
     return extractor(Path(path))

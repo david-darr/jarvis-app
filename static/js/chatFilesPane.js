@@ -1,13 +1,13 @@
+import { mountChatPane } from './chatPaneLayout.js';
 import { api, el } from './api.js';
-import { closeArtifact, openArtifact } from './chatContent.js';
-import { closeBrowser } from './browserPane.js';
+import { openArtifact } from './chatContent.js';
 
 let pane = null;
 
 export function closeChatFiles() {
   if (!pane) return;
   document.removeEventListener('keydown', pane.onKey);
-  pane.panel.remove();
+  pane.layout.dispose(); pane.panel.remove();
   pane = null;
 }
 
@@ -32,17 +32,25 @@ async function loadFiles(current) {
     for (const [origin, heading] of [['attachment', 'Sent to this chat'], ['created', 'Created by a model'], ['generated', 'Generated files']]) {
       const group = files.filter(file => file.origin === origin);
       if (!group.length) continue;
-      body.append(el('h3', { class: 'chat-files-heading', text: heading }));
+      body.append(el('div', { class: 'chat-files-group-heading' }, [el('h3', { class: 'chat-files-heading', text: heading }),
+        el('button', { type: 'button', class: 'btn quiet', text: 'Open all', onclick: async () => {
+          closeChatFiles();
+          for (const file of group.filter(file => file.exists)) await openArtifact(current.sessionId, file.url, file.name, null, { background: true });
+        } })]));
       for (const file of group) {
         const button = el('button', { type: 'button', class: 'chat-file-row', disabled: !file.exists,
           title: file.exists ? `Preview ${file.name}` : `${file.name} is no longer available` }, [
           el('span', { class: 'chat-file-name', text: file.name }),
           el('span', { class: 'meta', text: file.exists ? sizeLabel(file.size) : 'No longer available' }),
         ]);
-        button.onclick = () => {
+        button.onclick = event => {
           closeChatFiles();
-          openArtifact(current.sessionId, file.url, file.name, button);
+          openArtifact(current.sessionId, file.url, file.name, button, { background: event.ctrlKey || event.metaKey });
         };
+        button.addEventListener('mousedown', event => { if (event.button === 1) event.preventDefault(); });
+        button.addEventListener('auxclick', event => {
+          if (event.button === 1 && file.exists) { event.preventDefault(); closeChatFiles(); openArtifact(current.sessionId, file.url, file.name, button, { background: true }); }
+        });
         body.append(button);
       }
     }
@@ -57,10 +65,7 @@ export function refreshChatFiles(sessionId) {
 
 export function openChatFiles(sessionId) {
   if (!sessionId) return;
-  import('./chatComputerPane.js').then(m => m.closeChatComputer()).catch(() => {});
   closeChatFiles();
-  closeArtifact();
-  closeBrowser();
   const host = document.querySelector('.chat-layout');
   if (!host) return;
   const body = el('div', { class: 'chat-files-body' });
@@ -74,6 +79,6 @@ export function openChatFiles(sessionId) {
   pane = { panel, body, sessionId, onKey };
   refresh.onclick = () => loadFiles(pane);
   document.addEventListener('keydown', onKey);
-  host.append(panel);
+  pane.layout = mountChatPane(host, panel, closeChatFiles);
   loadFiles(pane);
 }

@@ -70,6 +70,9 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (url.pathname === "/api/sessions" && sessionDelay) await delay(sessionDelay);
+    if (url.pathname === '/api/chat/artifacts' && (demoState.staleArtifacts || []).includes(url.searchParams.get('url'))) {
+      res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{"detail":"File no longer available"}'); return;
+    }
     const file = req.method === 'GET' && media(url);
     if (file) { res.setHeader('Content-Type', file.type); res.end(file.base64 ? Buffer.from(file.base64, 'base64') : file.body); return; }
     res.setHeader("Content-Type", "application/json");
@@ -159,6 +162,10 @@ app.whenReady().then(async () => {
     assert.ok(await js("!document.querySelector('.kairos-sky-image, .kairos-sky-point, .core-motion-toggle, .core-caption, .kairos-mark')"), "Home has no sky scene, dot or motion control");
     assert.ok(await js("Number(document.querySelector('.dashboard-core').dataset.drawMs) < 400"), "Home banner draws quickly");
     await require('./appearance-checks.cjs')({ js, win, waitFor, capture, base, delay });
+    await require('./artifact-pane-checks.cjs')({ js, win, waitFor, capture, base, delay, navigate });
+    await require('./artifact-viewer-checks.cjs')({ js, win, waitFor, capture, delay, navigate });
+    await require('./artifact-review-checks.cjs')({ js, win, waitFor, capture, delay, navigate, writes });
+    await require('./artifact-continuity-checks.cjs')({ js, win, waitFor, capture, base, delay, navigate, writes, demoState, reads });
     await js("(async () => { const overlay=document.getElementById('onboarding-overlay'); overlay.classList.remove('hidden'); await import('/static/js/onboarding.js').then(m => m.run(overlay, () => {})); })()");
     assert.equal(await js("document.querySelector('.onboarding-card h2').textContent"), 'Not more time. The right time.');
     await capture('desktop-onboarding');
@@ -1402,7 +1409,7 @@ app.whenReady().then(async () => {
     errors.length = errorsBefore;
     console.log("PASS: app desktop/mobile and icon rail, persistence/keyboard/tooltips, reduced motion, vault/chat/Settings, empty/error states, website layouts/links/images/previews.");
     console.log("Screenshots: " + output);
-    fs.writeFileSync(path.join(output, "result.json"), JSON.stringify({ passed: true, checks: ["10 tabs desktop/mobile", "52px icon rail layout and animation", "sidebar persistence, keyboard, tooltips, mobile override", "vault search/read", "Settings and usable mobile forms", "Home chat link and model menu", "beam/core reduced motion", "centered new-chat composer", "independent history persistence, draft retention and mobile focus", "new-chat landing does not write data", "mocked note completion", "delayed navigation", "10 empty views and unavailable status", "website desktop/mobile layouts, anchors, images, five preview states, live halftone and fallback, release-driven downloads, phone menu, FAQ, 404 and reduced motion", "site demo from disk"], docImagesUpdated: updateDocImages, errors, writes }, null, 2));
+    fs.writeFileSync(path.join(output, "result.json"), JSON.stringify({ passed: true, checks: ["artifact split/resize/persistence, maximize/Escape, retained tabs/renderers and overlays", "10 tabs desktop/mobile", "52px icon rail layout and animation", "sidebar persistence, keyboard, tooltips, mobile override", "vault search/read", "Settings and usable mobile forms", "Home chat link and model menu", "beam/core reduced motion", "centered new-chat composer", "independent history persistence, draft retention and mobile focus", "new-chat landing does not write data", "mocked note completion", "delayed navigation", "10 empty views and unavailable status", "website desktop/mobile layouts, anchors, images, five preview states, live halftone and fallback, release-driven downloads, phone menu, FAQ, 404 and reduced motion", "site demo from disk"], docImagesUpdated: updateDocImages, errors, writes }, null, 2));
   } catch (error) {
     await capture("failure").catch(() => {});
     fs.writeFileSync(path.join(output, "result.json"), JSON.stringify({ passed: false, failure: error.stack, actual: error.actual, expected: error.expected, errors }, null, 2));

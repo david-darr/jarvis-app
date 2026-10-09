@@ -229,7 +229,7 @@ async def retry_with_model(session_id: str, body: FallbackRequest, user: str = D
         raise HTTPException(400, "Choose an image-capable model for this message")
     if original.get("references"):
         try:
-            chat_references.resolve(session_id, original["references"])
+            chat_references.resolve(session_id, original["references"], auth_manager.is_admin(user))
         except ValueError:
             raise HTTPException(409, "A selected reference is no longer available. Choose it again before sending.")
     await chat_service.close_session_brain(session_id)

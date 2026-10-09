@@ -1,10 +1,11 @@
 // Composer @ picker. Selected IDs stay separate from the visible draft and
 // are resolved again by the server when the message is sent.
-import { api } from './api.js';
+import { api, toast } from './api.js';
 import { agentAvatar } from './agentHandoff.js';
+import { bindReviewComposer, reviewsChanged, reviewKey, openReview } from './artifactReview.js';
 
 const MAX_REFERENCES = 5;
-const KINDS = { file: 'File', note: 'Vault note', chat: 'Chat', agent: 'Agent' };
+const KINDS = { file: 'File', note: 'Vault note', chat: 'Chat', agent: 'Agent', artifact_comment: 'Comment' };
 let pickerNumber = 0;
 
 export function mountChatReferences(input, inputTop, getSessionId) {
@@ -29,8 +30,10 @@ export function mountChatReferences(input, inputTop, getSessionId) {
   let timer = null;
   let requestNumber = 0;
 
-  const key = item => `${item.kind}:${item.session_id || ''}:${item.id}`;
-  const getSelected = () => selected.map(({ kind, id, session_id, label, color }) => ({ kind, id, session_id, label, color }));
+  const key = item => item.kind === 'artifact_comment' ? reviewKey(item) : `${item.kind}:${item.session_id || ''}:${item.id}`;
+  const getSelected = () => selected.map(item => item.kind === 'artifact_comment'
+    ? { kind: item.kind, url: item.url, comment: item.comment, picks: [...item.picks], label: item.label }
+    : { kind: item.kind, id: item.id, session_id: item.session_id, label: item.label, color: item.color });
   const hide = () => {
     clearTimeout(timer);
     requestNumber++;
@@ -47,8 +50,15 @@ export function mountChatReferences(input, inputTop, getSessionId) {
       const chip = document.createElement('span');
       chip.className = 'chat-reference-chip';
       if (item.kind === 'agent') chip.append(agentAvatar(item.label, item.color));
-      const label = document.createElement('span');
-      label.textContent = `${KINDS[item.kind]} · ${item.label}`;
+      const label = document.createElement(item.kind === 'artifact_comment' ? 'button' : 'span');
+      if (item.kind === 'artifact_comment') {
+        chip.classList.add('artifact-comment-chip'); label.type = 'button'; label.className = 'artifact-comment-open';
+        label.title = `${item.label}\n${item.comment}`;
+        const name = document.createElement('span'), comment = document.createElement('span');
+        name.textContent = item.label; comment.textContent = item.comment;
+        label.append(name, comment);
+        label.addEventListener('click', () => openReview(item, getSessionId(), label).catch(error => toast(error.message, 'error')));
+      } else label.textContent = `${KINDS[item.kind]} · ${item.label}`;
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.textContent = '×';
@@ -56,18 +66,25 @@ export function mountChatReferences(input, inputTop, getSessionId) {
       remove.addEventListener('click', () => {
         selected = selected.filter(ref => key(ref) !== key(item));
         paintChips();
+        reviewsChanged();
         input.focus();
       });
       chip.append(label, remove);
       chips.append(chip);
     }
   };
-  const clear = () => { selected = []; paintChips(); hide(); };
-  const add = item => {
-    if (!KINDS[item.kind] || selected.some(ref => key(ref) === key(item))) return;
-    if (selected.length >= MAX_REFERENCES) return;
-    selected.push(item);
+  const clear = () => { selected = []; paintChips(); hide(); reviewsChanged(); };
+  const add = (item, previous = null) => {
+    if (!KINDS[item.kind]) return false;
+    const index = previous ? selected.findIndex(ref => key(ref) === key(previous)) : -1;
+    if (index < 0 && selected.some(ref => key(ref) === key(item))) return true;
+    const isComment = item.kind === 'artifact_comment';
+    if (index < 0 && selected.filter(ref => (ref.kind === 'artifact_comment') === isComment).length >= (isComment ? 10 : MAX_REFERENCES)) {
+      toast(isComment ? 'Add at most 10 artifact comments per message' : 'Select at most 5 references', 'error'); return false;
+    }
+    if (index < 0) selected.push(item); else selected[index] = item;
     paintChips();
+    reviewsChanged(); return true;
   };
   const choose = item => {
     if (!range) return;
@@ -119,7 +136,7 @@ export function mountChatReferences(input, inputTop, getSessionId) {
     clearTimeout(timer);
     const before = input.value.slice(0, input.selectionStart);
     const match = /(^|\s)@([^@\n]{0,80})$/.exec(before);
-    if (!match || selected.length >= MAX_REFERENCES || input.selectionStart !== input.selectionEnd) {
+    if (!match || selected.filter(ref => ref.kind !== 'artifact_comment').length >= MAX_REFERENCES || input.selectionStart !== input.selectionEnd) {
       requestNumber++;
       hide();
       return;
@@ -160,9 +177,13 @@ export function mountChatReferences(input, inputTop, getSessionId) {
   input.addEventListener('keydown', onKeydown, true);
   const onOutside = event => { if (!inputTop.contains(event.target) && !list.contains(event.target)) hide(); };
   document.addEventListener('pointerdown', onOutside);
+  // The artifact pane belongs to the main chat, not an independently mounted
+  // side/agent composer. Opening one must not steal the main review draft.
+  const releaseReview = input.id === 'chat-input' ? bindReviewComposer({ add, getSelected, sessionId: getSessionId }) : () => {};
   return {
     getSelected, add, clear, hide,
     dispose() {
+      releaseReview();
       clearTimeout(timer);
       requestNumber++;
       document.removeEventListener('pointerdown', onOutside);

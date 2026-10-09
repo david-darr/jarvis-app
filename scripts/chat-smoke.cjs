@@ -151,9 +151,15 @@ const server = http.createServer(async (req, res) => {
         { type: 'table', rows: [['Area', 'Direction'], ['Chat', 'Clear']] },
         { type: 'paragraph', level: 0, text: 'Closing paragraph after the table.' },
       ] });
-      if (file.extension === 'pptx') return json({ kind: 'pptx', truncated: false, layout_fidelity: false, slides: [
-        { index: 1, title: 'Quarterly review', body: ['First point', 'Second point'], tables: [], notes: 'Speaker notes here.' },
-        { index: 2, title: 'Second slide', body: [], tables: [[['a', 'b']]], notes: '' },
+      // The shape contract core/office_preview.py has returned since the
+      // artifact viewer upgrade (2026-10-08); title/body/tables stay too.
+      const text = (id, name, value, y) => ({ id, name, kind: 'text', x: 600000, y, w: 9000000, h: 800000, rotation: 0, z: id,
+        fill: null, line: null, rows: [], image: null, paragraphs: [{ align: 'left', level: 0, runs: [{ text: value, size_pt: 28, bold: false, italic: false, underline: false, color: null }] }] });
+      if (file.extension === 'pptx') return json({ kind: 'pptx', truncated: false, layout_fidelity: false, slide_width: 12192000, slide_height: 6858000, slides: [
+        { index: 1, title: 'Quarterly review', body: ['First point', 'Second point'], tables: [], notes: 'Speaker notes here.', groups: [],
+          shapes: [text(2, 'Title 1', 'Quarterly review', 400000), text(3, 'Body', 'First point', 1600000), text(4, 'Body 2', 'Second point', 2600000)] },
+        { index: 2, title: 'Second slide', body: [], tables: [[['a', 'b']]], notes: '', groups: [],
+          shapes: [text(2, 'Title 1', 'Second slide', 400000), { id: 5, name: 'Table', kind: 'table', x: 600000, y: 1800000, w: 6000000, h: 900000, rotation: 0, z: 5, fill: null, line: null, paragraphs: [], image: null, rows: [['a', 'b']] }] },
       ] });
       return json({ kind: 'csv', truncated: false, rows: [['name', 'note'], ['Smith, John', 'two']] });
     }
@@ -228,7 +234,7 @@ app.whenReady().then(async () => {
       ['Sent to this chat', 'Created by a model', 'Generated files']);
     await capture('desktop-chat-files');
     await js("document.querySelector('.chat-file-row').click()");
-    await waitFor("!!document.querySelector('.artifact-source, .artifact-document')");
+    await waitFor("!!document.querySelector('.artifact-tab-panel:not([hidden]) .artifact-source, .artifact-document')");
     assert.equal(await js("document.querySelectorAll('.chat-files-panel').length"), 0);
     await js("document.querySelector('.chat-files-toggle').click()");
     await waitFor("document.querySelectorAll('.chat-file-row').length===3");
@@ -367,14 +373,16 @@ app.whenReady().then(async () => {
     await waitFor("fetch('/api/sessions/s1').then(r=>r.json()).then(s=>s.model_override==='')");
     assert.equal(chats.s1.model_override, '');
     await js("document.querySelector('.artifact-card').click()");
-    await waitFor("!!document.querySelector('.artifact-document h1')");
+    await waitFor("!!document.querySelector('.artifact-tab-panel:not([hidden]) .artifact-document h1')");
     await capture('desktop-artifact');
-    await js("[...document.querySelectorAll('.artifact-toolbar button')].find(b=>b.textContent==='Source').click()");
-    assert.ok(await js("document.querySelector('.artifact-source').textContent.startsWith('# Project brief')"));
+    await js("[...document.querySelectorAll('.artifact-tab-panel:not([hidden]) .artifact-toolbar button')].find(b=>b.textContent==='Source').click()");
+    // Source view is line-numbered now; read the code text without the numbers.
+    assert.ok(await js("[...document.querySelectorAll('.artifact-tab-panel:not([hidden]) .artifact-source .artifact-line')].map(l => l.lastChild.textContent).join('\\n').startsWith('# Project brief')"));
     await js("document.querySelector('[aria-label=\"Close file preview\"]').click(); document.querySelectorAll('.artifact-card')[1].click()");
-    await waitFor("!!document.querySelector('.artifact-frame')");
-    assert.equal(await js("document.querySelector('.artifact-frame').getAttribute('sandbox')"), '');
-    assert.ok(await js("!document.querySelector('.artifact-frame').srcdoc.includes('<script')"));
+    await waitFor("!!document.querySelector('.artifact-tab-panel:not([hidden]) .artifact-frame')");
+    // Same-origin so Select mode can read the static DOM; never scripts.
+    assert.equal(await js("document.querySelector('.artifact-tab-panel:not([hidden]) .artifact-frame').getAttribute('sandbox')"), 'allow-same-origin');
+    assert.ok(await js("!document.querySelector('.artifact-tab-panel:not([hidden]) .artifact-frame').srcdoc.includes('<script')"));
     assert.equal(await js("window.__xss || 0"), 0);
     await capture('desktop-html-preview');
     // Card 7 is the macro-enabled .docm — deliberately never previewed, so
@@ -382,59 +390,62 @@ app.whenReady().then(async () => {
     // a structured preview.
     await js("document.querySelector('[aria-label=\"Close file preview\"]').click(); document.querySelectorAll('.artifact-card')[7].click()");
     await waitFor("!!document.querySelector('.artifact-fallback')");
-    assert.ok(await js("document.querySelector('.artifact-toolbar a').href.includes('download=true')"));
+    assert.ok(await js("document.querySelector('.artifact-tab-panel:not([hidden]) .artifact-toolbar a').href.includes('download=true')"));
 
     // -- Office previews (David's ask 2026-09-15). Every string below comes
     // from the document, so these also confirm content is inserted as text.
     await js("document.querySelector('[aria-label=\"Close file preview\"]').click(); document.querySelectorAll('.artifact-card')[2].click()");
-    await waitFor("!!document.querySelector('.office-doc')");
-    assert.equal(await js("document.querySelector('.office-doc h1').textContent"), 'Project brief');
+    await waitFor("!!document.querySelector('.artifact-tab-panel:not([hidden]) .office-doc')");
+    assert.equal(await js("document.querySelector('.artifact-tab-panel:not([hidden]) .office-doc h1').textContent"), 'Project brief');
     // Reading order: the table sits between the two paragraphs, not after
     // both of them.
-    assert.deepEqual(await js("[...document.querySelector('.office-doc').children].map(n=>n.tagName)"), ['H1', 'P', 'DIV', 'P']);
-    assert.equal(await js("document.querySelector('.office-grid th').textContent"), 'Area');
+    assert.deepEqual(await js("[...document.querySelector('.artifact-tab-panel:not([hidden]) .office-doc').children].map(n=>n.tagName)"), ['H1', 'P', 'DIV', 'P']);
+    assert.equal(await js("document.querySelector('.artifact-tab-panel:not([hidden]) .office-grid th').textContent"), 'Area');
     await capture('desktop-office-docx');
 
     await js("document.querySelector('[aria-label=\"Close file preview\"]').click(); document.querySelectorAll('.artifact-card')[4].click()");
-    await waitFor("document.querySelectorAll('.office-tab').length===2");
-    assert.equal(await js("document.querySelector('.office-tab.active').textContent"), 'Budget');
-    assert.equal(await js("document.querySelector('.office-grid th').textContent"), 'Item');
+    await waitFor("document.querySelectorAll('.artifact-tab-panel:not([hidden]) .office-tab').length===2");
+    assert.equal(await js("document.querySelector('.artifact-tab-panel:not([hidden]) .office-tab.active').textContent"), 'Budget');
+    // Sheets carry column letters and row numbers; read cell A1 itself.
+    assert.equal(await js("document.querySelector('.artifact-tab-panel:not([hidden]) .office-grid td[data-pick$=\"cell=A1\"]').textContent"), 'Item');
     // A partial view says so rather than implying the file ends here.
-    assert.ok(await js("document.querySelector('.office-note').textContent.includes('900 rows')"));
-    await js("[...document.querySelectorAll('.office-tab')].find(t=>t.textContent==='Notes').click()");
-    await waitFor("document.querySelector('.office-grid th').textContent==='second sheet'");
-    assert.equal(await js("document.querySelector('.office-tab.active').textContent"), 'Notes');
+    assert.ok(await js("document.querySelector('.artifact-tab-panel:not([hidden]) .office-note').textContent.includes('900 rows')"));
+    await js("[...document.querySelectorAll('.artifact-tab-panel:not([hidden]) .office-tab')].find(t=>t.textContent==='Notes').click()");
+    await waitFor("document.querySelector('.artifact-tab-panel:not([hidden]) .office-grid td[data-pick$=\"cell=A1\"]')?.textContent==='second sheet'");
+    assert.equal(await js("document.querySelector('.artifact-tab-panel:not([hidden]) .office-tab.active').textContent"), 'Notes');
     await capture('desktop-office-xlsx');
 
     await js("document.querySelector('[aria-label=\"Close file preview\"]').click(); document.querySelectorAll('.artifact-card')[5].click()");
-    await waitFor("!!document.querySelector('.office-slide')");
-    assert.equal(await js("document.querySelector('.office-slide h2').textContent"), 'Quarterly review');
-    assert.equal(await js("document.querySelectorAll('.office-slide p').length"), 2);
-    assert.ok(await js("!!document.querySelector('.office-notes')"), 'speaker notes are available');
+    await waitFor("!!document.querySelector('.artifact-tab-panel:not([hidden]) .office-slide')");
+    assert.equal(await js("document.querySelector('.artifact-tab-panel:not([hidden]) .office-slide [data-pick=\"pptx:slide=1;shape=2\"]').textContent"), 'Quarterly review');
+    assert.equal(await js("document.querySelectorAll('.artifact-tab-panel:not([hidden]) .office-slide [data-pick]').length"), 3);
+    assert.ok(await js("!!document.querySelector('.artifact-tab-panel:not([hidden]) .office-notes')"), 'speaker notes are available');
     // The fidelity limit is stated in the UI, not left to be discovered.
-    assert.ok(await js("[...document.querySelectorAll('.office-note')].some(n=>n.textContent.includes('layout, theming, and images are not shown'))"));
-    await js("[...document.querySelectorAll('.artifact-toolbar button')].find(b=>b.getAttribute('aria-label')==='Next slide').click()");
-    await waitFor("document.querySelector('.office-slide h2').textContent==='Second slide'");
-    assert.ok(await js("!!document.querySelector('.office-slide .office-grid')"), 'slide tables render');
+    assert.ok(await js("[...document.querySelectorAll('.artifact-tab-panel:not([hidden]) .office-note')].some(n=>n.textContent.includes('Approximate layout'))"));
+    await js("[...document.querySelectorAll('.artifact-tab-panel:not([hidden]) .artifact-toolbar button')].find(b=>b.getAttribute('aria-label')==='Next slide').click()");
+    await waitFor("document.querySelector('.artifact-tab-panel:not([hidden]) .office-slide [data-pick=\"pptx:slide=2;shape=2\"]')?.textContent==='Second slide'");
+    assert.ok(await js("!!document.querySelector('.artifact-tab-panel:not([hidden]) .office-slide .office-grid')"), 'slide tables render');
     await capture('desktop-office-pptx');
 
     await js("document.querySelector('[aria-label=\"Close file preview\"]').click(); document.querySelectorAll('.artifact-card')[6].click()");
-    await waitFor("!!document.querySelector('.office-grid')");
-    // Parsed server-side precisely so a quoted separator survives.
-    assert.equal(await js("document.querySelectorAll('.office-grid td')[0].textContent"), 'Smith, John');
-    await js("[...document.querySelectorAll('.artifact-toolbar button')].find(b=>b.textContent==='Source').click()");
-    await waitFor("!!document.querySelector('.artifact-source')");
-    assert.ok(await js("document.querySelector('.artifact-source').textContent.includes('\"Smith, John\"')"));
-    await js("[...document.querySelectorAll('.artifact-toolbar button')].find(b=>b.textContent==='Table').click()");
-    await waitFor("!!document.querySelector('.office-grid')");
+    await waitFor("!!document.querySelector('.artifact-tab-panel:not([hidden]) .office-grid')");
+    // Parsed server-side precisely so a quoted separator survives (row 1 is the header row, so A2).
+    assert.equal(await js("document.querySelector('.artifact-tab-panel:not([hidden]) .office-grid td[data-pick$=\"cell=A2\"]').textContent"), 'Smith, John');
+    await js("[...document.querySelectorAll('.artifact-tab-panel:not([hidden]) .artifact-toolbar button')].find(b=>b.textContent==='Source').click()");
+    await waitFor("!!document.querySelector('.artifact-tab-panel:not([hidden]) .artifact-source')");
+    assert.ok(await js("document.querySelector('.artifact-tab-panel:not([hidden]) .artifact-source').textContent.includes('\"Smith, John\"')"));
+    await js("[...document.querySelectorAll('.artifact-tab-panel:not([hidden]) .artifact-toolbar button')].find(b=>b.textContent==='Table').click()");
+    await waitFor("!!document.querySelector('.artifact-tab-panel:not([hidden]) .office-grid')");
     await js("import('/static/js/chatContent.js').then(m=>m.openArtifact('s1','/generated-files/012345abcdef_preview.pdf','preview.pdf'))");
-    await waitFor("document.querySelector('.artifact-pdf-text')?.textContent.includes('JARVIS preview test')");
+    await waitFor("document.querySelector('.artifact-tab-panel:not([hidden]) .artifact-pdf-text')?.textContent.includes('JARVIS preview test')");
     await delay(1000);
     await capture('desktop-pdf-preview');
     await js("import('/static/js/chatContent.js').then(m=>m.openArtifact('s1','/generated-files/012345abcdef_image.png','image.png'))");
-    await waitFor("document.querySelector('.artifact-preview > img')?.naturalWidth===1");
+    await waitFor("document.querySelector('.artifact-tab-panel:not([hidden]) .artifact-preview .artifact-image-viewport img')?.naturalWidth===1");
     await open('s2');
-    assert.equal(await js("document.querySelectorAll('.artifact-panel').length"), 0);
+    assert.equal(await js("document.querySelectorAll('.chat-layout .artifact-viewer').length"), 1, 'Documents persist on a chat switch');
+    assert.match(await js("document.querySelector('.artifact-tab-panel:not([hidden]) .artifact-origin').textContent"), /^from /);
+    await js("import('/static/js/chatContent.js').then(m => m.closeArtifact())");
     await delay(400);
     assert.ok(await js("document.querySelector('#chat-main').classList.contains('is-empty')"));
     await js("window.originalComposer=document.querySelector('#chat-input')");
@@ -692,7 +703,7 @@ app.whenReady().then(async () => {
       await js("document.querySelector('#chat-messages').scrollTop=0");
       await capture('mobile-chat-' + width);
       await js("document.querySelector('.artifact-card').click()");
-      await waitFor("!!document.querySelector('.artifact-document')");
+      await waitFor("!!document.querySelector('.artifact-tab-panel:not([hidden]) .artifact-document')");
       await delay(250); // let the deliberate slide-in animation settle
       assert.ok(await js("document.querySelector('.artifact-panel').getBoundingClientRect().right <= innerWidth+1"));
       await capture('mobile-artifact-' + width);

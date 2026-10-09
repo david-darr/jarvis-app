@@ -40,6 +40,13 @@ export function getInFlight(sessionId) {
   return _inflight.get(sessionId) || null;
 }
 
+export function clearPermission(sessionId, requestId) {
+  const entry = _inflight.get(sessionId);
+  if (entry?.permission?.id !== requestId) return;
+  entry.permission = null;
+  _notify(sessionId);
+}
+
 export function listInFlight() {
   return [..._inflight.entries()].map(([sessionId, entry]) => ({ sessionId, ...entry }));
 }

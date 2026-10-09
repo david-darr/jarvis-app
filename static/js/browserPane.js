@@ -1,3 +1,4 @@
+import { mountChatPane } from './chatPaneLayout.js';
 // static/js/browserPane.js — the side browser's UI (David's ask 2026-09-15).
 //
 // One set of chrome (back / forward / reload / address / open-externally /
@@ -47,11 +48,11 @@ export function releaseBrowser() {
 
 export function closeBrowser() {
   if (!pane) return;
-  const { panel, cleanups, native } = pane;
+  const { panel, cleanups, native, layout } = pane;
   pane = null;
   for (const fn of cleanups) { try { fn(); } catch { /* best effort */ } }
   if (native) bridge()?.close();
-  panel.remove();
+  layout.dispose(); panel.remove();
 }
 
 function normalizeForDisplay(url) {
@@ -62,11 +63,7 @@ function normalizeForDisplay(url) {
 }
 
 export function openBrowser(initialUrl) {
-  // One right-hand pane at a time. Imported lazily to avoid a static import
-  // cycle: chatContent.js opens this pane for external links.
-  import('./chatContent.js').then(m => m.closeArtifact()).catch(() => {});
-  import('./chatFilesPane.js').then(m => m.closeChatFiles()).catch(() => {});
-  import('./chatComputerPane.js').then(m => m.closeChatComputer()).catch(() => {});
+  // mountChatPane closes the previous pane before mounting this browser.
   closeBrowser();
 
   const host = document.querySelector('.chat-layout');
@@ -98,8 +95,12 @@ export function openBrowser(initialUrl) {
   document.addEventListener('keydown', onKey);
   cleanups.push(() => document.removeEventListener('keydown', onKey));
 
-  host.append(panel);
-  pane = { panel, cleanups, native };
+  // A native view receives its own pointer events above the DOM. Hide it for
+  // the captured divider drag and restore it after the new bounds settle.
+  const layout = mountChatPane(host, panel, closeBrowser, {
+    onDrag: dragging => dragging ? suppressBrowser() : releaseBrowser(),
+  });
+  pane = { panel, cleanups, native, layout };
 
   let go;
   if (native) {

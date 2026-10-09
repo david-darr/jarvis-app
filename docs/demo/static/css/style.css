@@ -56,6 +56,10 @@
   --sidebar-width: 204px;
   --sidebar-rail-width: 52px;
   --chat-column: 860px;
+  --chat-pane-width: 520px;
+  /* Default ink on a rendered document page (slides): the page stays white in
+     every theme, like the HTML preview, so its text does too. */
+  --page-ink: #202124;
   --page-max: 1200px;
   --library-max: 1440px;
   --shadow-elevated: 0 12px 40px rgba(var(--shade-rgb), .10);

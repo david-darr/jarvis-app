@@ -2,7 +2,7 @@ import { api, el, toast, confirmDialog, modelMark } from "../api.js";
 import { ICONS } from "../icons.js";
 import { runSlashCommand } from "../slashCommands.js";
 import * as chatStream from "../chatStream.js";
-import { renderMessageBody, copyText, closeArtifact } from "../chatContent.js";
+import { renderMessageBody, copyText, hideArtifact, mountArtifactPane, setArtifactContext, showArtifactPane } from "../chatContent.js";
 import { openBrowser, closeBrowser, suppressBrowser, releaseBrowser } from "../browserPane.js";
 import { openChatFiles, closeChatFiles, refreshChatFiles } from "../chatFilesPane.js";
 import { openChatComputer, closeChatComputer, updateChatComputer } from "../chatComputerPane.js";
@@ -446,8 +446,9 @@ function attachToInFlight(sessionId, messages, replyCard, replyBody, sendBtn) {
     // A tool asked for something it has not been granted. Show it here, in
     // the chat that asked, while the reply is still being produced.
     if (entry.permission && entry.permission.id !== shownPermission) {
-      shownPermission = entry.permission.id;
-      showPermissionPrompt(entry.permission, () => { entry.permission = null; });
+      const request = entry.permission;
+      shownPermission = request.id;
+      showPermissionPrompt(request, () => chatStream.clearPermission(sessionId, request.id));
     }
     const follow = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 100;
     const current = sessionId === activeSessionId && replyCard.isConnected;
@@ -552,6 +553,7 @@ function syncChatLayout(messages, title) {
 
 function renderWelcome(messages) {
   messages.replaceChildren();
+  delete messages.dataset.sessionId;
   syncChatLayout(messages, 'New chat');
 }
 
@@ -581,6 +583,7 @@ export async function render(container, tabId, options = {}) {
   // typical chat app's "new chat by default" convention rather than
   // silently resuming wherever you left off.
   activeSessionId = null;
+  setArtifactContext(null);
 
   const sessionsPanel = el("div", { id: "chat-sessions" });
 
@@ -738,7 +741,10 @@ export async function render(container, tabId, options = {}) {
   const filesBtn = el("button", { type: "button", class: "input-icon-btn chat-files-toggle",
     title: "Files in this chat", "aria-label": "Files in this chat",
     onclick: () => activeSessionId ? openChatFiles(activeSessionId) : toast("Open a chat to see its files", "error") });
+  const documentsBtn = el("button", { type: "button", class: "btn quiet chat-documents-toggle", text: "Documents", "aria-label": "Documents", onclick: () => showArtifactPane(documentsBtn) });
   filesBtn.insertAdjacentHTML("beforeend", ICON_DOC);
+  mobileHeader.insertBefore(filesBtn, headerNewBtn);
+  mobileHeader.insertBefore(documentsBtn, headerNewBtn);
   let computerInfo = null;
   const dismissComputer = () => {
     const entry = chatStream.getInFlight(activeSessionId);
@@ -811,7 +817,7 @@ export async function render(container, tabId, options = {}) {
   const sendBtn = el("button", { class: "btn", id: "chat-send", title: "Send" });
   sendBtn.insertAdjacentHTML("beforeend", ICON_SEND);
 
-  const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, filesBtn, computerWatch, permissionControl, workspacePill, contextPill]);
+  const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, computerWatch, permissionControl, workspacePill, contextPill]);
   // Dictation (David's ask 2026-09-15). Hidden outright when the browser
   // cannot record, rather than offered and then failing on click.
   const micBtn = el("button", { type: "button", class: "input-icon-btn chat-mic-btn", id: "chat-mic", title: "Dictate", "aria-label": "Dictate a message" });
@@ -857,7 +863,6 @@ export async function render(container, tabId, options = {}) {
   sessionsList.addEventListener("click", () => closeSessionsDrawer(true));
 
   function startNewChat() {
-    closeArtifact();
     activeImagePreview?.();
     activeWebCapture?.();
     closeChatFiles();
@@ -868,6 +873,7 @@ export async function render(container, tabId, options = {}) {
     activeUnsubscribers.forEach(unsub => unsub());
     activeUnsubscribers.length = 0;
     activeSessionId = null;
+    setArtifactContext(null);
     syncPermissionMode();
     renderQueue();
     clearStagedAttachments();
@@ -967,7 +973,7 @@ export async function render(container, tabId, options = {}) {
     dock.getAnimations().forEach(animation => animation.cancel());
     closeSessionMenu();
     closeDocumentsMenu?.();
-    closeArtifact();
+    hideArtifact({ navigation: true });
     activeImagePreview?.();
     activeWebCapture?.();
     closeChatFiles();
@@ -987,6 +993,8 @@ export async function render(container, tabId, options = {}) {
   await refreshProjectPicker(sessionsList, messages);
   if (disposed || !container.isConnected) return cleanup;
   if (options.sessionId) await openSession(options.sessionId, sessionsList, messages);
+  if (disposed || !container.isConnected) return cleanup;
+  await mountArtifactPane(container);
   if (disposed || !container.isConnected) return cleanup;
   // Landed: from here on, gaining or losing messages dissolves the background.
   backdropInstant = false;
@@ -2089,6 +2097,7 @@ async function openProjectModal(project) {
 
 async function refreshSessions(sessionsList, messages) {
   const allSessions = await api("/api/sessions");
+  setArtifactContext(activeSessionId, allSessions);
   if (!sessionsList.isConnected) return;
   // Projects (David's ask 2026-09-12) — narrows the list to whatever
   // project is currently selected in the picker above; null (the default,
@@ -2261,6 +2270,7 @@ async function createSession({ preserveAttachments = false } = {}) {
   const draftFiles = preserveAttachments ? stagedAttachments : [];
   const session = await api("/api/sessions", { method: "POST", body: JSON.stringify({}) });
   activeSessionId = session.id;
+  setArtifactContext(session.id);
   renderQueue();
   // A chat created while a project is selected joins it automatically
   // (David's ask 2026-09-12, matching Claude/ChatGPT's "new chat inside
@@ -2283,7 +2293,6 @@ async function createSession({ preserveAttachments = false } = {}) {
 
 async function openSession(sessionId, sessionsList, messages) {
   activeTimeline?.reset();
-  closeArtifact();
   activeImagePreview?.();
   activeWebCapture?.();
   closeChatFiles();
@@ -2297,6 +2306,7 @@ async function openSession(sessionId, sessionsList, messages) {
   activeUnsubscribers.forEach(unsub => unsub());
   activeUnsubscribers.length = 0;
   activeSessionId = sessionId;
+  setArtifactContext(sessionId);
   mainOpened(sessionId);
   // A queue whose reply finished while this chat was not on screen waits
   // for Resume rather than sending on its own.
@@ -2310,6 +2320,7 @@ async function openSession(sessionId, sessionsList, messages) {
   if (!messages.isConnected || activeSessionId !== sessionId) return;
   syncPermissionMode(session.permission_mode);
   messages.innerHTML = "";
+  messages.dataset.sessionId = sessionId;
   for (const msg of session.messages) {
     messages.appendChild(messageCard(msg.role, msg.content, msg.ts, msg.status,
       (msg.image_attachment_ids || []).map(id => `/api/chat/images/${encodeURIComponent(sessionId)}/${encodeURIComponent(id)}`), msg));

@@ -60,20 +60,64 @@
   googleFiles.push({ id: 'drive-trash', name: 'Old brief', mimeType: 'text/plain', parents: ['root'], trashed: true });
   googleFiles.push({ id: 'drive-child', name: 'Folder notes.txt', mimeType: 'text/plain', parents: ['drive-folder'], trashed: false });
 
-  function pdfFixture() {
+  function pdfFixture(pageCount = 1) {
     const text = 'BT /F1 18 Tf 50 740 Td (Kairos Google Drive preview) Tj ET';
-    const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
-      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', `<< /Length ${text.length} >>\nstream\n${text}\nendstream`];
+    const kids = Array.from({ length: pageCount }, (_, i) => `${4 + i * 2} 0 R`).join(' ');
+    const objects = ['<< /Type /Catalog /Pages 2 0 R >>', `<< /Type /Pages /Kids [${kids}] /Count ${pageCount} >>`,
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+    for (let i = 0; i < pageCount; i++) objects.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + i * 2} 0 R >>`,
+      `<< /Length ${text.length} >>\nstream\n${text}\nendstream`);
     let body = '%PDF-1.4\n', offsets = [0];
     objects.forEach((object, index) => { offsets.push(body.length); body += `${index + 1} 0 obj\n${object}\nendobj\n`; });
     const xref = body.length;
-    body += `xref\n0 6\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+    body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
     return body;
   }
 
+  const artifacts = {
+    'review-grid.xlsx': { kind: 'office', data: { kind: 'xlsx', sheets: [
+      { name: 'Sheet1', rows: [['A1', 'B1', 'C1'], ['A2', 'B2', 'C2'], ['A3', 'B3', 'C3']] }] } },
+    'review-image.png': { kind: 'image', type: 'image/png', base64: 'iVBORw0KGgoAAAANSUhEUgAAAUAAAACgCAIAAADywSLLAAAB8ElEQVR4nO3TQQ3AIADAQJh/PyjBAjrmgQ9pcqegn86z1wCavtcBwD0DQ5iBIczAEGZgCDMwhBkYwgwMYQaGMANDmIEhzMAQZmAIMzCEGRjCDAxhBoYwA0OYgSHMwBBmYAgzMIQZGMIMDGEGhjADQ5iBIczAEGZgCDMwhBkYwgwMYQaGMANDmIEhzMAQZmAIMzCEGRjCDAxhBoYwA0OYgSHMwBBmYAgzMIQZGMIMDGEGhjADQ5iBIczAEGZgCDMwhBkYwgwMYQaGMANDmIEhzMAQZmAIMzCEGRjCDAxhBoYwA0OYgSHMwBBmYAgzMIQZGMIMDGEGhjADQ5iBIczAEGZgCDMwhBkYwgwMYQaGMANDmIEhzMAQZmAIMzCEGRjCDAxhBoYwA0OYgSHMwBBmYAgzMIQZGMIMDGEGhjADQ5iBIczAEGZgCDMwhBkYwgwMYQaGMANDmIEhzMAQZmAIMzCEGRjCDAxhBoYwA0OYgSHMwBBmYAgzMIQZGMIMDGEGhjADQ5iBIczAEGZgCDMwhBkYwgwMYQaGMANDmIEhzMAQZmAIMzCEGRjCDAxhBoYwA0OYgSHMwBBmYAgzMIQZGMIMDGEGhjADQ5iBIczAEGZgCDMwhBkYwgwMYQaGMANDmIEhzMAQZmAIMzCEGRjCDAxhBoYwA0OYgSHMwBBmYAgzMIQZGMIMDGEGhjADQ5iBIczAEGZgCDMwhBkYwgwMYQaGMANDmIEhzMAQZmAIMzCEGRhG1w/bVQOyK5Pb0gAAAABJRU5ErkJggg==' },
+    'project-brief.md': { kind: 'markdown', body: '# Project brief\n\nA calm workspace.\n\n' + Array.from({ length: 80 }, (_, i) => `## Step ${i + 1}\n\nReview the plan and collect feedback.\n`).join('\n') },
+    'weekly-plan.md': { kind: 'markdown', body: '# Planning the week\n\nMake time for the next step.\n' },
+    'review-notes.txt': { kind: 'text', body: 'Review notes\nKeep the next step clear.\n' },
+    'budget.xlsx': { kind: 'office', data: { kind: 'xlsx', sheets: [
+      { name: 'Budget', rows: [['Item', 'Budget'], ['Research', '1200']] },
+      { name: 'Actual', rows: [['Item', 'Actual'], ['Research', '950']] }] } },
+    'workspace.pptx': { kind: 'office', data: { kind: 'pptx', slide_width: 12192000, slide_height: 6858000, layout_fidelity: false,
+      slides: ['Direction', 'Next steps', 'Review'].map((title, i) => ({ index: i + 1, title, body: ['Make room for the work.'], notes: 'Collect feedback.', background: '#fbf6ee', shapes: [
+        { id: 2, name: 'Title', kind: 'text', x: 600000, y: 500000, w: 10000000, h: 900000, rotation: 0, z: 0, fill: null, line: null, paragraphs: [{ align: 'left', level: 0, runs: [{ text: title, size_pt: 36, bold: true, color: '#3a2a20' }] }] },
+        { id: 3, name: 'Plan', kind: 'text', x: 650000, y: 1750000, w: 6400000, h: 1900000, rotation: 0, z: 1, fill: null, line: null, paragraphs: [{ align: 'left', level: 0, runs: [{ text: 'Make room for the work.\nReview the plan and share the next step.', size_pt: 24, color: '#3a2a20' }] }] },
+        { id: 4, name: 'Picture', kind: 'picture', x: 8000000, y: 1900000, w: 2800000, h: 2100000, rotation: 8, z: 2, image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAACgCAIAAADywSLLAAAEHklEQVR4nO3dzWncQACG4XVIQbm4Ap1dgDsILG4gBaQBY0gHW4DPqmAvqcF39xCIQCwh+Gc1kuabeZ6TD0EIj94dreLR3Ly+/D4Amb7sfQLA9QQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwb6WPdz5dCx7wD7d3j+VPaBxaXV8b0q9VtYlUucwG5e2x7dMwPNVMjw8Lz8a4+NdkTE2Lm2Pb5mAp6tEuisN89VjbFzaHt8yD7FcJeuZPhOvuwc2Lm2P78xTaAi2KGAf83V+SBuXfiZhMzAEEzAEEzAEEzAEEzAEEzAEEzAEEzAEEzAEEzAEEzAEEzAEK/xKHdL9/P5t71NI9eNXmZfbfIoZGIIJGIK5hWb/+0AyAu72+5UqWIlbaAgmYAi26S20O0koywwMwQQMwQQMwQQMwQQMwQQMwQTcoGnDu3kPSxreoFDAEEzAbTIJd7I/sNVIzbq9fzqfjtNVYvv1qszfbhbWK+AuGvZ9uE7L6xVwL1fJwm3gqTDdifXAXaziKHjFUBUPsSCYgCGY9cAQzAwMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwawH7oLVSFVJXY3E9qRb7aBYD8yHLhRv5KjzjRzn0zHsjRz2B96+Xi/TqdA0KOPj3fKGPcRqk3pTMl74HUfAEMx64AaZflMMD88Lb6TNwBBMwBBMwBBMwBBMwBDMn1Kys3e3QfW3KG8QMDv41N7Fl/9YzP8QMNtZvuf4fAQlTwRMRrr/PeDw968Re+YhFnn1bnDkFGZgVrRBYGPfU7EZmEMD0+PY61RsPXAX+wNvb/uixse7DudhMzDtzIdjf/OwgGmqorGzhq0HprV+xp7upc3AEEzANDX91nYmaxMwBBMwbU56Y2XnsxIBQzABQzAB0+z96ljlWZUlYAgmYAgmYAgmYAgmYAhmPfAWOlwPzDbMwBRQ5+qfocqzKkvAEMx6YAhmBqbN+9WhsvNZiYAhmIBpcNIbqjmTtQkYggmY1qa+oYJz2IyAaaqfoad6BUxTFQ2d1Stg2mlp6K9eAdNIUUOX9dpelC26WvXVNkOv6U48xGJ16zU29F2vGZjUqVi6OyxmoHNzdVeXrNt/CJgdXHb4bsyifYOA2Zk+l/AQC4IJGIIJGIIJGIIJGHoN+Pb+qZM94PYy/W6n3/PHGZe2x/eSGRiCLQ3Yh32dH8/GpYfp93A43Ly+FNj143w6Tj/4T/ki5m8lC0fXuLQ9vsUCvrxWKGX56BqX5se3WMATGdcztJeMS6vjWzhgYEueQkMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAcMh1x+3skhvZZZcagAAAABJRU5ErkJggg==', line: '#815e1e' },
+        { id: 5, name: 'Milestones', kind: 'table', x: 650000, y: 4400000, w: 6400000, h: 1300000, rotation: 0, z: 3, rows: [['Phase', 'Owner'], ['Review', 'Workspace team']] },
+        { id: 6, name: 'Timeline', kind: 'chart', x: 8000000, y: 4700000, w: 2800000, h: 900000, rotation: 0, z: 4 }
+      ] })) } },
+    'brief.docx': { kind: 'office', data: { kind: 'docx', blocks: [
+      { type: 'heading', level: 1, text: 'Project brief', runs: [{ text: 'Project brief', bold: true }] },
+      { type: 'paragraph', text: 'A calm workspace. Make room for the work.', runs: [{ text: 'A calm workspace. ', bold: true }, { text: 'Make room for the work.', italic: true }] },
+      { type: 'list', list: 'bullet', level: 0, text: 'Collect the references', runs: [{ text: 'Collect the references' }] },
+      { type: 'list', list: 'bullet', level: 0, text: 'Review the plan', runs: [{ text: 'Review the plan' }] },
+      { type: 'list', list: 'number', level: 0, text: 'Share the next step', runs: [{ text: 'Share the next step', underline: true }] },
+      { type: 'image', text: 'Workspace picture', image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAACgCAIAAADywSLLAAAEHklEQVR4nO3dzWncQACG4XVIQbm4Ap1dgDsILG4gBaQBY0gHW4DPqmAvqcF39xCIQCwh+Gc1kuabeZ6TD0EIj94dreLR3Ly+/D4Amb7sfQLA9QQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwb6WPdz5dCx7wD7d3j+VPaBxaXV8b0q9VtYlUucwG5e2x7dMwPNVMjw8Lz8a4+NdkTE2Lm2Pb5mAp6tEuisN89VjbFzaHt8yD7FcJeuZPhOvuwc2Lm2P78xTaAi2KGAf83V+SBuXfiZhMzAEEzAEEzAEEzAEEzAEEzAEEzAEEzAEEzAEEzAEEzAEEzAEK/xKHdL9/P5t71NI9eNXmZfbfIoZGIIJGIK5hWb/+0AyAu72+5UqWIlbaAgmYAi26S20O0koywwMwQQMwQQMwQQMwQQMwQQMwQTcoGnDu3kPSxreoFDAEEzAbTIJd7I/sNVIzbq9fzqfjtNVYvv1qszfbhbWK+AuGvZ9uE7L6xVwL1fJwm3gqTDdifXAXaziKHjFUBUPsSCYgCGY9cAQzAwMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwQQMwawH7oLVSFVJXY3E9qRb7aBYD8yHLhRv5KjzjRzn0zHsjRz2B96+Xi/TqdA0KOPj3fKGPcRqk3pTMl74HUfAEMx64AaZflMMD88Lb6TNwBBMwBBMwBBMwBBMwBDMn1Kys3e3QfW3KG8QMDv41N7Fl/9YzP8QMNtZvuf4fAQlTwRMRrr/PeDw968Re+YhFnn1bnDkFGZgVrRBYGPfU7EZmEMD0+PY61RsPXAX+wNvb/uixse7DudhMzDtzIdjf/OwgGmqorGzhq0HprV+xp7upc3AEEzANDX91nYmaxMwBBMwbU56Y2XnsxIBQzABQzAB0+z96ljlWZUlYAgmYAgmYAgmYAgmYAhmPfAWOlwPzDbMwBRQ5+qfocqzKkvAEMx6YAhmBqbN+9WhsvNZiYAhmIBpcNIbqjmTtQkYggmY1qa+oYJz2IyAaaqfoad6BUxTFQ2d1Stg2mlp6K9eAdNIUUOX9dpelC26WvXVNkOv6U48xGJ16zU29F2vGZjUqVi6OyxmoHNzdVeXrNt/CJgdXHb4bsyifYOA2Zk+l/AQC4IJGIIJGIIJGIIJGHoN+Pb+qZM94PYy/W6n3/PHGZe2x/eSGRiCLQ3Yh32dH8/GpYfp93A43Ly+FNj143w6Tj/4T/ki5m8lC0fXuLQ9vsUCvrxWKGX56BqX5se3WMATGdcztJeMS6vjWzhgYEueQkMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAUMwAcMh1x+3skhvZZZcagAAAABJRU5ErkJggg==' },
+      { type: 'table', text: 'Phase\tOwner', rows: [['Phase', 'Owner'], ['Review', 'Workspace team']] }
+    ] } },
+    'budget.csv': { kind: 'office', body: 'Item,Budget\nResearch,1200\n', data: { kind: 'csv', rows: [['Item', 'Budget'], ['Research', '1200']] } },
+    'preview.html': { kind: 'html', body: '<h1>Workspace preview</h1><p>Make room for the work.</p>' },
+    'reference.pdf': { kind: 'pdf', body: pdfFixture(2), type: 'application/pdf' },
+    'workspace.png': { kind: 'image', type: 'image/png', base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jX1sAAAAASUVORK5CYII=' },
+    'download.zip': { kind: 'unsupported', body: 'Synthetic download' },
+  };
+  const sharedFileURL = '/chat-files/00112233445566778899aabb';
+  const artifactFor = url => url.searchParams.get('url') === sharedFileURL ? artifacts['review-notes.txt']
+    : artifacts[(url.searchParams.get('url') || '').split('/').pop().replace(/^[a-f0-9]{12}_/, '')];
+
   // Binary and HTML responses are shared by the smoke server and demo shim too.
   function media(url) {
+    if (url.pathname === '/api/chat/artifacts/content') {
+      const artifact = artifactFor(url);
+      return artifact ? { type: artifact.type || 'text/plain', body: artifact.body || '', base64: artifact.base64 } : null;
+    }
     const match = url.pathname.match(/^\/api\/google\/drive\/files\/(drive-[a-z]+)\/(thumbnail|preview)$/);
     if (!match) return null;
     if (match[2] === 'thumbnail' || match[1] === 'drive-image') return { type: 'image/png',
@@ -407,7 +451,13 @@
     // Must precede the generic /api/sessions/ match below, which would
     // otherwise swallow this and return a whole session object.
     if (route.endsWith("/context")) return { available: true, used_tokens: 48200, capacity_tokens: 258400, percent: 18.7, estimated_capacity: false, capacity_source: "cli_cache", model: "synthetic-model" };
-    if (route.startsWith("/api/sessions/")) return { ...sessions[0], id: route.split("/")[3], model_endpoint_id: "m1", messages: [{ role: "user", content: "Let's make the workspace feel more focused.", ts: now - 100 }, { role: "assistant", run_id: "r-computer", content: "## A clearer direction\n\nStart with **what matters most**: clear navigation, a calm reading space, and useful connections between your work.\n\n- Keep the next step easy to find.\n- Bring the files into the conversation.\n- Give every thought room to breathe.\n\n```python\nworkspace = {\n    \"focus\": \"the work that matters\"\n}\n```\n\n[Project brief](/generated-files/012345abcdef_project-brief.md)", ts: now - 90 }] };
+    if (route === '/api/sessions/s2') return { ...sessions[1], model_endpoint_id: 'm1', messages: [
+      { role: 'user', content: 'Plan the week ahead.', ts: now - 100 },
+      { role: 'assistant', content: '[Weekly plan](/generated-files/fedcba987654_weekly-plan.md)', ts: now - 90 } ] };
+    if (route.startsWith("/api/sessions/")) { const session = { ...sessions[0], id: route.split("/")[3], model_endpoint_id: "m1", messages: [{ role: "user", content: "Let's make the workspace feel more focused.", ts: now - 100 }, { role: "assistant", run_id: "r-computer", content: "## A clearer direction\n\nStart with **what matters most**: clear navigation, a calm reading space, and useful connections between your work.\n\n- Keep the next step easy to find.\n- Bring the files into the conversation.\n- Give every thought room to breathe.\n\n```python\nworkspace = {\n    \"focus\": \"the work that matters\"\n}\n```\n\n[Project brief](/generated-files/012345abcdef_project-brief.md)", ts: now - 90 }] };
+      if (state.artifactReviewNewer && session.id === 's1') session.messages.push({ role: 'assistant', content: '[Updated brief](/generated-files/abcdef012345_project-brief.md)', ts: now });
+      return session;
+    }
     if (route === "/api/projects") return list(projects);
     if (route.startsWith("/api/projects/")) return projects[0];
     if (route === "/api/notes") return list(url.searchParams.get("include_completed") === "false" ? notes.filter(n => !n.completed) : notes);
@@ -482,7 +532,18 @@
         { name: "5-hour", used_percent: 12, resets_at: now + 3 * 3600 }, { name: "Weekly", used_percent: 83, resets_at: now + 2 * 86400 }] },
     ], recorded: [] };
     if (route === "/api/documents") return list(docs);
-    if (route === "/api/chat/files/library") return list([]);
+    const filesFor = id => Object.keys(artifacts).filter(name => id === 's2' ? name === 'weekly-plan.md' : name !== 'weekly-plan.md').map(name => ({
+      name, url: `/generated-files/${id === 's2' ? 'fedcba987654' : '012345abcdef'}_${name}`, origin: 'generated', exists: true, size: 2048 })).concat(id === 's2' ? [
+        { name: 'shared-notes.txt', url: sharedFileURL, origin: 'attachment', exists: true, size: 2048 } ] : []);
+    if (route === "/api/chat/files/library") return list(sessions.slice(0, 2).map(session => ({ session_id: session.id, title: session.title, files: filesFor(session.id) })));
+    if (route === '/api/chat/files') return list(filesFor(url.searchParams.get('session_id')));
+    if (route === '/api/chat/artifacts') {
+      const artifact = artifactFor(url);
+      if (!artifact) throw new Error('Missing artifact fixture');
+      const filename = url.searchParams.get('url') === sharedFileURL ? 'shared-notes.txt' : url.searchParams.get('url').split('/').pop().replace(/^[a-f0-9]{12}_/, '');
+      return { kind: artifact.kind, filename, extension: filename.split('.').pop(), size: (artifact.body || '').length || 2048 };
+    }
+    if (route === '/api/chat/artifacts/office') return artifactFor(url)?.data;
     if (route === "/api/documents/search") return list(docs.filter(d => d.title.toLowerCase().includes(url.searchParams.get("q").toLowerCase())));
     if (route.startsWith("/api/documents/")) return { ...docs[0], content: "# Design principles\n\nMake the important things easy to find." };
     if (route === "/api/skills") return list([

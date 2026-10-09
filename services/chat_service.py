@@ -434,7 +434,7 @@ def _hand_off_references(session_id: str, text: str, attachment_ids: list[str] |
     from services.agent_handoff import hand_off, recent_context
     if not is_admin:
         raise ValueError("Only admins can hand work to agents")
-    if len(references) > 5 or any(not isinstance(agent_id, str) or agent_service.get(agent_id) is None for agent_id in agents):
+    if sum(ref.get("kind") != "artifact_comment" for ref in references) > 5 or any(not isinstance(agent_id, str) or agent_service.get(agent_id) is None for agent_id in agents):
         raise ValueError("Select existing agents, with at most 5 references")
     if not text.strip() and not attachment_ids:
         raise ValueError("Say what work to hand over")
