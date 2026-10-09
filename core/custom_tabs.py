@@ -331,6 +331,8 @@ def _apply_folder_policy(entry: dict) -> None:
         approved = settings_store.get_setting(_FOLDER_APPROVALS_KEY) or {}
         entry["status"] = ("on" if approved.get(entry["slug"]) == entry["fingerprint"]
                            else "needs_approval") if user else ("on" if entry["enabled"] else "off")
+    if user and entry["slug"] in (settings_store.get_setting("disabled_user_tabs") or []):
+        entry.update(enabled=False, status="off")
 
 
 def _folder_allowed(entry: dict) -> bool:
@@ -342,6 +344,8 @@ def _folder_allowed(entry: dict) -> bool:
             or entry["_path"] != os.path.join(USER_TABS_DIR if user else PREBUILT_TABS_DIR, slug)):
         return False
     if user:
+        if slug in (settings_store.get_setting("disabled_user_tabs") or []):
+            return False
         if (settings_store.get_setting(_FOLDER_APPROVALS_KEY) or {}).get(slug) != snapshot:
             return False
     elif slug not in enabled_templates():
@@ -505,6 +509,22 @@ def mount_one(app, slug: str) -> bool:
     return False
 
 
+def set_user_tab_enabled(slug: str, enabled: bool) -> dict:
+    """Suspend a folder tab without deleting source or granting approval."""
+    entry = _folder_entry(slug, user=True)
+    if entry is None:
+        raise KeyError(slug)
+    disabled = set(settings_store.get_setting("disabled_user_tabs") or [])
+    if enabled:
+        disabled.discard(slug)
+    else:
+        disabled.add(slug)
+    settings_store.update_settings(disabled_user_tabs=sorted(disabled))
+    if not enabled:
+        tab_folders.unregister(slug)
+    return {"slug": slug, "enabled": enabled}
+
+
 def list_tabs() -> list[dict]:
     candidates, _ = _load_candidates()
     entries = list(candidates.values())
@@ -571,7 +591,8 @@ def delete(slug: str) -> dict:
         tab_folders.unregister(slug)
         approved = dict(settings_store.get_setting(_FOLDER_APPROVALS_KEY) or {})
         approved.pop(slug, None)
-        settings_store.update_settings(**{_FOLDER_APPROVALS_KEY: approved})
+        settings_store.update_settings(**{_FOLDER_APPROVALS_KEY: approved,
+            "disabled_user_tabs": [s for s in settings_store.get_setting("disabled_user_tabs") or [] if s != slug]})
         return {"removed": [slug], "restart_required": True}
     # A premade tab's files are shipped app files, not something the user
     # created — deleting them would break the Tool Store and be undone by the

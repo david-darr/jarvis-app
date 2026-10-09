@@ -42,6 +42,7 @@ DEFAULTS: dict[str, Any] = {
     "helper_endpoint_id": None,
     "approved_custom_tab_fingerprints": {},  # Only run user tab source whose current tree hash an admin approved.
     "approved_folder_tab_fingerprints": {},  # Folder tabs approve only their own paths and bytes.
+    "disabled_user_tabs": [],  # Non-destructive community revocation; source approval stays separate.
     # Remote access over Tailscale (David's ask 2026-09-03: users should be
     # able to set this up during onboarding the way we run it by hand).
     # See core/remote_access.py.

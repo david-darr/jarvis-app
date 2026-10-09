@@ -83,6 +83,7 @@
       state.handoffSessions ||= {};
       state.handoffSessions[body.session_id] ||= store.sessions[body.session_id];
     }
+    // Community installs and refresh use the same fixtures as desktop/phone smoke.
     const updated = mutate(path, method, body);
     if (updated?.handoffs) {
       // Let the visitor see queued, working and the returned agent reply.

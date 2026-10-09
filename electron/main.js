@@ -213,7 +213,7 @@ function startBackend() {
       // own environment at startup, so nothing it starts inherits it.
       // JARVIS_INSTANCE tells the page which copy it is (the DEV badge).
       env: { ...process.env, JARVIS_DATA_DIR: path.join(app.getPath("userData"), "data"), JARVIS_UI_SECRET: UI_SECRET,
-             APP_PORT: String(INSTANCE.port), JARVIS_INSTANCE: INSTANCE.name },
+             APP_PORT: String(INSTANCE.port), JARVIS_INSTANCE: INSTANCE.name, KAIROS_VERSION: app.getVersion() },
     },
   );
   const proc = backendProcess;

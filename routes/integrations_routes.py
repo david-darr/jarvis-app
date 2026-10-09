@@ -50,9 +50,14 @@ async def mcp_catalog(user: str = Depends(require_admin)) -> list[dict]:
 
 @router.post("/mcp-server")
 async def create_mcp_server(body: CreateMcpServerRequest, user: str = Depends(require_admin)) -> dict:
+    return await add_mcp_server(body)
+
+
+async def add_mcp_server(body: CreateMcpServerRequest, *, replace_id=None) -> dict:
+    """Shared add/check gate, including community updates preserving tool pins."""
     try:
         item = integrations.create_mcp_server(body.name, body.mcp_type, body.command, body.args, body.url,
-                                              body.api_key, body.auth)
+                                              body.api_key, body.auth, replace_id=replace_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     # Checked at once (roadmap phase 6): the answer says whether it works,

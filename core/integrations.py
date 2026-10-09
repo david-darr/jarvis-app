@@ -66,6 +66,7 @@ def _load() -> dict:
 
 def _masked(item: dict) -> dict:
     out = {"id": item["id"], "kind": item["kind"], "name": item["name"]}
+    out["enabled"] = item.get("enabled", True)
     if item["kind"] == "api_service":
         out["base_url"] = item.get("base_url", "")
         out["has_api_key"] = bool(item.get("api_key_encrypted"))
@@ -121,7 +122,7 @@ def list_mcp_servers_runtime(only_ids: Optional[list[str]] = None) -> dict[str, 
     global behavior."""
     servers = {}
     for item in _load().values():
-        if item["kind"] != "mcp_server":
+        if item["kind"] != "mcp_server" or not item.get("enabled", True):
             continue
         if only_ids is not None and item["id"] not in only_ids:
             continue
@@ -241,7 +242,7 @@ def create_api_service(name: str, base_url: str, api_key: Optional[str] = None) 
 
 def create_mcp_server(name: str, mcp_type: str, command: Optional[str] = None,
                        args: Optional[list[str]] = None, url: Optional[str] = None,
-                       api_key: Optional[str] = None, auth: Optional[str] = None) -> dict:
+                       api_key: Optional[str] = None, auth: Optional[str] = None, *, replace_id=None) -> dict:
     """`auth="oauth"` marks a server that is used only once signed in
     (core/mcp_oauth.py); the catalog's sign-in servers are added that way."""
     if mcp_type not in MCP_TYPES:
@@ -253,7 +254,10 @@ def create_mcp_server(name: str, mcp_type: str, command: Optional[str] = None,
     if auth not in (None, "oauth") or (auth == "oauth" and mcp_type != "http"):
         raise ValueError("auth may only be 'oauth', and only for an http MCP server")
     data = _load()
-    item_id = uuid.uuid4().hex[:12]
+    previous = data.get(replace_id) if replace_id else None
+    if replace_id and (not previous or previous["kind"] != "mcp_server"):
+        raise ValueError("Store update requires an existing MCP server")
+    item_id = replace_id or uuid.uuid4().hex[:12]
     data[item_id] = {
         "id": item_id, "kind": "mcp_server", "name": name, "mcp_type": mcp_type,
         "command": command, "args": args or [], "url": url,
@@ -261,6 +265,12 @@ def create_mcp_server(name: str, mcp_type: str, command: Optional[str] = None,
     }
     if auth:
         data[item_id]["auth"] = auth
+    if previous:
+        for key in ("pinned_tools", "enabled"):
+            if key in previous:
+                data[item_id][key] = previous[key]
+        if previous.get("url") == url and previous.get("auth") == auth and previous.get("oauth"):
+            data[item_id]["oauth"] = previous["oauth"]
     write_json_atomic(INTEGRATIONS_FILE, data)
     return _masked(data[item_id])
 
@@ -324,6 +334,16 @@ def delete_integration(item_id: str) -> None:
     data = _load()
     data.pop(item_id, None)
     write_json_atomic(INTEGRATIONS_FILE, data)
+
+
+def set_enabled(item_id: str, enabled: bool) -> dict:
+    """Suspend a server while preserving credentials and tool acceptance."""
+    data = _load()
+    if item_id not in data:
+        raise KeyError(item_id)
+    data[item_id]["enabled"] = enabled
+    write_json_atomic(INTEGRATIONS_FILE, data)
+    return _masked(data[item_id])
 
 
 def get_integration(item_id: str) -> Optional[dict]:

@@ -114,6 +114,26 @@ class ImportTests(unittest.TestCase):
         self.skills.stop()
         self.staging.stop()
 
+    def test_supporting_files_preserve_structure_findings(self):
+        for confirmed in (False, True):
+            with self.subTest(confirmed=confirmed):
+                with self.assertRaises(skill_curator.SkillImportRefused) as caught:
+                    skill_curator.check_import("fixture", "Summarize supplied notes.", confirmed=confirmed,
+                        supporting_files={"helper.exe": b"Read supplied notes."})
+                self.assertFalse(caught.exception.needs_confirmation)
+                self.assertIn("binary_file", [f["pattern"] for f in caught.exception.findings])
+
+    def test_supporting_file_scans_add_findings_without_duplicates(self):
+        with patch.object(skills_guard, "should_allow_install", wraps=skills_guard.should_allow_install) as policy:
+            result = skill_curator.check_import("fixture", "Summarize supplied notes.", confirmed=True,
+                supporting_files={"references/helper.md": b"ngrok", "helper.custom": b"ngrok"})
+        findings = policy.call_args.args[0].findings
+        keys = [(f.file, f.line, f.pattern_id) for f in findings]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertEqual(len(findings), 2)
+        self.assertEqual({f.file for f in findings}, {str(Path("references/helper.md")), "helper.custom"})
+        self.assertEqual(result["verdict"], "caution")
+
     def test_recorded_save_uses_import_and_community_scan_create_stays_user(self):
         with patch.object(skills_service, "import_skill", wraps=skills_service.import_skill) as imported, \
              patch.object(skills_guard, "scan_skill", wraps=skills_guard.scan_skill) as scan:

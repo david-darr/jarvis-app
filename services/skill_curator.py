@@ -126,7 +126,19 @@ def _reconcile(data: dict, slug: str) -> Optional[dict]:
 
 def _blocked(record: dict) -> bool:
     scan = record.get("scan") or {}
-    return scan.get("verdict") == "dangerous" and record.get("approved_hash") != record.get("content_hash")
+    return record.get("disabled", False) or (scan.get("verdict") == "dangerous" and record.get("approved_hash") != record.get("content_hash"))
+
+
+def set_enabled(slug: str, enabled: bool) -> dict:
+    """Suspend a skill without overriding its content-bound scan approval."""
+    with _LOCK:
+        data = _load()
+        rec = _reconcile(data, slug)
+        if rec is None:
+            raise FileNotFoundError(slug)
+        rec["disabled"] = not enabled
+        _save(data)
+        return rec
 
 
 def record(slug: str, source: str, origin: Optional[str] = None) -> dict:
@@ -193,7 +205,7 @@ def model_visible(slug: str) -> bool:
     return rec is not None and not _blocked(rec)
 
 
-def check_import(slug: str, skill_md: str, confirmed: bool = False) -> dict:
+def check_import(slug: str, skill_md: str, confirmed: bool = False, *, supporting_files=None) -> dict:
     """Scan a SKILL.md before it is written. Raises SkillImportRefused when
     Hermes's install policy for a community source does not allow it (a
     confirmed "caution" is allowed; "dangerous" never is). Returns the scan."""
@@ -201,7 +213,24 @@ def check_import(slug: str, skill_md: str, confirmed: bool = False) -> dict:
         staged = Path(tmp) / slug
         staged.mkdir()
         (staged / "SKILL.md").write_text(skill_md, encoding="utf-8")
+        for name, content in (supporting_files or {}).items():
+            from core.store_schema import safe_path
+            safe_path(name)
+            if name == "SKILL.md":
+                raise ValueError("Supporting files cannot replace SKILL.md")
+            target = staged / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
         result = skills_guard.scan_skill(staged, source="community")
+        if supporting_files:
+            combined = list(result.findings)
+            for name in ["SKILL.md", *supporting_files]:
+                combined.extend(skills_guard.scan_file(staged / name, str(Path(name)), force_text=True))
+            unique = {}
+            for finding in combined:
+                unique.setdefault((finding.file, finding.line, finding.pattern_id), finding)
+            result.findings = list(unique.values())
+            result.verdict = skills_guard._determine_verdict(result.findings)
     allowed, reason = skills_guard.should_allow_install(result, force=confirmed)
     report = skills_guard.format_scan_report(result)
     findings = [{"severity": f.severity, "pattern": f.pattern_id, "line": f.line,

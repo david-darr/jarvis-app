@@ -17,6 +17,7 @@ from core.constants import STATIC_DIR
 from core.middleware import SecurityHeadersMiddleware
 from core import custom_tabs, tab_hooks, image_gen, remote_access, task_scheduler, vault_sync
 from core.builtin_tasks import autoenable_builtins, migrate_builtin_schedules
+from services.store_catalog import start_watch as start_store_watch, stop_watch as stop_store_watch
 from core.channels import discord_channel
 from core.connectors import hub as connector_hub
 from routes import (
@@ -33,6 +34,7 @@ from routes import (
     speech_routes,
     workspace_routes,
     system_routes,
+    store_routes,
     integrations_routes,
     google_routes,
     channels_routes,
@@ -138,6 +140,8 @@ async def lifespan(_app: FastAPI):
     # resurrect something the user turned off.
     autoenable_builtins()
     await tab_hooks.reconcile()
+    # Turns off pulled community installs (services/store_catalog.py).
+    start_store_watch()
     task_scheduler.start()
     await discord_channel.start()
     # Every other messaging platform (core/connectors), each supervised so a
@@ -151,6 +155,7 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        await stop_store_watch()
         try:
             await swarm_service.shutdown(_app)
         finally:
@@ -183,6 +188,7 @@ app.include_router(model_routes.router)
 app.include_router(speech_routes.router)
 app.include_router(workspace_routes.router)
 app.include_router(system_routes.router)
+app.include_router(store_routes.router)
 app.include_router(integrations_routes.router)
 app.include_router(google_routes.router)
 app.include_router(channels_routes.router)

@@ -92,6 +92,13 @@
     { slug: "project_tracker", name: "Project tracker", description: "Your team's project notes", kind: "user", format: "folder",
       status: "needs_approval", reason: null, fingerprint: "a".repeat(64), files: ["tab.json", "routes.py", "view.js"] },
   ];
+  const communityCatalog = () => ({ commit: 'c'.repeat(40), stale: false, items: [
+    { kind: 'tab', slug: 'pomodoro', name: 'Pomodoro', description: 'A quiet focus timer with a five-minute break.' },
+    { kind: 'skill', slug: 'meeting_summary', name: 'Meeting summary', description: 'Turn meeting notes into decisions, owners and next steps.', installed: true, installed_version: '1.0.0', update_available: true },
+    { kind: 'tool', slug: 'example_reference', name: 'Reference server (example)', description: 'A clearly labelled example MCP connection template.' },
+    { kind: 'automation', slug: 'weekly_review', name: 'Weekly review', description: 'Review progress and plan the coming week. Installs turned off.' },
+  ].filter(() => !state.empty).map(item => ({ author: 'david-darr', version: '1.1.0', installed: false, turned_off: false, update_available: false,
+    ...item, ...(state.communityInstalls?.[item.slug] || {}), local_id: item.slug })) });
   const tabManifest = (tab) => ({ id: tab.slug, label: tab.name, format: tab.format, user_tab: tab.kind === "user",
     view_url: `/tab-files/${tab.slug}/view.js`,
     style_url: tab.slug === "crm" ? (options.demo ? "tabs/crm/view.css" : "/tab-files/crm/view.css") : null });
@@ -110,6 +117,20 @@
     return { name: 'example-com-click', description, body, steps, labels, content: `---\ndescription: ${description}\n---\n\n${body}` };
   }
   function mutate(route, method, body = {}) {
+    if (route === '/api/store/refresh') return communityCatalog();
+    if (route === '/api/store/install' && method === 'POST') {
+      if (body.kind === 'tab' && !body.confirmed) return { _status: 409, detail: { needs_confirmation: true,
+        report: 'Review this community tab before installation.', fingerprint: 'b'.repeat(64), commit: 'c'.repeat(40) } };
+      state.communityInstalls ||= {};
+      state.communityInstalls[body.slug] = { installed: true, installed_version: '1.1.0', update_available: false };
+      if (body.kind === 'tab' && !tabs.some(t => t.slug === body.slug)) tabs.push({ slug: body.slug, name: 'Pomodoro', description: 'Local focus timer',
+        kind: 'user', format: 'folder', status: 'needs_approval', fingerprint: 'b'.repeat(64), files: ['tab.json', 'routes.py', 'view.js'] });
+      return { slug: body.slug, id: body.slug, enabled: false, status: body.kind === 'tab' ? 'needs_approval' : 'installed' };
+    }
+    if (route.startsWith('/api/store/installed/') && method === 'DELETE') {
+      state.communityInstalls ||= {}; state.communityInstalls[route.split('/').at(-1)] = { installed: false, update_available: false };
+      return { ok: true };
+    }
     if (route === '/api/google/calendar/settings' && method === 'PATCH') { state.googleCalendarIds = body.calendar_ids; return body; }
     if (route === '/api/google/oauth/start') { state.googleCalendarMissing = false; return { url: 'https://accounts.google.com/o/oauth2/v2/auth' }; }
     if (route === '/api/google/calendar/action') {
@@ -289,6 +310,7 @@
     return { nodes, edges };
   }
   function fixture(url) {
+    if (url.pathname === '/api/store/catalog') return communityCatalog();
     const route = url.pathname;
     const list = (data) => state.empty ? [] : data;
     if (route === "/api/auth/status") return { auth_enabled: false, setup_required: false, username: "Alex", is_admin: true, instance: state.empty ? "dev" : "" };

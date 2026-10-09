@@ -6,7 +6,7 @@ import { pill } from "../settingsKit.js";
 // behind their own read/describe calls; this view only loads catalog metadata.
 export async function render(container) {
   container.innerHTML = "";
-  const state = { query: "", kind: "all", installed: false, skills: [], servers: [], integrations: [], skillsError: "", catalogError: "", tabs: [], tabsError: "", admin: false };
+  const state = { query: "", kind: "all", installed: false, skills: [], servers: [], integrations: [], skillsError: "", catalogError: "", tabs: [], tabsError: "", admin: false, community: [], communityError: "" };
   const search = el("input", { type: "search", class: "tool-store-search", placeholder: "Search skills, tools and tabs", "aria-label": "Search skills, tools and tabs" });
   const filters = el("div", { class: "segmented-tabs tool-store-filters", role: "group", "aria-label": "Store category" });
   const installed = el("label", { class: "tool-store-installed" }, [
@@ -18,6 +18,12 @@ export async function render(container) {
   const manageTools = el("button", { type: "button", class: "btn quiet", text: "Add MCP server", disabled: true });
   const buildTab = el("button", { type: "button", class: "btn primary", text: "Build a tab", hidden: true, "aria-expanded": "false" });
   const installTab = el("button", { type: "button", class: "btn quiet", text: "Install a tab", hidden: true, "aria-expanded": "false" });
+  const refreshCommunity = el("button", { type: "button", class: "btn quiet", text: "Refresh community", hidden: true, onclick: async () => {
+    refreshCommunity.disabled = true;
+    try { setCommunity(await api("/api/store/refresh", { method: "POST" })); draw(); }
+    catch (error) { toast(error.message, "error"); }
+    finally { refreshCommunity.disabled = false; }
+  } });
   const remoteInstall = el("details", { class: "disclosure-panel tool-store-install", hidden: true });
   const customServer = el("details", { class: "disclosure-panel tool-store-install", hidden: true });
   const tabBuilder = el("details", { class: "disclosure-panel tool-store-install", hidden: true });
@@ -51,7 +57,7 @@ export async function render(container) {
       ]),
     ]),
     el("div", { class: "tool-store-toolbar" }, [search, filters, installed]),
-    el("div", { class: "tool-store-summary" }, [count, el("div", { class: "tool-store-manage" }, [manageSkills, manageTools, buildTab, installTab])]),
+    el("div", { class: "tool-store-summary" }, [count, el("div", { class: "tool-store-manage" }, [manageSkills, manageTools, buildTab, installTab, refreshCommunity])]),
     remoteInstall, customServer, managerHost,
     tabBuilder, tabInstaller, results,
   ]));
@@ -95,7 +101,7 @@ export async function render(container) {
     draw();
   });
   const loaded = await Promise.allSettled([
-    api("/api/skills"), api("/api/integrations/catalog"), api("/api/integrations"), api("/api/system/tabs"), api("/api/auth/status"),
+    api("/api/skills"), api("/api/integrations/catalog"), api("/api/integrations"), api("/api/system/tabs"), api("/api/auth/status"), api("/api/store/catalog"),
   ]);
   if (!container.isConnected) return;
   if (loaded[0].status === "fulfilled") state.skills = loaded[0].value;
@@ -113,6 +119,9 @@ export async function render(container) {
   if (loaded[3].status === "fulfilled") state.tabs = loaded[3].value;
   else state.tabsError = "Tabs are unavailable right now.";
   state.admin = loaded[4].status === "fulfilled" && loaded[4].value.is_admin;
+  if (loaded[5].status === "fulfilled") setCommunity(loaded[5].value);
+  else if (state.admin) state.communityError = loaded[5].reason?.message || "The community catalog is unavailable right now.";
+  refreshCommunity.hidden = !state.admin;
   tabBuilder.append(el("summary", { text: "Tab brief" }));
   renderTabBuilder(tabBuilder);
   if (state.admin) setupTabInstaller();
@@ -160,15 +169,7 @@ export async function render(container) {
       const detail = payload.detail;
       installStatus.textContent = typeof detail === "string" ? detail : "Review the scan below.";
       if (response.status === 409 && detail && typeof detail === "object") {
-        const actions = [];
-        if (detail.needs_confirmation && detail.sha256) actions.push(
-          el("button", { type: "button", class: "btn danger", text: "Install anyway", onclick: () => installSkill(true, detail.sha256) }),
-        );
-        installReview.append(el("div", { class: "tool-store-scan" }, [
-          el("div", { class: "title", text: detail.needs_confirmation ? "Review this skill" : "Installation blocked" }),
-          el("pre", { text: detail.report || "" }),
-          ...actions,
-        ]));
+        showInstallReview(installReview, detail, "skill", () => installSkill(true, detail.sha256));
       }
     } catch (error) { installStatus.textContent = `Install failed: ${error.message}`; }
     finally { installButton.disabled = false; }
@@ -209,7 +210,7 @@ export async function render(container) {
 
   function draw() {
     filters.innerHTML = "";
-    for (const [id, label] of [["all", "All"], ["skills", "Skills"], ["tools", "Tools"], ["tabs", "Tabs"]]) {
+    for (const [id, label] of [["all", "All"], ["skills", "Skills"], ["tools", "Tools"], ["tabs", "Tabs"], ["automations", "Automations"]]) {
       const button = el("button", {
         type: "button", class: "segmented-tab" + (state.kind === id ? " active" : ""),
         text: label, "aria-pressed": state.kind === id ? "true" : "false",
@@ -217,10 +218,10 @@ export async function render(container) {
       button.addEventListener("click", () => { state.kind = id; draw(); });
       filters.append(button);
     }
-    remoteInstall.hidden = state.kind === "tabs" || loaded[1].status !== "fulfilled";
+    remoteInstall.hidden = !["all", "skills", "tools"].includes(state.kind) || loaded[1].status !== "fulfilled";
     customServer.hidden = remoteInstall.hidden;
-    manageSkills.hidden = state.kind === "tabs";
-    manageTools.hidden = state.kind === "tabs";
+    manageSkills.hidden = ["tabs", "automations"].includes(state.kind);
+    manageTools.hidden = ["tabs", "automations"].includes(state.kind);
     buildTab.hidden = state.kind !== "tabs";
     installTab.hidden = state.kind !== "tabs" || !state.admin;
     if (state.kind === "tabs") managerHost.hidden = true;
@@ -239,7 +240,12 @@ export async function render(container) {
     const tabs = ["all", "tabs"].includes(state.kind) ? state.tabs.filter((item) =>
       (!q || `${item.slug} ${item.name} ${item.blurb || ""} ${item.description} ${item.detail || ""} ${item.reads || ""} ${item.status} ${item.reason || ""}`.toLowerCase().includes(q)) &&
       (!state.installed || item.kind === "user" || item.enabled)) : [];
-    const total = skills.length + tools.length + custom.length + tabs.length;
+    const kindFilter = { skill: "skills", tool: "tools", tab: "tabs", automation: "automations" };
+    const community = state.community.filter((item) =>
+      (state.kind === "all" || state.kind === kindFilter[item.kind]) &&
+      (!state.installed || item.installed) &&
+      (!q || `${item.name} ${item.description} ${item.author} ${item.kind}`.toLowerCase().includes(q)));
+    const total = skills.length + tools.length + custom.length + tabs.length + community.length;
     count.textContent = `${total} result${total === 1 ? "" : "s"}`;
     if (skills.length) {
       results.append(el("h3", { class: "tool-store-heading", text: `Skills · ${skills.length}` }));
@@ -265,6 +271,13 @@ export async function render(container) {
       if (offerBuild) grid.append(buildTabCard());
       results.append(grid);
     }
+    if (state.admin) {
+      results.append(el("h3", { class: "tool-store-heading", text: `Community · ${community.length}`, "data-community-heading": "" }));
+      if (state.communityError) results.append(el("div", { class: "tool-store-notice", role: "status", text: state.communityError }));
+      const grid = el("div", { class: "tool-store-grid tool-store-community" });
+      for (const item of community) grid.append(communityCard(item));
+      results.append(grid);
+    }
     if (["all", "tabs"].includes(state.kind) && state.tabsError) results.append(el("div", { class: "tool-store-notice", text: state.tabsError }));
     if (["all", "tools"].includes(state.kind) && state.catalogError) {
       results.append(el("div", { class: "tool-store-notice", text: state.catalogError }));
@@ -282,6 +295,87 @@ export async function render(container) {
     state.tabs = await api("/api/system/tabs");
     state.tabsError = "";
     draw();
+  }
+
+  function setCommunity(catalog) {
+    state.community = catalog.items || [];
+    state.communityError = catalog.stale ? `Showing the saved catalog. ${catalog.error || "Refresh when the connection returns."}` : "";
+  }
+
+  async function reloadCommunity() {
+    const values = await Promise.allSettled([api("/api/store/catalog"), api("/api/system/tabs"), api("/api/skills"), api("/api/integrations")]);
+    if (values[0].status === "fulfilled") setCommunity(values[0].value);
+    if (values[1].status === "fulfilled") state.tabs = values[1].value;
+    if (values[2].status === "fulfilled") state.skills = values[2].value;
+    if (values[3].status === "fulfilled") state.integrations = values[3].value;
+    document.dispatchEvent(new CustomEvent("jarvis:tabs-changed"));
+    draw();
+  }
+
+  // The local import and Community paths share the same review presentation.
+  function showInstallReview(host, detail, kind, confirm) {
+    host.replaceChildren(el("div", { class: "tool-store-scan" }, [
+      el("div", { class: "title", text: detail.needs_confirmation ? `Review this ${kind}` : "Installation blocked" }),
+      el("pre", { text: detail.report || "" }),
+      ...(detail.fingerprint ? [el("p", { class: "meta tool-store-tab-hash", text: `SHA-256: ${detail.fingerprint}` })] : []),
+      ...(detail.needs_confirmation ? [el("button", { type: "button", class: "btn danger", text: "Install anyway", onclick: confirm })] : []),
+    ]));
+  }
+
+  function communityCard(item) {
+    const review = el("div", { class: "tool-store-review" });
+    const status = item.turned_off ? "Turned off" : item.update_available ? "Update available" : item.installed ? "Installed" : item.install_blocked ? "Revoked" : "Community";
+    const actions = el("div", { class: "tool-store-card-foot" });
+    const button = el("button", { type: "button", class: "btn primary", text: item.update_available ? "Update" : "Install", disabled: !!item.install_blocked });
+    async function installCommunity(options = {}) {
+      if (item.installed && !options.confirmed && !await confirmDialog({ title: `Update ${item.name}?`, message: "Replace this store item's installed source with the catalog version. Tabs need source approval again. Automations install turned off.", confirmLabel: "Update" })) return;
+      button.disabled = true; review.replaceChildren();
+      try {
+        const response = await fetch("/api/store/install", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: item.kind, slug: item.slug, replace: !!item.installed, ...options }) });
+        const payload = await response.json();
+        if (response.status === 409 && typeof payload.detail === "object") {
+          const detail = payload.detail;
+          showInstallReview(review, detail, item.kind, () => installCommunity({ confirmed: true,
+            expected_fingerprint: detail.fingerprint, expected_sha256: detail.sha256, expected_commit: detail.commit }));
+          return;
+        }
+        if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : "Installation failed.");
+        toast(item.kind === "tab" ? "Installed. Review and approve its files in Yours." : item.kind === "automation" ? "Installed turned off. Choose delivery and a model in Tasks." : `Installed ${item.name}`, "success");
+        if (item.kind === "tab") state.kind = "tabs";
+        await reloadCommunity();
+      } catch (error) { review.textContent = error.message; }
+      finally { button.disabled = !!item.install_blocked; }
+    }
+    button.addEventListener("click", () => installCommunity());
+    if (!item.installed || item.update_available) actions.append(button);
+    if (item.turned_off) actions.append(el("button", { type: "button", class: "btn quiet", text: "Turn back on", onclick: async () => {
+      if (!await confirmDialog({ title: `Turn ${item.name} back on?`, message: `This item was pulled from the store:\n\n${item.revoked_reason}\n\nExisting source approval and tool acceptance still apply.`, confirmLabel: "Turn back on", danger: true })) return;
+      try {
+        await api(`/api/store/revoked/${item.kind}/${encodeURIComponent(item.slug)}/reenable`, { method: "POST", body: JSON.stringify({ confirmed: true, expected_revocation: item.revoked_reason }) });
+        await reloadCommunity();
+      } catch (error) { toast(error.message, "error"); }
+    } }));
+    if (item.installed) {
+      actions.append(el("button", { type: "button", class: "btn quiet", text: "Manage", onclick: () => {
+        if (item.kind === "tab") { state.kind = "tabs"; draw(); }
+        else if (item.kind === "skill") showSkillManager(item.local_id);
+        else navigate(item.kind === "automation" ? "tasks" : "settings", item.kind === "tool" ? { section: "integrations" } : {});
+      } }));
+      actions.append(el("button", { type: "button", class: "btn quiet danger", text: "Remove", onclick: async () => {
+        if (!await confirmDialog({ title: `Remove ${item.name}?`, message: "Remove this community item from Kairos. Saved tab data is kept.", confirmLabel: "Remove" })) return;
+        try { await api(`/api/store/installed/${item.kind}/${encodeURIComponent(item.slug)}`, { method: "DELETE" }); await reloadCommunity(); }
+        catch (error) { toast(error.message, "error"); }
+      } }));
+    }
+    return el("article", { class: "tool-store-card", "data-community-kind": item.kind, "data-community-slug": item.slug }, [
+      el("div", { class: "tool-store-card-top" }, [el("span", { class: "tool-store-mark" }, [svg(ICONS.store)]),
+        el("span", { class: "tool-store-badge" + (item.turned_off || item.install_blocked ? " blocked" : ""), text: status })]),
+      el("h4", { text: item.name }), el("p", { text: item.description }),
+      el("div", { class: "meta", text: `Community · ${item.kind} · @${item.author} · v${item.version}` }),
+      item.revoked_reason ? el("p", { class: "tool-store-tab-reason", text: item.revoked_reason }) : null,
+      actions, review,
+    ]);
   }
 
   function buildTabCard() {
@@ -398,9 +492,7 @@ export async function render(container) {
         } else if (response.status === 409 && typeof payload.detail === "object") {
           const detail = payload.detail;
           status.textContent = detail.needs_confirmation ? "Review the scan before installing." : "Installation blocked.";
-          review.append(el("pre", { text: detail.report }));
-          if (detail.needs_confirmation) review.append(el("button", { type: "button", class: "btn danger", text: "Install anyway",
-            onclick: () => install(kind, true, detail.fingerprint, snapshot) }));
+          showInstallReview(review, detail, "tab", () => install(kind, true, detail.fingerprint, snapshot));
         } else status.textContent = typeof payload.detail === "string" ? payload.detail : "Installation failed.";
       } catch (error) { status.textContent = error.message; }
       finally { upload.disabled = github.disabled = false; }
@@ -437,11 +529,13 @@ export async function render(container) {
   function healthEl(integration) {
     const status = integration.status;
     const when = status?.checked_at ? new Date(status.checked_at * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
-    const text = !status ? "Not checked yet"
+    const text = integration.enabled === false ? "Turned off"
+      : !status ? "Not checked yet"
       : status.state === "working" ? `Working · ${status.tools} tool${status.tools === 1 ? "" : "s"} · checked ${when}`
       : status.state === "signed_out" ? "Not signed in"
       : `Not responding · ${status.error || "no answer"} · checked ${when}`;
     const check = el("button", { type: "button", class: "btn quiet", text: "Check" });
+    check.disabled = integration.enabled === false;
     check.addEventListener("click", async () => {
       check.disabled = true;
       check.textContent = "Checking…";
@@ -567,14 +661,16 @@ export async function render(container) {
   }
 
   function customToolCard(item) {
-    const connected = item.auth !== "oauth" || item.signed_in;
+    const suspended = item.enabled === false;
+    const connected = !suspended && (item.auth !== "oauth" || item.signed_in);
     const actionHost = el("div", { class: "tool-store-action" });
-    if (!connected) actionHost.append(el("button", { type: "button", class: "btn", text: "Sign in", onclick: () => signIn(item.id, item.name, actionHost) }));
+    if (suspended) actionHost.append(el("span", { class: "tool-store-badge blocked", text: "Turned off" }));
+    else if (!connected) actionHost.append(el("button", { type: "button", class: "btn", text: "Sign in", onclick: () => signIn(item.id, item.name, actionHost) }));
     else actionHost.append(el("span", { class: "tool-store-badge", text: "Added" }));
     return el("article", { class: "tool-store-card" }, [
       el("div", { class: "tool-store-card-top" }, [
         el("span", { class: "tool-store-mark" }, [svg(ICONS.store)]),
-        item.status?.state === "down"
+        suspended ? el("span", { class: "tool-store-badge blocked", text: "Turned off" }) : item.status?.state === "down"
           ? el("span", { class: "tool-store-badge blocked", text: "Not responding" })
           : el("span", { class: "tool-store-badge" + (connected ? "" : " muted"), text: connected ? "Connected" : "Needs sign-in" }),
       ]),

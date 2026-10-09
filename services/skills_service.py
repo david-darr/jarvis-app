@@ -42,7 +42,7 @@ def _seed_hash(path: str) -> str:
 
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
 
-_SLUG_RE = re.compile(r"[^a-z0-9-]+")
+_SLUG_RE = re.compile(r"[^a-z0-9_-]+")
 # Hermes's skill-name rule. A slug becomes a directory name, so it must never
 # carry a separator or a dot: "..\\..\\x" used to reach a SKILL.md outside the
 # skills folder through the API and the model's read_skill tool.
@@ -261,7 +261,7 @@ def update_skill(slug: str, description: str, body: str) -> dict:
 
 def import_skill(filename: str, raw_content: str, confirmed: bool = False, *,
                  name: str | None = None, origin: str | None = None,
-                 replace: bool = True, source: str = "imported") -> dict:
+                 replace: bool = True, source: str = "imported", supporting_files=None) -> dict:
     """Import local file text or a fetched community SKILL.md.
 
     Local imports may replace an existing skill; URL installs set replace=False
@@ -283,10 +283,46 @@ def import_skill(filename: str, raw_content: str, confirmed: bool = False, *,
     slug = _slugify(name)
     path = _skill_path(slug)
     rendered = _render(parsed["description"], parsed["body"], parsed.get("frontmatter", ""))
-    scan = skill_curator.check_import(slug, rendered, confirmed=confirmed)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w" if replace else "x", encoding="utf-8") as f:
-        f.write(rendered)
+    scan = skill_curator.check_import(slug, rendered, confirmed=confirmed, supporting_files=supporting_files)
+    if supporting_files is not None:
+        import uuid
+        from pathlib import Path
+        from core import tab_folders
+        from core.store_schema import safe_path
+        destination = Path(path).parent
+        if tab_folders.is_link(SKILLS_DIR) or tab_folders.is_link(str(destination)):
+            raise ValueError("Skill destination cannot be a link")
+        if destination.exists():
+            tab_folders.code_files(str(destination), user=False)
+            if not replace:
+                raise FileExistsError(f"skill '{slug}' already exists")
+        os.makedirs(SKILLS_DIR, exist_ok=True)
+        staged = Path(SKILLS_DIR) / (".install-" + uuid.uuid4().hex)
+        backup = Path(SKILLS_DIR) / (".previous-" + uuid.uuid4().hex)
+        staged.mkdir()
+        try:
+            (staged / "SKILL.md").write_text(rendered, encoding="utf-8")
+            for relative, content in supporting_files.items():
+                safe_path(relative)
+                target = staged.joinpath(*relative.split("/"))
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+            if destination.exists():
+                os.rename(destination, backup)
+            try:
+                os.rename(staged, destination)
+            except OSError:
+                if backup.exists():
+                    os.rename(backup, destination)
+                raise
+        finally:
+            for folder in (staged, backup):
+                if folder.exists():
+                    shutil.rmtree(folder)
+    else:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w" if replace else "x", encoding="utf-8") as f:
+            f.write(rendered)
     skill_curator.record(slug, source, origin=origin or os.path.basename(filename))
     return {"slug": slug, "description": parsed["description"], "body": parsed["body"],
             "scan": scan["verdict"]}
@@ -295,9 +331,10 @@ def import_skill(filename: str, raw_content: str, confirmed: bool = False, *,
 def delete_skill(slug: str) -> None:
     path = _skill_path(slug)
     if os.path.exists(path):
-        os.remove(path)
+        from core import tab_folders
+        # Bundle files share the same checked folder as SKILL.md.
+        tab_folders.code_files(os.path.dirname(path), user=False)
         skill_dir = os.path.dirname(path)
-        if not os.listdir(skill_dir):
-            os.rmdir(skill_dir)
+        shutil.rmtree(skill_dir)
         from services import skill_curator
         skill_curator.forget(slug)

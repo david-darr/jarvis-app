@@ -130,6 +130,7 @@ class TaskService:
         trigger: Optional[dict] = None,
         reply_to: Optional[str] = None,
         context: str = "",
+        enabled: bool = True,
     ) -> dict:
         if schedule_kind not in ("once", "interval", "daily", "card"):
             raise ValueError("schedule_kind must be 'once', 'interval', 'daily' or 'card'")
@@ -173,7 +174,7 @@ class TaskService:
             "interval_seconds": interval_seconds,
             # "HH:MM" in local time, for schedule_kind == "daily".
             "run_time": run_time,
-            "enabled": True,
+            "enabled": enabled,
             "next_run_at": next_run_at,
             "last_run_at": None,
             "created_at": now,

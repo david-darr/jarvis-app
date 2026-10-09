@@ -798,6 +798,7 @@ class AppWiringTests(unittest.IsolatedAsyncioTestCase):
                  "remote_access": Mock(start_if_enabled=AsyncMock(), stop=AsyncMock()),
                  "chat_service": Mock(shutdown=AsyncMock()),
                  "tab_hooks": Mock(reconcile=AsyncMock(), stop_all=AsyncMock()),
+                 "start_store_watch": Mock(), "stop_store_watch": AsyncMock(),
                  # A backup restored before the imports (core/backup.py); none here.
                  "_RESTORED": None}
         exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec"), scope)

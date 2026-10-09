@@ -118,6 +118,8 @@ async def check(item_id: str) -> Optional[dict]:
     item = integrations.get_integration(item_id)
     if item is None or item.get("kind") != "mcp_server":
         return None
+    if not item.get("enabled", True):
+        return integrations.get_integration_masked(item_id)
     await mcp_oauth.refresh_due([item_id])
     config = integrations.list_mcp_servers_runtime([item_id]).get(item["name"])
     if config is None:  # an OAuth server not signed in is left out until it is

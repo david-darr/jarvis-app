@@ -410,6 +410,18 @@ app.whenReady().then(async () => {
           await navigate('agents');
         }
         if (tab === "tool-store" && !demoState.empty) {
+          await waitFor("document.querySelectorAll('[data-community-slug]').length === 4");
+          assert.ok(await js("document.querySelector('[data-community-heading]').textContent.includes('Community')"), label + " Community section renders");
+          assert.equal(await js("document.querySelector('[data-community-slug=meeting_summary] .tool-store-badge').textContent"), 'Update available', label + ' Community update badge');
+          const communityWrites = writes.length;
+          await js("document.querySelector('[data-community-slug=weekly_review] .btn.primary').click()");
+          await waitFor("document.querySelector('[data-community-slug=weekly_review] .tool-store-badge').textContent === 'Installed'");
+          assert.ok(writes.slice(communityWrites).some(w => w.path === '/api/store/install' && JSON.parse(w.body).kind === 'automation'), label + ' Community install uses the store gate');
+          await js("document.querySelector('[data-community-heading]').scrollIntoView({ block: 'start' })");
+          await capture(label + '-tool-store-community');
+          // Reset the synthetic install so both viewport passes exercise Install.
+          demoState.communityInstalls = {};
+          writes.splice(communityWrites);
           // Roadmap phase 6: server health, a tool held for review, and an
           // unreadable skill that says why.
           await waitFor("document.querySelectorAll('.tool-store-health').length === 3");
