@@ -92,6 +92,18 @@ class PublishTests(unittest.IsolatedAsyncioTestCase):
         self.now += 5
         return result
 
+    async def test_pending_sign_in_survives_a_redrawn_view(self):
+        # The Tool Store view that started sign-in can be redrawn; status
+        # must hand the waiting code to the new view (never the device code).
+        await self.start_flow()
+        pending = account.status()["pending"]
+        self.assertEqual(pending["user_code"], "ABCD-EFGH")
+        self.assertEqual(pending["verification_uri"], "https://github.com/login/device")
+        self.assertNotIn("server-only-device-code", json.dumps(account.status()))
+        self.respond({"access_token": TOKEN}, {"login": "alice"})
+        await account.poll()
+        self.assertNotIn("pending", account.status())
+
     async def test_device_happy_path_encrypted_and_safe(self):
         result = await self.start_flow()
         self.assertEqual(set(result), {"user_code", "verification_uri", "expires_in", "interval"})

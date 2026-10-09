@@ -1,6 +1,6 @@
 {
  "built": {
-  "app.js": "babe7ff418183e39a45694401770655cb18f2af6b985b96ce43d393f4e6cfb7f",
+  "app.js": "11a4fe49f2e28ae8b246a16636eb31a53647008cb1c0bdaa5964daaa03ff1737",
   "fixtures.js": "af1505fd809fc1d0673f5bca950b6c16a274a09ca360c82b34df4383830106e7",
   "index.html": "876b0a30cc72b90dee0b600154fb85b90eceac5bb0f113984c97bf512bd68803",
   "shim.js": "f86b266cb59b6b654edb6ed26973802430586d7b84bdc2a9effbadb529c90945",
@@ -338,7 +338,7 @@
   "static/js/sidebar.js": "f49acf5596f0ff90000bf2cdf510198a415cdcee02f87b601ac936ddd44f8712",
   "static/js/skillManager.js": "198b97910e478c7618b9fa599fa3a8bfcdfdcb152fff348999faf2ec2cf8c9b8",
   "static/js/slashCommands.js": "f387a1083af25fc03c6d5ae695e9470bbfea97460cadd04a5407793934d6f5e0",
-  "static/js/storePublish.js": "50ee4b50e916b22939be14acada5a386930f061e58a82d9588ab536fa660f374",
+  "static/js/storePublish.js": "b06f59d7b34882154d311ef260c32f4212c03babcf0d8f8f599f892cd55beecc",
   "static/js/swarmBoard.js": "699d24aaaf8f84e12fb7365b598fae373f4c0e1b4696cf3425b5406eeea9a596",
   "static/js/swarmEvents.js": "513eb95038447edc16840b73b046cf89b528202f633abec89f56aa908130b3f4",
   "static/js/swarmGraph.js": "d42cba53b2dd8516aa074d95cd4907723b253f2f26ec08faca1e6631d19bb6e6",

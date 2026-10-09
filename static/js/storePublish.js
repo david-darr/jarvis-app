@@ -131,8 +131,13 @@ export async function githubStrip(host) {
   async function signIn() {
     const current = ++generation;
     strip.querySelector("button").disabled = true;
+    try { await waitForApproval(await post("/api/store/github/start"), current); }
+    catch (error) { draw(); strip.append(el("span", { class: "meta", text: error.message })); }
+  }
+  // Also resumes a sign-in started by an earlier, since-redrawn view: the
+  // server keeps the pending code (services/github_account.py status()).
+  async function waitForApproval(code, current) {
     try {
-      const code = await post("/api/store/github/start");
       const notice = el("span", { class: "meta", text: "Enter this code on GitHub:" });
       strip.replaceChildren(notice, el("strong", { class: "store-device-code", text: code.user_code }),
         el("button", { type: "button", class: "btn quiet", text: "Copy code", onclick: async () => {
@@ -153,6 +158,11 @@ export async function githubStrip(host) {
   // The view owns this handler; a detached view must not keep fetching.
   const published = () => { if (host.isConnected) loadSubmissions(); else document.removeEventListener("kairos:store-published", published); };
   document.addEventListener("kairos:store-published", published);
-  try { account = await api("/api/store/github"); if (host.isConnected) { draw(); await loadSubmissions(); } }
-  catch (error) { strip.textContent = error.message; }
+  try {
+    account = await api("/api/store/github");
+    if (!host.isConnected) return;
+    draw();
+    if (account.pending) waitForApproval(account.pending, ++generation);
+    await loadSubmissions();
+  } catch (error) { strip.textContent = error.message; }
 }

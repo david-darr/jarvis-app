@@ -76,7 +76,13 @@ def credentials():
 def status():
     saved = read_json(str(FILE), {})
     account = json.loads(decrypt(saved["account"])) if saved.get("account") else {}
-    return {"configured": bool(_client_id()), "signed_in": bool(account.get("token")), "login": account.get("login")}
+    result = {"configured": bool(_client_id()), "signed_in": bool(account.get("token")), "login": account.get("login")}
+    # A sign-in waiting on GitHub outlives the Tool Store view that started
+    # it, so a redrawn view picks the polling back up instead of dropping it.
+    if _pending and _now() < _pending["expires"] and not result["signed_in"]:
+        result["pending"] = {"user_code": _pending["user_code"], "verification_uri": _pending["verification_uri"],
+                             "expires_in": int(_pending["expires"] - _now()), "interval": _pending["interval"]}
+    return result
 
 
 async def start():
@@ -89,7 +95,8 @@ async def start():
         if result.get("verification_uri") != "https://github.com/login/device":
             raise ValueError("GitHub returned an unexpected verification URI")
         expires, interval = int(result["expires_in"]), max(1, int(result.get("interval", 5)))
-        _pending = {"device_code": result["device_code"], "client_id": ident,
+        _pending = {"device_code": result["device_code"], "client_id": ident, "user_code": result["user_code"],
+                    "verification_uri": result["verification_uri"],
                     "expires": _now() + expires, "next": _now() + interval, "interval": interval}
         return {"user_code": result["user_code"], "verification_uri": result["verification_uri"], "expires_in": expires, "interval": interval}
 
