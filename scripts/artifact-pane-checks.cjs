@@ -7,19 +7,22 @@ module.exports = async function checkArtifactPanes({ js, win, waitFor, capture, 
   const width = () => js("document.querySelector('#chat-main').getBoundingClientRect().width");
   const active = ".artifact-tab-panel:not([hidden])";
   const select = index => js(`document.querySelectorAll('.artifact-tab-label')[${index}].click()`);
+  // The default chat column is 60% of the chat area; the document gets the rest (about 40%).
+  const defaultWidth = () => js("Math.round(document.querySelector('.has-pane').clientWidth * 0.6)");
   const split = async expected => {
     await delay(250);
+    if (expected === 'default') expected = await defaultWidth();
     assert.ok(Math.abs(await width() - expected) < 2, `Chat column is about ${expected}px`);
-    assert.ok(await js("(() => { const a = document.querySelector('#chat-main').getBoundingClientRect(), b = document.querySelector('.artifact-panel').getBoundingClientRect(); return b.width > a.width && b.left >= a.right; })()"), 'The pane gets the remaining room');
+    assert.ok(await js("(() => { const a = document.querySelector('#chat-main').getBoundingClientRect(), b = document.querySelector('.artifact-panel').getBoundingClientRect(); return b.width > 0 && b.left >= a.right; })()"), 'The pane sits beside the chat');
     assert.ok(await js("document.querySelector('#chat-main').scrollWidth <= document.querySelector('#chat-main').clientWidth + 2 && document.querySelector('.chat-input-bar').scrollWidth <= document.querySelector('.chat-input-bar').clientWidth + 2"), 'The narrow chat and composer fit');
   };
   win.setContentSize(1920, 1080);
   await navigate('chat', { sessionId: 's1' });
   await waitFor("!!document.querySelector('.artifact-card')");
-  await js("localStorage.removeItem('jarvis:chat-pane-width'); if (document.querySelector('#chat-history-toggle').getAttribute('aria-expanded') === 'true') document.querySelector('#chat-history-toggle').click()");
+  await js("localStorage.removeItem('kairos:chat-pane-width'); if (document.querySelector('#chat-history-toggle').getAttribute('aria-expanded') === 'true') document.querySelector('#chat-history-toggle').click()");
   await js("document.querySelector('.artifact-card').click()");
   await waitFor("!!document.querySelector('.artifact-document')");
-  await split(520);
+  await split('default');
   assert.equal(await js("document.querySelector('.chat-pane-resizer').getAttribute('role')"), 'separator');
   assert.equal(await js("document.querySelector('.chat-pane-resizer').getAttribute('aria-orientation')"), 'vertical');
   await capture('artifact-split-1920');
@@ -31,19 +34,20 @@ module.exports = async function checkArtifactPanes({ js, win, waitFor, capture, 
   await mouse({ type: 'mouseMoved', x: handle.x + 96, y: handle.y, button: 'left', buttons: 1 });
   assert.equal(await js("getComputedStyle(document.querySelector('#chat-main')).transitionDuration"), '0s', 'Dragging has no width transition');
   await mouse({ type: 'mouseReleased', x: handle.x + 96, y: handle.y, button: 'left', clickCount: 1 });
-  await split(616);
-  assert.equal(await js("localStorage.getItem('jarvis:chat-pane-width')"), '616');
-  await close(); await open('project-brief.md'); await split(616);
+  const dragged = (await defaultWidth()) + 96;
+  await split(dragged);
+  assert.equal(await js("localStorage.getItem('kairos:chat-pane-width')"), String(dragged));
+  await close(); await open('project-brief.md'); await split(dragged);
   // Persistence also survives a fresh document/module instance.
   await win.loadURL(base);
   await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
   await navigate('chat', { sessionId: 's1' });
-  await open('project-brief.md'); await split(616);
+  await open('project-brief.md'); await split(dragged);
   const arrow = key => js(`document.querySelector('.chat-pane-resizer').dispatchEvent(new KeyboardEvent('keydown', { key: '${key}', bubbles: true, cancelable: true }))`);
-  await arrow('ArrowLeft'); await split(592);
-  assert.equal(await js("document.querySelector('.chat-pane-resizer').getAttribute('aria-valuenow')"), '592');
+  await arrow('ArrowLeft'); await split(dragged - 24);
+  assert.equal(await js("document.querySelector('.chat-pane-resizer').getAttribute('aria-valuenow')"), String(dragged - 24));
   await js("document.querySelector('.chat-pane-resizer').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))");
-  await split(520);
+  await split('default');
   // Keyboard resizing clamps at both limits and exposes the same ARIA range.
   await js("{ const h = document.querySelector('.chat-pane-resizer'); for (let i = 0; i < 100; i++) h.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })); }");
   await delay(250); assert.ok(Math.abs(await width() - 380) < 2);
@@ -52,7 +56,7 @@ module.exports = async function checkArtifactPanes({ js, win, waitFor, capture, 
   await delay(250);
   assert.ok(await js("Math.abs(document.querySelector('#chat-main').getBoundingClientRect().width - Number(document.querySelector('.chat-pane-resizer').getAttribute('aria-valuemax'))) < 2"));
   await js("document.querySelector('.chat-pane-resizer').dispatchEvent(new MouseEvent('dblclick'))");
-  await split(520);
+  await split('default');
 
   await js("import('/static/js/sideChat.js').then(m => m.openSideChat('s3'))");
   await waitFor("!!document.querySelector('.side-chat')");
@@ -66,7 +70,7 @@ module.exports = async function checkArtifactPanes({ js, win, waitFor, capture, 
   await js("document.querySelector('.artifact-maximize').click()");
   assert.ok(await js("!document.querySelector('.side-chat').inert && getComputedStyle(document.querySelector('.side-chat')).display === 'flex'"), 'Restore preserves the side chat');
   await js("import('/static/js/sideChat.js').then(m => m.closeSideChat())");
-  await split(520);
+  await split('default');
   await js("document.querySelector('.artifact-maximize').click()");
   await escape(); assert.ok(await js("!!document.querySelector('.artifact-panel') && !document.querySelector('#chat-main').inert"), 'First Escape restores');
   await escape(); assert.equal(await js("!!document.querySelector('.artifact-panel')"), false, 'Second Escape closes');
@@ -118,7 +122,7 @@ module.exports = async function checkArtifactPanes({ js, win, waitFor, capture, 
       open() { return Promise.resolve({ ok: true, url: 'https://example.com/' }); }
     } }; })()`);
   await js("import('/static/js/browserPane.js').then(m => m.openBrowser('https://example.com/'))");
-  await split(520);
+  await split('default');
   const browserHandle = await js("(() => { const r = document.querySelector('.chat-pane-resizer').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + 150 }; })()");
   await mouse({ type: 'mousePressed', ...browserHandle, button: 'left', clickCount: 1 });
   await mouse({ type: 'mouseMoved', x: browserHandle.x + 24, y: browserHandle.y, button: 'left', buttons: 1 });
@@ -126,19 +130,19 @@ module.exports = async function checkArtifactPanes({ js, win, waitFor, capture, 
   await mouse({ type: 'mouseReleased', x: browserHandle.x + 24, y: browserHandle.y, button: 'left', clickCount: 1 });
   assert.deepEqual(await js("window.nativeBrowserVisibility"), [false, true], 'Native browser returns after the drag');
   await js("document.querySelector('.chat-pane-resizer').dispatchEvent(new MouseEvent('dblclick'))");
-  await split(520);
+  await split('default');
   await open('project-brief.md');
   assert.equal(await js("window.nativeBrowserClosed"), 1);
   assert.equal(await js("document.querySelectorAll('.artifact-panel').length"), 1);
   await js("window.jarvis = window.originalJarvis; delete window.originalJarvis");
   await js("import('/static/js/chatFilesPane.js').then(m => m.openChatFiles('s1'))");
-  await waitFor("!!document.querySelector('.chat-file-row')"); await split(520);
+  await waitFor("!!document.querySelector('.chat-file-row')"); await split('default');
   await js("import('/static/js/chatComputerPane.js').then(m => m.openChatComputer('s1', { closed_at: 1, title: 'Saved computer' }))");
-  await split(520);
+  await split('default');
   assert.equal(await js("document.querySelectorAll('.artifact-panel').length"), 1);
   await open('project-brief.md');
 
-  win.setContentSize(1280, 900); await split(520); await capture('artifact-split-1280');
+  win.setContentSize(1280, 900); await split('default'); await capture('artifact-split-1280');
   await js("document.querySelector('.artifact-maximize').click()");
   win.setContentSize(900, 900); await delay(300);
   assert.equal(await js("getComputedStyle(document.querySelector('.artifact-panel')).position"), 'absolute');
@@ -166,10 +170,10 @@ module.exports = async function checkArtifactPanes({ js, win, waitFor, capture, 
   await js("window.originalStorageGet = Storage.prototype.getItem; window.originalStorageSet = Storage.prototype.setItem; Storage.prototype.getItem = Storage.prototype.setItem = () => { throw new Error('Storage unavailable'); }; true");
   try {
     await open('review-notes.txt'); await arrow('ArrowRight'); await delay(250);
-    assert.ok(Math.abs(await width() - 544) < 2);
+    assert.ok(Math.abs(await width() - ((await defaultWidth()) + 24)) < 2);
     await close();
   } finally {
-    await js("Storage.prototype.getItem = window.originalStorageGet; Storage.prototype.setItem = window.originalStorageSet; delete window.originalStorageGet; delete window.originalStorageSet; localStorage.removeItem('jarvis:chat-pane-width')");
+    await js("Storage.prototype.getItem = window.originalStorageGet; Storage.prototype.setItem = window.originalStorageSet; delete window.originalStorageGet; delete window.originalStorageSet; localStorage.removeItem('kairos:chat-pane-width')");
   }
   win.setContentSize(1440, 900); await navigate('home');
   console.log('PASS: artifact split, pointer/keyboard resize and persistence, maximize/Escape, retained tabs/renderers, pane exclusivity and overlays.');

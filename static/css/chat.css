@@ -257,7 +257,7 @@
 .chat-pane-resizer { display: none; }
 @media (min-width: 1101px) {
   .chat-layout.has-pane #chat-main {
-    flex: 0 0 auto; width: clamp(380px, var(--chat-pane-width), 60%);
+    flex: 0 0 auto; width: clamp(380px, var(--chat-pane-width), 70%); /* matches MAX_SHARE in chatPaneLayout.js */
     --chat-column: min(860px, 100%);
     transition: width 180ms var(--ease-out, ease-out);
   }
