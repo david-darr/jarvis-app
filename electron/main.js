@@ -26,6 +26,7 @@ const fs = require("fs");
 const path = require("path");
 const { autoUpdater } = require("electron-updater");
 const sideBrowser = require("./browser");
+const forgePreview = require('./forgePreview');
 const { installScreenGrab } = require("./screen-grab");
 const { createDesktopLog } = require("./desktop-log");
 const { createUiSecret, uiCookie, browserHandoffUrl } = require("./ui-access");
@@ -370,10 +371,12 @@ async function createWindow() {
     backgroundColor: "#F3EADB",
     title: INSTANCE.label,
     titleBarStyle: "hidden",
-    // Height matches the page's title bar (static/css/style.css --titlebar-h);
+    // 35, not --titlebar-h (36): the bar ends in a 1px bottom border, and the
+    // controls must stop above it so the line runs on under them.
+    // Otherwise matches the page's title bar (static/css/style.css);
     // the colour is that bar's, so the controls sit in it seamlessly.
     ...(process.platform === "win32" ? { titleBarOverlay: {
-      color: "#EFE4D2", symbolColor: "#6B5646", height: 36,
+      color: "#EFE4D2", symbolColor: "#6B5646", height: 35,
     } } : {}),
     autoHideMenuBar: true,
     icon: windowIcon(),
@@ -388,6 +391,12 @@ async function createWindow() {
   // A named instance keeps its name in the taskbar whatever the page calls itself.
   if (INSTANCE.name) win.on("page-title-updated", (event) => event.preventDefault());
   sideBrowser.attach(win, { backendOrigin: new URL(BACKEND_URL).origin });
+  forgePreview.attach(win, { backendOrigin: new URL(BACKEND_URL).origin,
+    getAllowedPorts: async id => {
+      const response = await session.defaultSession.fetch(`${BACKEND_URL}/api/forge/sessions/${encodeURIComponent(id)}/app/allowed-ports`, { redirect: 'error', signal: AbortSignal.timeout(10000) });
+      if (!response.ok) return [];
+      return (await response.json()).ports;
+    } });
 
   // The app's own renderer must never spawn a real second window. Chat
   // replies carry target="_blank" on external links (see chatContent.js), and
@@ -420,6 +429,7 @@ async function createWindow() {
 
   win.on("resize", () => win.webContents.send("browser:host-resized"));
   win.on("closed", () => sideBrowser.close());
+  win.on('closed', () => forgePreview.close());
 
   // Load the splash BEFORE anything that can fail. It is the only channel for
   // telling you what went wrong, so it has to be on screen first — otherwise a
@@ -542,6 +552,16 @@ ipcMain.handle("pick-vault-folder", async () => {
 // app window is allowed to ask.
 function fromAppWindow(event) {
   return !!mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents;
+}
+
+ipcMain.handle('forge-preview:open', (event, id, url, rect) => fromAppWindow(event) ? forgePreview.open(id, url, rect) : { ok: false });
+ipcMain.handle('forge-preview:navigate', (event, url) => fromAppWindow(event) ? forgePreview.navigate(url) : { ok: false });
+ipcMain.handle('forge-preview:state', event => fromAppWindow(event) ? forgePreview.state() : { open: false });
+ipcMain.handle('forge-preview:external', event => fromAppWindow(event) ? forgePreview.openExternal() : { ok: false });
+for (const [channel, fn] of [['back', forgePreview.goBack], ['forward', forgePreview.goForward],
+  ['reload', forgePreview.reload], ['close', forgePreview.close], ['bounds', forgePreview.setBounds],
+  ['visible', forgePreview.setVisible], ['width', forgePreview.setWidth]]) {
+  ipcMain.on(`forge-preview:${channel}`, (event, value) => { if (fromAppWindow(event)) Promise.resolve(fn(value)).catch(console.error); });
 }
 
 function fromOverlayWindow(event) {
@@ -718,10 +738,19 @@ if (!gotTheLock) {
 // happens only via the tray menu (which sets isQuitting first).
 app.on("window-all-closed", () => {});
 
-app.on("before-quit", () => {
+let previewShutdownComplete = false;
+app.on("before-quit", (event) => {
+  if (!previewShutdownComplete && backendReady) {
+    event.preventDefault();
+    previewShutdownComplete = true;
+    session.defaultSession.fetch(`${BACKEND_URL}/api/forge/apps/shutdown`, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10000) })
+      .catch(console.error).finally(() => app.quit());
+    return;
+  }
   isQuitting = true;
   // Destroyed, not hidden — a hidden view keeps running scripts and audio.
   sideBrowser.close();
+  forgePreview.close();
   if (usageOverlay && !usageOverlay.isDestroyed()) usageOverlay.destroy();
   stopBackend();
 });

@@ -49,7 +49,7 @@ CLAUDE_APPROVED_BEFORE = {f"mcp__hive_mind__{name}" for name in (
     # Helpers (roadmap phase 5, 2026-10-06): delegate and collect.
     "delegate helper_results computer "
     # Agent mentions (2026-10-08): hand work to a named agent from a chat.
-    "hand_to_agent save_skill add_mcp_server").split()}
+    "hand_to_agent save_skill add_mcp_server forge_app_logs").split()}
 
 
 def load_cli():
@@ -201,7 +201,7 @@ class SmallWindowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("agent_remember", shown(self.brain(8192, agent_id="a1")), "an agent keeps its own tools")
         for big in (None, tool_registry.SMALL_WINDOW + 1, 200000):
             full = self.brain(big, is_admin=True)
-            self.assertEqual(shown(full), set(names(tool_registry.specs(tool_registry.OPENAI, True))), big)
+            self.assertEqual(shown(full), set(names(tool_registry.specs(tool_registry.OPENAI, True, session_id=self.sid))), big)
             self.assertNotIn("jarvis_tool_search", shown(full))
             self.assertNotIn("only your most-used tools are listed", full._messages[0]["content"])
         small = self.brain(8192, is_admin=True)

@@ -3,8 +3,8 @@
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const suite = process.argv[2];
-if (!['browser-smoke', 'chat-smoke', 'ui-smoke', 'usage-overlay-smoke', 'crm-smoke'].includes(suite)) {
-  throw new Error('Choose browser-smoke, chat-smoke, ui-smoke, usage-overlay-smoke, or crm-smoke');
+if (!['browser-smoke', 'preview-smoke', 'chat-smoke', 'ui-smoke', 'usage-overlay-smoke', 'crm-smoke'].includes(suite)) {
+  throw new Error('Choose browser-smoke, preview-smoke, chat-smoke, ui-smoke, usage-overlay-smoke, or crm-smoke');
 }
 if (suite === 'crm-smoke') {
   require('node:fs').accessSync(path.join(__dirname, '..', 'tabs', 'crm', 'view.js'));

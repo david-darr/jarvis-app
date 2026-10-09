@@ -2,10 +2,13 @@ import { api, el, customSelect, confirmDialog, openPanelDialog } from './api.js'
 import { mountForgeTranscript } from './forgeTranscript.js';
 import { forgeRunning } from './forgeUi.js';
 import { subscribeAll } from './chatStream.js';
+import { configureApp, launchApp } from './forgeAppPreview.js';
 
-export async function mountForgeSession(panel, session, project, models, { initialMessage, onReview, onLeave, onDiff, onChanges } = {}) {
+export async function mountForgeSession(panel, session, project, models, { initialMessage, onReview, onLeave, onDiff, onChanges, onPreview } = {}) {
   const id = session.id, base = `/api/forge/sessions/${encodeURIComponent(id)}`;
   let disposed = false, mutating = false, dialog = null, chatCleanup = () => {};
+  const appController = new AbortController();
+  let appDialogCleanup = () => {}, appStarting = false, appStatus = null;
   const status = el('p', { class: 'forge-review-status', role: 'alert' });
   const agentLabel = el('span', { class: 'meta', text: models.find(m => m.id === session.model_endpoint_id)?.name || 'Default agent' });
   const mode = customSelect({}, ['build', 'plan'].map(value => el('option', { value, text: value === 'build' ? 'Build' : 'Plan' })));
@@ -23,17 +26,34 @@ export async function mountForgeSession(panel, session, project, models, { initi
     catch (error) { mode.value = session.forge.mode; status.textContent = error.message; }
     finally { mutating = false; sync(); }
   });
-  const header = el('header', { class: 'forge-session-header' }, [el('strong', { text: project?.name || 'Forge project' }), agentLabel, end]);
+  const run = el('button', { class: 'btn quiet forge-run-app', text: 'Run app', disabled: !!session.forge.removed, onclick: async () => {
+    if (appStarting || disposed) return;
+    if (appStatus?.ready) { onPreview?.(id); return; }
+    appDialogCleanup = configureApp(session, project, panel, async () => {
+      appStarting = true; run.disabled = true; status.textContent = 'Waiting for app approval and readiness...';
+      try { appStatus = await launchApp(id, 'start', { signal: appController.signal, owner: panel }); if (!disposed) { status.textContent = ''; onPreview?.(id); } }
+      catch (error) { if (!disposed) status.textContent = error.message; }
+      finally { appStarting = false; refreshApp(); }
+    });
+  } });
+  async function refreshApp() {
+    try { const result = await api(`${base}/app/status`); if (!disposed) { appStatus = result; run.textContent = result.ready ? 'Preview' : 'Run app'; run.disabled = appStarting || !!session.forge.removed; } }
+    catch (error) { if (!disposed) status.textContent = error.message; }
+  }
+  const appTimer = setInterval(refreshApp, 3000);
+  document.addEventListener('kairos:forge-apps', refreshApp); refreshApp();
+  const header = el('header', { class: 'forge-session-header' }, [el('strong', { text: project?.name || 'Forge project' }), agentLabel, run, end]);
   const host = el('div', { class: 'forge-chat-host' });
   // filter(Boolean): replaceChildren would print a false condition as the text "false".
   panel.replaceChildren(...[header, explanation, session.forge.isolation === 'in_place' && el('p', { class: 'forge-warning', text: 'In place: changes affect your project folder directly.' }), status, host].filter(Boolean));
   explain(); sync();
   // Teardown is installed before awaiting the chat mount.
-  const cleanup = () => { disposed = true; unsubscribe(); chatCleanup(); dialog?.close(); };
+  const cleanup = () => { disposed = true; appController.abort(); appDialogCleanup(); clearInterval(appTimer); document.removeEventListener('kairos:forge-apps', refreshApp); unsubscribe(); chatCleanup(); dialog?.close(); };
   panel._cleanup = cleanup;
   try {
     const mounted = await mountForgeTranscript(host, { sessionId: id, title: session.title, modelPicker: !session.forge.removed,
       workspace: session.workspace_dir, branch: session.forge.branch, modeControl: mode, modeBusy: () => mutating,
+      hasMessages: !!session.messages?.length,
       onDiff, onChanges,
       queue: true, readOnly: !!session.forge.removed, initialMessage, placeholder: 'Message your agent',
       emptyText: 'Describe the next step for this project.', onTurnEnd: onReview,
@@ -53,7 +73,11 @@ export async function mountForgeSession(panel, session, project, models, { initi
     const inPlace = session.forge.isolation === 'in_place';
     const body = el('div', { class: 'forge-form' }, [el('p', { text: inPlace ? 'Keep your project folder and leave this session.' : 'Keep this worktree for later, or remove it. Your branch and conversation are kept.' }),
       dirty && el('p', { class: 'forge-warning', text: inPlace ? 'Your project has changes. Leaving keeps them.' : 'This worktree has changes from the session baseline. Removing it discards any uncommitted changes.' })]);
-    const keep = el('button', { class: 'btn primary', text: 'Keep and leave', onclick: () => { dialog.close(); onLeave(); } });
+    const keep = el('button', { class: 'btn primary', text: 'Keep and leave', onclick: async () => {
+      keep.disabled = true;
+      try { await api(`${base}/end`, { method: 'POST' }); document.dispatchEvent(new Event('kairos:forge-apps')); dialog.close(); onLeave(); }
+      catch (error) { status.textContent = error.message; keep.disabled = false; }
+    } });
     const footer = el('div', {}, [keep]);
     if (!inPlace) footer.append(el('button', { class: 'btn danger', text: 'Remove worktree', onclick: async () => {
       if (dirty && !await confirmDialog({ title: 'Discard worktree changes?', message: 'Permanently discard all uncommitted changes in this worktree and remove it? Your branch and conversation will remain.', confirmLabel: 'Discard changes and remove' })) return;

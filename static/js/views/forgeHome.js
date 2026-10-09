@@ -7,7 +7,7 @@ import { openProjectForm } from '../forgeProjectForms.js';
 import { subscribeAll } from '../chatStream.js';
 
 const navigate = (tab, options = {}) => document.dispatchEvent(new CustomEvent('jarvis:navigate', { detail: { tab, ...options } }));
-const widgetNames = { working: 'Working now', activity: 'Git activity', recent: 'Recent projects', lifespan: 'Repo lifespan' };
+const widgetNames = { working: 'Working now', services: 'Running services', activity: 'Git activity', recent: 'Recent projects', lifespan: 'Repo lifespan' };
 const widgetsKey = 'kairos:forge-widgets';
 function panel(title, body, control) {
   return el('section', { class: 'forge-panel' }, [el('header', { class: 'forge-panel-header' }, [el('h2', { text: title }), control]), body]);
@@ -116,9 +116,16 @@ export function render(container, tabId, options = {}) {
     if (disposed || busy) return;
     busy = true;
     try {
-      const [result, groups] = await Promise.all([api('/api/forge/activity'), projectSessions(projects)]);
+      const [result, groups, apps] = await Promise.all([api('/api/forge/activity'), projectSessions(projects), api('/api/forge/apps/running')]);
       if (disposed) return;
       sessionGroups = groups; drawWorking();
+      bodies.services.replaceChildren(...(apps.length ? apps.map(app => {
+        const group = groups.find(g => g.project.id === app.project_id), session = group?.sessions.find(s => s.id === app.session_id);
+        return el('button', { class: 'dashboard-row forge-running-service', 'data-app-session': app.session_id,
+          onclick: () => navigate('forgeShell', { sessionId: app.session_id, previewSessionId: app.session_id }) }, [
+          el('span', { class: 'status-dot ok' }), el('span', { class: 'dashboard-row-copy' }, [
+            el('strong', { text: `:${app.port} ${session?.title || 'Session'}` }), el('small', { class: 'meta', text: app.command })])]);
+      }) : [el('p', { class: 'meta', text: 'No apps running.' })]));
       if (groups.some(g => g.error)) bodies.working.append(el('p', { class: 'meta', text: 'Some project sessions could not load.' }));
       const totals = result.days.reduce((sum, row) => ({ commits: sum.commits + row.commits, added: sum.added + row.added, removed: sum.removed + row.removed }), { commits: 0, added: 0, removed: 0 });
       bodies.activity.replaceChildren(el('p', { class: 'forge-activity-total', text: `${totals.commits} commits · 14 days` }),
@@ -176,6 +183,7 @@ export function render(container, tabId, options = {}) {
   };
   message.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); composer.requestSubmit(); } };
   load();
+  document.addEventListener('kairos:forge-apps', refreshActivity);
   const timer = setInterval(() => { if (!document.hidden) { refreshActivity(); lifespan(); } }, 30000);
-  return () => { disposed = true; ++summaryVersion; ++branchVersion; unsubscribe(); clearInterval(timer); disposeBanner(); dialog?.close(); document.removeEventListener('kairos:appearance', appearance); };
+  return () => { disposed = true; ++summaryVersion; ++branchVersion; unsubscribe(); clearInterval(timer); disposeBanner(); dialog?.close(); document.removeEventListener('kairos:appearance', appearance); document.removeEventListener('kairos:forge-apps', refreshActivity); };
 }

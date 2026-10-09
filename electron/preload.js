@@ -17,6 +17,29 @@ const { contextBridge, ipcRenderer } = require("electron");
 // supplied by the caller — a generic send(channel, ...) would hand the
 // renderer the entire IPC surface and undo the point of this file.
 contextBridge.exposeInMainWorld("jarvis", {
+  forgePreview: {
+    open: (id, url, bounds) => ipcRenderer.invoke('forge-preview:open', id, url, bounds),
+    navigate: url => ipcRenderer.invoke('forge-preview:navigate', url),
+    state: () => ipcRenderer.invoke('forge-preview:state'),
+    openExternal: () => ipcRenderer.invoke('forge-preview:external'),
+    back: () => ipcRenderer.send('forge-preview:back'),
+    forward: () => ipcRenderer.send('forge-preview:forward'),
+    reload: () => ipcRenderer.send('forge-preview:reload'),
+    close: () => ipcRenderer.send('forge-preview:close'),
+    setBounds: rect => ipcRenderer.send('forge-preview:bounds', rect),
+    setWidth: width => ipcRenderer.send('forge-preview:width', width),
+    setVisible: visible => ipcRenderer.send('forge-preview:visible', !!visible),
+    onState: handler => {
+      const wrapped = (_event, state) => handler(state);
+      ipcRenderer.on('forge-preview:state', wrapped);
+      return () => ipcRenderer.removeListener('forge-preview:state', wrapped);
+    },
+    onError: handler => {
+      const wrapped = (_event, error) => handler(error);
+      ipcRenderer.on('forge-preview:error', wrapped);
+      return () => ipcRenderer.removeListener('forge-preview:error', wrapped);
+    },
+  },
   pickVaultFolder: () => ipcRenderer.invoke("pick-vault-folder"),
   // Two #rrggbb colors; main.js checks both and that the call came from this window.
   setTitleBar: (color, symbolColor) => ipcRenderer.send("window:title-bar", String(color), String(symbolColor)),

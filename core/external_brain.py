@@ -63,8 +63,8 @@ class ExternalBrain:
         self.read_only = read_only
         self.small_window = bool(window and window <= tool_registry.SMALL_WINDOW) and not helper
         self.tools = tool_registry.openai_tools(is_admin, agent=bool(agent_id), small_window=self.small_window,
-                                                helper=helper, read_only=read_only)
-        self._deferred: dict[str, dict] = tool_registry.deferred_tools(is_admin, agent=bool(agent_id), helper=helper, read_only=read_only) \
+                                                helper=helper, read_only=read_only, session_id=session_id or '')
+        self._deferred: dict[str, dict] = tool_registry.deferred_tools(is_admin, agent=bool(agent_id), helper=helper, read_only=read_only, session_id=session_id or '') \
             if self.small_window else {}
         if self._deferred:
             self.tools = self.tools + tool_search.bridge_schemas()

@@ -35,6 +35,10 @@
         { role: 'assistant', content: 'The composer now explains where your work runs. I also added a keyboard shortcut.\n\n```javascript\nexport const shortcut = "Enter";\n```', ts: now - 300 }] },
   };
   const forgeReviews = state.forgeReviews ||= {};
+  const forgeApps = state.forgeApps ||= {};
+  const forgeCommands = state.forgeCommands ||= {};
+  const forgeAppPending = state.forgeAppPending ||= {};
+  const forgeAppAnswers = state.forgeAppAnswers ||= {};
   const gardenSource = 'export const shortcut = "Enter";\n\nexport function composerHint() {\n  return "Build in a worktree";\n}\n';
   function forgeReview(id) {
     if (!forgeReviews[id]) {
@@ -218,6 +222,38 @@
     return { name: 'example-com-click', description, body, steps, labels, content: `---\ndescription: ${description}\n---\n\n${body}` };
   }
   function mutate(route, method, body = {}, query = {}) {
+    const commandRoute = route.match(/^\/api\/forge\/projects\/([^/]+)\/app\/command$/);
+    if (commandRoute && method === 'PUT') {
+      const project = forgeProjects.find(p => p.id === commandRoute[1]);
+      project.app_command = body.command;
+      forgeCommands[project.id] = body.command; return project;
+    }
+    const answerRoute = route.match(/^\/api\/permissions\/([^/]+)\/answer$/);
+    if (answerRoute && forgeAppPending[answerRoute[1]]) {
+      forgeAppAnswers[answerRoute[1]] = body.choice; return { status: 'answered' };
+    }
+    const appRoute = route.match(/^\/api\/forge\/sessions\/([^/]+)\/app\/(start|stop|restart|approved)$/);
+    if (appRoute) {
+      const id = appRoute[1], action = appRoute[2], session = forgeSessions[id], projectId = session.forge.project_id;
+      const command = forgeCommands[projectId] || 'npm run dev -- --host 127.0.0.1 --port {port}';
+      if (action === 'stop') { forgeApps[id] = { ...forgeApps[id], running: false, ready: false, ports: [], url: null }; return forgeApps[id]; }
+      if (action === 'approved' || state.forgeAppApproved?.[projectId] === command) {
+        (state.forgeAppApproved ||= {})[projectId] = command;
+        forgeApps[id] = { session_id: id, project_id: projectId, command: command.replace('{port}', '5173'),
+          running: true, ready: true, port: 5173, ports: [5173], url: 'http://127.0.0.1:5173/', fixture: true,
+          fixture_html: '<!doctype html><style>body{font:16px system-ui;background:#f5f0e5;padding:24px;color:#30251e}button{padding:10px}</style><h1>Kairos garden</h1><p>Your ideas, growing into something useful.</p><button>Plant an idea</button>' };
+        return { _appStart: { status: forgeApps[id] } };
+      }
+      const requestId = 'app-approval-' + id;
+      const permission = { id: requestId, tool: 'forge_app_start', title: 'Run app?',
+        description: `Command: ${command.replace('{port}', '5173')}\nFolder: ${session.workspace_dir}`,
+        choices: [{ id: 'once', label: 'Approve command', behavior: 'allow' }, { id: 'reject', label: 'Cancel', behavior: 'deny' }] };
+      forgeAppPending[requestId] = id; delete forgeAppAnswers[requestId];
+      return { _appStart: { permission } };
+    }
+    if (route === '/api/forge/apps/shutdown') { Object.values(forgeApps).forEach(app => { app.running = app.ready = false; app.ports = []; }); return { ok: true }; }
+    const endRoute = route.match(/^\/api\/forge\/sessions\/([^/]+)\/end$/);
+    if (endRoute) { if (forgeApps[endRoute[1]]) { forgeApps[endRoute[1]].running = forgeApps[endRoute[1]].ready = false; forgeApps[endRoute[1]].ports = []; } return { ok: true }; }
     if (route === '/api/forge/sessions' && method === 'POST') {
       const project = forgeProjects.find(p => p.id === body.project_id);
       if (!project || project.id === 'fp2') return { _status: 400, detail: 'Forge sessions require a Git repository root with an initial commit.' };
@@ -235,7 +271,7 @@
       if (action === 'mode' && method === 'POST') { session.forge.mode = body.mode; return session; }
       if (!action && method === 'DELETE') {
         if (session.forge.isolation !== 'in_place' && review.files.length && (query.discard !== 'true' || query.confirmed !== 'true')) return { _status: 409, detail: 'Worktree has changes. Confirm discard before removing it.' };
-        session.forge.removed = true; return { ok: true };
+        session.forge.removed = true; if (forgeApps[session.id]) { forgeApps[session.id].running = forgeApps[session.id].ready = false; forgeApps[session.id].ports = []; } return { ok: true };
       }
       if (['revert-file', 'revert-hunk'].includes(action) || /^checkpoints\/.+\/undo$/.test(action || '')) {
         if (!body.confirmed) return { _status: 400, detail: 'Confirm this operation first.' };
@@ -504,6 +540,17 @@
     ];
     const route = url.pathname;
     const list = (data) => state.empty ? [] : data;
+    if (route === '/api/forge/apps/running') return list(Object.values(forgeApps).filter(app => app.running));
+    const appRead = route.match(/^\/api\/forge\/sessions\/([^/]+)\/app\/(suggest|status|logs|allowed-ports)$/);
+    if (appRead) {
+      const id = appRead[1], action = appRead[2], session = forgeSessions[id];
+      if (!session) throw new Error('Forge session not found');
+      if (action === 'suggest') return { command: forgeCommands[session.forge.project_id] || '', suggestions: ['npm run dev -- --host 127.0.0.1 --port {port}', 'npm run preview'] };
+      const app = forgeApps[id] || { session_id: id, running: false, ready: false, ports: [] };
+      if (action === 'status') return app;
+      if (action === 'allowed-ports') return { ports: app.running ? app.ports : [] };
+      return { session_id: id, lines: ['> kairos-garden dev', 'Local: http://127.0.0.1:5173/', 'Ready in 240 ms', 'GET / 200'] };
+    }
     if (route === "/api/auth/status") return { auth_enabled: false, setup_required: false, username: "Alex", is_admin: state.isAdmin !== false, instance: state.empty ? "dev" : "" };
     if (route === '/api/forge/root') return { path: state.forgeRoot || 'C:\\Users\\Alex\\Documents\\Kairos Projects' };
     if (route === '/api/forge/projects') return list(forgeProjects.map(p => ({ ...p, git: p.id === 'fp2' ? { state: 'not_git', message: 'Not a git repository' } : forgeSummary })));

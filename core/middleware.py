@@ -63,16 +63,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Found by scripts/chat-smoke.cjs, which reproduces this exact header.
         #
         # Deliberately the narrowest widening that makes it work: it permits
-        # EMBEDDING https pages and nothing else. No script, style, connect,
+        # EMBEDDING https pages and loopback HTTP app previews. No script, style, connect,
         # or font source changes, so a framed page still cannot run anything
         # in this origin — it is a separate browsing context, the frame is
         # sandboxed without allow-top-navigation (static/js/browserPane.js),
         # and X-Frame-Options/frame-ancestors below still stop JARVIS itself
-        # from being framed by anyone else. http: is excluded so the fallback
-        # cannot silently downgrade to a plaintext page.
+        # from being framed by anyone else. Plain HTTP is limited to the two
+        # App Preview hosts; the renderer chooses its session's allowed port.
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; "
-            "frame-src 'self' https:; img-src 'self' data: blob:"
+            "frame-src 'self' https: http://127.0.0.1:* http://localhost:*; img-src 'self' data: blob:"
         )
         # Odysseus applies this same no-cache rule to .js/.css/.html source
         # files specifically (see specs/frontend.md) — without it, Electron's

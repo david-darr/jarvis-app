@@ -324,17 +324,21 @@ class ForgeSessions:
             return {'restored': file_checkpoints.restore(event_id, selections)}
 
     def remove(self, session_id, discard=False, confirmed=False):
+        from services.forge_apps import forge_apps
         if discard:
             self._confirmed(confirmed)
-        with self.lock:
+        with forge_apps.lock, self.lock:
             root = self.workspace(session_id)
             session = self.get(session_id)
             details = session['forge']
             if details['isolation'] != 'in_place':
                 if not discard and forge_git.run_git(root, 'status')[1]:
                     raise ReviewConflict('Worktree has uncommitted changes. Confirm discarding them to remove it.')
+                forge_apps.stop(session_id)
                 _, repo = self.project(details['project_id'])
                 forge_git.worktree_remove(repo, root, discard)
+            else:
+                forge_apps.stop(session_id)
             self.sessions.set_forge(session_id, {**details, 'removed': True})
             return {'ok': True, 'branch': details['branch'], 'kept_project_folder': details['isolation'] == 'in_place'}
 

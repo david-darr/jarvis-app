@@ -1,5 +1,5 @@
 import { ICONS } from "./icons.js";
-import { WORDMARK } from "./brand.js";
+import { WORDMARK, ICON as KAIROS_MARK } from "./brand.js";
 import { api, useAppMenusForSelects } from "./api.js";
 import * as onboarding from "./onboarding.js";
 import * as auth from "./auth.js";
@@ -262,7 +262,7 @@ async function buildSidebar() {
     }
     const rail = document.createElement('button'); rail.type = 'button'; rail.className = 'forge-mode-rail';
     rail.setAttribute('aria-label', appMode === 'forge' ? 'Switch to Kairos' : 'Switch to Forge Preview');
-    rail.title = rail.getAttribute('aria-label'); rail.innerHTML = ICONS.agents;
+    rail.title = rail.getAttribute('aria-label'); rail.innerHTML = KAIROS_MARK; // The Kairos circle mark (David, 2026-10-09).
     rail.onclick = () => switchMode(appMode === 'forge' ? 'kairos' : 'forge'); control.append(rail);
     document.querySelector('.sidebar-header').after(control);
   }

@@ -231,7 +231,7 @@ class Brain:
         # (roadmap phase 2, 2026-10-05: this was a hand-kept list of names, so
         # a new read tool silently prompted until someone added it here). Each
         # asks the person itself where it needs to.
-        allowed_tools = tool_registry.claude_preapproved(agent=bool(self.agent_id)) + [
+        allowed_tools = tool_registry.claude_preapproved(agent=bool(self.agent_id), session_id=self.session_id or '') + [
             # Canva image/design generation (David's ask 2026-09-10, "have
             # their claude code use Canva"). Pre-approves only the
             # generate-and-export surface actually needed for "create an

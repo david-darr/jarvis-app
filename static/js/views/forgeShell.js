@@ -4,6 +4,7 @@ import { navigateForge, sessionStatus, changeTotals, diffCounts, forgeRunning } 
 import { mountForgeSession } from '../forgeSessionPane.js';
 import { fileView, diffView, changeRole, revertFile } from '../forgeSurfaces.js';
 import { mountArtifactPane, hideArtifact, setArtifactContext } from '../chatContent.js';
+import { mountAppPreview } from '../forgeAppPreview.js';
 
 // Project layouts survive Home and Chats navigation, without retaining DOM or subscriptions.
 const layouts = new Map();
@@ -24,7 +25,8 @@ export async function render(container, tabId, options = {}) {
   const sidebarTabs = el('div', { class: 'forge-sidebar-tabs', role: 'tablist', 'aria-label': 'Project panels' });
   const search = el('input', { type: 'search', placeholder: 'Search sessions', 'aria-label': 'Search sessions' });
   const cards = el('div', { class: 'forge-session-cards' });
-  const sessionPanel = el('section', { class: 'forge-sidebar-panel', role: 'tabpanel', id: 'forge-panel-sessions' }, [el('div', { class: 'forge-session-search' }, [search]), cards]);
+  const runningStrip = el('div', { class: 'forge-running-strip', 'aria-label': 'Running apps', hidden: true });
+  const sessionPanel = el('section', { class: 'forge-sidebar-panel', role: 'tabpanel', id: 'forge-panel-sessions' }, [runningStrip, el('div', { class: 'forge-session-search' }, [search]), cards]);
   const tree = el('div', { class: 'forge-explorer-tree', role: 'tree', 'aria-label': 'Project files' });
   const treeRoot = el('div', { class: 'forge-tree-root' }, [el('span', { text: '\u25be', 'aria-hidden': 'true' }), el('strong')]);
   const explorerPanel = el('section', { class: 'forge-sidebar-panel', role: 'tabpanel', id: 'forge-panel-explorer' }, [
@@ -52,7 +54,7 @@ export async function render(container, tabId, options = {}) {
   panes.append(left, divider, right); shell.append(sidebar, workspace, parked); container.replaceChildren(shell);
   let disposed = false, project, projects = [], models = [], sessions = [], layout, navigation = 0, reviewsVersion = 0, explorerVersion = 0;
   let explorerContext = null, activePane = 'left', tabDrag = null, cancelResize = null, reviewBusy = false;
-  let width = Number(readStorage('kairos:forge-sidebar-width', 260)) || 260;
+  let width = Number(readStorage('kairos:forge-sidebar-width', 228)) || 228;
   const panels = new Map(), reviews = new Map();
   const tabButtons = new Map();
   const cleanupPanels = () => { for (const panel of panels.values()) { panel._cleanup?.(); panel.remove(); } panels.clear(); };
@@ -60,6 +62,7 @@ export async function render(container, tabId, options = {}) {
     disposed = true; ++navigation; ++reviewsVersion; ++explorerVersion; cancelResize?.(); cleanupPanels(); unsubscribe(); clearInterval(timer); hideArtifact({ navigation: true });
     document.removeEventListener('keydown', onKey); window.removeEventListener('resize', viewportChanged);
     document.removeEventListener('kairos:forge-projects', projectsChanged); if (controller === instance) controller = null;
+    document.removeEventListener('kairos:forge-apps', refreshApps); clearInterval(appTimer);
   };
   let ready;
   const instance = { open: async next => { await ready; if (!disposed) return openContext(next); } }; controller = instance;
@@ -106,10 +109,10 @@ export async function render(container, tabId, options = {}) {
   document.addEventListener('keydown', onKey);
   window.addEventListener('resize', viewportChanged);
   document.addEventListener('kairos:forge-projects', projectsChanged);
-  resize.ondblclick = () => setWidth(260, true);
+  resize.ondblclick = () => setWidth(228, true);
   resize.onpointerdown = event => beginResize(event, resize, () => width, value => setWidth(value), (x, start, origin) => origin + x - start, () => remember('kairos:forge-sidebar-width', width));
   resize.onkeydown = event => {
-    if (['ArrowLeft', 'ArrowRight', 'Home'].includes(event.key)) { event.preventDefault(); setWidth(event.key === 'Home' ? 260 : width + (event.key === 'ArrowRight' ? 20 : -20), true); }
+    if (['ArrowLeft', 'ArrowRight', 'Home'].includes(event.key)) { event.preventDefault(); setWidth(event.key === 'Home' ? 228 : width + (event.key === 'ArrowRight' ? 20 : -20), true); }
   };
   divider.onpointerdown = event => beginResize(event, divider, () => layout.ratio, value => { layout.ratio = Math.max(.08, Math.min(.92, value)); drawPanes(); }, (x, start, origin) => origin + (x - start) / panes.clientWidth);
   divider.onkeydown = event => { if (['ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); layout.ratio = Math.max(.08, Math.min(.92, layout.ratio + (event.key === 'ArrowRight' ? .03 : -.03))); drawPanes(); } };
@@ -122,6 +125,8 @@ export async function render(container, tabId, options = {}) {
   workspace.ondragleave = event => { if (!workspace.contains(event.relatedTarget)) workspace.classList.remove('forge-drop-right'); };
   workspace.ondrop = event => { event.preventDefault(); if (workspace.classList.contains('forge-drop-right') && tabDrag) split(tabDrag); cancelDrag(); };
   strip.onwheel = event => { if (strip.scrollWidth > strip.clientWidth) { event.preventDefault(); strip.scrollLeft += event.deltaY || event.deltaX; } };
+  const appTimer = setInterval(refreshApps, 5000);
+  document.addEventListener('kairos:forge-apps', refreshApps);
   try {
     ready = Promise.all([api('/api/forge/projects'), api('/api/models/choices').catch(() => [])]).then(values => { [projects, models] = values; });
     await ready;
@@ -162,12 +167,14 @@ export async function render(container, tabId, options = {}) {
       } else if (layout.sessionId && !sessions.some(s => s.id === layout.sessionId)) layout.sessionId = null;
       branch.textContent = sessions.find(s => s.id === layout.sessionId)?.forge.branch || project.git?.branch || 'Project folder';
       drawCards(); drawTabs(); drawPanes();
+      refreshApps();
       selectSidebarTab(readStorage(`kairos:forge-panel:${id}`, 'sessions'));
       await refreshReviews();
       if (disposed || version !== navigation) return;
       setArtifactContext(layout.sessionId);
       await mountArtifactPane(artifactHost);
       if (session && phone() && next.closeSheet) showSidebar(false);
+      if (next.previewSessionId) openPreview(next.previewSessionId);
     } catch (error) { if (!disposed && version === navigation) status.textContent = error.message; }
   }
   function showSidebar(show) {
@@ -180,9 +187,9 @@ export async function render(container, tabId, options = {}) {
   }
   function setWidth(value, persist = false) {
     if (phone()) return;
-    width = Math.min(560, Math.floor(innerWidth / 2), Math.max(260, Math.round(value)));
+    width = Math.min(520, Math.max(208, Math.round(value)));
     sidebar.style.width = `${width}px`; resize.setAttribute('aria-valuenow', String(width));
-    resize.setAttribute('aria-valuemin', '260'); resize.setAttribute('aria-valuemax', String(Math.min(560, Math.floor(innerWidth / 2))));
+    resize.setAttribute('aria-valuemin', '208'); resize.setAttribute('aria-valuemax', '520');
     if (persist) remember('kairos:forge-sidebar-width', width);
   }
   function viewportChanged() {
@@ -213,6 +220,26 @@ export async function render(container, tabId, options = {}) {
       ]);
     }));
     if (!sorted.length) cards.append(el('p', { class: 'meta', text: sessions.length ? 'No matching sessions.' : 'Start a session with +.' }));
+  }
+  async function refreshApps() {
+    try {
+      const apps = await api('/api/forge/apps/running');
+      if (disposed || !project) return;
+      const rows = apps.filter(app => app.project_id === project.id);
+      runningStrip.hidden = !rows.length;
+      runningStrip.replaceChildren(el('strong', { text: 'Running' }), ...rows.map(app => el('button', {
+        class: 'forge-small-button', text: `:${app.port} ${sessions.find(s => s.id === app.session_id)?.title || 'Session'}`,
+        onclick: () => openPreview(app.session_id) })));
+    } catch { /* Session status exposes failures. */ }
+  }
+  function openPreview(sessionId) {
+    let tab = layout.tabs.find(t => t.id === `preview:${sessionId}`);
+    if (!tab) { tab = { id: `preview:${sessionId}`, type: 'app-preview', title: 'Preview', sessionId }; layout.tabs.push(tab); }
+    const sessionTab = layout.tabs.find(t => t.type === 'session' && t.sessionId === sessionId);
+    if (!phone() && sessionTab) { layout.left = sessionTab.id; sessionTab.pane = 'left'; split(tab.id); }
+    else activate(tab.id, 'left');
+    if (phone()) showSidebar(false);
+    refreshApps();
   }
   function relativeTime(at) {
     const minutes = Math.max(0, Math.floor((Date.now() / 1000 - at) / 60));
@@ -359,6 +386,7 @@ export async function render(container, tabId, options = {}) {
         host.replaceChildren(panel);
       }
     }
+    for (const panel of panels.values()) panel._setVisible?.(panel.parentElement === left || (isSplit && panel.parentElement === right));
   }
   function ensurePanel(tab) {
     if (panels.has(tab.id)) return panels.get(tab.id);
@@ -373,9 +401,12 @@ export async function render(container, tabId, options = {}) {
           if (disposed || panels.get(tab.id) !== panel) return;
           const initialMessage = tab.initialMessage; delete tab.initialMessage;
           await mountForgeSession(panel, session, project, models, { initialMessage, onReview: refreshReviews,
+            onPreview: openPreview,
             onDiff: path => { layout.sessionId = tab.sessionId; activePane = tab.pane || 'left'; openSurface('diff', path, true); },
             onChanges: () => { layout.sessionId = tab.sessionId; showSidebar(true); selectSidebarTab('changes'); refreshReviews(); },
             onLeave: () => { closeTab(tab.id); selectSidebarTab('sessions'); openContext({ projectId: project.id }); } });
+        } else if (tab.type === 'app-preview') {
+          await mountAppPreview(panel, tab.sessionId);
         } else if (tab.type === 'file') {
           const file = await api(`${tab.base}/file?${new URLSearchParams({ path: tab.path })}`);
           if (!disposed && panels.get(tab.id) === panel) panel.replaceChildren(fileView(file));
@@ -393,13 +424,14 @@ export async function render(container, tabId, options = {}) {
       id = selected?.type === 'session' ? layout.tabs.findLast(t => t.type !== 'session')?.id : selected?.id;
     }
     const tab = layout.tabs.find(t => t.id === id);
-    if (tab) { tab.preview = false; const other = layout.tabs.findLast(t => t.id !== id && t.type === 'session') || layout.tabs.findLast(t => t.id !== id); if (other) { layout.left = other.id; other.pane = 'left'; } else layout.left = null; activate(id, 'right'); }
+    if (tab) { tab.preview = false; const other = layout.tabs.find(t => t.id !== id && t.type === 'session' && t.sessionId === tab.sessionId) || layout.tabs.findLast(t => t.id !== id && t.type === 'session') || layout.tabs.findLast(t => t.id !== id); if (other) { layout.left = other.id; other.pane = 'left'; } else layout.left = null; activate(id, 'right'); }
     else { activePane = 'right'; drawPanes(); }
   }
   function cancelDrag() { tabDrag = null; workspace.classList.remove('forge-drop-right'); strip.querySelectorAll('.dragging').forEach(row => row.classList.remove('dragging')); }
   function beginResize(event, handle, get, set, calculate, save = () => {}) {
     if (event.button !== 0 || phone()) return;
     event.preventDefault(); cancelResize?.();
+    for (const panel of panels.values()) panel._suspend?.(true);
     const origin = get(), start = event.clientX; let frame = null, pending = origin;
     handle.setPointerCapture(event.pointerId); handle.classList.add('dragging');
     const move = event => { pending = calculate(event.clientX, start, origin); if (!frame) frame = requestAnimationFrame(() => { frame = null; set(pending); }); };
@@ -407,6 +439,7 @@ export async function render(container, tabId, options = {}) {
       if (frame) cancelAnimationFrame(frame); frame = null; set(cancel ? origin : pending); if (!cancel) save();
       handle.classList.remove('dragging'); handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', lost);
       if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId); cancelResize = null;
+      for (const panel of panels.values()) panel._suspend?.(false);
     };
     const up = () => finish(), lost = () => finish(true); cancelResize = () => finish(true);
     handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', lost);

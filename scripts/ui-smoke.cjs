@@ -26,7 +26,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   // The site (docs/) may read GitHub's public release data; nothing else leaves.
   const site = url.pathname.startsWith("/docs/") || url.pathname.startsWith("/kairos/");
-  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src 'self' https:; img-src 'self' data: blob:" + (site ? "; connect-src 'self' https://api.github.com" : ""));
+  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src 'self' https: http://127.0.0.1:* http://localhost:*; img-src 'self' data: blob:" + (site ? "; connect-src 'self' https://api.github.com" : ""));
   if (url.pathname === "/__github-latest") {
     // Stands in for api.github.com/repos/david-darr/kairos/releases/latest.
     res.setHeader("Content-Type", "application/json"); res.setHeader("Access-Control-Allow-Origin", "*");
@@ -83,6 +83,22 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname === '/api/settings/computer-use') demoState.computerUse = JSON.parse(body);
       let parsed = {}; try { parsed = JSON.parse(body); } catch {}
       const updated = mutate(url.pathname, req.method, parsed, Object.fromEntries(url.searchParams));
+      if (updated?._appStart) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.write(`data: ${JSON.stringify(updated._appStart)}\n\n`);
+        if (updated._appStart.permission) {
+          const request = updated._appStart.permission;
+          const timer = setInterval(() => {
+            const answer = demoState.forgeAppAnswers[request.id];
+            if (!answer) return;
+            clearInterval(timer);
+            const result = answer === 'once' ? mutate(url.pathname.replace(/\/(start|restart)$/, '/approved'), 'POST', {})._appStart : { error: 'App command was not approved.' };
+            res.end(`data: ${JSON.stringify(result)}\n\n`);
+          }, 50);
+          res.on('close', () => clearInterval(timer));
+        } else res.end();
+        return;
+      }
       if (updated?._status) res.statusCode = updated._status;
       if (url.pathname === "/api/chat/stream") {
         res.setHeader("Content-Type", "text/event-stream");
@@ -229,9 +245,9 @@ app.whenReady().then(async () => {
       await navigate('home');
       if (label === 'mobile') await js("document.querySelector('#mobile-menu-btn').click()");
       await js("document.querySelector('#forge-mode-switch [data-mode=forge]').click()");
-      await waitFor("document.querySelectorAll('.forge-stats .forge-stat').length === 5 && document.querySelectorAll('.forge-widget-grid > section').length === 4");
+      await waitFor("document.querySelectorAll('.forge-stats .forge-stat').length === 5 && document.querySelectorAll('.forge-widget-grid > section').length === 5");
       assert.deepEqual(await js("[...document.querySelectorAll('#nav [data-tab]')].map(n => n.dataset.tab)"), ['forgeHome'], label + ' Forge navigation');
-      assert.deepEqual(await js("[...document.querySelectorAll('.forge-widget-grid > section > header h2')].map(n => n.textContent)"), ['Working now', 'Git activity', 'Recent projects', 'Repo lifespan']);
+      assert.deepEqual(await js("[...document.querySelectorAll('.forge-widget-grid > section > header h2')].map(n => n.textContent)"), ['Working now', 'Running services', 'Git activity', 'Recent projects', 'Repo lifespan']);
       await waitFor("!!document.querySelector('.forge-banner canvas') && document.querySelectorAll('.forge-ranked tbody tr').length === 4");
       assert.ok(await js("document.querySelector('.forge-donut svg').getAttribute('role') === 'img' && !!document.querySelector('.forge-heatmap svg[aria-label]')"), label + ' accessible charts');
       await js("document.querySelector('.forge-bar').focus()");
@@ -248,7 +264,7 @@ app.whenReady().then(async () => {
       await js("document.querySelector('[data-widget-toggle=working]').click()");
       await closePopup('button', label + ' Customize');
       await win.loadURL(base);
-      await waitFor("document.querySelectorAll('.forge-widget-grid > section').length === 3 && document.querySelectorAll('.forge-stats .forge-stat').length === 5");
+      await waitFor("document.querySelectorAll('.forge-widget-grid > section').length === 4 && document.querySelectorAll('.forge-stats .forge-stat').length === 5");
       assert.ok(await js("![...document.querySelectorAll('.forge-widget-grid > section > header h2')].some(n => n.textContent === 'Working now')"), label + ' hidden widget survives reload');
       await openPopup(customizeOpener, customizeReady, label + ' Customize restore');
       await js("document.querySelector('[data-widget-toggle=working]').click()");
@@ -316,6 +332,58 @@ app.whenReady().then(async () => {
       assert.ok(await js("!document.querySelector('.forge-project-sidebar').hidden"), label + ' starting opens project sidebar');
       if (width <= 768) await js("document.querySelector('[aria-label=\"Close project sidebar\"]').click()");
       await capture(label + '-forge-shell');
+      // App checks have their own write index for each viewport pass.
+      const appWriteStart = writes.length;
+      if (width > 768) {
+        assert.equal(await js("Math.round(document.querySelector('.forge-project-sidebar').getBoundingClientRect().width)"), 228, 'sidebar default width');
+        assert.equal(await js("document.querySelector('.forge-project-resizer').getAttribute('aria-valuemin')"), '208');
+        assert.equal(await js("document.querySelector('.forge-project-resizer').getAttribute('aria-valuemax')"), '520');
+        await js("document.querySelector('.forge-project-resizer').dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowLeft', bubbles:true})); document.querySelector('.forge-project-resizer').dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowLeft', bubbles:true}))");
+        assert.equal(await js("Math.round(document.querySelector('.forge-project-sidebar').getBoundingClientRect().width)"), 208, 'sidebar minimum width');
+        await js("document.querySelector('.forge-project-resizer').dispatchEvent(new KeyboardEvent('keydown', {key:'Home', bubbles:true}))");
+      }
+      await waitFor("document.querySelector('.forge-transcript-layout .chat-backdrop')?.dataset.scene === 'sky'");
+      assert.equal(await js("getComputedStyle(document.querySelector('.forge-transcript-layout .chat-backdrop')).display !== 'none'"), true, label + ' Forge halftone on');
+      await js("import('/static/js/appearance.js').then(m => m.updateAppearance({halftone:false}))");
+      assert.equal(await js("getComputedStyle(document.querySelector('.forge-transcript-layout .chat-backdrop')).display"), 'none', 'Forge halftone off');
+      await js("import('/static/js/appearance.js').then(m => m.updateAppearance({halftone:true}))");
+      await js("document.querySelector('.forge-run-app').click()");
+      await waitFor("!!document.querySelector('.forge-app-command-input')");
+      // A different command per pass must ask again for this project.
+      await js(`{ const input=document.querySelector('.forge-app-command-input'); input.value='npm run dev -- --host 127.0.0.1 --port {port} --pass=${label}'; input.dispatchEvent(new Event('input')); [...document.querySelectorAll('.modal-panel button')].find(b => b.textContent === 'Save and run').click(); }`);
+      await waitFor("!!document.querySelector('.forge-app-approval')");
+      assert.ok(!demoState.forgeApps[forgeSessionId]?.running, label + ' Run app waits for approval');
+      assert.ok(await js("document.querySelector('.forge-app-approval pre').textContent.includes('5173') && document.querySelector('.forge-app-approval pre').textContent.includes('Folder:')"), label + ' exact command and folder');
+      await js("[...document.querySelectorAll('.forge-app-approval button')].find(b => b.textContent === 'Approve command').click()");
+      await waitFor("!!document.querySelector('.forge-app-preview-surface iframe')");
+      if (width > 768) assert.ok(await js("document.querySelector('.forge-shell').dataset.split === 'true' && !!document.querySelector('[aria-label=\"Left pane\"] .forge-transcript-layout')"), 'preview opens beside session');
+      assert.ok(writes.slice(appWriteStart).some(w => w.path === forgeBase + '/app/start'), label + ' own app start');
+      assert.ok(await js("document.querySelector('.forge-preview-fallback').textContent.includes('iframe')"), label + ' labelled fallback');
+      await waitFor("!!document.querySelector('.forge-running-strip button') && !document.querySelector('.forge-running-strip').hidden && !!document.querySelector('[data-forge-project=fp1] .forge-app-dot')");
+      for (const preset of ['tablet', 'phone', 'desktop']) {
+        await js(`document.querySelector('[data-preview-width=${preset}]').click()`);
+        assert.equal(await js(`document.querySelector('[data-preview-width=${preset}]').getAttribute('aria-pressed')`), 'true');
+      }
+      await js("document.querySelector('.forge-preview-logs').open=true");
+      await waitFor("document.querySelector('.forge-app-logs').textContent.includes('Ready')");
+      if (width <= 768) await js("document.querySelector('[data-preview-width=phone]').click()");
+      await capture(label + '-forge-preview');
+      const restartStart = writes.length;
+      await js("[...document.querySelectorAll('.forge-preview-log-controls button')].find(b => b.textContent === 'Restart').click()");
+      await waitFor("!document.querySelector('.forge-preview-log-controls button').disabled");
+      assert.ok(writes.slice(restartStart).some(w => w.path === forgeBase + '/app/restart'), label + ' logs restart');
+      assert.ok(!await js("!!document.querySelector('.forge-app-approval')"), 'same command already approved');
+      await navigate('forgeHome');
+      await waitFor(`!!document.querySelector('.forge-running-service[data-app-session="${forgeSessionId}"]')`);
+      assert.ok(await js("document.querySelector('.forge-running-service').textContent.includes(':5173')"), label + ' Running services port');
+      await js(`document.querySelector('.forge-running-service[data-app-session="${forgeSessionId}"]').click()`);
+      await waitFor("!!document.querySelector('.forge-preview-log-controls')");
+      await js("document.querySelector('.forge-preview-logs').open=true; [...document.querySelectorAll('.forge-preview-log-controls button')].find(b => b.textContent === 'Stop').click()");
+      await waitFor("document.querySelector('.forge-preview-status').textContent.includes('stopped')");
+      assert.ok(writes.slice(appWriteStart).some(w => w.path === forgeBase + '/app/stop'), label + ' logs stop');
+      await js("document.querySelector('.forge-surface-tab-group[data-surface-type=app-preview] .forge-tab-close').click(); document.querySelector('.forge-surface-tab-group[data-surface-type=session] .forge-surface-tab').click()");
+      await waitFor("!!document.querySelector('.forge-pane .forge-transcript-layout')");
+
       await waitFor("document.querySelector('.forge-work-label')?.textContent.includes('Worked for') && !!document.querySelector('.forge-turn-review:not([hidden])')");
       assert.ok(await js("!document.querySelector('.forge-work').open"), label + ' completed work folds closed');
       assert.ok(await js("!document.querySelector('.forge-transcript .msg, .forge-transcript .msg-body')"), label + ' transcript has no chat bubbles');
@@ -416,10 +484,10 @@ app.whenReady().then(async () => {
           await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {type:'mouseReleased', x:point.x+dx, y:point.y, button:'left', clickCount:1});
         };
         await dragHandle('.forge-project-resizer', 100);
-        assert.equal(await js("Math.round(document.querySelector('.forge-project-sidebar').getBoundingClientRect().width)"), 360, 'sidebar resizes');
-        assert.equal(await js("JSON.parse(localStorage.getItem('kairos:forge-sidebar-width'))"), 360, 'sidebar width saved');
+        assert.equal(await js("Math.round(document.querySelector('.forge-project-sidebar').getBoundingClientRect().width)"), 328, 'sidebar resizes');
+        assert.equal(await js("JSON.parse(localStorage.getItem('kairos:forge-sidebar-width'))"), 328, 'sidebar width saved');
         await js("document.querySelector('.forge-project-resizer').dispatchEvent(new MouseEvent('dblclick', {bubbles:true}))");
-        assert.equal(await js("Math.round(document.querySelector('.forge-project-sidebar').getBoundingClientRect().width)"), 260, 'sidebar double-click resets');
+        assert.equal(await js("Math.round(document.querySelector('.forge-project-sidebar').getBoundingClientRect().width)"), 228, 'sidebar double-click resets');
         await js("document.querySelector('.forge-surface-tab-group[data-surface-type=file] .forge-surface-tab').click(); document.dispatchEvent(new KeyboardEvent('keydown', {key:'d', ctrlKey:true, bubbles:true, cancelable:true}))");
         await waitFor("document.querySelector('.forge-shell').dataset.split === 'true'");
         assert.ok(await js("!!document.querySelector('[aria-label=\"Left pane\"] .forge-transcript-layout') && !!document.querySelector('[aria-label=\"Right pane\"] .forge-file-viewer')"), 'split shows file beside session');
@@ -472,6 +540,7 @@ app.whenReady().then(async () => {
         await js("document.querySelector('.forge-mode-rail').click()");
         await waitFor("!!document.querySelector('.forge-home') && document.querySelectorAll('#nav [data-tab]').length === 1");
         assert.equal(await js("document.querySelector('.forge-mode-rail').getAttribute('aria-label')"), 'Switch to Kairos');
+        assert.ok(await js("!!document.querySelector('.forge-mode-rail svg .brand-point')"), 'Collapsed mode toggle is the Kairos circle mark');
         await capture('desktop-forge-switch-collapsed');
         await js("document.querySelector('.forge-mode-rail').click()"); await waitFor("!!document.querySelector('.dashboard-hero')");
         await js("document.querySelector('#sidebar-toggle').click()"); await delay(350);

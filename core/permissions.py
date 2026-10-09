@@ -282,9 +282,9 @@ async def decide(*, surface: str, tool: str, arguments: dict, title: str = "", d
                  force_prompt: bool = False) -> Decision:
     """Answer from a rule, or ask the person and wait."""
     target = target if target is not None else derive_target(tool, arguments)
-    # Builder imports/connections always need the person's explicit review
-    # when requested, even on an Auto surface. Other Auto behavior is unchanged.
-    explicit_review = force_prompt and tool in {"save_skill", "add_mcp_server"}
+    # Builder imports/connections and first-run app commands need explicit
+    # review when requested, even on an Auto surface.
+    explicit_review = force_prompt and tool in {"save_skill", "add_mcp_server", "forge_app_start"}
     # Auto is an explicit, per-chat admin choice. It answers broker requests
     # for this chat only, including requests from a tainted turn; it does not
     # add a standing grant or change the policy for other chats/tasks.

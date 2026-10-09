@@ -91,6 +91,19 @@
     }
     // Community installs and refresh use the same fixtures as desktop/phone smoke.
     const updated = mutate(path, method, body, Object.fromEntries(url.searchParams));
+    if (updated?._appStart) {
+      const encoder = new TextEncoder();
+      return new Response(new ReadableStream({ async start(controller) {
+        const send = packet => controller.enqueue(encoder.encode(`data: ${JSON.stringify(packet)}\n\n`));
+        send(updated._appStart);
+        if (updated._appStart.permission) {
+          const request = updated._appStart.permission;
+          while (!state.forgeAppAnswers[request.id]) await new Promise(resolve => setTimeout(resolve, 50));
+          send(state.forgeAppAnswers[request.id] === 'once' ? mutate(path.replace(/\/(start|restart)$/, '/approved'), 'POST', {})._appStart : { error: 'App command was not approved.' });
+        }
+        controller.close();
+      } }), { headers: { 'Content-Type': 'text/event-stream' } });
+    }
     if (updated?.handoffs) {
       // Let the visitor see queued, working and the returned agent reply.
       setTimeout(() => { state.handoffStatus = 'working'; }, 1200);

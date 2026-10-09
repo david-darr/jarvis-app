@@ -2536,7 +2536,7 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertTrue({"save_generated_image", "save_generated_file"}.isdisjoint(plain))
         # write_repo_file is admin-only since roadmap phase 7 (2026-10-06).
         self.assertEqual(admin - plain, {"run_shell", "google_drive", "google_sheets", "google_forms", "google_calendar",
-                                         "write_repo_file", "hand_to_agent", "save_skill", "add_mcp_server"})
+                                         "write_repo_file", "hand_to_agent", "save_skill", "add_mcp_server"})  # forge_app_logs: Forge sessions only (test_forge_apps)
         self.assertIn("Unknown tool", asyncio.run(reg.call("run_shell", {"command": "echo hi"}, reg.ToolContext(), reg.OPENAI)))
         self.assertIn("Unknown tool", asyncio.run(reg.call("save_generated_file", {}, reg.ToolContext(), reg.OPENAI)))
         self.assertIn("Unknown tool", asyncio.run(reg.call("no_such_tool", {}, reg.ToolContext(), reg.CLAUDE)))

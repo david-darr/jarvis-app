@@ -389,7 +389,7 @@ class CodexBrain:
         if is_fresh_thread:
             prompt_text = system_prompt.for_codex(sys.executable, HIVE_MIND_CLI_PATH, self.is_admin,
                                                   full_access=self.permission_mode == "auto" and not self.agent_auto,
-                                                  agent=bool(self.agent_id), computer_available=bool(self.session_id or self.agent_id)) + projects.project_addendum(self.project_id) \
+                                                  agent=bool(self.agent_id), computer_available=bool(self.session_id or self.agent_id), session_id=self.session_id or '') + projects.project_addendum(self.project_id) \
                 + (f"\n\n{self.agent_prompt}" if self.agent_prompt else "")
             prior = session_manager.effective_messages(self.session_id, exclude_last=True)
             if prior:

@@ -149,6 +149,27 @@ class ForgeProjects:
             write_json_atomic(self.file, rows)
             return item
 
+    def set_app_command(self, project_id, command):
+        with self.lock:
+            rows = self.list()
+            item = next((p for p in rows if p['id'] == project_id), None)
+            if not item:
+                raise KeyError('Project not found.')
+            if item.get('app_command') != command:
+                item.pop('app_command_hash', None)
+            item['app_command'] = command
+            write_json_atomic(self.file, rows)
+            return item
+
+    def approve_app_command(self, project_id, command, digest):
+        with self.lock:
+            rows = self.list()
+            item = next((p for p in rows if p['id'] == project_id), None)
+            if not item or item.get('app_command') != command:
+                raise ValueError('The app command changed during approval.')
+            item['app_command_hash'] = digest
+            write_json_atomic(self.file, rows)
+
     def new(self, name):
         destination = forge_root(create=True) / folder_name(name)
         destination.mkdir()  # exclusive: existing folders are never reused

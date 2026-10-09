@@ -604,6 +604,10 @@ class SessionManager:
         store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def delete_session(self, session_id: str) -> None:
+        from services.forge_apps import forge_apps
+        with forge_apps.lock:
+            forge_apps._stop(session_id)
+            forge_apps.records.pop(session_id, None)
         from core.computer import manager
         manager.forget(f"chat:{session_id}")
         store.delete_session(session_id)

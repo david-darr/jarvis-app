@@ -28,6 +28,7 @@ export function mountForgeRail(nav) {
         onclick: () => { selected = project.id; draw(); navigateForge('forgeShell', { projectId: project.id, revealProject: true }); } }, [
         el('span', { class: 'forge-project-mark', text: project.name.slice(0, 1).toUpperCase(), 'aria-hidden': 'true' }),
         el('span', { class: 'forge-project-name', text: project.name }), diffCounts(totals),
+        sessions.some(s => s._appRunning) && el('span', { class: 'status-dot ok forge-app-dot', 'aria-label': 'App running' }),
       ]);
       const context = () => openOptionMenu(row, [
         { value: 'home', text: 'Open on Home' }, { value: 'path', text: 'Copy path' }, { value: 'remove', text: 'Remove from list' },
@@ -52,6 +53,8 @@ export function mountForgeRail(nav) {
     const at = ++version;
     try {
       const next = await projectSessions(await api('/api/forge/projects'));
+      const apps = await api('/api/forge/apps/running');
+      for (const group of next) for (const session of group.sessions) session._appRunning = apps.some(app => app.session_id === session.id);
       await Promise.allSettled(next.flatMap(g => g.sessions.filter(s => !s.forge.removed).map(async s => {
         s._changes = (await api(`/api/forge/sessions/${encodeURIComponent(s.id)}/changes`)).files;
       })));
@@ -64,7 +67,8 @@ export function mountForgeRail(nav) {
   document.addEventListener('kairos:forge-project-selected', selection);
   document.addEventListener('kairos:forge-projects', refresh);
   document.addEventListener('kairos:forge-review', refresh);
+  document.addEventListener('kairos:forge-apps', refresh);
   const timer = setInterval(() => { if (!document.hidden) refresh(); }, 30000);
   refresh();
-  return () => { disposed = true; ++version; clearInterval(timer); unsubscribe(); document.removeEventListener('kairos:forge-project-selected', selection); document.removeEventListener('kairos:forge-projects', refresh); document.removeEventListener('kairos:forge-review', refresh); section.remove(); };
+  return () => { disposed = true; ++version; clearInterval(timer); unsubscribe(); document.removeEventListener('kairos:forge-project-selected', selection); document.removeEventListener('kairos:forge-projects', refresh); document.removeEventListener('kairos:forge-review', refresh); document.removeEventListener('kairos:forge-apps', refresh); section.remove(); };
 }

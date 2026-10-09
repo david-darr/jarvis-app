@@ -129,7 +129,7 @@ def register(name: str, description: str, schema: dict, surfaces: frozenset = AL
 
 # Never a helper's, though they only read: a helper hands no work on and
 # reads no other helper's results.
-HELPER_BLOCKED = frozenset({"delegate", "helper_results"})
+HELPER_BLOCKED = frozenset({"delegate", "helper_results", "forge_app_logs"})
 
 
 def helper_tool(spec: ToolSpec) -> bool:
@@ -138,14 +138,20 @@ def helper_tool(spec: ToolSpec) -> bool:
 
 
 def specs(surface: str, is_admin: bool = False, agent: bool = False, helper: bool = False,
-          read_only: bool = False) -> list[ToolSpec]:
+          read_only: bool = False, session_id: str | None = None) -> list[ToolSpec]:
     """The tools one surface offers, in registration order (stable, so the
     tool list - part of the cached prompt prefix - never reorders). Agent-only
     tools appear only for an agent's runs and chats; a helper gets only
     helper_tool()'s."""
     return [s for s in _REGISTRY.values() if surface in s.surfaces and (is_admin or not s.admin_only)
             and (agent or not s.agent_only) and (not helper or helper_tool(s))
-            and (not read_only or s.effect == READ)]
+            and (not read_only or s.effect == READ)
+            and (s.name != 'forge_app_logs' or session_id is None or forge_session(session_id))]
+
+
+def forge_session(session_id):
+    from core.session_manager import session_manager
+    return bool(session_id and (session_manager.get_session(session_id) or {}).get('forge'))
 
 
 def session_read_only(session_id: str | None) -> bool:
@@ -165,6 +171,7 @@ async def call(name: str, args: dict, ctx: ToolContext, surface: str) -> str | T
     if (ctx.read_only or session_read_only(ctx.session_id)) and not read_tool(name):
         return 'Not run: Forge Plan mode is read-only.'
     if (spec is None or surface not in spec.surfaces or (spec.admin_only and not ctx.is_admin)
+            or (name == 'forge_app_logs' and not forge_session(ctx.session_id))
             or (spec.agent_only and not ctx.agent_id) or (ctx.helper and not helper_tool(spec))):
         return f"Unknown tool: {name}"
     ctx = dataclasses.replace(ctx, surface=surface)
@@ -230,11 +237,11 @@ async def dispatch(name: str, args: dict, ctx: ToolContext, surface: str) -> str
     return await hook_service.around_tool(name, args, lambda: call(name, args, ctx, surface), **ctx.hook_context())
 
 
-def claude_preapproved(agent: bool = False) -> list[str]:
+def claude_preapproved(agent: bool = False, session_id: str | None = None) -> list[str]:
     """Claude's pre-approved Kairos tools: every registry tool on its surface.
     Each asks the person itself where it needs to (Google changes, run_code
     with the internet), so none needs Claude Code's own prompt."""
-    return [f"mcp__hive_mind__{s.name}" for s in specs(CLAUDE, is_admin=True, agent=agent)]
+    return [f"mcp__hive_mind__{s.name}" for s in specs(CLAUDE, is_admin=True, agent=agent, session_id=session_id)]
 
 
 def _flag(name: str, schema: dict) -> str:
@@ -258,18 +265,18 @@ def _shown(spec: ToolSpec, small_window: bool) -> bool:
 
 
 def openai_tools(is_admin: bool = False, agent: bool = False, small_window: bool = False,
-                 helper: bool = False, read_only: bool = False) -> list[dict]:
+                 helper: bool = False, read_only: bool = False, session_id: str | None = None) -> list[dict]:
     """The OpenAI function-calling list for one session: every tool, or on a
     small window only the core ones (the rest: deferred_tools)."""
     return [{"type": "function", "function": {"name": s.name, "description": s.description, "parameters": s.schema}}
-            for s in specs(OPENAI, is_admin, agent, helper, read_only) if _shown(s, small_window)]
+            for s in specs(OPENAI, is_admin, agent, helper, read_only, session_id) if _shown(s, small_window)]
 
 
 def deferred_tools(is_admin: bool = False, agent: bool = False, helper: bool = False,
-                   read_only: bool = False) -> dict[str, dict]:
+                   read_only: bool = False, session_id: str | None = None) -> dict[str, dict]:
     """A small window's hidden tools, as core/tool_search.py catalog entries."""
     return {s.name: {"server": "jarvis", "name": s.name, "description": s.description, "schema": s.schema}
-            for s in specs(OPENAI, is_admin, agent, helper, read_only) if not _shown(s, True)}
+            for s in specs(OPENAI, is_admin, agent, helper, read_only, session_id) if not _shown(s, True)}
 
 
 def _fields(args: dict, key: str) -> tuple[str, dict]:
@@ -278,6 +285,17 @@ def _fields(args: dict, key: str) -> tuple[str, dict]:
 
 
 # -- memory: past chats, skills, notes, tasks, calendar, documents ------------
+
+@register('forge_app_logs', 'Read recent logs from this Forge session\'s own app server.',
+          _object({'limit': {'type': 'integer', 'minimum': 1, 'maximum': 2000}}), admin_only=True, effect=READ)
+async def _forge_app_logs(args, ctx):
+    from services.forge_apps import forge_apps
+    if not ctx.is_admin or not forge_session(ctx.session_id):
+        return 'Unknown tool: forge_app_logs'
+    result = forge_apps.logs(ctx.session_id, int(args.get('limit', 200)))
+    if ctx.turn_taint and result['lines']:
+        ctx.turn_taint.mark('Forge app output')
+    return '\n'.join(result['lines']) or 'No app logs for this session.'
 
 @register(
     "search_sessions",

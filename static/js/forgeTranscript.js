@@ -4,6 +4,7 @@ import { renderMessageBody } from './chatContent.js';
 import { clearPermission, getInFlight, subscribeAll } from './chatStream.js';
 import { diffView } from './forgeSurfaces.js';
 import { changeTotals, diffCounts } from './forgeUi.js';
+import { mountChatBackdrop } from './chatBackdrop.js';
 
 // Re-created for Kairos from the layout brief. No Monocode source is copied.
 const duration = seconds => {
@@ -47,6 +48,7 @@ function createTranscript(options) {
   let disposed = false, following = true, heldUntil = 0, refreshVersion = 0;
   let files = [], checkpoints = [], refreshing = false;
   let modelStatus, modeControl, sendControl, inputControl;
+  let backdrop;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const jump = el('button', { class: 'forge-jump btn', text: 'Jump to latest', hidden: true, onclick: () => {
     following = true; heldUntil = 0; follow();
@@ -89,8 +91,11 @@ function createTranscript(options) {
     root.replaceChildren(el('div', { class: 'forge-transcript-layout' }, [
       el('div', { class: 'forge-transcript-scroll' }, [messages, jump]), queueList, composer,
     ]));
+    backdrop = mountChatBackdrop(root.firstElementChild);
+    backdrop.show(options.hasMessages ? 'sky' : 'figure');
   }
   function card(role, text, message) {
+    backdrop?.show('sky', { animate: !options.hasMessages });
     if (role === 'user') {
       const content = el('div', { class: 'forge-prompt-text', text });
       const more = el('button', { class: 'forge-small-button', text: 'Show more', hidden: true, 'aria-expanded': 'false', onclick: () => {
@@ -299,6 +304,7 @@ function createTranscript(options) {
   return {
     messages: documentBody, mount, card, paint, history, follow, setBusy,
     dispose() {
+      backdrop?.dispose();
       disposed = true; ++refreshVersion; clearInterval(ticker); observer.disconnect(); unsubscribe();
       documentBody.querySelectorAll('.forge-prompt').forEach(node => node._observer?.disconnect());
       document.removeEventListener('kairos:forge-review', reviewChanged); states.clear();
