@@ -299,6 +299,8 @@ async def set_session_workspace(session_id: str, body: SetWorkspaceRequest, user
         session_manager.set_workspace(session_id, resolved)
     except KeyError:
         raise HTTPException(status_code=404, detail="session not found")
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     await chat_service.close_session_brain(session_id)
     return {"workspace_dir": resolved}
 

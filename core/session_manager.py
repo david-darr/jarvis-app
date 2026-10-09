@@ -572,10 +572,21 @@ class SessionManager:
         core/workspace.py's vet_workspace — the caller must vet before
         calling this), or clear back to None for the default vault scope."""
         session = self._require(session_id)
+        if session.get('forge') and workspace_dir != session['forge']['worktree']:
+            raise ValueError('A Forge workspace is fixed for the life of its session.')
         session["workspace_dir"] = workspace_dir
         # The CLI files its sessions by working folder, so one started in the
         # old folder cannot be resumed from the new one.
         _clear_claude_session(session)
+        return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
+
+    def set_forge(self, session_id: str, details: dict) -> dict:
+        session = self._require(session_id)
+        previous = session.get('forge') or {}
+        if previous.get('mode') != details.get('mode'):
+            _clear_claude_session(session)
+            session['codex_thread_id'] = None
+        session['forge'] = copy.deepcopy(details)
         return store.save_session(session, rebuild_messages_from=store.MESSAGES_UNCHANGED)
 
     def set_integrations(self, session_id: str, enabled_integration_ids: Optional[list[str]]) -> dict:

@@ -1,4 +1,4 @@
-"""Bounded, non-interactive git reads for Forge Preview. No shell or git writes."""
+"""Bounded, non-interactive git recipes for Forge. Never a shell."""
 import copy
 import os
 import subprocess
@@ -30,18 +30,18 @@ def git_env():
     return env
 
 
-def _run(cwd, args, timeout=TIMEOUT, output_cap=OUTPUT_CAP, check=True):
+def _run(cwd, args, timeout=TIMEOUT, output_cap=OUTPUT_CAP, check=True, input_data=None, worktree=False):
     folder = vet_workspace(str(cwd))
     if not folder:
         raise GitError('Project folder is unavailable or unusable.')
-    command = ['git', '--no-pager', '-c', 'core.hooksPath=' + os.devnull,
+    command = ['git', '--no-pager', '--literal-pathspecs', '-c', 'core.hooksPath=' + os.devnull,
                '-c', 'credential.interactive=false', '-c', 'core.askPass=' + os.devnull,
                '-c', 'core.fsmonitor=false',
-               '-c', 'protocol.ext.allow=never', *args]
+               '-c', 'protocol.ext.allow=never', *(['--work-tree=' + folder] if worktree else []), *args]
     output = bytearray()
     overflow = threading.Event()
     try:
-        with subprocess.Popen(command, cwd=folder, env=git_env(), stdin=subprocess.DEVNULL,
+        with subprocess.Popen(command, cwd=folder, env=git_env(), stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0,
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)) as process:
             def consume():
@@ -57,6 +57,20 @@ def _run(cwd, args, timeout=TIMEOUT, output_cap=OUTPUT_CAP, check=True):
                         break
             reader = threading.Thread(target=consume, daemon=True)
             reader.start()
+            def send():
+                try:
+                    remaining = memoryview(input_data)
+                    while remaining:
+                        written = process.stdin.write(remaining)
+                        if not written:
+                            break
+                        remaining = remaining[written:]
+                    process.stdin.close()
+                except (OSError, BrokenPipeError):
+                    pass
+            writer = threading.Thread(target=send, daemon=True) if input_data is not None else None
+            if writer:
+                writer.start()
             try:
                 process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -65,6 +79,8 @@ def _run(cwd, args, timeout=TIMEOUT, output_cap=OUTPUT_CAP, check=True):
                 reader.join(timeout=1)
                 raise GitError('Git timed out. Try again with a smaller repository.')
             reader.join(timeout=1)
+            if writer:
+                writer.join(timeout=1)
             if reader.is_alive():
                 raise GitError('Git output did not finish in time.')
             if overflow.is_set():
@@ -83,7 +99,12 @@ READS = {
     'head': ['rev-parse', '--verify', 'HEAD'],
     'branch': ['symbolic-ref', '--short', '-q', 'HEAD'],
     'index': ['rev-parse', '--git-path', 'index'],
+    'common': ['rev-parse', '--git-common-dir'],
     'files': ['ls-files', '-z', '--'],
+    'untracked': ['ls-files', '--others', '--exclude-standard', '-z', '--'],
+    'worktrees': ['worktree', 'list', '--porcelain', '-z'],
+    'branches': ['for-each-ref', '--format=%(refname:short)', 'refs/heads/'],
+    'status': ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--'],
     'log': ['log', '--no-ext-diff', '--no-textconv', '--no-renames', '--format=%x00COMMIT%x00%H%x00%at%x00%aN%x00%aE%x00%s%x00', '--numstat', '-z', 'HEAD', '--'],
 }
 
@@ -96,6 +117,57 @@ def run_git(path, recipe, **options):
 
 def init_repo(path):
     return _run(path, ['init', '--', str(Path(path).resolve())])
+
+
+def validate_branch(path, branch):
+    if not isinstance(branch, str) or not branch or branch.startswith('-') or any(ord(c) < 32 for c in branch):
+        raise GitError('Invalid branch name.')
+    _run(path, ['check-ref-format', '--branch', branch])
+    return branch
+
+
+def rev_parse(path, ref='HEAD'):
+    if not isinstance(ref, str) or not ref or ref.startswith('-') or any(ord(c) < 32 for c in ref):
+        raise GitError('Invalid base reference.')
+    return _run(path, ['rev-parse', '--verify', '--end-of-options', ref + '^{commit}'])[1].strip()
+
+
+def worktree_add(path, destination, base, branch=None):
+    # Destination confinement belongs to ForgeSessions; this runner never accepts options.
+    commit = rev_parse(path, base) if branch else validate_branch(path, base)
+    args = ['worktree', 'add']
+    if branch:
+        args += ['-b', validate_branch(path, branch)]
+    return _run(path, [*args, '--', str(destination), commit], timeout=120)
+
+
+def worktree_remove(path, destination, discard=False):
+    return _run(path, ['worktree', 'remove', *(['--force'] if discard else []), '--', str(destination)], timeout=120)
+
+
+def diff(path, commit, filename=None, numstat=False):
+    commit = rev_parse(path, commit)
+    return _run(path, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames',
+                      *(['--numstat', '-z'] if numstat else ['--patch', '--unified=3']),
+                      commit, '--', *([filename] if filename else [])], worktree=True)[1]
+
+
+def apply_reverse(path, patch):
+    body = patch.encode('utf-8')
+    _run(path, ['apply', '-R', '--check', '--', '-'], input_data=body, worktree=True)
+    return _run(path, ['apply', '-R', '--', '-'], input_data=body, worktree=True)
+
+
+def restore_file(path, commit, filename):
+    # --no-overlay also removes tracked additions absent from the starting tree.
+    return _run(path, ['checkout', '--no-overlay', rev_parse(path, commit), '--', filename], worktree=True)
+
+
+def require_tracked(path, commit, filename):
+    result = _run(path, ['ls-files', '--error-unmatch', '--with-tree=' + rev_parse(path, commit), '-z', '--', filename])
+    if filename not in result[1].split('\0'):
+        raise GitError('Choose one tracked file, not a directory.')
+    return result
 
 
 def clone_repo(root, source, destination):

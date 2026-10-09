@@ -10,6 +10,9 @@ import { closeBrowser, openBrowser } from "./browserPane.js";
 import { initAppearance } from "./appearance.js";
 import { initLayout, setKnownTabs, sidebarLayout } from "./layout.js";
 
+import { mountForgeRail } from './forgeRail.js';
+
+let forgeRailCleanup = () => {};
 restoreSidebar();
 if (window.jarvis?.browser) document.documentElement.classList.add("electron-shell");
 if (/mac/i.test(navigator.userAgentData?.platform || navigator.platform || "")) document.documentElement.classList.add("platform-mac");
@@ -45,11 +48,12 @@ const NAV = [
 const STUB_TABS = new Set();
 const FORGE_NAV = [
   { id: 'forgeHome', label: 'Home', icon: 'home' },
-  { id: 'forgeProjects', label: 'Projects', icon: 'library' },
 ];
 let forgeAdmin = false;
 let appMode = 'kairos';
 try { appMode = localStorage.getItem('kairos:app-mode') === 'forge' ? 'forge' : 'kairos'; } catch { /* Device storage is optional. */ }
+// The marker must match a mode restored at startup, not only one switched to.
+document.documentElement.dataset.appMode = appMode;
 function rememberMode(mode) {
   appMode = mode;
   document.documentElement.dataset.appMode = mode;
@@ -109,6 +113,11 @@ let navigationVersion = 0;
 // captured once the arriving view has drawn its halftone (and the chat has
 // opened any chat it was asked for), or after 800 ms at most.
 export function switchTab(tabId, options = {}) {
+  if (tabId === 'forgeSession') tabId = 'forgeShell';
+  if (tabId === 'forgeShell' && activeTab === 'forgeShell' && modules.forgeShell) {
+    closeMobileMenu();
+    return modules.forgeShell.open(options);
+  }
   const homeAndChat = (activeTab === "home" && tabId === "chat") || (activeTab === "chat" && tabId === "home");
   if (!homeAndChat || !document.startViewTransition || matchMedia("(prefers-reduced-motion: reduce)").matches
       || document.documentElement.dataset.halftone !== "on") {
@@ -133,7 +142,7 @@ export function switchTab(tabId, options = {}) {
 }
 
 async function performSwitch(tabId, options = {}) {
-  const mode = FORGE_NAV.some(item => item.id === tabId) ? 'forge' : 'kairos';
+  const mode = tabId === 'forgeShell' || FORGE_NAV.some(item => item.id === tabId) ? 'forge' : 'kairos';
   if (mode === 'forge' && !forgeAdmin) return;
   if (mode !== appMode) { rememberMode(mode); await buildSidebar(); }
   const version = ++navigationVersion;
@@ -152,10 +161,11 @@ async function performSwitch(tabId, options = {}) {
 
   activeTab = tabId;
   const titlebarTab = document.getElementById("titlebar-tab");
-  if (titlebarTab) titlebarTab.textContent = NAV.find((item) => item.id === tabId)?.label || document.querySelector(`.nav-item[data-tab="${tabId}"]`)?.textContent?.trim() || "";
+  if (titlebarTab) titlebarTab.textContent = tabId === 'forgeShell' ? 'Forge' : NAV.find((item) => item.id === tabId)?.label || document.querySelector(`.nav-item[data-tab="${tabId}"]`)?.textContent?.trim() || "";
   document.querySelectorAll(".nav-item").forEach((item) => {
-    item.classList.toggle("active", item.dataset.tab === tabId);
-    if (item.dataset.tab === tabId) item.setAttribute("aria-current", "page");
+    const selected = item.dataset.tab === tabId;
+    item.classList.toggle("active", selected);
+    if (selected) item.setAttribute("aria-current", "page");
     else item.removeAttribute("aria-current");
   });
   const nextView = document.createElement("div");
@@ -275,6 +285,7 @@ async function buildSidebar() {
     document.title = `Kairos (${status.instance})`;
   }).catch(() => {});
 
+  forgeRailCleanup();
   const nav = document.getElementById("nav");
   // Cleared before rebuilding — buildSidebar() now also runs whenever
   // Approved and enabled tabs supply their own sidebar manifests.
@@ -313,6 +324,7 @@ async function buildSidebar() {
       nav.appendChild(navEl);
     }
   }
+  if (appMode === 'forge') forgeRailCleanup = mountForgeRail(nav);
   refreshAgentBadge();
 
   nav.querySelectorAll(".nav-item").forEach((item) => {
@@ -491,7 +503,7 @@ async function startApp() {
   document.addEventListener("jarvis:tabs-changed", async () => {
     for (const id of Object.keys(customViewUrls)) delete modules[id];
     const tabs = await buildSidebar();
-    if (activeTab && ![...NAV, ...FORGE_NAV].some((item) => item.id === activeTab) && !tabs.some((item) => item.id === activeTab)) switchTab("home");
+    if (activeTab && activeTab !== 'forgeShell' && ![...NAV, ...FORGE_NAV].some((item) => item.id === activeTab) && !tabs.some((item) => item.id === activeTab)) switchTab("home");
   });
   document.addEventListener("kairos:layout", () => { buildSidebar(); });
   commandPalette.init({ nav: NAV, customTabs: customTabs || [], switchTab, openSettings });

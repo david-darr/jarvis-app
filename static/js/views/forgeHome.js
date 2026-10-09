@@ -2,6 +2,9 @@ import { api, el, customSelect, openPanelDialog, toast } from '../api.js';
 import { mountDither } from '../dither.js';
 import { halftoneSource, halftoneFocus, halftonePalette, halftoneVersion } from '../appearance.js';
 import { bars, donut, heatmap, statCard, rankedTable } from '../forgeCharts.js';
+import { projectSessions, sessionRow, forgeRunning } from '../forgeUi.js';
+import { openProjectForm } from '../forgeProjectForms.js';
+import { subscribeAll } from '../chatStream.js';
 
 const navigate = (tab, options = {}) => document.dispatchEvent(new CustomEvent('jarvis:navigate', { detail: { tab, ...options } }));
 const widgetNames = { working: 'Working now', activity: 'Git activity', recent: 'Recent projects', lifespan: 'Repo lifespan' };
@@ -21,18 +24,46 @@ export function render(container, tabId, options = {}) {
   const banner = el('div', { class: 'forge-banner', 'aria-hidden': 'true' });
   const message = el('textarea', { id: 'forge-message', rows: '3', placeholder: 'Describe a task, a bug to fix, or an idea to try.', 'aria-label': 'Message your agent' });
   const pickers = el('div', { class: 'forge-composer-controls' });
-  const send = el('button', { type: 'submit', class: 'btn primary', text: 'Start chat', disabled: true });
-  const composer = el('form', { class: 'forge-composer' }, [message, el('div', { class: 'forge-composer-bottom' }, [pickers, send])]);
+  const send = el('button', { type: 'submit', class: 'btn primary', text: 'Start session', disabled: true });
+  const locationNote = el('p', { class: 'meta forge-location-note', role: 'status' });
+  const composer = el('form', { class: 'forge-composer' }, [message, pickers, locationNote, el('div', { class: 'forge-composer-bottom' }, [send])]);
   const hero = el('section', { class: 'forge-hero' }, [banner, el('div', { class: 'forge-hero-copy' }, [
     el('div', { class: 'eyebrow' }, ['Forge ', el('small', { class: 'forge-preview', text: 'Preview' })]),
     el('h1', { text: 'What should your agents work on?' }), composer,
-    el('p', { class: 'meta', text: 'Start a Kairos chat in your project folder.' }),
+    el('p', { class: 'meta', text: 'Build in an isolated worktree, or plan before changing files.' }),
   ])]);
   const grid = el('div', { class: 'forge-widget-grid' });
   const customize = el('button', { type: 'button', class: 'btn quiet', text: 'Customize' });
   page.append(hero, el('div', { class: 'forge-toolbar' }, [el('span', { class: 'meta', text: 'Your work, in view' }), customize]), grid);
   container.append(page);
   let disposed = false, dialog = null, projectSelect = null, modelSelect = null, lifespanSelect = null, projects = [], busy = false;
+  let isolationSelect, modeSelect, branchSelect, branchField, branchVersion = 0, starting = false, branchesReady = false, sessionGroups = [];
+  const drawWorking = () => {
+    if (disposed) return;
+    const running = sessionGroups.flatMap(({ project, sessions }) => sessions.filter(s => !s.forge.removed && forgeRunning(s.id)).map(s => sessionRow(s, project)));
+    bodies.working.replaceChildren(...(running.length ? running : [el('p', { class: 'meta', text: 'No Forge sessions running.' })]));
+  };
+  const unsubscribe = subscribeAll(drawWorking);
+  const updateSend = () => { send.disabled = starting || !projectSelect?.value || !modelSelect?.value || (isolationSelect?.value === 'existing_branch' && (!branchesReady || !branchSelect?.value)); };
+  const field = (label, picker) => el('label', { class: 'forge-picker-field' }, [el('span', { class: 'meta', text: label }), picker]);
+  async function locationChanged() {
+    const version = ++branchVersion;
+    const isolation = isolationSelect.value;
+    branchField.hidden = isolation !== 'existing_branch';
+    locationNote.classList.toggle('forge-warning', isolation === 'in_place');
+    locationNote.textContent = isolation === 'in_place' ? 'In place changes your project folder directly. There is no isolated worktree.' : isolation === 'existing_branch' ? 'Use an available branch in a separate worktree.' : 'A new branch and worktree keep your project folder untouched.';
+    branchesReady = false; updateSend();
+    if (isolation !== 'existing_branch') return;
+    branchField.replaceChildren(el('span', { class: 'meta', text: 'Branch' }), el('span', { class: 'meta', text: 'Loading branches...' }));
+    try {
+      const branches = await api(`/api/forge/projects/${encodeURIComponent(projectSelect.value)}/branches`);
+      if (disposed || version !== branchVersion) return;
+      branchSelect = customSelect({}, [el('option', { value: '', text: 'Choose an available branch' }), ...branches.map(b => el('option', { value: b.name, text: b.worktree ? `${b.name} (already checked out)` : b.name, disabled: !!b.worktree }))]);
+      branchSelect.querySelector('button').setAttribute('aria-label', 'Branch for new session');
+      branchField.replaceChildren(el('span', { class: 'meta', text: 'Branch' }), branchSelect);
+      branchesReady = true; branchSelect.addEventListener('change', updateSend); updateSend();
+    } catch { if (!disposed && version === branchVersion) branchField.textContent = 'Branches could not load. Choose a different location to retry.'; }
+  }
   let hidden = [];
   try { hidden = JSON.parse(localStorage.getItem(widgetsKey) || '[]'); if (!Array.isArray(hidden)) hidden = []; } catch { /* Defaults remain visible. */ }
   const bodies = Object.fromEntries(Object.keys(widgetNames).map(key => [key, el('div', { class: 'forge-widget-body' }, [el('p', { class: 'meta', text: 'Loading...' })])]));
@@ -85,10 +116,10 @@ export function render(container, tabId, options = {}) {
     if (disposed || busy) return;
     busy = true;
     try {
-      const result = await api('/api/forge/activity');
+      const [result, groups] = await Promise.all([api('/api/forge/activity'), projectSessions(projects)]);
       if (disposed) return;
-      bodies.working.replaceChildren(...(result.working.length ? result.working.map(s => el('button', { type: 'button', class: 'dashboard-row', onclick: () => navigate('chat', { sessionId: s.id }) }, [
-        el('span', { class: 'status-dot ok' }), el('span', { class: 'dashboard-row-copy' }, [el('strong', { text: s.title }), el('small', { class: 'meta', text: s.project_name })])])) : [el('p', { class: 'meta', text: 'No chat turns running in your projects.' })]));
+      sessionGroups = groups; drawWorking();
+      if (groups.some(g => g.error)) bodies.working.append(el('p', { class: 'meta', text: 'Some project sessions could not load.' }));
       const totals = result.days.reduce((sum, row) => ({ commits: sum.commits + row.commits, added: sum.added + row.added, removed: sum.removed + row.removed }), { commits: 0, added: 0, removed: 0 });
       bodies.activity.replaceChildren(el('p', { class: 'forge-activity-total', text: `${totals.commits} commits · 14 days` }),
         el('p', { class: 'meta', text: `+${totals.added.toLocaleString()} / -${totals.removed.toLocaleString()} lines` }), bars(result.days, 'Git activity'));
@@ -104,22 +135,30 @@ export function render(container, tabId, options = {}) {
       if (results[0].status === 'rejected') throw results[0].reason;
       projects = results[0].value;
       const models = results[1].status === 'fulfilled' ? results[1].value : [];
-      projectSelect = projectPicker(projects, 'Project for new chat');
+      projectSelect = projectPicker(projects, 'Project for new session');
       modelSelect = customSelect({}, models.map(m => el('option', { value: m.id, text: `${m.name} · ${m.model || 'CLI default'}` })));
-      modelSelect.querySelector('button').setAttribute('aria-label', 'Model for new chat');
+      modelSelect.querySelector('button').setAttribute('aria-label', 'Agent for new session');
       projectSelect.disabled = !projects.length; modelSelect.disabled = !models.length;
-      pickers.append(projectSelect, modelSelect);
-      send.disabled = !projects.length || !models.length;
-      if (!projects.length || !models.length) pickers.append(el('button', { type: 'button', class: 'btn quiet', text: !projects.length ? 'Add a project' : 'Add a model', onclick: () => navigate(!projects.length ? 'forgeProjects' : 'settings', { section: 'add-models' }) }));
+      isolationSelect = customSelect({}, [el('option', { value: 'new_worktree', text: 'New worktree' }), el('option', { value: 'existing_branch', text: 'Existing branch' }), el('option', { value: 'in_place', text: 'In place' })]);
+      isolationSelect.querySelector('button').setAttribute('aria-label', 'Where it runs');
+      modeSelect = customSelect({}, [el('option', { value: 'build', text: 'Build' }), el('option', { value: 'plan', text: 'Plan' })]);
+      modeSelect.querySelector('button').setAttribute('aria-label', 'Mode for new session');
+      branchField = el('label', { class: 'forge-picker-field', hidden: true });
+      pickers.append(field('Project', projectSelect), field('Where it runs', isolationSelect), field('Agent', modelSelect), field('Mode', modeSelect), branchField);
+      projectSelect.addEventListener('change', locationChanged); isolationSelect.addEventListener('change', locationChanged); modelSelect.addEventListener('change', updateSend);
+      if (options.projectId && projects.some(p => p.id === options.projectId)) projectSelect.value = options.projectId;
+      locationChanged();
+      if (!projects.length || !models.length) pickers.append(el('button', { type: 'button', class: 'btn quiet', text: !projects.length ? 'Add a project' : 'Add a model', onclick: event => !projects.length ? openProjectForm('existing', { owner: page, opener: event.currentTarget, onSaved: () => { document.dispatchEvent(new Event('kairos:forge-projects')); navigate('forgeHome'); } }) : navigate('settings', { section: 'add-models' }) }));
       lifespanSelect = projectPicker(projects, 'Repository for lifespan');
       lifespanSelect.disabled = !projects.length;
       if (options.projectId && projects.some(p => p.id === options.projectId)) projectSelect.value = lifespanSelect.value = options.projectId;
       panels.lifespan.querySelector('header').append(lifespanSelect);
       lifespanSelect.addEventListener('change', lifespan);
       bodies.recent.replaceChildren(...(projects.length ? projects.slice(0, 5).map(p => el('button', { type: 'button', class: 'dashboard-row', onclick: async () => {
-        try { await api(`/api/forge/projects/${p.id}/opened`, { method: 'POST' }); if (!disposed) { projectSelect.value = lifespanSelect.value = p.id; lifespan(); message.focus(); } } catch { /* api displays the error. */ }
-      } }, [el('span', { class: 'dashboard-row-copy' }, [el('strong', { text: p.name }), el('small', { class: 'meta', text: p.path })])])) : [el('p', { class: 'meta', text: 'Add an existing folder, clone a repository, or start a new project.' }), el('button', { type: 'button', class: 'btn', text: 'Open Projects', onclick: () => navigate('forgeProjects') })]));
+        try { await api(`/api/forge/projects/${p.id}/opened`, { method: 'POST' }); if (!disposed) { projectSelect.value = lifespanSelect.value = p.id; locationChanged(); lifespan(); message.focus(); } } catch { /* api displays the error. */ }
+      } }, [el('span', { class: 'dashboard-row-copy' }, [el('strong', { text: p.name }), el('small', { class: 'meta', text: p.path })])])) : [el('p', { class: 'meta', text: 'Add an existing folder, clone a repository, or start a new project.' }), el('button', { type: 'button', class: 'btn', text: 'Open folder', onclick: event => openProjectForm('existing', { owner: page, opener: event.currentTarget, onSaved: () => { document.dispatchEvent(new Event('kairos:forge-projects')); navigate('forgeHome'); } }) })]));
       lifespan(); refreshActivity();
+      if (options.compose) message.focus();
     } catch { if (!disposed) grid.replaceChildren(el('p', { role: 'status', text: 'Forge could not load. Open Home again to retry.' })); }
   }
   composer.onsubmit = async event => {
@@ -127,21 +166,16 @@ export function render(container, tabId, options = {}) {
     if (send.disabled || !message.value.trim()) return;
     const project = projects.find(p => p.id === projectSelect.value), text = message.value.trim(), model = modelSelect.value;
     if (!project || !model) return;
-    send.disabled = true;
-    let session;
+    starting = true; updateSend();
     try {
-      await api(`/api/forge/projects/${project.id}/opened`, { method: 'POST' });
-      session = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ title: text.slice(0, 60) }) });
-      await api(`/api/sessions/${session.id}/workspace`, { method: 'POST', body: JSON.stringify({ path: project.path }) });
-      await api(`/api/sessions/${session.id}/model`, { method: 'POST', body: JSON.stringify({ model_endpoint_id: model }) });
-      sessionStorage.setItem('jarvis:pendingChatHandoff', JSON.stringify({ sessionId: session.id, message: text }));
-      navigate('chat');
+      const session = await api('/api/forge/sessions', { method: 'POST', body: JSON.stringify({ project_id: project.id, task: text, model_endpoint_id: model, mode: modeSelect.value, isolation: isolationSelect.value, branch: isolationSelect.value === 'existing_branch' ? branchSelect.value : null }) });
+      if (!disposed) navigate('forgeSession', { sessionId: session.id, initialMessage: text });
     } catch (error) {
-      toast(session ? 'Chat created, but setup did not finish. Your message is still here.' : 'Could not start chat. Your message is still here.', 'error');
-    } finally { send.disabled = false; }
+      toast('Could not start session. Your message is still here.', 'error');
+    } finally { starting = false; updateSend(); }
   };
   message.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); composer.requestSubmit(); } };
   load();
   const timer = setInterval(() => { if (!document.hidden) { refreshActivity(); lifespan(); } }, 30000);
-  return () => { disposed = true; ++summaryVersion; clearInterval(timer); disposeBanner(); dialog?.close(); document.removeEventListener('kairos:appearance', appearance); };
+  return () => { disposed = true; ++summaryVersion; ++branchVersion; unsubscribe(); clearInterval(timer); disposeBanner(); dialog?.close(); document.removeEventListener('kairos:appearance', appearance); };
 }

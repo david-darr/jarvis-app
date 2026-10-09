@@ -40,7 +40,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET') reads.push({ path: url.pathname, query: Object.fromEntries(url.searchParams) });
     if (url.pathname === '/api/chat/stream' && req.method === 'POST' && demoState.computerTurn) {
       let body = ''; for await (const chunk of req) body += chunk;
-      writes.push({ path: url.pathname, method: req.method, body });
+      writes.push({ path: url.pathname, query: Object.fromEntries(url.searchParams), method: req.method, body });
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
       const send = (kind, detail) => res.write(`data: ${JSON.stringify({ run_id: 'r-computer', tool_event: {
         at: now, kind, name: 'computer', ok: true, detail: JSON.stringify(detail) } })}\n\n`);
@@ -79,13 +79,24 @@ const server = http.createServer(async (req, res) => {
     if (unavailable && url.pathname === "/api/system/status") { res.writeHead(503); res.end('{"detail":"Unavailable"}'); return; }
     if (req.method !== "GET") {
       let body = ""; for await (const chunk of req) body += chunk;
-      writes.push({ path: url.pathname, method: req.method, body });
+      writes.push({ path: url.pathname, query: Object.fromEntries(url.searchParams), method: req.method, body });
       if (url.pathname === '/api/settings/computer-use') demoState.computerUse = JSON.parse(body);
       let parsed = {}; try { parsed = JSON.parse(body); } catch {}
-      const updated = mutate(url.pathname, req.method, parsed);
+      const updated = mutate(url.pathname, req.method, parsed, Object.fromEntries(url.searchParams));
       if (updated?._status) res.statusCode = updated._status;
       if (url.pathname === "/api/chat/stream") {
         res.setHeader("Content-Type", "text/event-stream");
+        for (const packet of updated?._forgePackets || []) {
+          res.write(`data: ${JSON.stringify(packet)}\n\n`);
+          await delay(150);
+        }
+        if (demoState.forgeHeldSession === parsed.session_id) {
+          res.write('data: {"chunk":"Checking the shell entry point."}\n\n');
+          const timer = setInterval(() => {
+            if (demoState.forgeRelease) { clearInterval(timer); res.end('data: {"done":true}\n\n'); }
+          }, 50);
+          res.on('close', () => clearInterval(timer)); return;
+        }
         if (updated?.handoffs) { res.end(`data: ${JSON.stringify(updated)}\n\ndata: {"done":true}\n\n`); return; }
         res.end('data: {"chunk":"Tab build request received."}\n\ndata: {"done":true}\n\n'); return;
       }
@@ -148,7 +159,7 @@ app.whenReady().then(async () => {
     // Home to Chat animates (a view transition); captures wait for it to end.
     await waitFor("!document.documentElement.classList.contains('tab-transition')");
   };
-  const overflow = async () => js(`Array.from(document.querySelectorAll('#view-content, #view-content .view-constrained, .chat-input-bar, .settings-content, .cal-left, .panel-dialog, .panel-dialog .modal-body')).filter(e => e.clientWidth > 0 && e.scrollWidth > e.clientWidth + 2).map(e => ({class: e.className, width:e.clientWidth, scroll:e.scrollWidth}))`);
+  const overflow = async () => js(`Array.from(document.querySelectorAll('#view-content, #view-content .view-constrained, .chat-input-bar, .settings-content, .cal-left, .panel-dialog, .panel-dialog .modal-body, .forge-project-sidebar, .forge-workspace, .forge-pane, .forge-composer')).filter(e => e.clientWidth > 0 && e.scrollWidth > e.clientWidth + 2).map(e => ({class: e.className, width:e.clientWidth, scroll:e.scrollWidth}))`);
   const openPopup = async (opener, ready, label) => {
     await js(`window.__popupOpener = ${opener}; window.__popupOpener.focus(); window.__popupOpener.click()`);
     await waitFor(`!!document.querySelector('.modal-panel[role="dialog"][aria-modal="true"]') && (${ready})`);
@@ -219,7 +230,7 @@ app.whenReady().then(async () => {
       if (label === 'mobile') await js("document.querySelector('#mobile-menu-btn').click()");
       await js("document.querySelector('#forge-mode-switch [data-mode=forge]').click()");
       await waitFor("document.querySelectorAll('.forge-stats .forge-stat').length === 5 && document.querySelectorAll('.forge-widget-grid > section').length === 4");
-      assert.deepEqual(await js("[...document.querySelectorAll('#nav [data-tab]')].map(n => n.dataset.tab)"), ['forgeHome', 'forgeProjects'], label + ' Forge nav has only Home and Projects');
+      assert.deepEqual(await js("[...document.querySelectorAll('#nav [data-tab]')].map(n => n.dataset.tab)"), ['forgeHome'], label + ' Forge navigation');
       assert.deepEqual(await js("[...document.querySelectorAll('.forge-widget-grid > section > header h2')].map(n => n.textContent)"), ['Working now', 'Git activity', 'Recent projects', 'Repo lifespan']);
       await waitFor("!!document.querySelector('.forge-banner canvas') && document.querySelectorAll('.forge-ranked tbody tr').length === 4");
       assert.ok(await js("document.querySelector('.forge-donut svg').getAttribute('role') === 'img' && !!document.querySelector('.forge-heatmap svg[aria-label]')"), label + ' accessible charts');
@@ -244,35 +255,222 @@ app.whenReady().then(async () => {
       await closePopup('escape', label + ' Customize restore');
       await js("document.querySelector('[aria-label=\"Repository for lifespan\"]').parentElement.value = 'fp2'; document.querySelector('[aria-label=\"Repository for lifespan\"]').parentElement.dispatchEvent(new Event('change'))");
       await waitFor("document.querySelector('.forge-lifespan .forge-widget-body').textContent === 'Not a git repository'");
-      await navigate('forgeProjects');
-      await waitFor("document.querySelectorAll('[data-forge-project]').length === 2");
-      assert.deepEqual(await overflow(), [], label + ' Forge Projects overflow');
-      await capture(label + '-forge-projects');
-      for (const kind of ['existing', 'clone', 'new']) await popupDismissals(
-        `document.querySelector('[data-forge-add=${kind}]')`, `!!document.querySelector('[data-forge-form=${kind}] input')`, label + ' Forge ' + kind);
-      await js("document.querySelector('[data-forge-project=fp1] button').click()");
+      await waitFor("document.querySelectorAll('#nav [data-forge-project]').length === 2");
+      assert.ok(await js("!document.querySelector('[data-tab=forgeProjects], [data-tab=forgeSessions]')"), label + ' old views are absent');
+      if (width <= 768) await js("document.querySelector('#mobile-menu-btn').click()");
+      await js("document.querySelector('[aria-label=\"Add project\"]').click()");
+      assert.deepEqual(await js("[...document.querySelectorAll('.forge-project-menu button')].map(b => b.textContent)"), ['Open folder', 'Clone repo', 'New repo'], label + ' project menu');
+      await js("document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))");
+      for (const [kind, text] of [['existing', 'Open folder'], ['clone', 'Clone repo'], ['new', 'New repo']]) {
+        await js(`window.__popupOpener = document.querySelector('[aria-label="Add project"]'); window.__popupOpener.click(); [...document.querySelectorAll('.forge-project-menu button')].find(b => b.textContent === ${JSON.stringify(text)}).click()`);
+        await waitFor(`!!document.querySelector('[data-forge-form=${kind}] input')`);
+        assert.deepEqual(await overflow(), [], label + ' project form fits');
+        await closePopup('escape', label + ' ' + kind);
+      }
+      await js("document.querySelector('[data-forge-project=fp1]').dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true}))");
+      assert.deepEqual(await js("[...document.querySelectorAll('.custom-select-menu button')].map(b => b.textContent)"), ['Open on Home', 'Copy path', 'Remove from list'], label + ' project context menu');
+      const removeStart = writes.length;
+      await js("[...document.querySelectorAll('.custom-select-menu button')].find(b => b.textContent === 'Remove from list').click()");
+      await waitFor("!!document.querySelector('.confirm-panel')");
+      assert.ok(!writes.slice(removeStart).some(w => w.method === 'DELETE'), label + ' removal waits for confirmation');
+      await js("[...document.querySelectorAll('.confirm-panel button')].find(b => b.textContent === 'Cancel').click()");
+      await js("document.querySelector('[data-forge-project=fp1]').dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true})); [...document.querySelectorAll('.custom-select-menu button')].find(b => b.textContent === 'Open on Home').click()");
       await waitFor("document.querySelectorAll('.forge-stats .forge-stat').length === 5");
-      assert.equal(await js("document.querySelector('[aria-label=\"Project for new chat\"]').parentElement.value"), 'fp1', label + ' Open on Home selects project');
-      // A selected folder and model must reach the session before handoff sends.
-      const handoffStart = writes.length; // per pass: the desktop pass sends the same message
-      await js(`document.querySelector('[aria-label="Model for new chat"]').parentElement.value = 'm2'; document.querySelector('#forge-message').value = 'Build the Forge fixture'; document.querySelector('.forge-composer').requestSubmit()`);
-      await waitFor("document.getElementById('view-content').dataset.view === 'chat' && !sessionStorage.getItem('jarvis:pendingChatHandoff')");
+      assert.equal(await js("document.querySelector('[aria-label=\"Project for new session\"]').parentElement.value"), 'fp1', label + ' Open on Home selects project');
+      assert.equal(await js("document.querySelector('[aria-label=\"Where it runs\"]').parentElement.value"), 'new_worktree', label + ' isolated worktree is the default');
+      await js("document.querySelector('[aria-label=\"Agent for new session\"]').click()");
+      assert.ok(await js("document.querySelector('.custom-select-menu').textContent.includes('Claude') && document.querySelector('.custom-select-menu').textContent.includes('Codex')"), label + ' both coding agents are available');
+      await js("document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))");
+      await js(`(() => { const picker = document.querySelector('[aria-label="Where it runs"]').parentElement; picker.value = 'existing_branch'; picker.dispatchEvent(new Event('change')); })()`);
+      await waitFor("!!document.querySelector('[aria-label=\"Branch for new session\"]')");
+      await js("document.querySelector('[aria-label=\"Branch for new session\"]').click()");
+      assert.ok(await js("[...document.querySelectorAll('.custom-select-menu button')].some(b => b.textContent.includes('main') && b.disabled)"), label + ' checked-out branches are unavailable');
+      await js("document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))");
+      assert.ok(reads.some(r => r.path === '/api/forge/projects/fp1/branches'), label + ' loads local branches');
+      await js(`(() => { const picker = document.querySelector('[aria-label="Branch for new session"]').parentElement; picker.value = 'feature/garden'; picker.dispatchEvent(new Event('change')); })()`);
+      assert.ok(await js("!document.querySelector('.forge-composer button[type=submit]').disabled"), label + ' branch selection enables start');
+      await js(`(() => { const picker = document.querySelector('[aria-label="Where it runs"]').parentElement; picker.value = 'in_place'; picker.dispatchEvent(new Event('change')); })()`);
+      assert.ok(await js("document.querySelector('.forge-location-note.forge-warning').textContent.includes('directly')"), label + ' in-place warning is visible');
+      await js(`(() => { const picker = document.querySelector('[aria-label="Where it runs"]').parentElement; picker.value = 'new_worktree'; picker.dispatchEvent(new Event('change')); document.querySelector('[aria-label="Agent for new session"]').parentElement.value = 'm2'; document.querySelector('#forge-message').value = 'Build the Forge fixture'; })()`);
+      assert.deepEqual(await overflow(), [], label + ' Forge composer overflow');
+      await capture(label + '-forge-home-composer');
+      // This index belongs to this viewport pass, even when both send the same task.
+      const handoffStart = writes.length;
+      await js("document.querySelector('.forge-composer').requestSubmit()");
+      await waitFor("document.getElementById('view-content').dataset.view === 'forgeShell' && !!document.querySelector('.forge-transcript-layout')");
+      await waitFor("document.querySelector('.forge-work-label')?.textContent.includes('Working for')");
+      assert.ok(await js("document.querySelector('[aria-label=\"Session mode\"]').disabled"), label + ' mode chip disabled while running');
       for (let i = 0; i < 80 && !writes.slice(handoffStart).some(w => w.path === '/api/chat/stream' && JSON.parse(w.body).message === 'Build the Forge fixture'); i++) await delay(50);
       const handoffWrites = writes.slice(handoffStart);
-      const workspaceWrite = handoffWrites.findLast(w => /\/workspace$/.test(w.path));
-      const modelWrite = handoffWrites.findLast(w => /\/model$/.test(w.path));
+      const createWrite = handoffWrites.find(w => w.path === '/api/forge/sessions' && w.method === 'POST');
       const streamWrite = handoffWrites.findLast(w => w.path === '/api/chat/stream');
-      assert.ok(handoffWrites.some(w => w.path === '/api/sessions' && w.method === 'POST'), label + ' creates chat');
-      assert.equal(JSON.parse(workspaceWrite.body).path, 'C:\\Users\\Alex\\Documents\\Kairos Projects\\garden', label + ' pins workspace');
-      assert.equal(JSON.parse(modelWrite.body).model_endpoint_id, 'm2', label + ' sets selected model');
-      assert.equal(JSON.parse(streamWrite.body).message, 'Build the Forge fixture', label + ' sends handoff');
-      assert.ok(handoffWrites.indexOf(workspaceWrite) < handoffWrites.indexOf(streamWrite) && handoffWrites.indexOf(modelWrite) < handoffWrites.indexOf(streamWrite), label + ' configures chat before sending');
-      assert.equal(await js("document.documentElement.dataset.appMode"), 'kairos', label + ' composer returns to Kairos');
+      assert.deepEqual(JSON.parse(createWrite.body), { project_id: 'fp1', task: 'Build the Forge fixture', model_endpoint_id: 'm2', mode: 'build', isolation: 'new_worktree', branch: null }, label + ' creates the selected Forge session');
+      assert.equal(JSON.parse(streamWrite.body).message, 'Build the Forge fixture', label + ' sends the first message');
+      assert.ok(handoffWrites.indexOf(createWrite) < handoffWrites.indexOf(streamWrite), label + ' creates Forge before sending');
+      assert.ok(!handoffWrites.some(w => w.path === '/api/sessions' || /\/(workspace|model)$/.test(w.path)), label + ' has no Phase 1 chat bridge');
+      const forgeSessionId = JSON.parse(streamWrite.body).session_id;
+      const forgeBase = '/api/forge/sessions/' + forgeSessionId;
+      await waitFor(`document.querySelector('.side-chat-send')?.textContent === 'Send' && document.querySelector('[data-session-id="${forgeSessionId}"]')`);
+      assert.equal(await js("document.documentElement.dataset.appMode"), 'forge', label + ' stays in Forge');
+      assert.ok(await js("document.querySelector('.forge-session-header').textContent.includes('Kairos garden') && document.querySelector('.forge-session-header').textContent.includes('Codex')"), label + ' session header');
+      assert.ok(await js("!document.querySelector('.forge-project-sidebar').hidden"), label + ' starting opens project sidebar');
+      if (width <= 768) await js("document.querySelector('[aria-label=\"Close project sidebar\"]').click()");
+      await capture(label + '-forge-shell');
+      await waitFor("document.querySelector('.forge-work-label')?.textContent.includes('Worked for') && !!document.querySelector('.forge-turn-review:not([hidden])')");
+      assert.ok(await js("!document.querySelector('.forge-work').open"), label + ' completed work folds closed');
+      assert.ok(await js("!document.querySelector('.forge-transcript .msg, .forge-transcript .msg-body')"), label + ' transcript has no chat bubbles');
+      assert.ok(await js("document.querySelector('.forge-composer-context').textContent.includes('~/Documents')"), label + ' abbreviated worktree and branch');
+      await capture(label + '-forge-transcript');
+      await js("document.querySelector('.forge-work').open = true");
+      await waitFor("document.querySelector('.forge-command-output')?.textContent.includes('Syntax check passed') && !!document.querySelector('.forge-inline-diff')");
+      assert.ok(await js("document.querySelectorAll('.forge-inline-diff .forge-diff-line').length <= 6"), label + ' inline diff has at most six numbered lines');
+      if (width > 768) await capture(label + '-forge-transcript-expanded');
+      await js("document.querySelector('.forge-inline-diff').click()");
+      await waitFor("!!document.querySelector('.forge-pane .forge-diff-viewer')");
+      await js("document.querySelector('.forge-surface-tab-group[data-surface-type=diff] .forge-tab-close').click()");
+      await waitFor("!!document.querySelector('.forge-pane .forge-transcript-layout')");
+      const undoStart = writes.length;
+      await js("document.querySelector('.forge-turn-review button[data-undo]').click()");
+      await waitFor("!!document.querySelector('.confirm-panel')");
+      assert.ok(!writes.slice(undoStart).some(w => w.path.endsWith('/undo')), label + ' Undo waits for confirmation');
+      await js("[...document.querySelectorAll('.confirm-panel button')].find(b => b.textContent === 'Cancel').click()");
+      assert.ok(!writes.slice(undoStart).some(w => w.path.endsWith('/undo')), label + ' cancelled Undo keeps files');
+      const checkpointId = await js("document.querySelector('.forge-turn-review button[data-undo]').dataset.undo");
+      await js("document.querySelector('.forge-turn-review button[data-undo]').click()");
+      await waitFor("!!document.querySelector('.confirm-panel')");
+      await js("[...document.querySelectorAll('.confirm-panel button')].find(b => b.textContent === 'Undo turn').click()");
+      await waitFor("!document.querySelector('.confirm-panel') && !document.querySelector('.forge-turn-review:not([hidden])')");
+      assert.deepEqual(JSON.parse(writes.slice(undoStart).find(w => w.path === forgeBase + '/checkpoints/' + checkpointId + '/undo').body), { confirmed: true }, label + ' Undo calls this turn checkpoint');
+      // Restore changes for this viewport pass's Unit C review checks.
+      const resendStart = writes.length;
+      await js("{const input=document.querySelector('.forge-transcript-input'); input.value='Restore composer changes'; input.dispatchEvent(new Event('input')); document.querySelector('.forge-send').click();}");
+      await waitFor("document.querySelector('.forge-send')?.textContent === 'Stop'");
+      await waitFor("document.querySelector('.forge-send')?.textContent === 'Send' && !!document.querySelector('.forge-turn-review:not([hidden])')");
+      assert.ok(writes.slice(resendStart).some(w => w.path === '/api/chat/stream' && JSON.parse(w.body).session_id === forgeSessionId), label + ' resend shares chatStream');
+      for (const mode of ['plan', 'build']) {
+        const modeStart = writes.length;
+        await js(`(() => { const picker = document.querySelector('[aria-label="Session mode"]').parentElement; picker.value = ${JSON.stringify(mode)}; picker.dispatchEvent(new Event('change')); })()`);
+        await waitFor(`document.querySelector('.forge-plan-note').textContent.includes(${JSON.stringify(mode === 'plan' ? 'blocked' : 'make changes')})`);
+        assert.equal(JSON.parse(writes.slice(modeStart).find(w => w.path === forgeBase + '/mode').body).mode, mode, label + ' mode route');
+      }
+      await js("document.querySelector('[data-forge-project=fp1]').click()");
+      await waitFor("!document.querySelector('.forge-project-sidebar').hidden && document.querySelectorAll('.forge-session-card').length >= 2");
+      assert.ok(await js("document.querySelector('.forge-project-heading strong').textContent === 'Kairos garden'"), label + ' project opens its sidebar');
+      if (width <= 768) {
+        assert.ok(await js("(() => { const r=document.querySelector('.forge-project-sidebar').getBoundingClientRect(); return r.left === 0 && r.top === 0 && r.width === innerWidth && r.height === innerHeight; })()"), label + ' sheet fills the phone');
+        assert.ok(await js("document.querySelector('.forge-workspace').inert"), label + ' sheet traps interaction');
+        await capture(label + '-forge-shell-sheet');
+      }
+      await js(`document.querySelector('.forge-session-card[data-session-id="${forgeSessionId}"]').click()`);
+      await waitFor("!!document.querySelector('.forge-pane .forge-transcript-layout')");
+      assert.ok(await js("!!document.querySelector('.forge-surface-tab-group[data-surface-type=session]')"), label + ' card opens a session tab');
+      // End-session retains Phase 2's separate dirty-worktree confirmation.
+      if (width <= 768) await waitFor("document.querySelector('.forge-project-sidebar').hidden");
+      const endStart = writes.length;
+      await js("[...document.querySelectorAll('.forge-session-header button')].find(b => b.textContent === 'End session').click()");
+      await waitFor("!!document.querySelector('.modal-panel .forge-warning')");
+      await js("[...document.querySelectorAll('.modal-panel button')].find(b => b.textContent === 'Remove worktree').click()");
+      await waitFor("!!document.querySelector('.confirm-panel')");
+      assert.ok(!writes.slice(endStart).some(w => w.method === 'DELETE'), label + ' dirty removal asks');
+      await js("[...document.querySelectorAll('.confirm-panel button')].find(b => b.textContent === 'Cancel').click(); document.querySelector('.modal-panel [aria-label=Close]').click()");
+      await js("document.querySelector('[aria-label=\"Open project sidebar\"]').click(); document.querySelector('[data-sidebar-tab=explorer]').click()");
+      await waitFor("!!document.querySelector('.forge-tree-directory')");
+      await js("document.querySelector('.forge-tree-directory').open = true");
+      await waitFor("!!document.querySelector('[data-file-path=\"src/garden.js\"]')");
+      await js("document.querySelector('[data-file-path=\"src/garden.js\"]').click()");
+      await waitFor("!!document.querySelector('.forge-pane .forge-file-viewer code .hljs-keyword')");
+      assert.ok(await js("document.querySelector('.forge-surface-tab-group[data-surface-type=file]').classList.contains('preview')"), label + ' Explorer opens an italic preview');
+      assert.ok(await js("document.querySelector('.forge-line-numbers').textContent.startsWith('1') && !document.querySelector('.forge-file-viewer textarea, .forge-file-viewer [contenteditable]')"), label + ' numbered read-only file');
+      await js("document.querySelector('[data-file-path=\"src/garden.js\"]').dispatchEvent(new MouseEvent('dblclick', {bubbles:true}))");
+      assert.ok(await js("!document.querySelector('.forge-surface-tab-group[data-surface-type=file]').classList.contains('preview')"), label + ' double-click pins the preview');
+      if (width > 768) await capture(label + '-forge-shell-explorer');
+      if (width <= 768) await js("document.querySelector('[aria-label=\"Open project sidebar\"]').click()");
+      await js("document.querySelector('[data-sidebar-tab=changes]').click()");
+      await waitFor("!!document.querySelector('.forge-change-open')");
+      await js("document.querySelector('.forge-change-open').click()");
+      await waitFor("!!document.querySelector('.forge-pane .forge-diff-line.diff-add') && !!document.querySelector('.forge-pane .forge-diff-line.diff-remove')");
+      assert.ok(await js("document.querySelector('.diff-add .forge-diff-number:nth-child(2)').textContent === '1'"), label + ' unified diff line numbers');
+      if (width > 768) await capture(label + '-forge-shell-changes');
+      if (width <= 768) await js("document.querySelector('[aria-label=\"Open project sidebar\"]').click()");
+      const revertStart = writes.length;
+      await js("document.querySelector('.forge-revert').click()");
+      await waitFor("!!document.querySelector('.confirm-panel')");
+      assert.ok(!writes.slice(revertStart).some(w => w.path.endsWith('/revert-file')), label + ' Revert waits for confirmation');
+      await js("[...document.querySelectorAll('.confirm-panel button')].find(b => b.textContent === 'Cancel').click()");
+      await waitFor("!document.querySelector('.confirm-panel') && !document.querySelector('.forge-revert').disabled");
+      assert.ok(!writes.slice(revertStart).some(w => w.path.endsWith('/revert-file')), label + ' Cancel keeps changes');
+      await js("document.querySelector('.forge-revert').click()");
+      await waitFor("!!document.querySelector('.confirm-panel')");
+      await js("[...document.querySelectorAll('.confirm-panel button')].find(b => b.textContent === 'Revert file').click()");
+      await waitFor("!document.querySelector('.forge-change-open')");
+      assert.deepEqual(JSON.parse(writes.slice(revertStart).find(w => w.path === forgeBase + '/revert-file').body), { path: 'src/garden.js', confirmed: true }, label + ' confirmed file route');
+      await js("document.querySelector('[data-sidebar-tab=sessions]').click(); document.querySelector('[data-sidebar-tab=explorer]').click()");
+      assert.equal(await js("localStorage.getItem('kairos:forge-panel:fp1')"), '"explorer"', label + ' panel preference remembered');
+      if (width > 768) {
+        // Native pointer input exercises pointer capture, width clamping and persistence.
+        const dragHandle = async (selector, dx) => {
+          const point = await js(`(() => { const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+100}; })()`);
+          await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {type:'mousePressed', x:point.x, y:point.y, button:'left', clickCount:1});
+          await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {type:'mouseMoved', x:point.x+dx, y:point.y, button:'left', buttons:1});
+          await delay(50);
+          await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {type:'mouseReleased', x:point.x+dx, y:point.y, button:'left', clickCount:1});
+        };
+        await dragHandle('.forge-project-resizer', 100);
+        assert.equal(await js("Math.round(document.querySelector('.forge-project-sidebar').getBoundingClientRect().width)"), 360, 'sidebar resizes');
+        assert.equal(await js("JSON.parse(localStorage.getItem('kairos:forge-sidebar-width'))"), 360, 'sidebar width saved');
+        await js("document.querySelector('.forge-project-resizer').dispatchEvent(new MouseEvent('dblclick', {bubbles:true}))");
+        assert.equal(await js("Math.round(document.querySelector('.forge-project-sidebar').getBoundingClientRect().width)"), 260, 'sidebar double-click resets');
+        await js("document.querySelector('.forge-surface-tab-group[data-surface-type=file] .forge-surface-tab').click(); document.dispatchEvent(new KeyboardEvent('keydown', {key:'d', ctrlKey:true, bubbles:true, cancelable:true}))");
+        await waitFor("document.querySelector('.forge-shell').dataset.split === 'true'");
+        assert.ok(await js("!!document.querySelector('[aria-label=\"Left pane\"] .forge-transcript-layout') && !!document.querySelector('[aria-label=\"Right pane\"] .forge-file-viewer')"), 'split shows file beside session');
+        const beforeSplit = await js("document.querySelector('[aria-label=\"Left pane\"]').clientWidth");
+        await dragHandle('.forge-pane-divider', 40);
+        assert.ok(await js("document.querySelector('[aria-label=\"Left pane\"]').clientWidth") > beforeSplit, 'split divider resizes');
+        await capture(label + '-forge-shell-split');
+        await js("{const t=document.querySelector('.forge-surface-tab-group[data-surface-type=diff]'); const dt=new DataTransfer(); t.dispatchEvent(new DragEvent('dragstart', {bubbles:true, dataTransfer:dt})); document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true})); document.querySelector('.forge-workspace').dispatchEvent(new DragEvent('drop', {bubbles:true, clientX:innerWidth-2, dataTransfer:dt}));}");
+        assert.ok(await js("!!document.querySelector('[aria-label=\"Right pane\"] .forge-file-viewer')"), 'Escape cancels tab drag');
+        await js("{const t=document.querySelector('.forge-surface-tab-group[data-surface-type=diff]'); const dt=new DataTransfer(), w=document.querySelector('.forge-workspace'); t.dispatchEvent(new DragEvent('dragstart', {bubbles:true, dataTransfer:dt})); w.dispatchEvent(new DragEvent('dragover', {bubbles:true, cancelable:true, clientX:innerWidth-2, dataTransfer:dt})); w.dispatchEvent(new DragEvent('drop', {bubbles:true, clientX:innerWidth-2, dataTransfer:dt}));}");
+        assert.ok(await js("!!document.querySelector('[aria-label=\"Right pane\"] .forge-diff-viewer')"), 'right-edge tab drop');
+      } else {
+        await js("document.querySelector('[aria-label=\"Close project sidebar\"]').click(); document.dispatchEvent(new KeyboardEvent('keydown', {key:'d', ctrlKey:true, bubbles:true, cancelable:true}))");
+        assert.equal(await js("document.querySelector('.forge-shell').dataset.split"), 'false', 'phone never splits');
+      }
+      await js("document.querySelector('.forge-surface-tab-group[data-surface-type=diff]').dispatchEvent(new MouseEvent('auxclick', {button:1, bubbles:true, cancelable:true}))");
+      assert.ok(await js("!document.querySelector('.forge-surface-tab-group[data-surface-type=diff]')"), label + ' middle-click closes');
+      assert.deepEqual(await overflow(), [], label + ' shell overflow');
+      // A project with no session uses the registered folder's read-only Explorer.
+      await js("document.querySelector('[data-forge-project=fp2]').click()");
+      await waitFor("document.querySelector('.forge-project-heading strong').textContent === 'Field notes'");
+      await js("document.querySelector('[data-sidebar-tab=explorer]').click()");
+      await waitFor("!!document.querySelector('[data-file-path=\"README.md\"]')");
+      await js("document.querySelector('[data-file-path=\"README.md\"]').click()");
+      await waitFor("document.querySelector('.forge-pane .forge-file-viewer')?.textContent.includes('Read only')");
+      assert.ok(reads.some(r => r.path === '/api/forge/projects/fp2/files'), label + ' project-folder fallback');
+      // Chats opens the shell and selects the correct project.
+      await navigate('chat');
+      await waitFor(`!!document.querySelector('.session-item[data-session-id="${forgeSessionId}"] .forge-chat-tag')`);
+      await js(`document.querySelector('.session-item[data-session-id="${forgeSessionId}"]').click()`);
+      await waitFor("document.getElementById('view-content').dataset.view === 'forgeShell' && !!document.querySelector('.forge-transcript-layout')");
+      assert.equal(await js("document.querySelector('.forge-project-heading strong').textContent"), 'Kairos garden', label + ' Chats selects the project');
+      await js("document.querySelector('[aria-label=\"New session\"]').click()");
+      await waitFor("!!document.querySelector('[aria-label=\"Project for new session\"]') && document.activeElement.id === 'forge-message'");
+      assert.equal(await js("document.querySelector('[aria-label=\"Project for new session\"]').parentElement.value"), 'fp1', label + ' sidebar plus preselects the composer');
+      // Keep this pass's response live so Working now and busy shimmer can be exercised.
+      const workingStart = writes.length;
+      demoState.forgeHeldSession = forgeSessionId; demoState.forgeRelease = false;
+      await js(`import('/static/js/chatStream.js').then(stream => stream.startTurn(${JSON.stringify(forgeSessionId)}, 'Shell entry check', 'Working now shell check ${label}', []))`);
+      await waitFor(`!!document.querySelector('.forge-home .forge-session-row[data-session-id="${forgeSessionId}"]') && !!document.querySelector('[data-forge-project=fp1].busy')`);
+      await js(`document.querySelector('.forge-home .forge-session-row[data-session-id="${forgeSessionId}"]').click()`);
+      await waitFor("document.getElementById('view-content').dataset.view === 'forgeShell' && !!document.querySelector('.forge-transcript-layout') && !document.querySelector('.forge-project-sidebar').hidden");
+      assert.ok(writes.slice(workingStart).some(w => w.path === '/api/chat/stream' && JSON.parse(w.body).session_id === forgeSessionId), label + ' Working now uses this pass session');
+      demoState.forgeRelease = true;
+      await waitFor("document.querySelector('.side-chat-send')?.textContent === 'Send'");
+      delete demoState.forgeHeldSession; delete demoState.forgeRelease;
       await navigate('home');
       if (label === 'desktop') {
         await js("document.querySelector('#sidebar-toggle').click()"); await delay(350);
         await js("document.querySelector('.forge-mode-rail').click()");
-        await waitFor("!!document.querySelector('.forge-home') && document.querySelectorAll('#nav [data-tab]').length === 2");
+        await waitFor("!!document.querySelector('.forge-home') && document.querySelectorAll('#nav [data-tab]').length === 1");
         assert.equal(await js("document.querySelector('.forge-mode-rail').getAttribute('aria-label')"), 'Switch to Kairos');
         await capture('desktop-forge-switch-collapsed');
         await js("document.querySelector('.forge-mode-rail').click()"); await waitFor("!!document.querySelector('.dashboard-hero')");
@@ -291,7 +489,7 @@ app.whenReady().then(async () => {
       demoState.isAdmin = false;
       await js("localStorage.setItem('kairos:app-mode', 'forge')"); await win.loadURL(base);
       await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
-      assert.ok(await js("!document.querySelector('#forge-mode-switch, #nav [data-tab=forgeHome], #nav [data-tab=forgeProjects]')"), label + ' non-admin sees no Forge switch');
+      assert.ok(await js("!document.querySelector('#forge-mode-switch, #nav [data-tab=forgeHome], #nav [data-tab=forgeProjects], #nav [data-tab=forgeSessions]')"), label + ' non-admin sees no Forge switch');
       await navigate('forgeHome');
       assert.equal(await js("document.getElementById('view-content').dataset.view"), 'home', label + ' non-admin cannot route to Forge');
       demoState.isAdmin = true; delete demoState.sessionFields;
@@ -1122,7 +1320,8 @@ app.whenReady().then(async () => {
     win.setContentSize(1440, 900);
     await navigate("home");
     await waitFor("document.querySelectorAll('.dashboard-row').length > 0");
-    await js("document.querySelector('.dashboard-row').click()");
+    // Forge sessions are listed too (newer here) and open the Forge screen; pick the plain chat.
+    await js("[...document.querySelectorAll('.dashboard-row')].find(r => r.textContent.includes('A clearer direction for the workspace')).click()");
     await waitFor("document.querySelectorAll('#chat-messages .msg').length === 2");
     await delay(400);
     await capture("desktop-conversation");
@@ -1580,6 +1779,16 @@ app.whenReady().then(async () => {
       await waitDemo("[...d.querySelectorAll('.msg.assistant')].some(m => m.textContent.includes('Demo reply') && m.textContent.includes('download Kairos'))", "the demo's scripted reply");
       await waitDemo("d.querySelector('.chat-backdrop').dataset.scene === 'sky' && !d.querySelector('.chat-backdrop').classList.contains('is-dissolving')", "the background turns to the sky after the first message");
       await capture(label + "-website-demo");
+      await inDemo("d.querySelector('#forge-mode-switch [data-mode=forge]').click()");
+      await waitDemo("!!d.querySelector('.forge-home .forge-composer')", 'Forge Home opens in the demo');
+      await waitDemo("!!d.querySelector('[data-forge-project=fp1]')", 'Forge projects load in the demo sidebar');
+      await inDemo("d.querySelector('[data-forge-project=fp1]').click()");
+      await waitDemo("!!d.querySelector('.forge-session-card[data-session-id=fs1]')", 'Forge sessions load in the demo');
+      await inDemo("d.querySelector('.forge-session-card[data-session-id=fs1]').click()");
+      await waitDemo("!!d.querySelector('.forge-shell .forge-transcript-layout')", 'Forge session renders in the bundle');
+      assert.ok(await inDemo("d.querySelector('.forge-session-header').textContent.includes('Kairos garden')"), label + ' demo Forge header');
+      await inDemo("d.querySelector('#forge-mode-switch [data-mode=kairos]').click()");
+      await waitDemo("!!d.querySelector('.dashboard-core')", 'demo returns to Kairos');
       if (label === "mobile") {
         assert.ok(await js("getComputedStyle(document.querySelector('.menu-button')).display !== 'none' && getComputedStyle(document.querySelector('.nav-links')).display === 'none'"), "phone menu starts closed");
         await js("document.querySelector('.menu-button').click()");
@@ -1636,7 +1845,7 @@ app.whenReady().then(async () => {
     for (let i = 0; i < 100 && !(await js("[...document.querySelectorAll('.msg.assistant')].some(m => m.textContent.includes('Demo reply'))")); i++) await delay(100);
     assert.ok(await js("[...document.querySelectorAll('.msg.assistant')].some(m => m.textContent.includes('Demo reply'))"), "The demo runs from disk");
     errors.length = errorsBefore;
-    console.log("PASS: app desktop/mobile and icon rail, persistence/keyboard/tooltips, reduced motion, vault/chat/Settings, empty/error states, website layouts/links/images/previews.");
+    console.log("PASS: app desktop/mobile and icon rail, Forge sessions/composer/review, persistence/keyboard/tooltips, reduced motion, vault/chat/Settings, empty/error states, website layouts/links/images/previews.");
     console.log("Screenshots: " + output);
     fs.writeFileSync(path.join(output, "result.json"), JSON.stringify({ passed: true, checks: ["artifact split/resize/persistence, maximize/Escape, retained tabs/renderers and overlays", "10 tabs desktop/mobile", "52px icon rail layout and animation", "sidebar persistence, keyboard, tooltips, mobile override", "vault search/read", "Settings and usable mobile forms", "Home chat link and model menu", "beam/core reduced motion", "centered new-chat composer", "independent history persistence, draft retention and mobile focus", "new-chat landing does not write data", "mocked note completion", "delayed navigation", "10 empty views and unavailable status", "website desktop/mobile layouts, anchors, images, five preview states, live halftone and fallback, release-driven downloads, phone menu, FAQ, 404 and reduced motion", "site demo from disk"], docImagesUpdated: updateDocImages, errors, writes }, null, 2));
   } catch (error) {

@@ -2118,7 +2118,7 @@ async function refreshSessions(sessionsList, messages) {
       "data-session-id": session.id,
       "data-title": session.title,
       // Drag onto the right half of the chat to open it side by side.
-      draggable: "true",
+      draggable: session.forge ? "false" : "true",
       ondragstart: (e) => { e.dataTransfer.setData(SESSION_MIME, session.id); e.dataTransfer.effectAllowed = "copy"; },
       onclick: () => openSession(session.id, sessionsList, messages),
       oncontextmenu: (e) => {
@@ -2128,6 +2128,7 @@ async function refreshSessions(sessionsList, messages) {
     });
     if (session.starred) item.appendChild(el("span", { class: "star-mark", text: "★ " }));
     item.appendChild(document.createTextNode(session.title));
+    if (session.forge) item.appendChild(el('small', { class: 'forge-chat-tag', text: 'Forge' }));
     item.title = session.title;
     sessionsList.appendChild(item);
     if (session.id === activeSessionId) syncChatLayout(messages, session.title);
@@ -2228,7 +2229,7 @@ function showSessionMenu(x, y, session, item, sessionsList, messages) {
     },
   });
 
-  const sideItem = canSplit() && session.id !== activeSessionId ? el("div", {
+  const sideItem = !session.forge && canSplit() && session.id !== activeSessionId ? el("div", {
     class: "context-menu-item",
     text: "Open side by side",
     onclick: () => { closeSessionMenu(); openSideChat(session.id); },
@@ -2318,6 +2319,10 @@ async function openSession(sessionId, sessionsList, messages) {
   [...sessionsList.children].forEach((c) => c.classList.remove("active"));
   const session = await api(`/api/sessions/${sessionId}`);
   if (!messages.isConnected || activeSessionId !== sessionId) return;
+  if (session.forge) {
+    document.dispatchEvent(new CustomEvent('jarvis:navigate', { detail: { tab: 'forgeSession', sessionId } }));
+    return;
+  }
   syncPermissionMode(session.permission_mode);
   messages.innerHTML = "";
   messages.dataset.sessionId = sessionId;

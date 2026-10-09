@@ -68,6 +68,7 @@ class ToolContext:
     model: Optional[str] = None
     # A helper's own tool calls (core/helpers.py): read tools and browse only.
     helper: bool = False
+    read_only: bool = False
 
     @property
     def permission_surface(self) -> str:
@@ -136,17 +137,33 @@ def helper_tool(spec: ToolSpec) -> bool:
     return (spec.effect == READ or spec.name == "browse") and not spec.agent_only and spec.name not in HELPER_BLOCKED
 
 
-def specs(surface: str, is_admin: bool = False, agent: bool = False, helper: bool = False) -> list[ToolSpec]:
+def specs(surface: str, is_admin: bool = False, agent: bool = False, helper: bool = False,
+          read_only: bool = False) -> list[ToolSpec]:
     """The tools one surface offers, in registration order (stable, so the
     tool list - part of the cached prompt prefix - never reorders). Agent-only
     tools appear only for an agent's runs and chats; a helper gets only
     helper_tool()'s."""
     return [s for s in _REGISTRY.values() if surface in s.surfaces and (is_admin or not s.admin_only)
-            and (agent or not s.agent_only) and (not helper or helper_tool(s))]
+            and (agent or not s.agent_only) and (not helper or helper_tool(s))
+            and (not read_only or s.effect == READ)]
+
+
+def session_read_only(session_id: str | None) -> bool:
+    if not session_id:
+        return False
+    from core.session_manager import session_manager
+    return ((session_manager.get_session(session_id) or {}).get('forge') or {}).get('mode') == 'plan'
+
+
+def read_tool(name: str) -> bool:
+    spec = _REGISTRY.get(name.removeprefix('mcp__hive_mind__'))
+    return bool(spec and spec.effect == READ)
 
 
 async def call(name: str, args: dict, ctx: ToolContext, surface: str) -> str | ToolResult:
     spec = _REGISTRY.get(name)
+    if (ctx.read_only or session_read_only(ctx.session_id)) and not read_tool(name):
+        return 'Not run: Forge Plan mode is read-only.'
     if (spec is None or surface not in spec.surfaces or (spec.admin_only and not ctx.is_admin)
             or (spec.agent_only and not ctx.agent_id) or (ctx.helper and not helper_tool(spec))):
         return f"Unknown tool: {name}"
@@ -207,6 +224,8 @@ def _audit(spec: ToolSpec, args: dict, ctx: ToolContext, result: str | ToolResul
 async def dispatch(name: str, args: dict, ctx: ToolContext, surface: str) -> str | ToolResult:
     """call() with the person's lifecycle hooks around it
     (services/hook_service.py): a before-tool hook can block it."""
+    if (ctx.read_only or session_read_only(ctx.session_id)) and not read_tool(name):
+        return 'Not run: Forge Plan mode is read-only.'
     from services.hook_service import hook_service
     return await hook_service.around_tool(name, args, lambda: call(name, args, ctx, surface), **ctx.hook_context())
 
@@ -239,17 +258,18 @@ def _shown(spec: ToolSpec, small_window: bool) -> bool:
 
 
 def openai_tools(is_admin: bool = False, agent: bool = False, small_window: bool = False,
-                 helper: bool = False) -> list[dict]:
+                 helper: bool = False, read_only: bool = False) -> list[dict]:
     """The OpenAI function-calling list for one session: every tool, or on a
     small window only the core ones (the rest: deferred_tools)."""
     return [{"type": "function", "function": {"name": s.name, "description": s.description, "parameters": s.schema}}
-            for s in specs(OPENAI, is_admin, agent, helper) if _shown(s, small_window)]
+            for s in specs(OPENAI, is_admin, agent, helper, read_only) if _shown(s, small_window)]
 
 
-def deferred_tools(is_admin: bool = False, agent: bool = False, helper: bool = False) -> dict[str, dict]:
+def deferred_tools(is_admin: bool = False, agent: bool = False, helper: bool = False,
+                   read_only: bool = False) -> dict[str, dict]:
     """A small window's hidden tools, as core/tool_search.py catalog entries."""
     return {s.name: {"server": "jarvis", "name": s.name, "description": s.description, "schema": s.schema}
-            for s in specs(OPENAI, is_admin, agent, helper) if not _shown(s, True)}
+            for s in specs(OPENAI, is_admin, agent, helper, read_only) if not _shown(s, True)}
 
 
 def _fields(args: dict, key: str) -> tuple[str, dict]:

@@ -90,7 +90,7 @@
       state.handoffSessions[body.session_id] ||= store.sessions[body.session_id];
     }
     // Community installs and refresh use the same fixtures as desktop/phone smoke.
-    const updated = mutate(path, method, body);
+    const updated = mutate(path, method, body, Object.fromEntries(url.searchParams));
     if (updated?.handoffs) {
       // Let the visitor see queued, working and the returned agent reply.
       setTimeout(() => { state.handoffStatus = 'working'; }, 1200);
@@ -98,6 +98,7 @@
       return new Response(`data: ${JSON.stringify(updated)}\n\ndata: {"done":true}\n\n`,
         { headers: { 'Content-Type': 'text/event-stream' } });
     }
+    if (updated?._forgePackets) return reply(body, updated);
     if (updated) { const { _status = 200, ...payload } = updated; return json(payload, _status); }
     if (path === "/api/sessions" && method === "POST") {
       const id = "demo" + store.nextId++;
@@ -132,8 +133,8 @@
     + "In the app, your message goes to the model you choose (Claude, Codex, a local model or any API), "
     + "with your vault, notes and tools at hand. Have a look around the other tabs, then download Kairos to try it for real.";
 
-  function reply(body) {
-    const session = store.sessions[body.session_id];
+  function reply(body, forgeTurn = null) {
+    const session = store.sessions[body.session_id] || data.forgeSessions[body.session_id];
     const now = Date.now() / 1000;
     // Asked to open or visit a website, the reply shows the computer at work.
     const usesComputer = /\b(?:open|browse|visit|website|computer)\b/i.test(body.message || "");
@@ -143,7 +144,7 @@
     }
     if (session) {
       session.messages.push({ role: "user", content: String(body.message || ""), ts: now });
-      session.messages.push({ role: "assistant", content: REPLY, ts: now + 1, ...(usesComputer ? { run_id: "r-computer" } : {}) });
+      session.messages.push({ role: "assistant", content: REPLY, ts: now + 1, ...(forgeTurn ? { run_id: forgeTurn.run_id } : usesComputer ? { run_id: "r-computer" } : {}) });
       if (session.title === "New chat") session.title = String(body.message || "New chat").slice(0, 48);
       const listed = data.sessions.find((s) => s.id === session.id);
       if (listed) { listed.title = session.title; listed.updated_at = now; }
@@ -152,6 +153,10 @@
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
+        for (const packet of forgeTurn?._forgePackets || []) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(packet)}\n\n`));
+          await new Promise(resolve => setTimeout(resolve, 180));
+        }
         const computerEvent = (kind, detail) => controller.enqueue(encoder.encode(relative(`data: ${JSON.stringify({
           run_id: "r-computer", tool_event: { at: now, kind, name: "computer", ok: true, detail: JSON.stringify(detail) } })}\n\n`)));
         if (usesComputer) {

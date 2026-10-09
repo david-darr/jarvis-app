@@ -37,6 +37,12 @@ function formBlocks(body, fragment, live) {
 // Sanitize into a detached fragment BEFORE insertion. No remote image loads,
 // raw HTML styles, event handlers, frames, IDs, or application-local links.
 // `live`: the reply is streaming in now (see formBlocks).
+export function highlightCode(code, raw, language = 'text') {
+  code.textContent = raw;
+  code.classList.add('hljs');
+  if (raw.length < 100000 && hljs.getLanguage(language)) code.innerHTML = hljs.highlight(raw, { language, ignoreIllegals: true }).value;
+}
+
 export function renderMessageBody(body, text, sessionId, rich = true, { live = false } = {}) {
   body._rawText = text;
   body.classList.toggle('chat-prose', rich);
@@ -84,7 +90,7 @@ export function renderMessageBody(body, text, sessionId, rich = true, { live = f
   for (const code of fragment.querySelectorAll('pre > code')) {
     const raw = code.textContent;
     const language = [...code.classList].find(c => c.startsWith('language-'))?.slice(9) || 'text';
-    if (raw.length < 100000 && hljs.getLanguage(language)) code.innerHTML = hljs.highlight(raw, { language, ignoreIllegals: true }).value;
+    highlightCode(code, raw, language);
     const pre = code.parentElement;
     const block = el('div', { class: 'chat-code-block' });
     pre.replaceWith(block);

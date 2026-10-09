@@ -38,7 +38,7 @@ class ExternalBrain:
                  project_id: str | None = None, endpoint_id: str | None = None,
                  integration_ids: list[str] | None = None, allow_user_tab_source: bool = False,
                  supports_images: bool = False, agent_id: str | None = None, agent_prompt: str = "",
-                 window: int | None = None, helper: bool = False):
+                 window: int | None = None, helper: bool = False, read_only: bool = False):
         self.base_url = base_url
         self.model = model
         self.api_key = api_key
@@ -60,10 +60,11 @@ class ExternalBrain:
         # its own short instructions instead of a chat's. That list is short
         # enough to show whole on any window, so no tool is hidden from it.
         self.helper = helper
+        self.read_only = read_only
         self.small_window = bool(window and window <= tool_registry.SMALL_WINDOW) and not helper
         self.tools = tool_registry.openai_tools(is_admin, agent=bool(agent_id), small_window=self.small_window,
-                                                helper=helper)
-        self._deferred: dict[str, dict] = tool_registry.deferred_tools(is_admin, agent=bool(agent_id), helper=helper) \
+                                                helper=helper, read_only=read_only)
+        self._deferred: dict[str, dict] = tool_registry.deferred_tools(is_admin, agent=bool(agent_id), helper=helper, read_only=read_only) \
             if self.small_window else {}
         if self._deferred:
             self.tools = self.tools + tool_search.bridge_schemas()
@@ -146,6 +147,8 @@ class ExternalBrain:
         from services.hook_service import hook_service
         real = args.get("name", "") if name == tool_search.CALL else name
         real_args = args.get("arguments") if name == tool_search.CALL else args
+        if (self.read_only or tool_registry.session_read_only(self.session_id)) and not tool_registry.read_tool(real):
+            return 'Not run: Forge Plan mode is read-only.'
 
         async def run():
             try:
@@ -189,13 +192,15 @@ class ExternalBrain:
 
     def _context(self) -> tool_registry.ToolContext:
         return tool_registry.ToolContext(self.session_id, self.is_admin, self.allow_user_tab_source,
-                                         self.turn_taint, self.agent_id, model=self.model, helper=self.helper)
+                                         self.turn_taint, self.agent_id, model=self.model, helper=self.helper, read_only=self.read_only)
 
     async def _call_mcp(self, name: str, args: dict) -> str:
         """A third-party tool: asked about first, like Claude's MCP calls,
         through the chat's own permission prompt. With nobody to ask (no chat
         window open, a scheduled run) the broker refuses and says where to
         grant it."""
+        if self.read_only or tool_registry.session_read_only(self.session_id):
+            return 'Not run: Forge Plan mode is read-only.'
         spec = self._mcp_tools[name]
         current = integrations.list_mcp_servers_runtime(self.integration_ids).get(spec["server"])
         if not self._same_mcp_endpoint(spec["config"], current):
@@ -232,7 +237,7 @@ class ExternalBrain:
         """Find the tools of the MCP servers this chat may use. Only for a
         real chat: a detached summariser gets none. The list is fixed for the
         connection, so the tool list - part of the cached prompt - is stable."""
-        if not self.session_id and not self.agent_id:
+        if self.read_only or (not self.session_id and not self.agent_id):
             return
         await mcp_oauth.refresh_due(self.integration_ids)
         servers = integrations.list_mcp_servers_runtime(self.integration_ids)

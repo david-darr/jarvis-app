@@ -111,11 +111,12 @@ class Brain:
                  integration_ids: list[str] | None = None, session_id: str | None = None,
                  model: str | None = None, is_admin: bool = False, project_id: str | None = None,
                  effort: str | None = None, resume_session_id: str | None = None,
-                 agent_id: str | None = None, agent_prompt: str = ""):
+                 agent_id: str | None = None, agent_prompt: str = "", read_only: bool = False):
         self.vault_dir = vault_dir or resolve_vault_dir()
         # A chat with an agent: its frozen identity and notes, appended to the
         # system prompt (core/session_manager.py set_agent).
         self.agent_prompt = agent_prompt
+        self.read_only = read_only
         # The agent this brain works for (services/agent_service.py), if any:
         # agent-only tools, and permission requests to that agent's inbox.
         self.agent_id = agent_id
@@ -278,6 +279,10 @@ class Brain:
         # (or acceptEdits mode), Claude skips the callback entirely.
         allowed_tools = [tool for tool in allowed_tools
                          if tool in grants and tool not in disabled and tool not in ("Bash", "PowerShell")]
+        if self.read_only:
+            disabled = [*disabled, 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash', 'PowerShell']
+            allowed_tools = [t for t in allowed_tools if tool_registry.read_tool(t)]
+            mcp_servers = {}  # Unknown third-party tools have no proven read effect.
         return disabled, allowed_tools, mcp_servers
 
     @staticmethod
@@ -342,9 +347,10 @@ class Brain:
             # further than that so one truly runaway response still hits a
             # real ceiling instead of growing memory unbounded.
             max_buffer_size=10 * 1024 * 1024,
-            permission_mode="default",
+            permission_mode="plan" if self.read_only else "default",
             disallowed_tools=disabled,
             mcp_servers=mcp_servers,
+            strict_mcp_config=self.read_only,
             allowed_tools=allowed_tools,
             model=self.model,
             effort=self.effort,
@@ -370,6 +376,9 @@ class Brain:
         return {"source": source, "session_id": self.session_id, "agent_id": self.agent_id, "model": self.model or "claude"}
 
     async def _hook_before_tool(self, input_data, tool_use_id, context):
+        if self.read_only and not self._plan_tool(input_data.get('tool_name', '')):
+            return {'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
+                    'permissionDecisionReason': 'Forge Plan mode is read-only.'}}
         from services.hook_service import hook_service
         try:
             reason = await hook_service.before_tool(input_data.get("tool_name", ""), input_data.get("tool_input") or {},
@@ -400,6 +409,8 @@ class Brain:
         guess made in this app. Falling back to a derived scope keeps the
         prompt useful when no suggestion arrives.
         """
+        if self.read_only and not self._plan_tool(tool_name):
+            return PermissionResultDeny(message='Forge Plan mode is read-only.', interrupt=False)
         rule_content = None
         for suggestion in getattr(context, "suggestions", None) or []:
             for rule in getattr(suggestion, "rules", None) or []:
@@ -434,6 +445,10 @@ class Brain:
         # The reason goes into the transcript, so the model is told it was
         # refused and why rather than silently failing or trying again.
         return PermissionResultDeny(message=decision.reason, interrupt=False)
+
+    @staticmethod
+    def _plan_tool(name: str) -> bool:
+        return name in {'Read', 'Glob', 'Grep', 'LS', 'WebFetch', 'WebSearch'} or tool_registry.read_tool(name)
 
     def fence_roots(self) -> list[str]:
         """Where Claude's file tools may reach in anything but an admin chat:

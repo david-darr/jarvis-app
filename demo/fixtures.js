@@ -27,6 +27,49 @@
     { id: 'fp1', name: 'Kairos garden', path: 'C:\\Users\\Alex\\Documents\\Kairos Projects\\garden', added_at: now - 90000, last_opened_at: now - 600 },
     { id: 'fp2', name: 'Field notes', path: 'C:\\Users\\Alex\\Documents\\Kairos Projects\\field-notes', added_at: now - 80000, last_opened_at: now - 8000 },
   ];
+  const forgeSessions = state.forgeSessions ||= {
+    fs1: { id: 'fs1', title: 'Tune the garden composer', created_at: now - 800, updated_at: now - 300, model_endpoint_id: 'm2',
+      workspace_dir: 'C:\\Users\\Alex\\Documents\\Kairos Projects\\garden-fp1\\composer-abc123',
+      forge: { project_id: 'fp1', branch: 'forge/garden-composer-abc123', base_branch: 'main', base_commit: 'a'.repeat(40), mode: 'build', isolation: 'new_worktree', worktree: 'C:\\Users\\Alex\\Documents\\Kairos Projects\\garden-fp1\\composer-abc123' },
+      messages: [{ role: 'user', content: 'Make the garden composer clearer.', ts: now - 400 },
+        { role: 'assistant', content: 'The composer now explains where your work runs. I also added a keyboard shortcut.\n\n```javascript\nexport const shortcut = "Enter";\n```', ts: now - 300 }] },
+  };
+  const forgeReviews = state.forgeReviews ||= {};
+  const gardenSource = 'export const shortcut = "Enter";\n\nexport function composerHint() {\n  return "Build in a worktree";\n}\n';
+  function forgeReview(id) {
+    if (!forgeReviews[id]) {
+      const hunks = [
+        { hash: '1'.repeat(64), old_start: 1, old_count: 1, new_start: 1, new_count: 1, patch: '@@ -1 +1 @@\n-export const shortcut = "Send";\n+export const shortcut = "Enter";\n' },
+        { hash: '2'.repeat(64), old_start: 4, old_count: 1, new_start: 4, new_count: 1, patch: '@@ -4 +4 @@\n-  return "Start a chat";\n+  return "Build in a worktree";\n' },
+      ];
+      forgeReviews[id] = { files: [{ path: 'src/garden.js', added: 2, removed: 2, binary: false, untracked: false, patch: 'diff --git a/src/garden.js b/src/garden.js\n', hunks }],
+        checkpoints: [{ id: 'fc-' + id, created: now - 300, finished: now - 290, source: 'chat:' + id, status: 'changed', overlap: false,
+          roots: [{ path: forgeSessions[id]?.workspace_dir || 'garden', changes: [{ path: 'src/garden.js', before: 'a'.repeat(40), after: 'b'.repeat(40) }], skipped: [] }] }] };
+    }
+    return forgeReviews[id];
+  }
+  forgeReview('fs1');
+  const forgeRuns = state.forgeRuns ||= {};
+  function forgeActivity(id, startedAt, runId = 'forge-run-' + id) {
+    const edit = forgeSessions[id]?.forge.mode === 'build';
+    const tools = [['read', 'Read', 'src/garden.js', '5 lines read'],
+      ...(edit ? [['edit', 'Edit', 'src/garden.js', 'Updated composer hint']] : []),
+      ...(edit ? [['command', 'shell', 'node --check src/garden.js', 'Syntax check passed.\nExit code: 0']] : [])];
+    const packets = tools.flatMap(([callId, name, summary, output], index) => ['started', 'finished'].map((phase, n) => ({ run_id: runId,
+      tool_step: { phase, id: callId, name, summary, ok: n ? true : null, output: n ? output : '', at: startedAt + index * .06 + n * .02, seconds: n ? .02 : null } })));
+    const run = { id: runId, session_id: id, surface: 'chat', started_at: startedAt, ended_at: startedAt + .25, outcome: 'finished',
+      steps: packets.map(({ tool_step: s }) => ({ at: s.at, kind: 'tool_' + s.phase, name: s.name, ok: s.ok, seconds: s.seconds,
+        detail: s.phase === 'finished' ? s.output : JSON.stringify({ [s.name === 'shell' ? 'command' : 'file_path']: s.summary }) })) };
+    (forgeRuns[id] ||= []).push(run);
+    if (edit) {
+      delete forgeReviews[id]; const review = forgeReview(id);
+      review.checkpoints[0].created = startedAt + .01; review.checkpoints[0].finished = startedAt + .24;
+      review.checkpoints[0].id = 'fc-' + runId;
+    }
+    return packets;
+  }
+  forgeActivity('fs1', now - 400, 'forge-seed');
+  forgeSessions.fs1.messages[1].run_id = 'forge-seed'; forgeSessions.fs1.messages[1].ts = now - 399;
   const forgeDays = Array.from({ length: 14 }, (_, i) => ({ date: dayForForge(i - 13), commits: [2, 4, 1, 0, 6, 3, 1][i % 7], added: (i + 1) * 17, removed: i * 3 }));
   function dayForForge(offset) { const date = new Date(now * 1000); date.setDate(date.getDate() + offset); return date.toISOString().slice(0, 10); }
   const forgeSummary = { state: 'ok', head: 'a'.repeat(40), branch: 'main', last_commit: { at: now - 1200, subject: 'Make room for the next idea', sha: 'a'.repeat(40) }, activity: forgeDays,
@@ -174,7 +217,50 @@
       + "\n\n## How to run this\n\nUse the computer tool. Stop for the person where marked; the computer's safety checks still apply.\n";
     return { name: 'example-com-click', description, body, steps, labels, content: `---\ndescription: ${description}\n---\n\n${body}` };
   }
-  function mutate(route, method, body = {}) {
+  function mutate(route, method, body = {}, query = {}) {
+    if (route === '/api/forge/sessions' && method === 'POST') {
+      const project = forgeProjects.find(p => p.id === body.project_id);
+      if (!project || project.id === 'fp2') return { _status: 400, detail: 'Forge sessions require a Git repository root with an initial commit.' };
+      const id = 'fs' + (Object.keys(forgeSessions).length + 1);
+      const worktree = body.isolation === 'in_place' ? project.path : project.path + '-worktrees\\task-' + id;
+      const session = { id, title: body.task.slice(0, 120), created_at: now, updated_at: now, model_endpoint_id: body.model_endpoint_id, workspace_dir: worktree, messages: [],
+        forge: { project_id: project.id, worktree, branch: body.isolation === 'in_place' ? 'main' : body.branch || 'forge/task-' + id, base_branch: body.branch || 'main', base_commit: 'a'.repeat(40), mode: body.mode || 'build', isolation: body.isolation || 'new_worktree' } };
+      forgeSessions[id] = session; forgeReviews[id] = { files: [], checkpoints: [] }; return session;
+    }
+    const forgeRoute = route.match(/^\/api\/forge\/sessions\/([^/]+)(?:\/(.*))?$/);
+    if (forgeRoute) {
+      const session = forgeSessions[forgeRoute[1]], action = forgeRoute[2];
+      if (!session) return { _status: 404, detail: 'Forge session not found.' };
+      const review = forgeReview(session.id);
+      if (action === 'mode' && method === 'POST') { session.forge.mode = body.mode; return session; }
+      if (!action && method === 'DELETE') {
+        if (session.forge.isolation !== 'in_place' && review.files.length && (query.discard !== 'true' || query.confirmed !== 'true')) return { _status: 409, detail: 'Worktree has changes. Confirm discard before removing it.' };
+        session.forge.removed = true; return { ok: true };
+      }
+      if (['revert-file', 'revert-hunk'].includes(action) || /^checkpoints\/.+\/undo$/.test(action || '')) {
+        if (!body.confirmed) return { _status: 400, detail: 'Confirm this operation first.' };
+        if (action === 'revert-file') review.files = review.files.filter(file => file.path !== body.path);
+        else if (action === 'revert-hunk') {
+          const file = review.files.find(file => file.path === body.path);
+          if (!file?.hunks.some(hunk => hunk.hash === body.hunk_hash)) return { _status: 409, detail: 'The hunk changed. Refresh before reverting it.' };
+          file.hunks = file.hunks.filter(hunk => hunk.hash !== body.hunk_hash); file.added = file.removed = file.hunks.length;
+          if (!file.hunks.length) review.files = review.files.filter(item => item !== file);
+        } else {
+          if (state.forgeUndoConflict) return { _status: 409, detail: 'src/garden.js changed since this turn. Undo cannot overwrite later edits.' };
+          review.files = []; review.checkpoints.forEach(event => { event.status = 'restored'; event.roots.forEach(root => { root.changes = []; }); });
+        }
+        return { restored: true };
+      }
+    }
+    const forgeModel = route.match(/^\/api\/sessions\/([^/]+)\/model$/);
+    if (forgeModel && forgeSessions[forgeModel[1]]) { Object.assign(forgeSessions[forgeModel[1]], body); return { ok: true, model_override: body.model_override ?? null }; }
+    if (route === '/api/chat/stream' && forgeSessions[body.session_id]) {
+      const session = forgeSessions[body.session_id];
+      const started = Date.now() / 1000, runId = 'forge-live-' + session.id + '-' + session.messages.length;
+      const packets = forgeActivity(session.id, started, runId);
+      if (!options.demo) session.messages.push({ role: 'user', content: body.message, ts: started }, { role: 'assistant', content: 'Tab build request received.', ts: started + .25, run_id: runId });
+      return { _forgePackets: packets, run_id: runId };
+    }
     if (route === '/api/forge/root' && method === 'PUT') { state.forgeRoot = body.path; return { path: body.path }; }
     if (['/api/forge/projects', '/api/forge/projects/new', '/api/forge/projects/clone'].includes(route) && method === 'POST') {
       const name = body.name || 'New project';
@@ -421,6 +507,38 @@
     if (route === "/api/auth/status") return { auth_enabled: false, setup_required: false, username: "Alex", is_admin: state.isAdmin !== false, instance: state.empty ? "dev" : "" };
     if (route === '/api/forge/root') return { path: state.forgeRoot || 'C:\\Users\\Alex\\Documents\\Kairos Projects' };
     if (route === '/api/forge/projects') return list(forgeProjects.map(p => ({ ...p, git: p.id === 'fp2' ? { state: 'not_git', message: 'Not a git repository' } : forgeSummary })));
+    const projectFiles = route.match(/^\/api\/forge\/projects\/([^/]+)\/(files|file)$/);
+    if (projectFiles) {
+      const path = url.searchParams.get('path') || '';
+      if (projectFiles[2] === 'file') return { path, content: path === 'README.md' ? '# Kairos garden\n\nA calm place to build.\n' : gardenSource };
+      return { path, entries: path === '' ? [{ name: 'src', path: 'src', directory: true, changed: false }, { name: 'README.md', path: 'README.md', directory: false, changed: false }]
+        : path === 'src' ? [{ name: 'garden.js', path: 'src/garden.js', directory: false, changed: false }] : [] };
+    }
+    if (/^\/api\/forge\/projects\/[^/]+\/sessions$/.test(route)) return list(Object.values(forgeSessions).filter(s => s.forge.project_id === route.split('/')[4]).map(({ messages, ...header }) => ({ ...header, message_count: messages.length })));
+    if (/^\/api\/forge\/projects\/[^/]+\/branches$/.test(route)) return [{ name: 'main', worktree: forgeProjects[0].path }, { name: 'feature/garden', worktree: null }];
+    const forgeRoute = route.match(/^\/api\/forge\/sessions\/([^/]+)(?:\/(.*))?$/);
+    if (forgeRoute) {
+      const session = forgeSessions[forgeRoute[1]], action = forgeRoute[2];
+      if (!session) throw new Error('Forge session not found.');
+      if (!action) return session;
+      const review = forgeReview(session.id);
+      if (action === 'changes') return { base_commit: session.forge.base_commit, files: review.files };
+      if (action === 'checkpoints') return review.checkpoints;
+      if (action === 'files') {
+        const folder = url.searchParams.get('path') || '';
+        const changed = review.files.some(file => file.path === 'src/garden.js');
+        return { path: folder, entries: folder === '' ? [{ name: 'src', path: 'src', directory: true, changed }, { name: 'README.md', path: 'README.md', directory: false, changed: false }]
+          : folder === 'src' ? [{ name: 'garden.js', path: 'src/garden.js', directory: false, changed }] : [] };
+      }
+      if (action === 'file') {
+        const path = url.searchParams.get('path');
+        let content = gardenSource;
+        const hunks = review.files[0]?.hunks || [];
+        if (!hunks.some(h => h.hash === '1'.repeat(64))) content = content.replace('"Enter"', '"Send"');
+        if (!hunks.some(h => h.hash === '2'.repeat(64))) content = content.replace('"Build in a worktree"', '"Start a chat"');
+        return { path, content: path === 'README.md' ? '# Kairos garden\n\nA calm place to build.\n' : content };
+      }
+    }
     if (/^\/api\/forge\/projects\/[^/]+\/summary$/.test(route)) return route.split('/')[4] === 'fp2' ? { state: 'not_git', message: 'Not a git repository' } : forgeSummary;
     if (route === '/api/forge/workspaces/recent') return list(forgeProjects.map(({ path, name }) => ({ path, name })));
     if (route === '/api/forge/activity') return { days: state.empty ? forgeDays.map(d => ({ ...d, commits: 0, added: 0, removed: 0 })) : forgeDays,
@@ -458,6 +576,11 @@
     if (route === "/api/remote/status") return { installed: true, logged_in: true, firewall_ok: false, auth_ready: false, has_any_users: false,
       running_now: false, hostname: "workstation.tail1234.ts.net", port: 8443, url: null };
     // Roadmap phase 8: run timelines and full backup.
+    if (route === '/api/runs' && url.searchParams.get('session_id')) return (forgeRuns[url.searchParams.get('session_id')] || []).slice().reverse().map(({ steps, ...run }) => run);
+    if (route.startsWith('/api/runs/')) {
+      const run = Object.values(forgeRuns).flat().find(r => r.id === route.split('/')[3]);
+      if (run) return { ...run, parent: null, children: [], helpers: [] };
+    }
     if (route === "/api/runs") return [
       { id: "r1", surface: "chat", label: "Plan the launch", model: "claude-opus", outcome: "finished", started_at: now - 600, ended_at: now - 560,
         total_tokens: 18240, tool_calls: 2, session_id: "s1" },
@@ -481,6 +604,14 @@
       { id: "r2", tool: "WebFetch", content: "docs.python.org", behavior: "allow", scope: "session", granted_by: "Alex", granted_at: now - 3600 }],
       audit: [{ at: now - 60, decision: "allow", tool: "WebFetch", content: "docs.python.org", by: "Alex" }] };
     if (route === "/api/file-checkpoints") return [];
+    if (/^\/api\/file-checkpoints\/[^/]+$/.test(route)) {
+      const checkpoint = Object.values(forgeReviews).flatMap(review => review.checkpoints).find(c => c.id === route.split('/').pop());
+      if (checkpoint) return { ...checkpoint, roots: checkpoint.roots.map(root => ({ ...root, changes: root.changes.map(change => ({ ...change,
+        restore_state: change.restored_at ? 'restored' : 'available',
+        added: 2, removed: 2,
+        diff: '@@ -1 +1 @@\n-export const shortcut = "Send";\n+export const shortcut = "Enter";\n@@ -4 +4 @@\n-  return "Start a chat";\n+  return "Build in a worktree";\n',
+      })) })) };
+    }
     if (route === "/api/settings/agent-tools") return { available: ["Bash", "Read", "Write", "WebFetch"], disabled: ["WebFetch"], extra_allowed: [] };
     if (route === "/api/system/custom-tabs") return tabs.filter((t) => t.status === "on").map(tabManifest);
     if (route === "/api/system/tabs") return tabs;
@@ -499,7 +630,8 @@
       return list([{ id: "as1", title: "Chat with Scout", starred: false, created_at: now - 600, updated_at: now - 300,
         message_count: 2, model_endpoint_id: "m1", agent_id: url.searchParams.get("agent_id") }]);
     }
-    if (route === "/api/sessions") return list(sessions);
+    if (route === "/api/sessions") return list([...sessions, ...Object.values(forgeSessions).map(({ messages, ...header }) => ({ ...header, message_count: messages.length }))]);
+    if (/^\/api\/sessions\/[^/]+$/.test(route) && forgeSessions[route.split('/')[3]]) return forgeSessions[route.split('/')[3]];
     if (route === '/api/chat/references') {
       const needle = (url.searchParams.get('q') || '').toLowerCase();
       return list(agentsFixture.filter(a => `${a.name} ${a.role}`.toLowerCase().includes(needle))
@@ -715,5 +847,5 @@
       { id: "context7", name: "Context7", description: "Up-to-date library documentation.", auth: "none", url: "https://mcp.context7.com/mcp", docs: null, added: true }];
     throw new Error("No fixture for " + route);
   }
-  return { fixture, mutate, media, data: { models, sessions, projects, notes, events, googleEvents, googleFiles, tasks, runs, agentsFixture, agentInbox, docs } };
+  return { fixture, mutate, media, data: { models, sessions, forgeSessions, projects, notes, events, googleEvents, googleFiles, tasks, runs, agentsFixture, agentInbox, docs } };
 });

@@ -43,6 +43,8 @@ export function getInFlight(sessionId) {
 export function clearPermission(sessionId, requestId) {
   const entry = _inflight.get(sessionId);
   if (entry?.permission?.id !== requestId) return;
+  if (entry.permissionStartedAt) entry.pausedSeconds = (entry.pausedSeconds || 0) + Date.now() / 1000 - entry.permissionStartedAt;
+  entry.permissionStartedAt = null;
   entry.permission = null;
   _notify(sessionId);
 }
@@ -75,7 +77,7 @@ export function startTurn(sessionId, sessionTitle, text, attachmentIds, referenc
   // can reach it from anywhere - the composer's stop button, a tab switch, or
   // Open Mic barge-in - without the caller having to hold a reference.
   const controller = new AbortController();
-  const entry = { text: "", status: "processing", connected: false, sessionTitle, error: null, controller, listeners: new Set() };
+  const entry = { text: "", prompt: text, startedAt: Date.now() / 1000, status: "processing", connected: false, sessionTitle, error: null, controller, listeners: new Set() };
   _inflight.set(sessionId, entry);
   _notify(sessionId);
   _runTurn(sessionId, entry, text, attachmentIds, references);
@@ -123,6 +125,7 @@ async function _runTurn(sessionId, entry, text, attachmentIds, references) {
           // transport only, and a request must survive the user switching
           // tabs and coming back mid-turn.
           entry.permission = payload.permission;
+          entry.permissionStartedAt = Date.now() / 1000;
           _notify(sessionId);
         }
         if (payload.handoffs) {
@@ -133,6 +136,12 @@ async function _runTurn(sessionId, entry, text, attachmentIds, references) {
           entry.runId = payload.run_id;
           entry.toolEvents ||= [];
           entry.toolEvents.push(payload.tool_event);
+          _notify(sessionId);
+        }
+        if (payload.tool_step) {
+          entry.runId = payload.run_id;
+          entry.toolSteps ||= [];
+          entry.toolSteps.push(payload.tool_step);
           _notify(sessionId);
         }
       }
@@ -154,6 +163,7 @@ async function _runTurn(sessionId, entry, text, attachmentIds, references) {
       entry.error = e.message;
     }
   }
+  entry.endedAt = Date.now() / 1000;
   _notify(sessionId);
 
   setTimeout(() => {

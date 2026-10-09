@@ -611,7 +611,8 @@ def list_sessions(agent_id: Optional[str] = None, include_agents: bool = False) 
         conn = _connect()
         rows = conn.execute(
             f"""SELECT id, title, starred, created_at, updated_at, message_count,
-                       model_endpoint_id, project_id, open_mic, agent_id
+                       model_endpoint_id, project_id, open_mic, agent_id,
+                       json_extract(doc, '$.forge') AS forge
                 FROM sessions {where}
                 ORDER BY starred DESC, updated_at DESC""", params
         ).fetchall()
@@ -627,6 +628,7 @@ def list_sessions(agent_id: Optional[str] = None, include_agents: bool = False) 
             "project_id": r["project_id"],
             "open_mic": bool(r["open_mic"]),
             "agent_id": r["agent_id"],
+            "is_forge": bool(r["forge"]),
         }
         for r in rows
     ]

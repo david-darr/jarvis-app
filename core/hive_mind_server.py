@@ -56,16 +56,16 @@ def get_hive_mind_server(exclude_session_id: str | None = None, is_admin: bool =
     session id in by building a fresh server per connection instead of one
     shared global instance, so a session never "finds" its own history."""
     ctx = tool_registry.ToolContext(session_id=exclude_session_id, is_admin=is_admin, turn_taint=turn_taint,
-                                    agent_id=agent_id)
+                                    agent_id=agent_id, read_only=tool_registry.session_read_only(exclude_session_id))
     tools = [tool(spec.name, spec.description, spec.schema)(_handler(spec.name, ctx))
-             for spec in tool_registry.specs(tool_registry.CLAUDE, is_admin, agent=bool(agent_id))]
+             for spec in tool_registry.specs(tool_registry.CLAUDE, is_admin, agent=bool(agent_id), read_only=ctx.read_only)]
     server = create_sdk_mcp_server(name="hive_mind", tools=tools)
     if system_prompt.computer_allowed(is_admin) and (exclude_session_id or agent_id):
         from mcp import types
         # Exempt only computer from Claude Code's deferred tool search.
         definitions = [types.Tool(name=spec.name, description=spec.description, inputSchema=spec.schema,
                        _meta={"anthropic/alwaysLoad": True} if spec.name == "computer" else None)
-                       for spec in tool_registry.specs(tool_registry.CLAUDE, is_admin, agent=bool(agent_id))]
+                       for spec in tool_registry.specs(tool_registry.CLAUDE, is_admin, agent=bool(agent_id), read_only=ctx.read_only)]
 
         async def list_tools(context, params):
             return types.ListToolsResult(tools=definitions)

@@ -181,7 +181,7 @@ class CodexBrain:
     def __init__(self, vault_dir: str | None = None, cwd_override: str | None = None,
                  session_id: str | None = None, model: str | None = None, is_admin: bool = False,
                  project_id: str | None = None, effort: str | None = None, agent_prompt: str = "",
-                 agent_auto: bool = False, agent_id: str | None = None):
+                 agent_auto: bool = False, agent_id: str | None = None, read_only: bool = False):
         self.cwd = cwd_override or vault_dir or resolve_vault_dir()
         # A chat with an agent (services/agent_service.py): its frozen
         # identity and notes. Codex reaches Kairos through its CLI, which has
@@ -211,7 +211,11 @@ class CodexBrain:
         # phase 7, 2026-10-06, David: "go with what you recommend"; before
         # this it was approve-all with the sandbox off, his 2026-10-05 call).
         self.agent_auto = agent_auto
-        if agent_auto:
+        self.read_only = read_only
+        if read_only:
+            self.permission_mode = 'base'
+            self.agent_auto = False
+        if self.agent_auto:
             self.permission_mode = "auto"
         # Present only once this session has completed at least one codex_cli
         # turn before — see set_codex_thread_id's caller below.
@@ -252,6 +256,20 @@ class CodexBrain:
         # Apply this on fresh and resumed turns: Codex resume keeps the
         # original workspace and does not accept --add-dir.
         ensure_user_tab_dirs()
+        if self.read_only:
+            # Resume inherits its original sandbox. Forge mode changes clear the
+            # thread ID; approval=never denies writes instead of hanging headlessly.
+            args = [codex, 'exec', *disabled_feature_args(), '-c', 'approval_policy="never"',
+                    '-c', 'sandbox_mode="read-only"']
+            if self.effort:
+                args += ['-c', f'model_reasoning_effort="{self.effort}"']
+            if self.thread_id:
+                args += ['resume', self.thread_id, '--json', '--skip-git-repo-check']
+            else:
+                args += ['--json', '--skip-git-repo-check', '-s', 'read-only', '-C', self.cwd]
+            if self.model:
+                args += ['-m', self.model]
+            return [*args, '-']
         if self.agent_auto:
             return self._agent_args(codex)
         auto = self.is_admin and self.permission_mode == "auto"

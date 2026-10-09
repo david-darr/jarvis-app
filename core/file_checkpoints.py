@@ -236,7 +236,7 @@ async def around_turn(source: str, workspace: str | None = None):
                 logger.exception("could not finish file checkpoint %s", event["id"])
 
 
-def list_events(limit: int = 100) -> list[dict]:
+def list_events(limit: int = 100, source: str | None = None) -> list[dict]:
     events = []
     for path in (STORE / "events").glob("*.json"):
         try:
@@ -248,7 +248,8 @@ def list_events(limit: int = 100) -> list[dict]:
                            for r in event["roots"]]})
         except (OSError, ValueError, KeyError):
             logger.warning("invalid checkpoint record %s", path)
-    recent = sorted(events, key=lambda e: e["created"], reverse=True)[:limit]
+    recent = sorted((e for e in events if source is None or e['source'] == source),
+                    key=lambda e: e['created'], reverse=True)[:limit]
     for event in recent:
         own_roots = {r["path"] for r in event["roots"]}
         event["overlap"] = any(other["id"] != event["id"]
@@ -298,8 +299,13 @@ def get_event(event_id: str) -> dict:
                     change["diff"] = "File is too large to show a text diff."
                     continue
                 a, b = old.decode("utf-8"), new.decode("utf-8")
-                change["diff"] = "".join(list(difflib.unified_diff(a.splitlines(True), b.splitlines(True),
-                                 fromfile="before/" + change["path"], tofile="after/" + change["path"]))[:2000])[:100000]
+                lines = list(difflib.unified_diff(a.splitlines(True), b.splitlines(True),
+                             fromfile="before/" + change["path"], tofile="after/" + change["path"]))
+                # Unit D totals describe this turn, even when its displayed
+                # checkpoint diff hits the existing 2,000-line/100 KB cap.
+                change["added"] = sum(line.startswith('+') for line in lines[2:])
+                change["removed"] = sum(line.startswith('-') for line in lines[2:])
+                change["diff"] = "".join(lines[:2000])[:100000]
             except UnicodeDecodeError:
                 change["diff"] = "Binary file changed."
     return event

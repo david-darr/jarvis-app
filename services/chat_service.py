@@ -15,6 +15,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import AsyncIterator, Optional, Union
@@ -103,7 +104,8 @@ async def _get_brain(session_id: str, endpoint: dict, is_admin: bool = False) ->
     _prime_with_history)."""
     principal_changed = session_manager.bind_execution_admin(session_id, is_admin)
     brain = _brains.get(session_id)
-    if brain is not None and (principal_changed or brain.is_admin != is_admin):
+    plan = ((session_manager.get_session(session_id) or {}).get('forge') or {}).get('mode') == 'plan'
+    if brain is not None and (principal_changed or brain.is_admin != is_admin or (getattr(brain, 'read_only', False) is True) != plan):
         await close_session_brain(session_id)
         brain = None
     if brain is not None:
@@ -152,6 +154,14 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
     """
     session = session_manager.get_session(session_id) if session_id else None
     workspace_dir = (session or {}).get("workspace_dir")
+    forge = (session or {}).get('forge') or {}
+    plan = forge.get('mode') == 'plan'
+    mode_note = ('\nForge mode: Plan (read-only).' if plan else '\nForge mode: Build.') if forge else ''
+    agent_prompt = ((session or {}).get('agent_prompt') or '') + mode_note
+    forge_options = {'read_only': plan} if forge else {}
+    if forge:
+        from services.forge_sessions import forge_sessions
+        forge_sessions.workspace(session_id)  # Re-vet before any provider gets its cwd.
     integration_ids = (session or {}).get("enabled_integration_ids")
     # An agent's own run (no chat) or a chat with an agent: its tools and,
     # for a run, the integrations chosen for it (services/agent_service.py).
@@ -175,12 +185,12 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
                      session_id=session_id, model=cli_model or None, is_admin=is_admin,
                      project_id=project_id, effort=effort,
                      resume_session_id=(session or {}).get("claude_session_id"), agent_id=agent_id,
-                     agent_prompt=(session or {}).get("agent_prompt") or "")
+                     agent_prompt=agent_prompt, **forge_options)
     if endpoint["kind"] == "codex_cli":
         return CodexBrain(cwd_override=workspace_dir, session_id=session_id,
                           model=cli_model or None, is_admin=is_admin, project_id=project_id,
-                          effort=effort, agent_prompt=(session or {}).get("agent_prompt") or "",
-                          agent_auto=bool(agent_id and session is None), agent_id=agent_id)
+                          effort=effort, agent_prompt=agent_prompt,
+                          agent_auto=bool(agent_id and session is None), agent_id=agent_id, **forge_options)
     base_url, model, api_key, num_ctx = model_endpoints.resolve_runtime(endpoint["id"])
     if endpoint["kind"] == "api" and override is not None:
         model = override or endpoint["model"]
@@ -197,7 +207,7 @@ def _build_brain(endpoint: dict, session_id: Optional[str], is_admin: bool = Fal
                          endpoint_id=endpoint["id"], integration_ids=integration_ids,
                          allow_user_tab_source=(endpoint.get("kind") == "api" and model_marks.mark_for(endpoint) == "openai"),
                          supports_images=bool(endpoint.get("supports_images")), agent_id=agent_id,
-                         agent_prompt=(session or {}).get("agent_prompt") or "", window=window)
+                         agent_prompt=agent_prompt, window=window, **forge_options)
 
 
 def _prime_with_history(session_id: str, just_created: bool, endpoint: dict, full_text: str,
@@ -392,7 +402,12 @@ def _prepare_sent_text(session_id: str, index: int, text: str, attachment_ids: l
     Deliberately before _prime_with_history: that wrapper is a one-off for
     a fresh connection, not part of the message."""
     sent = _apply_open_mic_discipline(session_id, _apply_attachments(session_id, text, attachment_ids) + reference_context)
+    if (session_manager.get_session(session_id) or {}).get('forge'):
+        from services.forge_sessions import forge_sessions
+        sent += forge_sessions.repo_context(session_id)
     session_manager.record_sent_text(session_id, index, text, sent)
+    if (session_manager.get_session(session_id) or {}).get('forge'):
+        forge_sessions.mark_repo_context_loaded(session_id)
     session_manager.record_image_attachments(session_id, index, attachments.image_ids(attachment_ids))
     return sent
 
@@ -430,6 +445,8 @@ def _hand_off_references(session_id: str, text: str, attachment_ids: list[str] |
     agents = list(dict.fromkeys(ref.get("id") for ref in (references or []) if ref.get("kind") == "agent"))
     if not agents:
         return None
+    if ((session_manager.get_session(session_id) or {}).get('forge') or {}).get('mode') == 'plan':
+        raise ValueError('Forge Plan mode cannot hand work to an agent.')
     from services.agent_service import agent_service
     from services.agent_handoff import hand_off, recent_context
     if not is_admin:
@@ -606,6 +623,8 @@ async def _stream_with_permission_prompts(session_id: str, brain, full_text: str
     context = runs.current_for(session_id)
     computer_queue = context.computer_queue if context else asyncio.Queue()
     next_computer = asyncio.ensure_future(computer_queue.get())
+    forge = bool((session_manager.get_session(session_id) or {}).get("forge"))
+    tool_summaries = {}
     try:
         while True:
             done, _ = await asyncio.wait({next_chunk, next_ask, next_computer}, return_when=asyncio.FIRST_COMPLETED)
@@ -622,9 +641,26 @@ async def _stream_with_permission_prompts(session_id: str, brain, full_text: str
                     while not computer_queue.empty():
                         yield {"tool_event": computer_queue.get_nowait(), "run_id": context.run_id if context else None}
                     return
+                before = len(tally.timeline)
                 tally.add(item)
                 if item.kind is runs.EventKind.TEXT:
                     yield item.data["text"]
+                elif forge and len(tally.timeline) > before and item.kind in (runs.EventKind.TOOL_STARTED, runs.EventKind.TOOL_FINISHED):
+                    # Project ONLY the kept timeline detail, never raw provider
+                    # arguments/meta. This shares its clipping and any redaction.
+                    step = tally.timeline[-1]
+                    call_id = item.data.get("id")
+                    started = item.kind is runs.EventKind.TOOL_STARTED
+                    if started:
+                        tool_summaries[call_id] = _forge_tool_summary(step["detail"])
+                    yield {"run_id": context.run_id if context else None, "tool_step": {
+                        "phase": "started" if started else "finished", "id": call_id,
+                        "name": step["name"], "summary": tool_summaries.get(call_id, ""),
+                        "ok": step["ok"], "output": "" if started else step["detail"],
+                        "at": step["at"], "seconds": step["seconds"],
+                    }}
+                    if not started:
+                        tool_summaries.pop(call_id, None)
                 next_chunk = asyncio.ensure_future(anext(replies))
     finally:
         next_ask.cancel()
@@ -636,6 +672,31 @@ async def _stream_with_permission_prompts(session_id: str, brain, full_text: str
         permissions.close_channel(f"chat:{session_id}")
         await asyncio.gather(next_ask, next_chunk, next_computer, return_exceptions=True)
         await replies.aclose()
+
+
+def _forge_tool_summary(detail: str) -> str:
+    """A short target drawn solely from already clipped timeline input."""
+    try:
+        args = json.loads(detail)
+    except (ValueError, TypeError):
+        # Long Edit inputs leave incomplete JSON after timeline clipping. A
+        # complete quoted target retained in that detail is still safe to use.
+        for key in ("file_path", "path", "command", "cmd", "query", "pattern", "url"):
+            match = re.search(r'"' + key + r'"\s*:\s*("(?:\\.|[^"\\])*")', detail or "")
+            if match:
+                try:
+                    return runs.clip_ends(json.loads(match.group(1)), runs.TIMELINE_CLIP)
+                except ValueError:
+                    pass
+        return detail
+    if isinstance(args, dict):
+        for key in ("file_path", "path", "command", "cmd", "query", "pattern", "url"):
+            if isinstance(args.get(key), str):
+                return runs.clip_ends(args[key], runs.TIMELINE_CLIP)
+        changes = args.get("changes")
+        if isinstance(changes, list):
+            return runs.clip_ends(", ".join(c["path"] for c in changes if isinstance(c, dict) and isinstance(c.get("path"), str)), runs.TIMELINE_CLIP)
+    return detail
 
 
 def _run_context(session_id: str, endpoint: dict, is_admin: bool) -> runs.RunContext:
