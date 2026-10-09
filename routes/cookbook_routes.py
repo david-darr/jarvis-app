@@ -85,6 +85,23 @@ async def register(body: RegisterRequest, user: str = Depends(require_admin)) ->
 
 # -- Built-in engine (no Ollama install needed) --------------------------
 
+@router.get('/engine/recommendation')
+async def engine_recommendation(user: str = Depends(require_admin)) -> dict:
+    return cookbook_service.model_recommendation()
+
+
+@router.post('/engine/setup/{name}')
+async def engine_setup(name: str, user: str = Depends(require_admin)) -> dict:
+    try:
+        return cookbook_service.setup_recommended(name)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@router.get('/engine/setup/{name}/status')
+async def engine_setup_status(name: str, user: str = Depends(require_admin)) -> dict:
+    return cookbook_service.recommended_progress(name)
+
 @router.get("/engine/catalog")
 async def engine_catalog(user: str = Depends(require_admin)) -> list[dict]:
     return llamacpp_engine.CATALOG

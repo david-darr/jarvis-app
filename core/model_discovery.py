@@ -140,7 +140,8 @@ async def _openai_models(token: str) -> list[dict]:
 
 async def _codex_cli_models() -> list[dict]:
     """Ask the installed CLI's app server, so discovery uses its own login."""
-    executable = shutil.which("codex")
+    from core.codex_cli import find_codex
+    executable = find_codex()
     if not executable:
         return []
     process = await asyncio.create_subprocess_exec(

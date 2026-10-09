@@ -222,6 +222,40 @@
     return { name: 'example-com-click', description, body, steps, labels, content: `---\ndescription: ${description}\n---\n\n${body}` };
   }
   function mutate(route, method, body = {}, query = {}) {
+    if (route === '/api/model-setup/codex/install') {
+      state.setupInstall = { id: 'setup-install', state: 'running', reads: 0, answered: false };
+      return { id: 'setup-install' };
+    }
+    if (route === '/api/model-setup/codex/install/setup-install/cancel') {
+      if (state.setupInstall) { state.setupInstall.state = 'error'; state.setupInstall.error = 'Installation cancelled.'; }
+      return { ok: true };
+    }
+    if (route === '/api/permissions/setup-install-permission/answer') {
+      if (state.setupInstall) {
+        state.setupInstall.answered = body.choice === 'once';
+        if (!state.setupInstall.answered) { state.setupInstall.state = 'error'; state.setupInstall.error = 'Installation cancelled.'; }
+      }
+      return { status: 'answered' };
+    }
+    const setupSignIn = route.match(/^\/api\/model-setup\/sign-in\/(claude|codex)$/);
+    if (setupSignIn) {
+      state.setupWaiting = setupSignIn[1]; state.setupWaitReads = 0;
+      return { ok: true, message: 'Finish signing in in the window that opened.' };
+    }
+    if (route === '/api/model-setup/api-key/test') return { ok: body.key !== 'bad', ...(body.key === 'bad' ? { error: 'Check your key and billing.' } : {}) };
+    if (route === '/api/model-setup/connections') {
+      if (body.kind === 'api' && body.key === 'bad') return { _status: 400, detail: 'The provider refused the test. Check your key and billing.' };
+      const kind = body.kind === 'api' ? 'api' : body.kind + '_cli';
+      const names = { claude: 'Claude Code', codex: 'ChatGPT with Codex', api: { openai: 'OpenAI', anthropic: 'Anthropic', openrouter: 'OpenRouter', google: 'Google Gemini' }[body.provider] };
+      const connection = { id: 'setup-' + body.kind, name: names[body.kind], kind, model: body.kind === 'api' ? 'demo-model' : '', has_api_key: body.kind === 'api' };
+      state.setupConnections ||= [];
+      state.setupConnections = state.setupConnections.filter(c => c.id !== connection.id).concat(connection);
+      return { ok: true, connection };
+    }
+    if (/^\/api\/cookbook\/engine\/setup\/[^/]+$/.test(route)) {
+      state.setupLocal = { status: 'downloading', completed: 100000000, total: 400000000, done: false };
+      return { ok: true, background: true, name: route.split('/').at(-1) };
+    }
     const commandRoute = route.match(/^\/api\/forge\/projects\/([^/]+)\/app\/command$/);
     if (commandRoute && method === 'PUT') {
       const project = forgeProjects.find(p => p.id === commandRoute[1]);
@@ -540,6 +574,33 @@
     ];
     const route = url.pathname;
     const list = (data) => state.empty ? [] : data;
+    const setup = state.modelSetup ||= { claude: { available: true, source: 'bundled', signed_in: true },
+      codex: { installed: false, version: null, path: null, signed_in: false }, node: { npm: true } };
+    const allModels = () => [...list(models), ...(state.setupConnections || [])];
+    if (route === '/api/model-setup/status') return { ...setup,
+      connections: Object.fromEntries(['claude_cli', 'codex_cli', 'api', 'local'].map(kind => [kind, allModels().filter(m => m.kind === kind)])) };
+    if (route === '/api/model-setup/codex/install/setup-install') {
+      const install = state.setupInstall;
+      if (!install) return { state: 'error', lines: [], error: 'Installation not found.' };
+      if (install.answered && install.state !== 'error' && ++install.reads >= 4) {
+        install.state = 'done'; setup.codex.installed = true; setup.codex.version = '0.155.1'; setup.codex.path = 'demo/codex';
+      }
+      const exact = setup.node.npm ? 'npm install -g @openai/codex' : 'https://api.github.com/repos/openai/codex/releases/latest';
+      return { id: install.id, state: install.state, lines: install.answered ? ['Installing Codex...', 'Checking the official package...'] : [], error: install.error,
+        permission: !install.answered && install.state === 'running' ? { id: 'setup-install-permission', tool: 'model_setup_install', target: exact,
+          title: 'Install Codex?', description: 'Kairos will run or download:\n' + exact, arguments: { command_or_url: exact },
+          choices: [{ id: 'once', label: 'Approve command', behavior: 'allow', scope: 'once' }, { id: 'reject', label: 'Cancel', behavior: 'deny', scope: 'once' }] } : null };
+    }
+    const setupWait = route.match(/^\/api\/model-setup\/sign-in\/(claude|codex)\/wait$/);
+    if (setupWait) {
+      const kind = setupWait[1];
+      if (state.setupWaiting === kind && !state.setupHoldSignIn && ++state.setupWaitReads >= 3) setup[kind].signed_in = true;
+      return { signed_in: setup[kind].signed_in, timed_out: !setup[kind].signed_in };
+    }
+    if (route === '/api/cookbook/engine/recommendation') return { name: 'qwen2.5-0.5b-instruct', label: 'Qwen 2.5 0.5B Instruct', params: '0.5B',
+      url: 'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf',
+      estimated_download_bytes: 400000000, disk_free_bytes: 24000000000, downloaded: false };
+    if (/^\/api\/cookbook\/engine\/setup\/[^/]+\/status$/.test(route)) return state.setupLocal || { status: 'not_started', done: false };
     if (route === '/api/forge/apps/running') return list(Object.values(forgeApps).filter(app => app.running));
     const appRead = route.match(/^\/api\/forge\/sessions\/([^/]+)\/app\/(suggest|status|logs|allowed-ports)$/);
     if (appRead) {
@@ -752,8 +813,8 @@
       state: "active", active_tasks: 1, configuration: {} }], total: state.empty ? 0 : 1, offset: 0 };
     if (/^\/api\/tasks\/[^/]+\/runs$/.test(route)) return state.empty ? [] : runs[route.split("/")[3]] || [];
     if (route === "/api/tasks/builtin") return ["Daily briefing", "Review priorities", "Organize memory", "Inbox triage"].map((label, i) => ({ label, description: "Keep the important things in view with a regular review.", action_id: "routine" + i, enabled: i === 0 && !state.empty, task_id: "t1", uses_model: true, default_daily_time: "07:00" }));
-    if (route === "/api/models") return list(models);
-    if (route === "/api/models/choices") return list(models.map((m) => ({ ...m, supports_images: m.kind !== "local" })));
+    if (route === "/api/models") return allModels();
+    if (route === "/api/models/choices") return allModels().map((m) => ({ ...m, supports_images: m.kind !== "local" }));
     if (route === "/api/speech/status") return { engine_available: true, active_model: null, models: [
       { name: "tiny.en", label: "Tiny", size_mb: 75, description: "Fastest, roughest.", downloaded: false },
       { name: "base.en", label: "Base", size_mb: 142, description: "A good balance for dictation.", downloaded: true },

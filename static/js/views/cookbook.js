@@ -19,6 +19,51 @@ let activeSection = "ollama";
 let ollamaPollTimer = null;
 let enginePollTimer = null;
 
+// Onboarding hands its local choice to Cookbook's existing engine. The
+// backend owns completion so leaving the guide never stops the download.
+export async function mountModelRecommendation(host, { onReturn, signal } = {}) {
+  const item = await api('/api/cookbook/engine/recommendation', { signal });
+  if (signal?.aborted || !host.isConnected) return () => {};
+  let disposed = false, timer;
+  const progress = el('p', { class: 'meta', role: 'status' });
+  const statusPath = `/api/cookbook/engine/setup/${encodeURIComponent(item.name)}/status`;
+  async function poll() {
+    if (disposed || signal?.aborted || !host.isConnected) return;
+    try {
+      const result = await api(statusPath, { signal });
+      if (disposed || signal?.aborted) return;
+      if (result.status === 'error') { progress.textContent = result.error; start.disabled = false; return; }
+      if (result.status === 'connected') {
+        progress.textContent = 'Your local model is connected. Pick it from the model menu above the chat box.';
+        document.dispatchEvent(new CustomEvent('kairos:models-changed', { detail: result })); return;
+      }
+      progress.textContent = result.status === 'starting' ? 'Starting your local model...' :
+        `Downloading in the background, you can start with it when it's done.${result.total ? ` ${Math.round(result.completed / result.total * 100)}%` : ''}`;
+      timer = setTimeout(poll, 1500);
+    } catch (error) { if (!signal?.aborted && !disposed) { progress.textContent = error.message; start.disabled = false; } }
+  }
+  const start = el('button', { class: 'btn', text: item.downloaded ? 'Use this model' : 'Download in the background', onclick: async () => {
+    const approved = await confirmDialog({ title: item.downloaded ? 'Start the local model?' : 'Download this model?',
+      message: item.downloaded ? 'Cookbook will start this model and connect it to Kairos.' : `Cookbook will download about ${(item.estimated_download_bytes / 1e9).toFixed(1)} GB from ${item.url}, then start it and connect it to Kairos.`,
+      confirmLabel: item.downloaded ? 'Start model' : 'Download model', danger: false });
+    if (!approved || disposed || signal?.aborted) return;
+    start.disabled = true;
+    try {
+      await api(`/api/cookbook/engine/setup/${encodeURIComponent(item.name)}`, { method: 'POST', signal });
+      progress.textContent = "Downloading in the background, you can start with it when it's done.";
+      await poll();
+    } catch (error) { if (!signal?.aborted && !disposed) { progress.textContent = error.message; start.disabled = false; } }
+  } });
+  host.replaceChildren(el('h4', { text: item.label }),
+    el('p', { text: `${item.params}. About ${(item.estimated_download_bytes / 1e9).toFixed(1)} GB to download (estimate). ${(item.disk_free_bytes / 1e9).toFixed(1)} GB free on disk.` }),
+    el('p', { text: 'Runs on this computer without an account. It is useful for simple conversations, but can struggle with long tasks and tools. Keep Kairos open while it downloads.' }),
+    start, progress, el('button', { class: 'btn quiet', text: 'Return to setup', onclick: onReturn }));
+  if (!item.downloaded && item.disk_free_bytes < item.estimated_download_bytes * 2) {
+    start.disabled = true; progress.textContent = 'Free up at least 0.8 GB of disk space, then try again.';
+  }
+  return () => { disposed = true; clearTimeout(timer); };
+}
+
 export async function render(container) {
   container.innerHTML = "";
   clearPolls();

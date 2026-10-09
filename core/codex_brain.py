@@ -227,7 +227,8 @@ class CodexBrain:
 
     @staticmethod
     def _codex_path() -> str:
-        path = shutil.which("codex")
+        from core.codex_cli import find_codex
+        path = find_codex()
         if not path:
             raise RuntimeError(
                 "Codex CLI not found on PATH. Install it with `npm install -g @openai/codex` "

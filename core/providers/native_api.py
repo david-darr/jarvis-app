@@ -60,9 +60,9 @@ def _anthropic_messages(messages: list[dict]) -> tuple[str, list[dict]]:
 
 
 async def _anthropic_post(client: httpx.AsyncClient, model: str, key: str,
-                          messages: list[dict], tools: list[dict] | None) -> dict:
+                          messages: list[dict], tools: list[dict] | None, max_tokens: int | None = None) -> dict:
     system, converted = _anthropic_messages(messages)
-    body: dict = {"model": model, "max_tokens": 4096, "messages": converted}
+    body: dict = {"model": model, "max_tokens": max_tokens or 4096, "messages": converted}
     if system:
         body["system"] = system
     if tools:
@@ -114,9 +114,11 @@ def _responses_input(messages: list[dict]) -> list[dict]:
 
 
 async def _openai_post(client: httpx.AsyncClient, model: str, key: str,
-                       messages: list[dict], tools: list[dict] | None) -> dict:
+                       messages: list[dict], tools: list[dict] | None, max_tokens: int | None = None) -> dict:
     body: dict = {"model": model, "input": _responses_input(messages), "store": False,
                   "include": ["reasoning.encrypted_content"]}
+    if max_tokens:
+        body['max_output_tokens'] = max_tokens
     if tools:
         body["tools"] = [{"type": "function", "name": t["function"]["name"],
                           "description": t["function"].get("description", ""),
@@ -141,12 +143,12 @@ async def _openai_post(client: httpx.AsyncClient, model: str, key: str,
 
 
 async def post(client: httpx.AsyncClient, base_url: str, model: str, key: str | None,
-               messages: list[dict], tools: list[dict] | None = None) -> dict:
+               messages: list[dict], tools: list[dict] | None = None, *, max_tokens: int | None = None) -> dict:
     if not key:
         raise ValueError("This API connection needs a saved API key")
     provider = mode(base_url)
     if provider == "anthropic":
-        return await _anthropic_post(client, model, key, messages, tools)
+        return await _anthropic_post(client, model, key, messages, tools, max_tokens)
     if provider == "openai":
-        return await _openai_post(client, model, key, messages, tools)
+        return await _openai_post(client, model, key, messages, tools, max_tokens)
     raise ValueError("Not a native API connection")

@@ -1,4 +1,5 @@
 import { api, el, toast, confirmDialog, modelMark } from "../api.js";
+import { openModelSetup } from "../modelSetup.js";
 import { ICONS } from "../icons.js";
 import { runSlashCommand } from "../slashCommands.js";
 import * as chatStream from "../chatStream.js";
@@ -669,7 +670,7 @@ export async function render(container, tabId, options = {}) {
   const input = el("textarea", { id: "chat-input", rows: "1", placeholder: "Where should we start?", "aria-label": "Message Kairos" });
   const modelBtn = el("button", { type: "button", class: "model-picker-btn", id: "model-picker-btn" }, [
     el("span", { class: "model-pill-mark", id: "model-picker-mark" }),
-    el("span", { id: "model-picker-label", text: "Add a model" }),
+    el("span", { id: "model-picker-label", text: "Set up a model" }),
   ]);
   modelBtn.insertAdjacentHTML("beforeend", ICON_CHEVRON);
   const modelMenu = el("div", { class: "model-picker-menu hidden", id: "model-picker-menu" });
@@ -953,9 +954,17 @@ export async function render(container, tabId, options = {}) {
   const disposeFind = mountChatFind(main, messages);
 
   let disposed = false;
+  const onModelsChanged = () => {
+    if (disposed) return;
+    const selected = main.querySelector('.model-connection-item.active');
+    const current = selected?.dataset.endpointId || null;
+    refreshModelPicker(current).catch(() => {});
+  };
+  document.addEventListener('kairos:models-changed', onModelsChanged);
   const cleanup = () => {
     if (disposed) return;
     disposed = true;
+    document.removeEventListener('kairos:models-changed', onModelsChanged);
     handoffs.dispose();
     disposeSideChat();
     backdrop.dispose();
@@ -1639,7 +1648,17 @@ async function setOpenMic(active, button) {
 // always list a free "Kairos (Claude)" option (id ""). Now every option,
 // Claude included, is a real endpoint the user added in Settings > Add
 // Models; an empty list means truly nothing's configured yet.
-const NO_MODEL_LABEL = "Add a model";
+const NO_MODEL_LABEL = "Set up a model";
+
+function setupChatModel() {
+  openModelSetup({ onConnected: async result => {
+    const target = activeSessionId;
+    if (target) {
+      await api(`/api/sessions/${target}/model`, { method: "POST", body: JSON.stringify({ model_endpoint_id: result.connection.id }) });
+    }
+    await refreshModelPicker(result.connection.id);
+  } });
+}
 
 // -- context meter ----------------------------------------------------------
 // David's ask 2026-09-15: show how much of the model's context this chat is
@@ -1781,17 +1800,24 @@ async function refreshModelPicker(currentEndpointId, modelOverride = null, model
   const endpoints = await api("/api/models/choices").catch(() => []);
   if (generation !== modelPickerGeneration || sessionId !== activeSessionId || !menu.isConnected) return;
   menu.innerHTML = "";
+  const main = document.getElementById("chat-main");
+  main?.querySelector(":scope > .model-setup-empty")?.remove();
+  if (!endpoints.length && main) main.prepend(el("div", { class: "model-setup-empty" }, [
+    el("h3", { text: "Set up a model" }), el("p", { text: "Connect a model so Kairos can answer you. We'll walk you through it." }),
+    el("button", { class: "btn", text: "Set up a model", onclick: setupChatModel }),
+  ]));
 
   const options = endpoints.map((ep) => ({
     id: ep.id,
     mark: ep.mark,
     name: ep.kind === "claude_cli" || ep.kind === "codex_cli" ? `${ep.name} (${ep.model || "CLI default"})` : `${ep.name} (${ep.model})`,
   }));
-  menu.appendChild(el("div", { class: "model-picker-heading", text: options.length ? "Model for this chat" : "No models yet. Add one in Settings." }));
+  menu.appendChild(el("div", { class: "model-picker-heading", text: options.length ? "Model for this chat" : "No models yet. Set up a model." }));
   for (const opt of options) {
     const ep = endpoints.find((e) => e.id === opt.id);
     const item = el("button", {
       type: 'button',
+      'data-endpoint-id': opt.id,
       class: "model-picker-item model-connection-item" + (opt.id === (currentEndpointId || "") ? " active" : ""),
       onclick: async () => {
         if (chatStream.getInFlight(activeSessionId)?.status === 'processing') return;
@@ -1816,8 +1842,8 @@ async function refreshModelPicker(currentEndpointId, modelOverride = null, model
     if (itemMark) item.prepend(itemMark);
     menu.appendChild(item);
   }
-  menu.appendChild(el("button", { type: "button", class: "model-picker-item model-add-item", text: "Add a model…",
-    onclick: () => { closeMenu(menu); import("./settings.js").then((m) => m.openSettingsWindow("add-models")); } }));
+  menu.appendChild(el("button", { type: "button", class: "model-picker-item model-add-item", text: "Set up a model",
+    onclick: () => { closeMenu(menu); setupChatModel(); } }));
   const active = options.find((o) => o.id === currentEndpointId);
   // The connection's own mark leads the pill.
   const markSlot = document.getElementById("model-picker-mark");

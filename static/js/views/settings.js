@@ -1,4 +1,5 @@
 import { api, el, customSelect, toast, confirmDialog, modelMark } from "../api.js";
+import { openModelSetup } from "../modelSetup.js";
 import { suppressBrowser, releaseBrowser } from "../browserPane.js";
 import { renderSpeechPanel } from "./speechPanel.js";
 import { renderAppearancePanel } from './appearancePanel.js';
@@ -655,6 +656,9 @@ function modelForm(title, subtitle, kind, onAdded) {
 function renderAddModelsPanel(body) {
   const done = () => selectSection("added-models");
   body.replaceChildren(
+    group({ title: "Model setup", description: "Choose a model with a step-by-step guide, including sign-in and installation." }, [
+      el("button", { class: "btn primary", text: "Help me set up a model", onclick: () => openModelSetup() }),
+    ]),
     modelForm("Claude Code CLI", "Uses the claude CLI already installed and signed in on this machine. No key needed.", "claude_cli", done),
     modelForm("Codex CLI", "Uses the codex CLI already installed and signed in on this machine. No key needed.", "codex_cli", done),
     modelForm("Local model server", "Ollama, llama.cpp, vLLM or any server on this machine or your network.", "local", done),

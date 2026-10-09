@@ -1,4 +1,5 @@
 import { api, el } from "./api.js";
+import { mountModelSetup } from "./modelSetup.js";
 
 // First-run wizard (David's ask, 2026-08-31) — shown once, in place of the
 // normal sidebar+view shell, until settings.onboarding_complete is true.
@@ -6,13 +7,15 @@ import { api, el } from "./api.js";
 // Discord config) rather than any special onboarding-only API surface, so
 // "set it up now" and "set it up later from Settings" are the exact same
 // code path.
-const STEPS = ["welcome", "vault", "discord", "remote", "finish"];
+const STEPS = ["welcome", "model", "vault", "discord", "remote", "finish"];
 
 export async function run(overlay, onComplete) {
   let step = 0;
   let settings = await api("/api/settings");
+  let disposeGuide = null;
 
   function renderStep() {
+    disposeGuide?.(); disposeGuide = null;
     overlay.innerHTML = "";
     const card = el("div", { class: "glass bracket card onboarding-card" });
     const dots = el("div", { class: "onboarding-steps" });
@@ -27,12 +30,26 @@ export async function run(overlay, onComplete) {
   const STEP_RENDERERS = {
     welcome: () => el("div", {}, [
       el("h2", { text: "Not more time. The right time." }),
-      el("div", { class: "sub", text: "Let's get Kairos set up on this machine. This takes under a minute — everything here can also be changed later from Settings or Cookbook." }),
+      el("div", { class: "sub", text: "Let's get Kairos set up on this machine. We'll help you choose a model and connect your memory. You can change these choices later." }),
       el("div", { class: "onboarding-actions" }, [
         el("div", {}),
         el("button", { class: "btn", text: "Get Started", onclick: () => goTo(1) }),
       ]),
     ]),
+
+    model: (card) => {
+      card.classList.add("onboarding-model-card");
+      const host = el("div");
+      const wrap = el("div", {}, [el("h2", { text: "Choose how Kairos thinks" }), host,
+        el("div", { class: "onboarding-actions" }, [
+          el("button", { class: "btn", text: "Back", onclick: () => goTo(0) }),
+          el("button", { class: "btn quiet", text: "Skip for now", onclick: () => goTo(2) }),
+          el("button", { class: "btn", text: "Continue", onclick: () => goTo(2) }),
+        ]),
+      ]);
+      disposeGuide = mountModelSetup(host);
+      return wrap;
+    },
 
     vault: () => {
       const pathEl = el("div", { class: "meta", style: "margin:10px 0;", text: settings.vault_dir });
@@ -99,8 +116,8 @@ export async function run(overlay, onComplete) {
         el("div", { style: "display:flex;gap:8px;" }, [pickBtn, questionnaireBtn]),
         questionnaireWrap,
         el("div", { class: "onboarding-actions" }, [
-          el("button", { class: "btn", text: "Back", onclick: () => goTo(0) }),
-          el("button", { class: "btn", text: "Continue", onclick: () => goTo(2) }),
+          el("button", { class: "btn", text: "Back", onclick: () => goTo(1) }),
+          el("button", { class: "btn", text: "Continue", onclick: () => goTo(3) }),
         ]),
       ]);
     },
@@ -125,8 +142,8 @@ export async function run(overlay, onComplete) {
         el("div", { class: "sub", text: "Optional — Discord is the fastest way to reach Kairos outside this app. Paste a bot token now, or skip and add it later from Settings." }),
         tokenInput, allowedInput, connectBtn, statusEl,
         el("div", { class: "onboarding-actions" }, [
-          el("button", { class: "btn", text: "Back", onclick: () => goTo(1) }),
-          el("button", { class: "btn", text: "Skip / Continue", onclick: () => goTo(3) }),
+          el("button", { class: "btn", text: "Back", onclick: () => goTo(2) }),
+          el("button", { class: "btn", text: "Skip / Continue", onclick: () => goTo(4) }),
         ]),
       ]);
     },
@@ -167,17 +184,17 @@ export async function run(overlay, onComplete) {
           text: "Get Tailscale",
         }),
         el("div", { class: "onboarding-actions" }, [
-          el("button", { class: "btn", text: "Back", onclick: () => goTo(2) }),
-          el("button", { class: "btn", text: "Skip / Continue", onclick: () => goTo(4) }),
+          el("button", { class: "btn", text: "Back", onclick: () => goTo(3) }),
+          el("button", { class: "btn", text: "Skip / Continue", onclick: () => goTo(5) }),
         ]),
       ]);
     },
 
     finish: () => el("div", {}, [
       el("h2", { text: "You're set." }),
-      el("div", { class: "sub", text: "One last thing — Kairos doesn't come with a default model. Head to Settings → Add Models to connect Claude Code CLI, a local server (Ollama, llama.cpp, vLLM), or an API provider, then pick it from the dropdown above the chat box. You can add more any time." }),
+      el("div", { class: "sub", text: "To start a conversation, pick a model you connected from the menu above the chat box. If you skipped model setup, use Set up a model on Home or Chat when you are ready. Add or change models any time from Settings. A local download can keep running in the background." }),
       el("div", { class: "onboarding-actions" }, [
-        el("button", { class: "btn", text: "Back", onclick: () => goTo(3) }),
+        el("button", { class: "btn", text: "Back", onclick: () => goTo(4) }),
         el("button", { class: "btn", text: "Enter Kairos", onclick: async () => {
           await api("/api/settings/onboarding-complete", { method: "POST" });
           onComplete();

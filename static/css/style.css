@@ -1,3 +1,24 @@
+/* The same model guide in the first-run wizard and Settings. */
+.onboarding-card.onboarding-model-card { width: 720px; }
+.model-setup { min-width: 0; }
+.model-setup-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.model-setup-choice { border: 1px solid var(--border); background: var(--surface-2); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+.model-setup-choice h3, .model-setup-choice p { margin: 0; }
+.model-setup-choice p, .model-setup-screen > p, .model-setup-words p { color: var(--text-dim); font-size: 13px; line-height: 1.6; }
+.model-setup-choice .btn { margin-top: auto; align-self: flex-start; }
+.model-setup-screen { display: grid; gap: 12px; }
+.model-setup-screen > .btn { justify-self: start; }
+.model-setup-screen input, .model-setup-screen select { width: 100%; min-width: 0; }
+.model-setup-words { margin-top: 18px; padding: 12px; border-top: 1px solid var(--border); }
+.model-setup-words summary { cursor: pointer; }
+.model-setup-words h4 { margin: 14px 0 4px; }
+.model-setup-words p { margin: 0; }
+.model-setup-error { color: var(--danger) !important; }
+.model-setup-progress { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; font: 12px/1.6 var(--font-mono); }
+.model-setup-empty { padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-panel-solid); }
+#chat-main > .model-setup-empty { max-width: 520px; margin: 16px auto; position: relative; z-index: 1; }
+@media (max-width: 600px) { .model-setup-cards { grid-template-columns: 1fr; } .onboarding-card.onboarding-model-card { padding: 20px 16px; } .onboarding-model-card .onboarding-actions { flex-wrap: wrap; } }
+
 /* Forge app viewer and the conversation's shared Kairos backdrop. */
 .forge-transcript-layout { position: relative; isolation: isolate; }
 .forge-transcript-layout > .chat-backdrop { pointer-events: none; }

@@ -9,7 +9,8 @@
 //   and a chat that "opens a website" when asked to.
 // Nothing leaves the visitor's browser and no model is ever called.
 (function () {
-  // Device sign-in and public submissions are synthetic, in-memory fixtures.
+  // Device sign-in, model setup/install progress and public submissions are
+  // synthetic in-memory fixtures. Vendor apps never launch in the demo.
   const state = { empty: false, githubSignedIn: false, githubConfigured: true };
   const { fixture, data, mutate, media } = window.kairosFixtures({ state, demo: true });
   const store = { sessions: {}, nextId: 1 };  // chats started in the demo

@@ -292,7 +292,7 @@ async def _post_chat(client: httpx.AsyncClient, base_url: str, api_key: Optional
     num_ctx = body.pop("num_ctx", None)
     if native_api.mode(base_url):
         return await native_api.post(client, base_url, body["model"], api_key,
-                                     body["messages"], body.get("tools"))
+                                     body["messages"], body.get("tools"), max_tokens=body.get('max_tokens'))
     if num_ctx and ollama_client.is_ollama_url(base_url):
         return await ollama_client.chat_capped(
             body["model"], body["messages"], num_ctx, tools=body.get("tools"), base_url=base_url,

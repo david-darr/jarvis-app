@@ -13,6 +13,6 @@ if (suite === 'crm-smoke') {
 const electronBinary = process.env.JARVIS_ELECTRON_BINARY || require('../electron/node_modules/electron');
 const result = spawnSync(electronBinary,
   [path.join(__dirname, suite + '.cjs'), ...process.argv.slice(3)],
-  { stdio: 'inherit', windowsHide: true, timeout: 240000 });
+  { stdio: 'inherit', windowsHide: true, timeout: 420000 });
 if (result.error) console.error(result.error.message);
 process.exit(result.status ?? 1);

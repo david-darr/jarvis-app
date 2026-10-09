@@ -10,8 +10,65 @@ owns) and polled by the frontend, same pattern as core/task_scheduler.py's
 background polling rather than a websocket/SSE push.
 """
 import asyncio
+from pathlib import Path
+import shutil
 
-from core import ollama_client
+from core import ollama_client, llamacpp_engine, model_endpoints
+
+_recommended_tasks = {}
+_recommended_progress = {}
+
+
+def model_recommendation():
+    entry = llamacpp_engine.CATALOG[0]
+    folder = Path(llamacpp_engine.GGUF_DIR)
+    while not folder.exists() and folder != folder.parent:
+        folder = folder.parent
+    free = shutil.disk_usage(folder).free
+    return {**entry, 'estimated_download_bytes': 400_000_000, 'disk_free_bytes': free,
+            'downloaded': any(m['name'] == entry['name'] for m in llamacpp_engine.list_downloaded())}
+
+
+def setup_recommended(name):
+    if name != llamacpp_engine.CATALOG[0]['name']:
+        raise ValueError('Choose the recommended Cookbook model.')
+    task = _recommended_tasks.get(name)
+    if not task or task.done():
+        _recommended_progress[name] = {'status': 'preparing', 'done': False}
+        _recommended_tasks[name] = asyncio.create_task(_finish_recommended(name))
+    return {'ok': True, 'name': name, 'background': True}
+
+
+def recommended_progress(name):
+    stage = _recommended_progress.get(name, {'status': 'not_started', 'done': False})
+    return {**llamacpp_engine.get_download_progress(name), **stage}
+
+
+async def _finish_recommended(name):
+    try:
+        if not any(m['name'] == name for m in llamacpp_engine.list_downloaded()):
+            llamacpp_engine.start_download(name)
+            _recommended_progress[name] = {'status': 'downloading', 'done': False}
+            deadline = asyncio.get_running_loop().time() + 3600
+            while True:
+                progress = llamacpp_engine.get_download_progress(name)
+                if progress.get('error') or progress.get('status') == 'error':
+                    raise ValueError('The local download failed. Try again from Cookbook.')
+                if progress.get('done'):
+                    break
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise ValueError('The local download took too long. Check Cookbook to try again.')
+                await asyncio.sleep(1)
+        _recommended_progress[name] = {'status': 'starting', 'done': False}
+        await llamacpp_engine.start(name)
+        current = llamacpp_engine.status()
+        if not current['running'] or current['model'] != name:
+            raise ValueError('The local model could not start. Try again from Cookbook.')
+        existing = next((e for e in model_endpoints.list_endpoints() if e['kind'] == 'local' and e['model'] == name and e['base_url'] == current['base_url']), None)
+        endpoint = existing or model_endpoints.create_endpoint(name=name, base_url=current['base_url'], model=name, kind='local')
+        _recommended_progress[name] = {'status': 'connected', 'done': True, 'connection': endpoint}
+    except (ValueError, RuntimeError, OSError) as error:
+        _recommended_progress[name] = {'status': 'error', 'done': True, 'error': str(error)[:300]}
 
 # A curated list, not a live catalog search — Ollama has no public "search
 # models" API without scraping ollama.com's library pages, which is heavier

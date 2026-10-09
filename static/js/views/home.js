@@ -1,4 +1,5 @@
 import { api, el, modelMark } from "../api.js";
+import { openModelSetup } from "../modelSetup.js";
 import { ICONS } from "../icons.js";
 import { mountDither } from "../dither.js";
 import { halftonePalette, halftoneSource, halftoneFocus, halftoneVersion } from "../appearance.js";
@@ -225,7 +226,11 @@ export function render(container, tabId, options = {}) {
     if (!projectList?.length) empty(projects.body, "Group your chats and shared knowledge into a project.", projectList === null);
     else projectList.slice(0, 3).forEach((p) => projects.body.append(row(p.name, (p.document_ids?.length || 0) + " shared documents", "library", () => navigate("chat", { projectId: p.id }))));
     models.body.replaceChildren();
-    if (!endpoints?.length) empty(models.body, "Connect a model in Settings to get started.", endpoints === null);
+    if (endpoints && !endpoints.length) models.body.append(el("div", { class: "model-setup-empty" }, [
+      el("h3", { text: "Set up a model" }), el("p", { text: "Choose how Kairos thinks. We'll help you connect it." }),
+      el("button", { class: "btn", text: "Set up a model", onclick: () => openModelSetup() }),
+    ]));
+    else if (endpoints === null) empty(models.body, "", true);
     else { const quotaShown = new Set(); endpoints.forEach((endpoint) => {
       const modelRow = row(endpoint.name, endpoint.model || endpoint.kind.replaceAll("_", " "), "brain", () => navigate("settings"));
       // The provider's own logo in place of the generic brain icon, when one is known
@@ -263,7 +268,8 @@ export function render(container, tabId, options = {}) {
     }
   }
   refresh();
+  document.addEventListener("kairos:models-changed", refresh);
   const refreshTimer = setInterval(() => { if (!document.hidden) refresh(); }, 30000);
   const countdownTimer = setInterval(updateCountdown, 1000);
-  return () => { disposed = true; disposeBanner(); document.removeEventListener("kairos:appearance", onAppearance); document.removeEventListener("kairos:layout", arrange); clearInterval(refreshTimer); clearInterval(countdownTimer); };
+  return () => { disposed = true; disposeBanner(); document.removeEventListener("kairos:models-changed", refresh); document.removeEventListener("kairos:appearance", onAppearance); document.removeEventListener("kairos:layout", arrange); clearInterval(refreshTimer); clearInterval(countdownTimer); };
 }
