@@ -105,7 +105,7 @@ class ForgeSessionTests(unittest.TestCase):
         self.git('branch', 'topic')
         session = self.create(isolation='existing_branch', branch='topic')
         self.assertEqual(self.git('branch', '--show-current', cwd=session['workspace_dir']), 'topic')
-        self.assertEqual(session['forge']['base_branch'], 'topic')
+        self.assertEqual(session['forge']['base_branch'], 'main')
         self.assertTrue(next(b for b in self.service.branches(self.project['id']) if b['name'] == 'topic')['worktree'])
         with self.assertRaises(forge_git.GitError): self.create(isolation='existing_branch', branch='topic')
         inplace = self.create(isolation='in_place')
@@ -148,7 +148,7 @@ class ForgeSessionTests(unittest.TestCase):
         self.assertEqual(self.service.files(session['id'], 'nested')['entries'][0]['path'], 'nested/new file.txt')
         with self.assertRaises(ValueError): self.service.revert_file(session['id'], 'nested', True)
         self.assertEqual(self.service.file(session['id'], 'nested/new file.txt')['content'], 'new\ntext')
-        with self.assertRaises(ValueError): self.service.file(session['id'], 'binary.bin')
+        self.assertTrue(self.service.file(session['id'], 'binary.bin')['binary'])
         (folder / 'large.txt').write_bytes(b'x' * (sessions_module.TEXT_CAP + 1))
         with self.assertRaisesRegex(ValueError, 'size'): self.service.file(session['id'], 'large.txt')
         with patch.object(sessions_module, '_linked', side_effect=lambda p: p.name == 'nested'):

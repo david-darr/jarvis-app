@@ -20,7 +20,12 @@ class GitError(ValueError):
 
 
 def git_env():
-    env = {k: v for k, v in os.environ.items() if not k.startswith(('GIT_', 'GCM_', 'SSH_ASKPASS'))}
+    from services.forge_apps import child_env
+    env = child_env()
+    # Git's own identity and SSH agent are the person's credentials, not Kairos secrets.
+    for key in ('GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_AUTHOR_DATE',
+                'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL', 'GIT_COMMITTER_DATE', 'SSH_AUTH_SOCK'):
+        if key in os.environ: env[key] = os.environ[key]
     env.update(GIT_TERMINAL_PROMPT='0', GIT_ASKPASS=os.devnull,
                SSH_ASKPASS=os.devnull, GCM_INTERACTIVE='Never',
                GIT_SSH_COMMAND='ssh -oBatchMode=yes -oStrictHostKeyChecking=yes',
@@ -30,11 +35,12 @@ def git_env():
     return env
 
 
-def _run(cwd, args, timeout=TIMEOUT, output_cap=OUTPUT_CAP, check=True, input_data=None, worktree=False):
+def _run(cwd, args, timeout=TIMEOUT, output_cap=OUTPUT_CAP, check=True, input_data=None, worktree=False, hooks=False):
     folder = vet_workspace(str(cwd))
     if not folder:
         raise GitError('Project folder is unavailable or unusable.')
-    command = ['git', '--no-pager', '--literal-pathspecs', '-c', 'core.hooksPath=' + os.devnull,
+    command = ['git', '--no-pager', '--literal-pathspecs',
+               *([] if hooks else ['-c', 'core.hooksPath=' + os.devnull]),
                '-c', 'credential.interactive=false', '-c', 'core.askPass=' + os.devnull,
                '-c', 'core.fsmonitor=false',
                '-c', 'protocol.ext.allow=never', *(['--work-tree=' + folder] if worktree else []), *args]
@@ -191,6 +197,129 @@ def remove_reserved(folder):
     folder = Path(folder)
     if folder.is_dir() and not folder.is_symlink():
         shutil.rmtree(folder, ignore_errors=True)
+
+
+def status_files(text):
+    records = iter(text.split('\0'))
+    rows = []
+    for record in records:
+        if not record:
+            continue
+        if len(record) < 4 or record[2] != ' ':
+            raise GitError('Git status could not be read.')
+        index, working, name = record[0], record[1], record[3:]
+        original = next(records, '') if index in 'RC' or working in 'RC' else None
+        rows.append(dict(path=name, original=original, staged=index not in ' ?',
+                         unstaged=working != ' ', index=index, working=working))
+    return rows
+
+
+def session_status(path):
+    branch = run_git(path, 'branch', check=False)[1].strip()
+    code, upstream = _run(path, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], check=False)
+    ahead = behind = 0
+    if not code:
+        counts = _run(path, ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'])[1].split()
+        ahead, behind = map(int, counts)
+    return dict(branch=branch or 'Detached HEAD', upstream=upstream.strip() if not code else None,
+                ahead=ahead, behind=behind, files=status_files(run_git(path, 'status')[1]),
+                branches=run_git(path, 'branches')[1].splitlines())
+
+
+def stage(path, filename=None, unstage=False):
+    args = ['restore', '--staged'] if unstage else ['add', '-A']
+    return _run(path, [*args, '--', filename if filename is not None else '.'])
+
+
+def commit(path, message):
+    if not isinstance(message, str) or not message.strip() or len(message) > 4000 or '\0' in message:
+        raise GitError('Enter a commit message, up to 4,000 characters.')
+    rows = session_status(path)['files']
+    if not rows:
+        raise GitError('There are no changes to commit.')
+    if not any(row['staged'] for row in rows):
+        stage(path)
+    return _run(path, ['commit', '-m', message.strip()], timeout=120, hooks=True)
+
+
+def switch_branch(path, branch, create=False):
+    validate_branch(path, branch)
+    if run_git(path, 'status')[1]:
+        raise GitError('Commit or discard your worktree changes before switching branches.')
+    return _run(path, ['switch', *(['-c'] if create else []), branch], hooks=True)
+
+
+def push_target(path):
+    branch = run_git(path, 'branch', check=False)[1].strip()
+    if not branch:
+        raise GitError('Choose a branch before pushing.')
+    validate_branch(path, branch)
+    code, configured = _run(path, ['config', '--get', f'branch.{branch}.remote'], check=False)
+    remotes = _run(path, ['remote'])[1].splitlines()
+    if not remotes:
+        raise GitError('This project has no Git remote. Add one in Git before pushing.')
+    remote = configured.strip() if not code else ('origin' if 'origin' in remotes else remotes[0] if len(remotes) == 1 else '')
+    if not remote or remote == '.' or remote not in remotes or remote.startswith('-'):
+        raise GitError('Choose a single Git remote for this branch before pushing.')
+    urls = _run(path, ['remote', 'get-url', '--push', '--all', remote])[1].splitlines()
+    if len(urls) != 1:
+        raise GitError('This remote has multiple push addresses. Choose one in Git first.')
+    code, merge = _run(path, ['config', '--get', f'branch.{branch}.merge'], check=False)
+    destination = merge.strip().removeprefix('refs/heads/') if not code else branch
+    validate_branch(path, destination)
+    return dict(remote=remote, url=urls[0], branch=branch, destination=destination,
+                head=rev_parse(path))
+
+
+def push(path, target):
+    try:
+        return _run(path, ['push', '--set-upstream', '--', target['remote'],
+                          f"refs/heads/{target['branch']}:refs/heads/{target['destination']}"], timeout=120, hooks=True)
+    except GitError as error:
+        raise GitError('Push failed. Check your Git sign-in and remote. If rejected, pull first. ' + str(error)) from error
+
+
+def pull(path):
+    if run_git(path, 'status')[1]:
+        raise GitError('Commit or discard your changes before pulling.')
+    if not session_status(path)['upstream']:
+        raise GitError('Push this branch once to set its upstream before pulling.')
+    try:
+        return _run(path, ['pull', '--ff-only'], timeout=120, hooks=True)
+    except GitError as error:
+        raise GitError('Pull could not fast-forward. Check your Git sign-in, or resolve diverged branches in Git. ' + str(error)) from error
+
+
+def merged(path, branch, base):
+    return _run(path, ['merge-base', '--is-ancestor', rev_parse(path, branch), rev_parse(path, base)], check=False)[0] == 0
+
+
+def discard_branch(repo, branch, base):
+    validate_branch(repo, branch)
+    current = run_git(repo, 'branch', check=False)[1].strip()
+    if branch in (base, current):
+        return False
+    _run(repo, ['branch', '-D', '--', branch])
+    return True
+
+
+def merge_back(repo, branch, base):
+    validate_branch(repo, branch); validate_branch(repo, base)
+    if run_git(repo, 'branch', check=False)[1].strip() != base:
+        raise GitError(f'Open {base} in the main project folder before merging back.')
+    if run_git(repo, 'status')[1]:
+        raise GitError('The main project folder has uncommitted changes. Commit or discard them before merging back.')
+    # Refuse an existing operation; never abort a merge belonging to the person.
+    if _run(repo, ['rev-parse', '--verify', 'MERGE_HEAD'], check=False)[0] == 0:
+        raise GitError('Finish the existing merge in the main project folder first.')
+    try:
+        return _run(repo, ['merge', '--no-edit', branch], timeout=120, hooks=True)
+    except GitError as error:
+        conflicts = _run(repo, ['diff', '--name-only', '--diff-filter=U', '-z', '--'])[1].split('\0')
+        if _run(repo, ['rev-parse', '--verify', 'MERGE_HEAD'], check=False)[0] == 0:
+            _run(repo, ['merge', '--abort'])
+        names = ', '.join(name for name in conflicts if name)
+        raise GitError(('Merge was cancelled. Conflicted files: ' + names + '. ') if names else 'Merge failed. No merge was kept. ' + str(error)) from error
 
 
 def _commits(text):

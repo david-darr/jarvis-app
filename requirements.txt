@@ -74,3 +74,8 @@ llama-cpp-python[server] @ https://github.com/abetlen/llama-cpp-python/releases/
 # bundled runtime for the same job. Models are NOT bundled; one is downloaded
 # on first use, so the installer does not grow for an optional feature.
 pywhispercpp>=1.5,<2
+# Forge terminal (Forge Phase 3, David approved 2026-10-09): a real PTY per
+# session. pywinpty wraps Windows ConPTY; ptyprocess is the POSIX equivalent.
+# Both MIT.
+pywinpty>=3.0.5,<4; sys_platform == "win32"
+ptyprocess>=0.7,<0.9; sys_platform != "win32"

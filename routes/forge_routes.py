@@ -3,7 +3,7 @@ import os
 import asyncio
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, StrictBool
 from typing import Literal
@@ -18,6 +18,9 @@ from services.forge_project_files import project_files, project_file
 from routes.session_routes import _for_client
 from services.forge_apps import forge_apps
 from core import permissions
+from services.forge_session_git import forge_session_git
+from services.forge_terminals import forge_terminals
+from core import settings as settings_store
 
 router = APIRouter(prefix='/api/forge', tags=['forge'], dependencies=[Depends(require_admin)])
 
@@ -259,6 +262,20 @@ def session_file(session_id: str, path: str):
     return call(forge_sessions.file, session_id, path)
 
 
+class SaveFileRequest(BaseModel):
+    path: str
+    content: str = Field(max_length=1024 * 1024)
+    hash: str
+    mtime: str
+    overwrite: StrictBool = False
+
+
+@router.put('/sessions/{session_id}/file')
+def save_session_file(session_id: str, body: SaveFileRequest):
+    return call(forge_sessions.save_file, session_id, body.path, body.content,
+                body.hash, body.mtime, body.overwrite)
+
+
 class AppCommandRequest(BaseModel):
     command: str = Field(min_length=1, max_length=4000)
 
@@ -273,22 +290,20 @@ def app_command(project_id: str, body: AppCommandRequest):
     return call(forge_apps.set_command, project_id, body.command)
 
 
-def app_start_stream(session_id, restart=False):
-    call(forge_sessions.workspace, session_id)
+def approval_stream(surface, launch):
     async def stream():
-        surface = f'forge-app:{session_id}'
         # One stream owns the approval channel; duplicate launches cannot replace it.
         if surface in permissions._channels:
-            yield 'data: ' + json.dumps({'error': 'An app start is already waiting.'}) + '\n\n'
+            yield 'data: ' + json.dumps({'error': 'Another action is already waiting for approval.'}) + '\n\n'
             return
         queue = permissions.open_channel(surface)
-        async def launch():
+        async def run():
             try:
-                result = await (forge_apps.restart if restart else forge_apps.start)(session_id, True, surface)
+                result = await launch(surface)
                 await queue.put({'status': result})
-            except (ValueError, OSError, KeyError) as error:
-                await queue.put({'error': str(error)})
-        task = asyncio.create_task(launch())
+            except (ValueError, OSError, KeyError, HTTPException) as error:
+                await queue.put({'error': str(error.detail) if isinstance(error, HTTPException) else str(error)})
+        task = asyncio.create_task(run())
         try:
             while True:
                 packet = await queue.get()
@@ -302,6 +317,12 @@ def app_start_stream(session_id, restart=False):
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
     return StreamingResponse(stream(), media_type='text/event-stream', headers={'Cache-Control': 'no-store'})
+
+
+def app_start_stream(session_id, restart=False):
+    call(forge_sessions.workspace, session_id)
+    return approval_stream(f'forge-app:{session_id}',
+        lambda surface: (forge_apps.restart if restart else forge_apps.start)(session_id, True, surface))
 
 
 @router.post('/sessions/{session_id}/app/start')
@@ -341,14 +362,130 @@ def running_apps():
 
 @router.post('/apps/shutdown')
 def shutdown_apps():
-    forge_apps.shutdown()
+    try:
+        forge_apps.shutdown()
+    finally:
+        forge_terminals.shutdown()
     return {'ok': True}
 
 
+class EndSessionRequest(BaseModel):
+    option: Literal['leave', 'merge', 'keep-branch', 'discard'] = 'leave'
+    confirmed: StrictBool = False
+
+
 @router.post('/sessions/{session_id}/end')
-async def end_session(session_id: str):
+async def end_session(session_id: str, body: EndSessionRequest = EndSessionRequest()):
     call(forge_sessions.get, session_id)
+    if body.option == 'merge':
+        call(forge_sessions.workspace, session_id)
+        return approval_stream(f'forge-git:{session_id}', lambda surface: forge_session_git.approved(session_id, 'merge', surface, True))
     async with chat_service.session_operation(session_id):
-        result = call(forge_apps.stop, session_id)
+        result = call(forge_apps.stop, session_id) if body.option == 'leave' else call(forge_session_git.end, session_id, body.option, body.confirmed)
+        forge_terminals.stop_session(session_id)
         await chat_service.close_session_brain(session_id)
         return result
+
+
+class GitActionRequest(BaseModel):
+    action: Literal['stage', 'unstage', 'commit', 'create-branch', 'switch', 'pull', 'push', 'merge']
+    path: str | None = None
+    message: str = Field(default='', max_length=4000)
+    branch: str = Field(default='', max_length=250)
+
+
+@router.get('/sessions/{session_id}/git')
+def git_status(session_id: str):
+    return call(forge_session_git.status, session_id)
+
+
+@router.post('/sessions/{session_id}/git')
+async def git_action(session_id: str, body: GitActionRequest):
+    call(forge_sessions.workspace, session_id)
+    if body.action in ('push', 'merge'):
+        return approval_stream(f'forge-git:{session_id}', lambda surface: forge_session_git.approved(session_id, body.action, surface))
+    async with chat_service.session_operation(session_id):
+        return await asyncio.to_thread(call, forge_session_git.action, session_id, body.action, body.path, body.message, body.branch)
+
+
+def terminal_access(request: Request, user: str = Depends(require_admin)):
+    from services.forge_terminal_access import local_terminal_request
+    if not local_terminal_request(request.scope) and not settings_store.get_setting('forge_terminal_remote'):
+        raise HTTPException(status_code=403, detail='The terminal is off over Remote Access. Turn on Allow the terminal over Remote Access in Settings > Forge to use it here.')
+    return user
+
+
+class TerminalSizeRequest(BaseModel):
+    rows: int = Field(default=24, ge=2, le=300, strict=True)
+    cols: int = Field(default=80, ge=2, le=500, strict=True)
+
+
+class TerminalInputRequest(BaseModel):
+    data: str = Field(max_length=65536)
+
+
+@router.post('/sessions/{session_id}/terminals', dependencies=[Depends(terminal_access)])
+def terminal_start(session_id: str, body: TerminalSizeRequest, request: Request):
+    from services.forge_terminal_access import local_terminal_request
+    return call(forge_terminals.start, session_id, body.rows, body.cols, True, not local_terminal_request(request.scope))
+
+
+@router.get('/sessions/{session_id}/terminals/{terminal_id}/output', dependencies=[Depends(terminal_access)])
+async def terminal_output(session_id: str, terminal_id: str, request: Request, after: int = 0):
+    try:
+        cursor = max(0, int(request.headers.get('last-event-id') or after))
+    except ValueError:
+        raise HTTPException(status_code=400, detail='Invalid terminal output cursor.')
+    call(forge_terminals.output, session_id, terminal_id, cursor)
+    async def stream():
+        nonlocal cursor
+        while not await request.is_disconnected():
+            # Check the setting on reconnect and during a long-lived remote stream.
+            terminal_access(request, '')
+            try:
+                packet = forge_terminals.output(session_id, terminal_id, cursor)
+            except (KeyError, ValueError):
+                yield 'event: closed\ndata: {}\n\n'; break
+            if packet['reset']:
+                yield 'event: reset\ndata: {}\n\n'
+            for event in packet['events']:
+                cursor = event['id']
+                yield f"id: {cursor}\ndata: " + json.dumps({'output': event['data']}) + '\n\n'
+            if packet['ended']:
+                yield 'event: closed\ndata: {}\n\n'; break
+            if not packet['events']:
+                yield ': keepalive\n\n'
+            await asyncio.sleep(.1)
+    return StreamingResponse(stream(), media_type='text/event-stream', headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'})
+
+
+@router.post('/sessions/{session_id}/terminals/{terminal_id}/input', dependencies=[Depends(terminal_access)])
+def terminal_input(session_id: str, terminal_id: str, body: TerminalInputRequest):
+    return call(forge_terminals.write, session_id, terminal_id, body.data)
+
+
+@router.post('/sessions/{session_id}/terminals/{terminal_id}/resize', dependencies=[Depends(terminal_access)])
+def terminal_resize(session_id: str, terminal_id: str, body: TerminalSizeRequest):
+    return call(forge_terminals.resize, session_id, terminal_id, body.rows, body.cols)
+
+
+@router.delete('/sessions/{session_id}/terminals/{terminal_id}', dependencies=[Depends(terminal_access)])
+def terminal_close(session_id: str, terminal_id: str):
+    return call(forge_terminals.close, session_id, terminal_id)
+
+
+class TerminalRemoteRequest(BaseModel):
+    enabled: StrictBool
+
+
+@router.get('/terminal/settings')
+def terminal_settings():
+    return {'forge_terminal_remote': bool(settings_store.get_setting('forge_terminal_remote'))}
+
+
+@router.put('/terminal/settings')
+def save_terminal_settings(body: TerminalRemoteRequest):
+    settings_store.update_settings(forge_terminal_remote=body.enabled)
+    if not body.enabled:
+        forge_terminals.stop_remote()
+    return terminal_settings()

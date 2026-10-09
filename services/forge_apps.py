@@ -25,9 +25,11 @@ CHOICES = [{'id': 'once', 'label': 'Approve command', 'behavior': 'allow', 'scop
            {'id': 'reject', 'label': 'Cancel', 'behavior': 'deny', 'scope': 'once'}]
 
 
-def child_env(port):
+def child_env(port=None):
     result = {k: v for k, v in os.environ.items() if k.upper() in ENV_KEYS}
-    result.update(PORT=str(port), BROWSER='none', LANG=os.environ.get('LANG', 'en_US.UTF-8'))
+    result.update(LANG=os.environ.get('LANG', 'en_US.UTF-8'))
+    if port is not None:
+        result.update(PORT=str(port), BROWSER='none')
     return result
 
 
@@ -121,6 +123,20 @@ class WindowsJob:
         resume.restype = ctypes.c_long
         if resume(w.HANDLE(int(process._handle))) < 0:
             raise OSError('Could not resume the app process.')
+
+    def assign_pid(self, pid):
+        """Attach a PTY shell to the same kill-on-close ownership used by apps."""
+        import ctypes
+        from ctypes import wintypes as w
+        self.kernel.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+        self.kernel.OpenProcess.restype = w.HANDLE
+        handle = self.kernel.OpenProcess(0x0101, False, pid)  # SET_QUOTA | TERMINATE
+        try:
+            if not handle or not self.kernel.AssignProcessToJobObject(self.handle, handle):
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            if handle:
+                self.kernel.CloseHandle(handle)
 
     def close(self):
         if getattr(self, 'handle', None):

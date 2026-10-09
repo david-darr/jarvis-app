@@ -102,7 +102,7 @@ const SECTION_GROUPS = [
   {
     id: "workspace", label: "Workspace", sections: [
       { id: "forge", label: "Forge", render: renderForgePanel, admin: true,
-        description: "The root folder for new and cloned Forge projects.", keywords: ["projects", "git", "clone", "root", "folder"] },
+        description: "Projects, Git and terminal access.", keywords: ["projects", "git", "clone", "root", "folder", "terminal", "remote"] },
       { id: "vault", label: "Vault", render: renderVaultPanel,
         description: "The notes folder Kairos reads and writes as its memory.",
         keywords: ["obsidian", "notes folder", "memory", "path", "sync", "location"] },
@@ -1107,7 +1107,7 @@ function renderMcpServerForm(host, rerender) {
 
 // -- Forge --------------------------------------------------------------
 async function renderForgePanel(body) {
-  const root = await api('/api/forge/root');
+  const [root, terminalSettings] = await Promise.all([api('/api/forge/root'), api('/api/forge/terminal/settings')]);
   const input = el('input', { value: root.path, 'aria-label': 'Forge root folder', style: 'width:100%;min-width:0' });
   const save = el('button', { type: 'button', class: 'btn', text: 'Save folder', onclick: async () => {
     save.disabled = true;
@@ -1115,7 +1115,10 @@ async function renderForgePanel(body) {
     catch { /* api displays the mutation error. */ }
     finally { save.disabled = false; }
   } });
-  body.replaceChildren(group({}, [row({ title: 'Forge root folder', description: 'New and cloned projects get their own folder here. Created on first use.', control: save, below: input })]));
+  body.replaceChildren(group({}, [row({ title: 'Forge root folder', description: 'New and cloned projects get their own folder here. Created on first use.', control: save, below: input })]),
+    group({ title: 'Terminal' }, [row({ title: 'Allow the terminal over Remote Access', description: 'Let signed-in admins use session terminals from your other devices. Off by default.',
+      control: toggle({ checked: !!terminalSettings.forge_terminal_remote, label: 'Allow the terminal over Remote Access',
+        onChange: enabled => api('/api/forge/terminal/settings', { method: 'PUT', body: JSON.stringify({ enabled }) }) }) })]));
 }
 
 // -- Vault --------------------------------------------------------------

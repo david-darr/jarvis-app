@@ -2469,3 +2469,25 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
   .cal-event-dialog .field-grow { grid-column: auto; }
   .cal-week-grid { max-height: 520px; }
 }
+.forge-editor-host { flex: 1; min-height: 0; overflow: hidden; }
+.forge-editor-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.forge-editor-toolbar > span:first-child { flex: 1; overflow-wrap: anywhere; }
+.forge-file-surface { display: flex; flex-direction: column; }
+.forge-git-panel { padding: 12px; overflow: auto; }
+.forge-git-content { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* The rail is narrow: let the branch line wrap, and drop the status line's space while it's empty. */
+.forge-git-content .forge-branch { white-space: normal; overflow-wrap: anywhere; }
+.forge-git-panel > [role=status]:empty { display: none; }
+.forge-git-content input, .forge-git-content textarea { width: 100%; min-width: 0; }
+.forge-git-actions, .forge-end-options { display: flex; gap: 8px; flex-wrap: wrap; }
+.forge-git-file { display: flex; align-items: center; gap: 6px; padding: 5px 0; }
+.forge-git-file code { flex: 1; overflow-wrap: anywhere; min-width: 0; }
+.forge-git-files > strong { font-size: 12px; color: var(--text-dim); }
+.forge-terminal-surface { display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg-panel-solid); }
+.forge-terminal-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px; border-bottom: 1px solid var(--border); }
+.forge-terminal-host { flex: 1; min-height: 0; min-width: 0; padding: 8px; overflow: hidden; }
+.forge-terminal-host .xterm { height: 100%; }
+.forge-sidebar-tabs { height: 42px; padding: 0 4px; }
+.forge-sidebar-tab { flex: 1 1 0; flex-direction: column; gap: 0; height: 36px; padding: 0 2px; }
+.forge-terminal-phone-note { display: none; }
+@media (max-width: 768px) { .forge-terminal-phone-note { display: block; flex-basis: 100%; } }

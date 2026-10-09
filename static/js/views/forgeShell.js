@@ -1,13 +1,19 @@
-import { api, el, modelMark } from '../api.js';
+import { api, el, modelMark, confirmDialog } from '../api.js';
 import { subscribeAll } from '../chatStream.js';
 import { navigateForge, sessionStatus, changeTotals, diffCounts, forgeRunning } from '../forgeUi.js';
 import { mountForgeSession } from '../forgeSessionPane.js';
 import { fileView, diffView, changeRole, revertFile } from '../forgeSurfaces.js';
 import { mountArtifactPane, hideArtifact, setArtifactContext } from '../chatContent.js';
 import { mountAppPreview } from '../forgeAppPreview.js';
+import { mountForgeEditor } from '../forgeEditor.js';
+import { mountGitPanel } from '../forgeGitPanel.js';
+import { mountForgeTerminal } from '../forgeTerminal.js';
 
 // Project layouts survive Home and Chats navigation, without retaining DOM or subscriptions.
 const layouts = new Map();
+window.addEventListener('beforeunload', event => {
+  if ([...layouts.values()].some(layout => layout.tabs.some(tab => tab.dirty))) { event.preventDefault(); event.returnValue = ''; }
+});
 let controller = null;
 export async function open(options = {}) { return controller?.open(options); }
 const readStorage = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
@@ -34,12 +40,14 @@ export async function render(container, tabId, options = {}) {
       el('button', { class: 'forge-small-button', text: 'Refresh', 'aria-label': 'Refresh Explorer', onclick: () => loadExplorer(true) })]), treeRoot, tree,
   ]);
   const changesList = el('div', { class: 'forge-changes-list' });
+  const gitPanel = el('section', { class: 'forge-sidebar-panel forge-git-panel', role: 'tabpanel', id: 'forge-panel-git' });
+  let gitCleanup = () => {};
   const changesPanel = el('section', { class: 'forge-sidebar-panel', role: 'tabpanel', id: 'forge-panel-changes' }, [
     el('div', { class: 'forge-sidebar-toolbar' }, [el('span', { text: 'Changes from session baseline' }), el('button', { class: 'forge-small-button', text: 'Refresh', 'aria-label': 'Refresh changes', onclick: () => refreshReviews() })]), changesList,
   ]);
   const status = el('p', { class: 'forge-shell-status', role: 'alert' });
   const resize = el('div', { class: 'forge-project-resizer', role: 'separator', tabindex: '0', 'aria-label': 'Resize project sidebar', 'aria-orientation': 'vertical' });
-  sidebar.append(el('header', { class: 'forge-project-header' }, [el('div', { class: 'forge-project-heading' }, [name, branch]), newSession, collapse]), sidebarTabs, status, sessionPanel, explorerPanel, changesPanel, resize);
+  sidebar.append(el('header', { class: 'forge-project-header' }, [el('div', { class: 'forge-project-heading' }, [name, branch]), newSession, collapse]), sidebarTabs, status, sessionPanel, explorerPanel, changesPanel, gitPanel, resize);
   const strip = el('div', { class: 'forge-surface-tabs', role: 'tablist', 'aria-label': 'Open sessions and files' });
   const reopen = el('button', { class: 'forge-small-button', text: 'Project', 'aria-label': 'Open project sidebar', onclick: () => showSidebar(true) });
   const splitButton = el('button', { class: 'forge-small-button', text: 'Split', title: 'Split right (Ctrl+D)', 'aria-label': 'Split right', onclick: () => split() });
@@ -59,7 +67,7 @@ export async function render(container, tabId, options = {}) {
   const tabButtons = new Map();
   const cleanupPanels = () => { for (const panel of panels.values()) { panel._cleanup?.(); panel.remove(); } panels.clear(); };
   const cleanup = () => {
-    disposed = true; ++navigation; ++reviewsVersion; ++explorerVersion; cancelResize?.(); cleanupPanels(); unsubscribe(); clearInterval(timer); hideArtifact({ navigation: true });
+    disposed = true; gitCleanup(); ++navigation; ++reviewsVersion; ++explorerVersion; cancelResize?.(); cleanupPanels(); unsubscribe(); clearInterval(timer); hideArtifact({ navigation: true });
     document.removeEventListener('keydown', onKey); window.removeEventListener('resize', viewportChanged);
     document.removeEventListener('kairos:forge-projects', projectsChanged); if (controller === instance) controller = null;
     document.removeEventListener('kairos:forge-apps', refreshApps); clearInterval(appTimer);
@@ -87,7 +95,7 @@ export async function render(container, tabId, options = {}) {
     }
     if (target) { event.preventDefault(); target.focus(); }
   };
-  for (const key of ['sessions', 'explorer', 'changes']) {
+  for (const key of ['sessions', 'explorer', 'changes', 'git']) {
     const button = el('button', { class: 'forge-sidebar-tab', role: 'tab', id: `forge-sidebar-${key}`, 'aria-controls': `forge-panel-${key}`, 'data-sidebar-tab': key,
       onclick: () => selectSidebarTab(key) });
     sidebarTabs.append(button); tabButtons.set(key, button);
@@ -98,7 +106,7 @@ export async function render(container, tabId, options = {}) {
       const next = event.key === 'Home' ? keys[0] : event.key === 'End' ? keys.at(-1) : keys[(index + (event.key === 'ArrowRight' ? 1 : -1) + keys.length) % keys.length];
       selectSidebarTab(next); tabButtons.get(next).focus();
     };
-    ({ sessions: sessionPanel, explorer: explorerPanel, changes: changesPanel })[key].setAttribute('aria-labelledby', button.id);
+    ({ sessions: sessionPanel, explorer: explorerPanel, changes: changesPanel, git: gitPanel })[key].setAttribute('aria-labelledby', button.id);
   }
   const unsubscribe = subscribeAll(id => {
     if (!layout || disposed) return;
@@ -203,6 +211,12 @@ export async function render(container, tabId, options = {}) {
     remember(`kairos:forge-panel:${project.id}`, key);
     for (const [name, button] of tabButtons) { const selected = name === key; button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1; }
     sessionPanel.hidden = key !== 'sessions'; explorerPanel.hidden = key !== 'explorer'; changesPanel.hidden = key !== 'changes';
+    gitPanel.hidden = key !== 'git';
+    gitCleanup(); gitCleanup = () => {};
+    if (key === 'git') {
+      if (layout.sessionId && !sessions.find(s => s.id === layout.sessionId)?.forge.removed) gitCleanup = mountGitPanel(gitPanel, layout.sessionId, { onChanged: refreshReviews });
+      else gitPanel.textContent = 'Select an active session to use Git.';
+    }
     if (key === 'explorer') loadExplorer();
   }
   function drawCards() {
@@ -241,6 +255,22 @@ export async function render(container, tabId, options = {}) {
     if (phone()) showSidebar(false);
     refreshApps();
   }
+  async function openTerminal(sessionId, create = false) {
+    const currentLayout = layout;
+    let tab = !create && layout.tabs.find(t => t.type === 'terminal' && t.sessionId === sessionId);
+    try {
+      if (!tab) {
+        const result = await api(`${sessionBase(sessionId)}/terminals`, { method: 'POST', body: JSON.stringify({ rows: 24, cols: 80 }) });
+        if (disposed || layout !== currentLayout) { await api(`${sessionBase(sessionId)}/terminals/${result.id}`, { method: 'DELETE' }); return; }
+        tab = { id: `terminal:${result.id}`, type: 'terminal', title: 'Terminal', terminalId: result.id, sessionId };
+        layout.tabs.push(tab);
+      }
+      const sessionTab = layout.tabs.find(t => t.type === 'session' && t.sessionId === sessionId);
+      if (!phone() && sessionTab) { layout.left = sessionTab.id; sessionTab.pane = 'left'; split(tab.id); }
+      else activate(tab.id, 'left');
+      if (phone()) showSidebar(false);
+    } catch (error) { status.textContent = error.message.replace(/^\d+: /, ''); }
+  }
   function relativeTime(at) {
     const minutes = Math.max(0, Math.floor((Date.now() / 1000 - at) / 60));
     return minutes < 1 ? 'now' : minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1440)}d`;
@@ -267,7 +297,7 @@ export async function render(container, tabId, options = {}) {
   function drawChanges() {
     if (!layout) return;
     const files = reviews.get(layout.sessionId) || [], totals = changeTotals(files);
-    tabButtons.get('sessions').textContent = 'Sessions'; tabButtons.get('explorer').textContent = 'Explorer';
+    tabButtons.get('sessions').textContent = 'Sessions'; tabButtons.get('explorer').textContent = 'Explorer'; tabButtons.get('git').textContent = 'Git';
     const changesTab = tabButtons.get('changes');
     changesTab.replaceChildren(totals.added || totals.removed ? diffCounts(totals) : el('span', { text: 'Changes' }));
     changesTab.setAttribute('aria-label', `Changes${totals.added || totals.removed ? ` +${totals.added} -${totals.removed}` : ''}`);
@@ -327,7 +357,7 @@ export async function render(container, tabId, options = {}) {
     let tab = layout.tabs.find(t => t.id === id);
     if (!tab) {
       const preview = layout.tabs.find(t => t.preview && t.pane === activePane);
-      if (preview) closeTab(preview.id);
+      if (preview && !preview.dirty) closeTab(preview.id);
       tab = { id, type, path, title: path.split('/').pop(), base, sessionId: layout.sessionId, preview: !pinned, pane: activePane };
       layout.tabs.push(tab);
     } else if (pinned) tab.preview = false;
@@ -344,8 +374,17 @@ export async function render(container, tabId, options = {}) {
     setArtifactContext(layout.sessionId);
     drawTabs(); drawPanes();
   }
-  function closeTab(id) {
-    const at = layout.tabs.findIndex(t => t.id === id); if (at < 0) return;
+  async function closeTab(id) {
+    const closingLayout = layout;
+    let at = layout.tabs.findIndex(t => t.id === id); if (at < 0) return;
+    const closing = layout.tabs[at];
+    if (closing.dirty && !await (panels.get(id)?._beforeClose?.() ?? confirmDialog({ title: 'Close unsaved file?', message: `Lose your unsaved edits to ${closing.path}?`, confirmLabel: 'Close without saving' }))) return;
+    if (closing.type === 'terminal') {
+      try { await api(`${sessionBase(closing.sessionId)}/terminals/${closing.terminalId}`, { method: 'DELETE' }); }
+      catch (error) { if (!error.message.startsWith('404:')) { status.textContent = error.message; return; } }
+    }
+    if (disposed || layout !== closingLayout) return;
+    at = layout.tabs.findIndex(t => t.id === id); if (at < 0) return;
     const tab = layout.tabs[at]; panels.get(id)?._cleanup?.(); panels.get(id)?.remove(); panels.delete(id); layout.tabs.splice(at, 1);
     for (const side of ['left', 'right']) if (layout[side] === id) layout[side] = layout.tabs.findLast(t => t.pane === side)?.id || null;
     if (tab.pane === 'right' && !layout.right) { layout.split = false; activePane = 'left'; }
@@ -357,6 +396,7 @@ export async function render(container, tabId, options = {}) {
       const selected = layout[activePane] === tab.id;
       const button = el('button', { class: 'forge-surface-tab', role: 'tab', 'aria-selected': String(selected), tabindex: selected ? '0' : '-1', text: tab.type === 'diff' ? `${tab.title} · Diff` : tab.title,
         title: tab.path || tab.title, onclick: () => activate(tab.id), ondblclick: () => { tab.preview = false; drawTabs(); } });
+      if (tab.dirty) button.textContent += ' *';
       button.onkeydown = event => {
         if (event.key === 'Delete') { event.preventDefault(); closeTab(tab.id); }
         if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
@@ -402,12 +442,16 @@ export async function render(container, tabId, options = {}) {
           const initialMessage = tab.initialMessage; delete tab.initialMessage;
           await mountForgeSession(panel, session, project, models, { initialMessage, onReview: refreshReviews,
             onPreview: openPreview,
+            onTerminal: openTerminal,
             onDiff: path => { layout.sessionId = tab.sessionId; activePane = tab.pane || 'left'; openSurface('diff', path, true); },
             onChanges: () => { layout.sessionId = tab.sessionId; showSidebar(true); selectSidebarTab('changes'); refreshReviews(); },
             onLeave: () => { closeTab(tab.id); selectSidebarTab('sessions'); openContext({ projectId: project.id }); } });
         } else if (tab.type === 'app-preview') {
           await mountAppPreview(panel, tab.sessionId);
+        } else if (tab.type === 'terminal') {
+          await mountForgeTerminal(panel, tab, id => openTerminal(id, true));
         } else if (tab.type === 'file') {
+          if (tab.sessionId) { await mountForgeEditor(panel, tab, drawTabs); return; }
           const file = await api(`${tab.base}/file?${new URLSearchParams({ path: tab.path })}`);
           if (!disposed && panels.get(tab.id) === panel) panel.replaceChildren(fileView(file));
         } else panel.replaceChildren(diffView(reviews.get(tab.sessionId)?.find(f => f.path === tab.path) || { path: tab.path, patch: '', hunks: [] }));

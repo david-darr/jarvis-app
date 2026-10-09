@@ -39,6 +39,22 @@
     if (url.pathname.startsWith("/generated-files/")) {
       return new Response("# Project brief\n\nA sample file from the Kairos demo.\n", { headers: { "Content-Type": "text/markdown" } });
     }
+    if (method === 'GET' && /\/terminals\/[^/]+\/output$/.test(url.pathname)) {
+      const encoder = new TextEncoder(); let timer, ended = false;
+      const stop = () => { ended = true; clearInterval(timer); };
+      return new Response(new ReadableStream({ start(controller) {
+        let cursor = Number(url.searchParams.get('after') || 0);
+        const send = () => {
+          if (ended) return;
+          url.searchParams.set('after', String(cursor));
+          const result = fixture(url);
+          for (const event of result.events) { cursor = event.id; controller.enqueue(encoder.encode(`id: ${event.id}\ndata: ${JSON.stringify({ output: event.data })}\n\n`)); }
+          if (result.ended) { controller.enqueue(encoder.encode('event: closed\ndata: {}\n\n')); stop(); controller.close(); }
+        };
+        timer = setInterval(send, 50); send();
+        init.signal?.addEventListener('abort', () => { if (!ended) { stop(); controller.close(); } }, { once: true });
+      }, cancel: stop }), { headers: { 'Content-Type': 'text/event-stream' } });
+    }
     return api(url, method, init.body);
   };
 
@@ -100,7 +116,7 @@
         if (updated._appStart.permission) {
           const request = updated._appStart.permission;
           while (!state.forgeAppAnswers[request.id]) await new Promise(resolve => setTimeout(resolve, 50));
-          send(state.forgeAppAnswers[request.id] === 'once' ? mutate(path.replace(/\/(start|restart)$/, '/approved'), 'POST', {})._appStart : { error: 'App command was not approved.' });
+          send(state.forgeAppAnswers[request.id] === 'once' ? mutate(updated._approvedPath || path.replace(/\/(start|restart)$/, '/approved'), 'POST', {})._appStart : { error: 'The action was not approved.' });
         }
         controller.close();
       } }), { headers: { 'Content-Type': 'text/event-stream' } });

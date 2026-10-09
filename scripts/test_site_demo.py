@@ -50,5 +50,13 @@ class SiteDemoTests(unittest.TestCase):
         self.assertIn('./static/js/vendor/pdf.mjs', (REPO / "docs" / "demo" / "app.js").read_text(encoding="utf-8"))
 
 
+    def test_forge_vendor_notices_and_terminal_styles_ship(self):
+        folder = REPO / 'docs' / 'demo' / 'static' / 'js' / 'vendor'
+        self.assertEqual((folder / 'forge-vendor.LICENSE.txt').read_bytes(),
+                         (REPO / 'static/js/vendor/forge-vendor.LICENSE.txt').read_bytes())
+        self.assertTrue((folder / 'xterm.css').exists())
+        self.assertIn('CodeMirror', (REPO / 'docs/demo/app.js').read_text(encoding='utf-8'))
+
+
 if __name__ == "__main__":
     unittest.main()

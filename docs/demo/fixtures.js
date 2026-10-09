@@ -285,9 +285,21 @@
       forgeAppPending[requestId] = id; delete forgeAppAnswers[requestId];
       return { _appStart: { permission } };
     }
-    if (route === '/api/forge/apps/shutdown') { Object.values(forgeApps).forEach(app => { app.running = app.ready = false; app.ports = []; }); return { ok: true }; }
-    const endRoute = route.match(/^\/api\/forge\/sessions\/([^/]+)\/end$/);
-    if (endRoute) { if (forgeApps[endRoute[1]]) { forgeApps[endRoute[1]].running = forgeApps[endRoute[1]].ready = false; forgeApps[endRoute[1]].ports = []; } return { ok: true }; }
+    if (route === '/api/forge/apps/shutdown') { Object.values(forgeApps).forEach(app => { app.running = app.ready = false; app.ports = []; }); Object.values(state.forgeTerminals || {}).forEach(t => { t.ended = true; }); return { ok: true }; }
+    const endRoute = route.match(/^\/api\/forge\/sessions\/([^/]+)\/end(-approved)?$/);
+    if (endRoute) {
+      const id = endRoute[1], session = forgeSessions[id], option = body.option || 'leave';
+      if (!session) return { _status: 404, detail: 'Forge session not found.' };
+      if (option === 'merge' && !endRoute[2]) { const result = mutate(`/api/forge/sessions/${id}/git`, 'POST', { action: 'merge' }); result._approvedPath = route + '-approved'; return result; }
+      if (endRoute[2]) mutate(`/api/forge/sessions/${id}/git-approved`, 'POST', {});
+      const review = forgeReview(id), git = state.forgeGit?.[id];
+      if (option === 'keep-branch' && review.files.length && session.forge.isolation !== 'in_place') return { _status: 409, detail: 'Worktree has uncommitted changes. Commit or choose Discard.' };
+      if (option === 'discard' && (review.files.length || git?.unmerged) && !body.confirmed) return { _status: 409, detail: 'Confirm discarding this session first.' };
+      if (forgeApps[id]) { forgeApps[id].running = forgeApps[id].ready = false; forgeApps[id].ports = []; }
+      Object.values(state.forgeTerminals || {}).filter(t => t.session_id === id).forEach(t => { t.ended = true; });
+      if (option !== 'leave' || endRoute[2]) session.forge.removed = true;
+      return endRoute[2] ? { _appStart: { status: { ok: true } } } : { ok: true };
+    }
     if (route === '/api/forge/sessions' && method === 'POST') {
       const project = forgeProjects.find(p => p.id === body.project_id);
       if (!project || project.id === 'fp2') return { _status: 400, detail: 'Forge sessions require a Git repository root with an initial commit.' };
@@ -302,7 +314,51 @@
       const session = forgeSessions[forgeRoute[1]], action = forgeRoute[2];
       if (!session) return { _status: 404, detail: 'Forge session not found.' };
       const review = forgeReview(session.id);
+      if (action === 'terminals' && method === 'POST') {
+        const terminals = state.forgeTerminals ||= {};
+        if (Object.values(terminals).filter(t => t.session_id === session.id && !t.ended).length >= 4) return { _status: 400, detail: 'You can open up to four terminals in a session. Close one first.' };
+        const id = 'fixture-terminal-' + Date.now() + '-' + Object.keys(terminals).length;
+        terminals[id] = { id, session_id: session.id, ended: false, events: [{ id: 1, data: 'Forge fixture shell\r\nPS> ' }], sequence: 1 };
+        return { id, session_id: session.id };
+      }
+      if (action?.startsWith('terminals/')) {
+        const [, id, operation] = action.split('/');
+        const terminal = state.forgeTerminals?.[id];
+        if (!terminal || terminal.session_id !== session.id) return { _status: 404, detail: 'Terminal not found.' };
+        if (method === 'DELETE') { terminal.ended = true; return { ok: true }; }
+        if (operation === 'input') { terminal.events.push({ id: ++terminal.sequence, data: body.data }); return { ok: true }; }
+        if (operation === 'resize') { terminal.rows = body.rows; terminal.cols = body.cols; return { ok: true }; }
+      }
+      const git = (state.forgeGit ||= {})[session.id] ||= { branch: session.forge.branch, upstream: null, ahead: 1, behind: 0, branches: ['main', session.forge.branch], unmerged: true, staged: [] };
+      if ((action === 'git' || action === 'git-approved') && method === 'POST') {
+        const operation = body.action || state.forgeGitAction?.[session.id];
+        if (action === 'git' && ['push', 'merge'].includes(operation)) {
+          (state.forgeGitAction ||= {})[session.id] = operation;
+          const requestId = 'forge-git-' + session.id + '-' + Date.now();
+          forgeAppPending[requestId] = session.id;
+          return { _approvedPath: route + '-approved', _appStart: { permission: { id: requestId, tool: 'forge_git_' + operation,
+            title: operation === 'push' ? 'Push branch?' : 'Merge back?', description: operation === 'push' ? `Push ${git.branch} to origin (https://example.test/garden.git), branch ${git.branch}.` : `Merge ${git.branch} into main.`,
+            choices: [{ id: 'once', label: 'Approve', behavior: 'allow', scope: 'once' }, { id: 'reject', label: 'Cancel', behavior: 'deny', scope: 'once' }] } } };
+        }
+        if (operation === 'stage') git.staged = body.path ? [...new Set([...git.staged, body.path])] : review.files.map(f => f.path);
+        if (operation === 'unstage') git.staged = body.path ? git.staged.filter(p => p !== body.path) : [];
+        if (operation === 'commit') { review.files = review.files.filter(f => git.staged.length && !git.staged.includes(f.path)); git.staged = []; }
+        if (operation === 'push') { git.upstream = 'origin/' + git.branch; git.ahead = 0; }
+        if (operation === 'merge') git.unmerged = false;
+        if (['create-branch', 'switch'].includes(operation)) { if (review.files.length) return { _status: 400, detail: 'Commit or discard your changes before switching branches.' }; git.branch = body.branch; session.forge.branch = body.branch; if (!git.branches.includes(body.branch)) git.branches.push(body.branch); }
+        return action === 'git-approved' ? { _appStart: { status: { ok: true } } } : { ok: true };
+      }
       if (action === 'mode' && method === 'POST') { session.forge.mode = body.mode; return session; }
+      if (action === 'file' && method === 'PUT') {
+        const key = session.id + ':' + body.path;
+        const files = state.forgeEditorFiles ||= {};
+        const old = files[key];
+        if ((state.forgeEditorConflict || old && old.hash !== body.hash) && !body.overwrite) return { _status: 409, detail: 'This file changed on disk. Reload it or overwrite with your edits.' };
+        state.forgeEditorConflict = false;
+        files[key] = { path: body.path, content: body.content, binary: false, hash: String(Date.now()), mtime: String(Date.now()) };
+        if (!review.files.some(file => file.path === body.path)) review.files.push({ path: body.path, added: 1, removed: 0, hunks: [], patch: '' });
+        return files[key];
+      }
       if (!action && method === 'DELETE') {
         if (session.forge.isolation !== 'in_place' && review.files.length && (query.discard !== 'true' || query.confirmed !== 'true')) return { _status: 409, detail: 'Worktree has changes. Confirm discard before removing it.' };
         session.forge.removed = true; if (forgeApps[session.id]) { forgeApps[session.id].running = forgeApps[session.id].ready = false; forgeApps[session.id].ports = []; } return { ok: true };
@@ -331,6 +387,7 @@
       if (!options.demo) session.messages.push({ role: 'user', content: body.message, ts: started }, { role: 'assistant', content: 'Tab build request received.', ts: started + .25, run_id: runId });
       return { _forgePackets: packets, run_id: runId };
     }
+    if (route === '/api/forge/terminal/settings' && method === 'PUT') { state.forgeTerminalRemote = body.enabled; return { forge_terminal_remote: body.enabled }; }
     if (route === '/api/forge/root' && method === 'PUT') { state.forgeRoot = body.path; return { path: body.path }; }
     if (['/api/forge/projects', '/api/forge/projects/new', '/api/forge/projects/clone'].includes(route) && method === 'POST') {
       const name = body.name || 'New project';
@@ -615,6 +672,7 @@
       return { session_id: id, lines: ['> kairos-garden dev', 'Local: http://127.0.0.1:5173/', 'Ready in 240 ms', 'GET / 200'] };
     }
     if (route === "/api/auth/status") return { auth_enabled: false, setup_required: false, username: "Alex", is_admin: state.isAdmin !== false, instance: state.empty ? "dev" : "" };
+    if (route === '/api/forge/terminal/settings') return { forge_terminal_remote: !!state.forgeTerminalRemote };
     if (route === '/api/forge/root') return { path: state.forgeRoot || 'C:\\Users\\Alex\\Documents\\Kairos Projects' };
     if (route === '/api/forge/projects') return list(forgeProjects.map(p => ({ ...p, git: p.id === 'fp2' ? { state: 'not_git', message: 'Not a git repository' } : forgeSummary })));
     const projectFiles = route.match(/^\/api\/forge\/projects\/([^/]+)\/(files|file)$/);
@@ -632,6 +690,15 @@
       if (!session) throw new Error('Forge session not found.');
       if (!action) return session;
       const review = forgeReview(session.id);
+      if (action?.startsWith('terminals/') && action.endsWith('/output')) {
+        const terminal = state.forgeTerminals?.[action.split('/')[1]];
+        if (!terminal || terminal.session_id !== session.id) throw new Error('Terminal not found.');
+        return { events: terminal.events.filter(e => e.id > Number(url.searchParams.get('after') || 0)), ended: terminal.ended, reset: false };
+      }
+      if (action === 'git') {
+        const git = (state.forgeGit ||= {})[session.id] ||= { branch: session.forge.branch, upstream: null, ahead: 1, behind: 0, branches: ['main', session.forge.branch], unmerged: true, staged: [] };
+        return { ...git, files: review.files.map(f => ({ path: f.path, staged: git.staged.includes(f.path), unstaged: !git.staged.includes(f.path), index: git.staged.includes(f.path) ? 'M' : ' ', working: git.staged.includes(f.path) ? ' ' : 'M' })) };
+      }
       if (action === 'changes') return { base_commit: session.forge.base_commit, files: review.files };
       if (action === 'checkpoints') return review.checkpoints;
       if (action === 'files') {
@@ -642,11 +709,12 @@
       }
       if (action === 'file') {
         const path = url.searchParams.get('path');
+        if (state.forgeEditorFiles?.[session.id + ':' + path]) return state.forgeEditorFiles[session.id + ':' + path];
         let content = gardenSource;
         const hunks = review.files[0]?.hunks || [];
         if (!hunks.some(h => h.hash === '1'.repeat(64))) content = content.replace('"Enter"', '"Send"');
         if (!hunks.some(h => h.hash === '2'.repeat(64))) content = content.replace('"Build in a worktree"', '"Start a chat"');
-        return { path, content: path === 'README.md' ? '# Kairos garden\n\nA calm place to build.\n' : content };
+        return { path, content: path === 'README.md' ? '# Kairos garden\n\nA calm place to build.\n' : content, binary: false, hash: 'fixture-open', mtime: '1' };
       }
     }
     if (/^\/api\/forge\/projects\/[^/]+\/summary$/.test(route)) return route.split('/')[4] === 'fp2' ? { state: 'not_git', message: 'Not a git repository' } : forgeSummary;

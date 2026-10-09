@@ -17,6 +17,9 @@ const { contextBridge, ipcRenderer } = require("electron");
 // supplied by the caller — a generic send(channel, ...) would hand the
 // renderer the entire IPC surface and undo the point of this file.
 contextBridge.exposeInMainWorld("jarvis", {
+  forgeTerminal: {
+    openExternal: url => ipcRenderer.invoke('forge-terminal:external', url),
+  },
   forgePreview: {
     open: (id, url, bounds) => ipcRenderer.invoke('forge-preview:open', id, url, bounds),
     navigate: url => ipcRenderer.invoke('forge-preview:navigate', url),

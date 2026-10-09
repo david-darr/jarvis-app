@@ -15,6 +15,7 @@ SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 
 DEFAULTS: dict[str, Any] = {
     "forge_root": None,  # None resolves the OS Documents folder on first use.
+    "forge_terminal_remote": False,
     "onboarding_complete": False,
     "vault_dir": None,  # None = use core/vault.py's default resolution
     "discord_bot_token_encrypted": None,

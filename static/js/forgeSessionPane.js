@@ -2,9 +2,9 @@ import { api, el, customSelect, confirmDialog, openPanelDialog } from './api.js'
 import { mountForgeTranscript } from './forgeTranscript.js';
 import { forgeRunning } from './forgeUi.js';
 import { subscribeAll } from './chatStream.js';
-import { configureApp, launchApp } from './forgeAppPreview.js';
+import { configureApp, launchApp, permissionAction } from './forgeAppPreview.js';
 
-export async function mountForgeSession(panel, session, project, models, { initialMessage, onReview, onLeave, onDiff, onChanges, onPreview } = {}) {
+export async function mountForgeSession(panel, session, project, models, { initialMessage, onReview, onLeave, onDiff, onChanges, onPreview, onTerminal } = {}) {
   const id = session.id, base = `/api/forge/sessions/${encodeURIComponent(id)}`;
   let disposed = false, mutating = false, dialog = null, chatCleanup = () => {};
   const appController = new AbortController();
@@ -16,7 +16,7 @@ export async function mountForgeSession(panel, session, project, models, { initi
   mode.value = session.forge.mode;
   mode.querySelector('button').setAttribute('aria-label', 'Session mode');
   const explanation = el('p', { class: 'meta forge-plan-note' });
-  const explain = () => { explanation.textContent = session.forge.mode === 'plan' ? 'Plan is read only. File edits and shell commands are blocked.' : 'Build lets your agent make changes in this workspace.'; };
+  const explain = () => { explanation.textContent = session.forge.mode === 'plan' ? 'Plan keeps your agent read only. You can still edit files and use the terminal.' : 'Build lets your agent make changes in this workspace.'; };
   const end = el('button', { class: 'btn quiet', text: 'End session', onclick: endSession });
   const sync = () => { mode.disabled = end.disabled = forgeRunning(id) || mutating || !!session.forge.removed; };
   const unsubscribe = subscribeAll(changed => { if (changed === id) sync(); });
@@ -43,7 +43,8 @@ export async function mountForgeSession(panel, session, project, models, { initi
   }
   const appTimer = setInterval(refreshApp, 3000);
   document.addEventListener('kairos:forge-apps', refreshApp); refreshApp();
-  const header = el('header', { class: 'forge-session-header' }, [el('strong', { text: project?.name || 'Forge project' }), agentLabel, run, end]);
+  const terminal = el('button', { class: 'btn quiet forge-open-terminal', text: 'Terminal', disabled: !!session.forge.removed, onclick: () => onTerminal?.(id) });
+  const header = el('header', { class: 'forge-session-header' }, [el('strong', { text: project?.name || 'Forge project' }), agentLabel, run, terminal, end]);
   const host = el('div', { class: 'forge-chat-host' });
   // filter(Boolean): replaceChildren would print a false condition as the text "false".
   panel.replaceChildren(...[header, explanation, session.forge.isolation === 'in_place' && el('p', { class: 'forge-warning', text: 'In place: changes affect your project folder directly.' }), status, host].filter(Boolean));
@@ -67,36 +68,33 @@ export async function mountForgeSession(panel, session, project, models, { initi
   async function endSession(event) {
     const opener = event.currentTarget;
     if (forgeRunning(id) || mutating) return;
-    let dirty = false;
-    try { dirty = (await api(`${base}/changes`)).files.length > 0; }
+    let state;
+    try { state = await api(`${base}/git`); }
     catch (error) { status.textContent = `Could not check the worktree: ${error.message}`; return; }
     if (disposed) return;
-    const inPlace = session.forge.isolation === 'in_place';
-    const body = el('div', { class: 'forge-form' }, [el('p', { text: inPlace ? 'Keep your project folder and leave this session.' : 'Keep this worktree for later, or remove it. Your branch and conversation are kept.' }),
-      dirty && el('p', { class: 'forge-warning', text: inPlace ? 'Your project has changes. Leaving keeps them.' : 'This worktree has changes from the session baseline. Removing it discards any uncommitted changes.' })]);
-    const keep = el('button', { class: 'btn primary', text: 'Keep and leave', onclick: async () => {
-      keep.disabled = true;
-      try { await api(`${base}/end`, { method: 'POST' }); document.dispatchEvent(new Event('kairos:forge-apps')); dialog.close(); onLeave(); }
-      catch (error) { status.textContent = error.message; keep.disabled = false; }
-    } });
-    const footer = el('div', {}, [keep]);
-    if (!inPlace) footer.append(el('button', { class: 'btn danger', text: 'Remove worktree', onclick: async () => {
-      if (dirty && !await confirmDialog({ title: 'Discard worktree changes?', message: 'Permanently discard all uncommitted changes in this worktree and remove it? Your branch and conversation will remain.', confirmLabel: 'Discard changes and remove' })) return;
+    const body = el('div', { class: 'forge-form' }, [
+      el('p', { text: 'Choose what to do with your session. Your conversation is kept.' }),
+      (state.files.length || state.unmerged) && el('p', { class: 'forge-warning', text: 'This session has uncommitted or unmerged changes.' }),
+      session.forge.isolation === 'in_place' && el('p', { class: 'meta', text: 'Your main project folder and its changes are kept.' }),
+    ].filter(Boolean));
+    const footer = el('div', { class: 'forge-end-options' });
+    async function finish(option) {
+      if (option === 'discard' && (state.files.length || state.unmerged) && !await confirmDialog({
+        title: 'Discard this session?', message: `Discard uncommitted changes and remove this worktree and branch ${state.branch}? Your main project folder and its current branch are kept.`, confirmLabel: 'Discard' })) return;
       if (disposed || forgeRunning(id) || mutating) return;
-      mutating = true; sync();
+      mutating = true; sync(); footer.querySelectorAll('button').forEach(b => { b.disabled = true; });
       try {
-        await api(`${base}${dirty ? '?discard=true&confirmed=true' : ''}`, { method: 'DELETE' });
-        dialog.close(); onLeave();
-      } catch (error) {
-        // The baseline diff can be clean even if a later commit has local edits.
-        // DELETE's authoritative dirty check also handles edits made after opening.
-        if (/^409:.*uncommitted changes/i.test(error.message)) {
-          dirty = true;
-          body.append(el('p', { class: 'forge-warning', role: 'alert', text: 'This worktree has uncommitted changes. Choose Remove worktree again to explicitly confirm discarding them.' }));
-        } else body.append(el('p', { role: 'alert', text: error.message }));
-      }
-      finally { mutating = false; sync(); }
-    } }));
+        const request = { option, confirmed: option === 'discard' };
+        if (option === 'merge') await permissionAction(`${base}/end`, { body: request, signal: appController.signal, owner: panel });
+        else await api(`${base}/end`, { method: 'POST', body: JSON.stringify(request) });
+        if (disposed) return;
+        document.dispatchEvent(new Event('kairos:forge-apps')); dialog.close(); onLeave?.();
+      } catch (error) { body.append(el('p', { role: 'alert', text: error.message.replace(/^\d+: /, '') })); }
+      finally { mutating = false; sync(); footer.querySelectorAll('button').forEach(b => { b.disabled = false; }); }
+    }
+    for (const [option, text] of [['merge', 'Merge back and remove'], ['keep-branch', 'Keep the branch, remove the worktree'], ['discard', 'Discard'], ['leave', 'Keep and leave']]) {
+      footer.append(el('button', { class: option === 'discard' ? 'btn danger' : 'btn', text, onclick: () => finish(option) }));
+    }
     dialog = openPanelDialog({ title: 'End session', body, footer, owner: panel, opener, group: 'forge' });
   }
 }

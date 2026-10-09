@@ -18,8 +18,10 @@ export async function api(path, options = {}) {
     // handle their own empty/fallback states (Home alone fires 7 GETs with
     // intentional .catch(() => []) fallbacks; toasting those would spam 7
     // error toasts the moment the backend hiccups).
+    // `toast: false` is for callers that show the failure themselves (e.g. the
+    // Forge editor's save-conflict dialog), so it doesn't appear twice.
     const method = (options.method || "GET").toUpperCase();
-    if (method !== "GET") toast(`${detail}`, "error");
+    if (method !== "GET" && options.toast !== false) toast(`${detail}`, "error");
     throw new Error(`${res.status}: ${detail}`);
   }
   if (res.status === 204) return null;

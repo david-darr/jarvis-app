@@ -1,0 +1,55 @@
+const assert = require('node:assert/strict');
+// Each viewport owns its write index; ui-smoke removes these at its Forge boundary.
+module.exports = async ({ js, waitFor, capture, writes, demoState, label, forgeSessionId, width }) => {
+  const start = writes.length;
+  const base = '/api/forge/sessions/' + forgeSessionId;
+  await js(`document.querySelector('.forge-surface-tab-group[data-surface-type=file] .forge-surface-tab').click()`);
+  await waitFor("!!document.querySelector('.forge-pane .cm-editor')");
+  await js(String.raw`{ const panel=document.querySelector('.forge-pane .forge-file-surface'); const view=panel._editor; view.dispatch({changes:{from:view.state.doc.length,insert:'\n// Human edit'}}); }`);
+  await waitFor("document.querySelector('.forge-surface-tab-group[data-surface-type=file] .forge-surface-tab').textContent.endsWith(' *')");
+  await capture(label + '-forge-editor');
+  await js(`document.querySelector('.forge-surface-tab-group[data-surface-type=file] .forge-tab-close').click()`);
+  await waitFor("!!document.querySelector('.confirm-panel')");
+  await js(`document.querySelector('.confirm-panel .btn').click()`);
+  demoState.forgeEditorConflict = true;
+  await js(`document.querySelector('[aria-label="Save file"]').click()`);
+  await waitFor("[...document.querySelectorAll('.panel-dialog h4')].some(n=>n.textContent.includes('File changed on disk'))");
+  await js(`[...document.querySelectorAll('.panel-dialog button')].find(b=>b.textContent==='Overwrite').click()`);
+  await waitFor("!document.querySelector('.forge-surface-tab-group[data-surface-type=file] .forge-surface-tab').textContent.endsWith(' *')");
+  assert.ok(writes.slice(start).some(w => w.path === base + '/file' && JSON.parse(w.body).overwrite), label + ' conflict overwrite');
+  await js(String.raw`{ const panel=document.querySelector('.forge-pane .forge-file-surface'); const view=panel._editor; view.dispatch({changes:{from:view.state.doc.length,insert:'\n// Reload will lose this'}}); }`);
+  demoState.forgeEditorConflict = true;
+  await js(`document.querySelector('[aria-label="Save file"]').click()`);
+  await waitFor("[...document.querySelectorAll('.panel-dialog h4')].some(n=>n.textContent.includes('File changed on disk'))");
+  await js(`[...document.querySelectorAll('.panel-dialog button')].find(b=>b.textContent==='Reload').click()`);
+  await waitFor("!document.querySelector('.forge-surface-tab-group[data-surface-type=file] .forge-surface-tab').textContent.endsWith(' *')");
+  assert.ok(await js("!document.querySelector('.forge-pane .forge-file-surface')._editor.state.doc.toString().includes('Reload will lose this')"), label + ' reload loses edits');
+  demoState.forgeEditorConflict = false;
+  await js(`document.querySelector('[aria-label="Open project sidebar"]').click(); document.querySelector('[data-sidebar-tab=git]').click()`);
+  await waitFor("!!document.querySelector('.forge-git-content textarea')");
+  await capture(label + '-forge-git');
+  await js(`[...document.querySelectorAll('.forge-git-content button')].find(b=>b.textContent==='Stage all').click()`);
+  await waitFor("[...document.querySelectorAll('.forge-git-content button')].some(b=>b.textContent==='Commit staged files')");
+  await js(`{ const input=document.querySelector('[aria-label="Commit message"]'); input.value='Human edit'; input.dispatchEvent(new Event('input')); [...document.querySelectorAll('.forge-git-content button')].find(b=>b.textContent==='Commit staged files').click(); }`);
+  await waitFor("[...document.querySelectorAll('.forge-git-content button')].some(b=>b.textContent==='Commit all changes')");
+  for (const [action, title] of [['Push', 'Push branch?'], ['Merge back', 'Merge back?']]) {
+    const promptStart = writes.length;
+    await js(`[...document.querySelectorAll('.forge-git-content button')].find(b=>b.textContent===${JSON.stringify(action)}).click()`);
+    await waitFor(`[...document.querySelectorAll('.panel-dialog h4')].some(n=>n.textContent.includes(${JSON.stringify(title)}))`);
+    assert.ok(!writes.slice(promptStart).some(w=>w.path.startsWith('/api/permissions/')), label + ' ' + action + ' asks first');
+    await js(`[...document.querySelectorAll('.panel-dialog button')].find(b=>b.textContent==='Approve').click()`);
+    await waitFor("!document.querySelector('.forge-app-approval') && ![...document.querySelectorAll('.forge-git-content button')].find(b=>b.textContent==='Push').disabled");
+  }
+  if (width <= 768) await js(`document.querySelector('[aria-label="Close project sidebar"]').click()`);
+  await js(`document.querySelector('.forge-surface-tab-group[data-surface-type=session] .forge-surface-tab').click()`);
+  await waitFor("!!document.querySelector('.forge-pane .forge-open-terminal')");
+  await js(`document.querySelector('.forge-pane .forge-open-terminal').click()`);
+  await waitFor("!!document.querySelector('.forge-pane .xterm')");
+  await waitFor("document.querySelector('.forge-pane .forge-terminal-surface')._terminal.buffer.active.getLine(0)?.translateToString().includes('Forge fixture shell')");
+  await js(`document.querySelector('.forge-pane .forge-terminal-surface')._terminal.input('echo human terminal\\r\\n')`);
+  await waitFor("document.querySelector('.forge-pane .forge-terminal-surface')._terminal.buffer.active.getLine(1)?.translateToString().includes('echo human terminal')");
+  await capture(label + '-forge-terminal');
+  await js(`document.querySelector('.forge-surface-tab-group[data-surface-type=terminal] .forge-tab-close').click()`);
+  await waitFor("!document.querySelector('.forge-surface-tab-group[data-surface-type=terminal]')");
+  assert.ok(writes.slice(start).some(w => w.path.includes('/terminals/') && w.method === 'DELETE'), label + ' terminal close');
+};

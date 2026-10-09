@@ -1653,6 +1653,10 @@ propcache==0.5.4 \
     # via
     #   aiohttp
     #   yarl
+ptyprocess==0.7.0 ; sys_platform != 'win32' \
+    --hash=sha256:4b41f3967fce3af57cc7e94b888626c18bf37a083e3651ca8feeb66d492fef35 \
+    --hash=sha256:5c5d0a3b48ceee0b48485e0c26037c0acd7d29765ca3fbb5cb3831d347423220
+    # via -r requirements.txt
 pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy' \
     --hash=sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29 \
     --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
@@ -1931,6 +1935,23 @@ pywin32==312 ; sys_platform == 'win32' \
     --hash=sha256:dab4f65ac9c4e48400a2a0530c46c3c579cd5905ecd11b80692373915269208b \
     --hash=sha256:dc90147579a905b8635e1b0ec6514967dcb07e6e0d9c42f1477feef14cac23bb
     # via mcp
+pywinpty==3.0.5 ; sys_platform == 'win32' \
+    --hash=sha256:03bb3c16d691d9242267201830bcd0e64a9b663170e9042bc84b210da9de15ac \
+    --hash=sha256:22ce1b780d89821cc52daf6eac0708af22d93d000ce9c7c07e37489db8594598 \
+    --hash=sha256:24366280a8aa677323da87bec729cb3ea3b35367386cece0978bdc6e4695c690 \
+    --hash=sha256:2c6008fb2d3774b48693b2fcb7f2cc317ade9dc581289a964ffeeaf81307c9b5 \
+    --hash=sha256:48db1b0ad9d0a1b81dcaaa7163a99a7808deaceb0c1b2344716dc1fc090c3c4c \
+    --hash=sha256:61db0db063de9865adbea66db294628f8577f608d9764a4c7d3384eeacc4e81b \
+    --hash=sha256:7b566165e0c5fdd6abe167a5ac8b954be6a843eb55a85946576d6bc1dea03d6d \
+    --hash=sha256:7dc4046ea8e4d7f0a16dae8dfcaeeda6df7ca3a9330444d2ba5bb96138fe0a91 \
+    --hash=sha256:89c5c6ef08997a3b4b277b214a35fe15cab4dd6d119f0140aa71df5b1168fdbc \
+    --hash=sha256:9c2919a81bc5cfb09b86fc5a002112b2de95ca4304a07413cbeeb746a1307a5c \
+    --hash=sha256:af7a8720c78776ddd6259b71dd567944f766a6cd67f8d2887fbc4973967bacda \
+    --hash=sha256:b467dcad72365bc2205ed8b6e694e817d71de269d46e56cfe267dfa9d3d30e1b \
+    --hash=sha256:c2406f54f699eab75953fb75ce805f2ae55a33a957cd070890abd454fb4b7680 \
+    --hash=sha256:d62946adf14b15b54c0b8d785f93fe18b04da23f4ad59e2e8c4612646e9abd23 \
+    --hash=sha256:e9391c05fbfa7a992a97e831fc6849887b4014a614192e3d984a7ca59592b376
+    # via -r requirements.txt
 pyyaml==6.0.3 \
     --hash=sha256:00c4bdeba853cc34e7dd471f16b4114f4162dc03e6b7afcc2128711f0eca823c \
     --hash=sha256:0150219816b6a1fa26fb4699fb7daa9caf09eb1999f3b70fb6e786805e80375a \

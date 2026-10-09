@@ -159,8 +159,8 @@ class ForgeSessions:
             if isolation == 'existing_branch':
                 if not branch or branch not in [b['name'] for b in self.branches(project_id)]:
                     raise ValueError('Choose an existing local branch.')
-                base_branch = forge_git.validate_branch(repo, branch)
-            base_commit = forge_git.rev_parse(repo, base_branch)
+                forge_git.validate_branch(repo, branch)
+            base_commit = forge_git.rev_parse(repo, branch if isolation == 'existing_branch' else base_branch)
             worktree, root = repo, None
             if isolation != 'in_place':
                 root = projects_module.forge_root(create=True)
@@ -335,9 +335,10 @@ class ForgeSessions:
 
     def remove(self, session_id, discard=False, confirmed=False):
         from services.forge_apps import forge_apps
+        from services.forge_terminals import forge_terminals
         if discard:
             self._confirmed(confirmed)
-        with forge_apps.lock, self.lock:
+        with forge_apps.lock, forge_terminals.lock, self.lock:
             root = self.workspace(session_id)
             session = self.get(session_id)
             details = session['forge']
@@ -345,10 +346,12 @@ class ForgeSessions:
                 if not discard and forge_git.run_git(root, 'status')[1]:
                     raise ReviewConflict('Worktree has uncommitted changes. Confirm discarding them to remove it.')
                 forge_apps.stop(session_id)
+                forge_terminals.stop_session(session_id)
                 _, repo = self.project(details['project_id'])
                 forge_git.worktree_remove(repo, root, discard)
             else:
                 forge_apps.stop(session_id)
+                forge_terminals.stop_session(session_id)
             self.sessions.set_forge(session_id, {**details, 'removed': True})
             return {'ok': True, 'branch': details['branch'], 'kept_project_folder': details['isolation'] == 'in_place'}
 
@@ -392,7 +395,54 @@ class ForgeSessions:
 
     def file(self, session_id, name):
         root = self.workspace(session_id)
-        return {'path': name, 'content': self._text(confined(root, name))}
+        return self._editor_file(confined(root, name), name)
+
+    @staticmethod
+    def _editor_file(path, name):
+        if not path.is_file():
+            raise ValueError('Choose a regular file.')
+        with path.open('rb') as handle:
+            body = handle.read(TEXT_CAP + 1)
+            stamp = os.fstat(handle.fileno()).st_mtime_ns
+        if len(body) > TEXT_CAP:
+            raise ValueError('File exceeds the text size limit.')
+        binary = b'\0' in body
+        try:
+            content = body.decode('utf-8') if not binary else ''
+        except UnicodeDecodeError:
+            binary, content = True, ''
+        return dict(path=name, content=content, binary=binary,
+                    hash=hashlib.sha256(body).hexdigest(), mtime=str(stamp))
+
+    def save_file(self, session_id, name, content, expected_hash, expected_mtime, overwrite=False):
+        if not isinstance(content, str) or '\0' in content:
+            raise ValueError('Save a UTF-8 text file without binary bytes.')
+        body = content.encode('utf-8')
+        if len(body) > TEXT_CAP:
+            raise ValueError('File exceeds the text size limit.')
+        with self.lock:
+            root = self.workspace(session_id)
+            path = confined(root, name)
+            current = self._editor_file(path, name)
+            if current['binary']:
+                raise ValueError('Binary files are read only.')
+            if not overwrite and (current['hash'] != expected_hash or current['mtime'] != expected_mtime):
+                raise ReviewConflict('This file changed on disk. Reload it or overwrite with your edits.')
+            # Revalidate before opening, and compare the opened file before any writes.
+            path = confined(root, name)
+            with path.open('r+b') as handle:
+                existing = handle.read(TEXT_CAP + 1)
+                stamp = str(os.fstat(handle.fileno()).st_mtime_ns)
+                if hashlib.sha256(existing).hexdigest() != current['hash'] or stamp != current['mtime']:
+                    raise ReviewConflict('This file changed while saving. Try again.')
+                handle.seek(0)
+                handle.write(body)
+                handle.truncate()
+                handle.flush()
+                os.fsync(handle.fileno())
+                stamp = str(os.fstat(handle.fileno()).st_mtime_ns)
+            return dict(path=name, content=content, binary=False,
+                        hash=hashlib.sha256(body).hexdigest(), mtime=stamp)
 
     def repo_context(self, session_id):
         """First-turn repository references, preserved in sent-text history."""

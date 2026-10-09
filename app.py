@@ -158,7 +158,11 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         from services.forge_apps import forge_apps
-        forge_apps.shutdown()
+        from services.forge_terminals import forge_terminals
+        try:
+            forge_apps.shutdown()
+        finally:
+            forge_terminals.shutdown()
         await stop_store_watch()
         try:
             await swarm_service.shutdown(_app)

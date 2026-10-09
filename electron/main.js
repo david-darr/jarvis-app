@@ -558,6 +558,15 @@ ipcMain.handle('forge-preview:open', (event, id, url, rect) => fromAppWindow(eve
 ipcMain.handle('forge-preview:navigate', (event, url) => fromAppWindow(event) ? forgePreview.navigate(url) : { ok: false });
 ipcMain.handle('forge-preview:state', event => fromAppWindow(event) ? forgePreview.state() : { open: false });
 ipcMain.handle('forge-preview:external', event => fromAppWindow(event) ? forgePreview.openExternal() : { ok: false });
+ipcMain.handle('forge-terminal:external', async (event, raw) => {
+  if (!fromAppWindow(event) || typeof raw !== 'string' || raw.length > 4000) return { ok: false };
+  try {
+    const url = new URL(raw);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return { ok: false };
+    await shell.openExternal(url.toString());
+    return { ok: true };
+  } catch { return { ok: false }; }
+});
 for (const [channel, fn] of [['back', forgePreview.goBack], ['forward', forgePreview.goForward],
   ['reload', forgePreview.reload], ['close', forgePreview.close], ['bounds', forgePreview.setBounds],
   ['visible', forgePreview.setVisible], ['width', forgePreview.setWidth]]) {

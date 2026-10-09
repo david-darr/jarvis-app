@@ -38,6 +38,17 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname.startsWith("/api/")) {
     if (req.method === 'GET') reads.push({ path: url.pathname, query: Object.fromEntries(url.searchParams) });
+    if (req.method === 'GET' && /\/terminals\/[^/]+\/output$/.test(url.pathname)) {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
+      let cursor = Number(url.searchParams.get('after') || 0);
+      const send = () => {
+        url.searchParams.set('after', String(cursor));
+        const result = fixture(url);
+        for (const event of result.events) { cursor = event.id; res.write(`id: ${event.id}\ndata: ${JSON.stringify({ output: event.data })}\n\n`); }
+        if (result.ended) { clearInterval(timer); res.end('event: closed\ndata: {}\n\n'); }
+      };
+      const timer = setInterval(send, 50); send(); res.on('close', () => clearInterval(timer)); return;
+    }
     if (url.pathname === '/api/chat/stream' && req.method === 'POST' && demoState.computerTurn) {
       let body = ''; for await (const chunk of req) body += chunk;
       writes.push({ path: url.pathname, query: Object.fromEntries(url.searchParams), method: req.method, body });
@@ -92,7 +103,7 @@ const server = http.createServer(async (req, res) => {
             const answer = demoState.forgeAppAnswers[request.id];
             if (!answer) return;
             clearInterval(timer);
-            const result = answer === 'once' ? mutate(url.pathname.replace(/\/(start|restart)$/, '/approved'), 'POST', {})._appStart : { error: 'App command was not approved.' };
+            const result = answer === 'once' ? mutate(updated._approvedPath || url.pathname.replace(/\/(start|restart)$/, '/approved'), 'POST', {})._appStart : { error: 'The action was not approved.' };
             res.end(`data: ${JSON.stringify(result)}\n\n`);
           }, 50);
           res.on('close', () => clearInterval(timer));
@@ -427,7 +438,7 @@ app.whenReady().then(async () => {
       for (const mode of ['plan', 'build']) {
         const modeStart = writes.length;
         await js(`(() => { const picker = document.querySelector('[aria-label="Session mode"]').parentElement; picker.value = ${JSON.stringify(mode)}; picker.dispatchEvent(new Event('change')); })()`);
-        await waitFor(`document.querySelector('.forge-plan-note').textContent.includes(${JSON.stringify(mode === 'plan' ? 'blocked' : 'make changes')})`);
+        await waitFor(`document.querySelector('.forge-plan-note').textContent.includes(${JSON.stringify(mode === 'plan' ? 'agent read only' : 'make changes')})`);
         assert.equal(JSON.parse(writes.slice(modeStart).find(w => w.path === forgeBase + '/mode').body).mode, mode, label + ' mode route');
       }
       await js("document.querySelector('[data-forge-project=fp1]').click()");
@@ -446,7 +457,7 @@ app.whenReady().then(async () => {
       const endStart = writes.length;
       await js("[...document.querySelectorAll('.forge-session-header button')].find(b => b.textContent === 'End session').click()");
       await waitFor("!!document.querySelector('.modal-panel .forge-warning')");
-      await js("[...document.querySelectorAll('.modal-panel button')].find(b => b.textContent === 'Remove worktree').click()");
+      await js("[...document.querySelectorAll('.modal-panel button')].find(b => b.textContent === 'Discard').click()");
       await waitFor("!!document.querySelector('.confirm-panel')");
       assert.ok(!writes.slice(endStart).some(w => w.method === 'DELETE'), label + ' dirty removal asks');
       await js("[...document.querySelectorAll('.confirm-panel button')].find(b => b.textContent === 'Cancel').click(); document.querySelector('.modal-panel [aria-label=Close]').click()");
@@ -455,9 +466,10 @@ app.whenReady().then(async () => {
       await js("document.querySelector('.forge-tree-directory').open = true");
       await waitFor("!!document.querySelector('[data-file-path=\"src/garden.js\"]')");
       await js("document.querySelector('[data-file-path=\"src/garden.js\"]').click()");
-      await waitFor("!!document.querySelector('.forge-pane .forge-file-viewer code .hljs-keyword')");
+      await waitFor("!!document.querySelector('.forge-pane .cm-editor')");
       assert.ok(await js("document.querySelector('.forge-surface-tab-group[data-surface-type=file]').classList.contains('preview')"), label + ' Explorer opens an italic preview');
-      assert.ok(await js("document.querySelector('.forge-line-numbers').textContent.startsWith('1') && !document.querySelector('.forge-file-viewer textarea, .forge-file-viewer [contenteditable]')"), label + ' numbered read-only file');
+      // CodeMirror's first gutter element is a hidden width spacer holding the widest number.
+      assert.ok(await js("[...document.querySelectorAll('.cm-lineNumbers .cm-gutterElement')].find(e => e.style.visibility !== 'hidden')?.textContent === '1' && !!document.querySelector('.cm-content[contenteditable=true]')"), label + ' numbered editable file');
       await js("document.querySelector('[data-file-path=\"src/garden.js\"]').dispatchEvent(new MouseEvent('dblclick', {bubbles:true}))");
       assert.ok(await js("!document.querySelector('.forge-surface-tab-group[data-surface-type=file]').classList.contains('preview')"), label + ' double-click pins the preview');
       if (width > 768) await capture(label + '-forge-shell-explorer');
@@ -499,13 +511,13 @@ app.whenReady().then(async () => {
         assert.equal(await js("Math.round(document.querySelector('.forge-project-sidebar').getBoundingClientRect().width)"), 228, 'sidebar double-click resets');
         await js("document.querySelector('.forge-surface-tab-group[data-surface-type=file] .forge-surface-tab').click(); document.dispatchEvent(new KeyboardEvent('keydown', {key:'d', ctrlKey:true, bubbles:true, cancelable:true}))");
         await waitFor("document.querySelector('.forge-shell').dataset.split === 'true'");
-        assert.ok(await js("!!document.querySelector('[aria-label=\"Left pane\"] .forge-transcript-layout') && !!document.querySelector('[aria-label=\"Right pane\"] .forge-file-viewer')"), 'split shows file beside session');
+        assert.ok(await js("!!document.querySelector('[aria-label=\"Left pane\"] .forge-transcript-layout') && !!document.querySelector('[aria-label=\"Right pane\"] .cm-editor')"), 'split shows file beside session');
         const beforeSplit = await js("document.querySelector('[aria-label=\"Left pane\"]').clientWidth");
         await dragHandle('.forge-pane-divider', 40);
         assert.ok(await js("document.querySelector('[aria-label=\"Left pane\"]').clientWidth") > beforeSplit, 'split divider resizes');
         await capture(label + '-forge-shell-split');
         await js("{const t=document.querySelector('.forge-surface-tab-group[data-surface-type=diff]'); const dt=new DataTransfer(); t.dispatchEvent(new DragEvent('dragstart', {bubbles:true, dataTransfer:dt})); document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true})); document.querySelector('.forge-workspace').dispatchEvent(new DragEvent('drop', {bubbles:true, clientX:innerWidth-2, dataTransfer:dt}));}");
-        assert.ok(await js("!!document.querySelector('[aria-label=\"Right pane\"] .forge-file-viewer')"), 'Escape cancels tab drag');
+        assert.ok(await js("!!document.querySelector('[aria-label=\"Right pane\"] .cm-editor') && !document.querySelector('[aria-label=\"Right pane\"] .forge-diff-viewer')"), 'Escape cancels tab drag');
         await js("{const t=document.querySelector('.forge-surface-tab-group[data-surface-type=diff]'); const dt=new DataTransfer(), w=document.querySelector('.forge-workspace'); t.dispatchEvent(new DragEvent('dragstart', {bubbles:true, dataTransfer:dt})); w.dispatchEvent(new DragEvent('dragover', {bubbles:true, cancelable:true, clientX:innerWidth-2, dataTransfer:dt})); w.dispatchEvent(new DragEvent('drop', {bubbles:true, clientX:innerWidth-2, dataTransfer:dt}));}");
         assert.ok(await js("!!document.querySelector('[aria-label=\"Right pane\"] .forge-diff-viewer')"), 'right-edge tab drop');
       } else {
@@ -515,6 +527,7 @@ app.whenReady().then(async () => {
       await js("document.querySelector('.forge-surface-tab-group[data-surface-type=diff]').dispatchEvent(new MouseEvent('auxclick', {button:1, bubbles:true, cancelable:true}))");
       assert.ok(await js("!document.querySelector('.forge-surface-tab-group[data-surface-type=diff]')"), label + ' middle-click closes');
       assert.deepEqual(await overflow(), [], label + ' shell overflow');
+      await require('./forge3-checks.cjs')({ js, waitFor, capture, writes, demoState, label, forgeSessionId, width });
       // A project with no session uses the registered folder's read-only Explorer.
       await js("document.querySelector('[data-forge-project=fp2]').click()");
       await waitFor("document.querySelector('.forge-project-heading strong').textContent === 'Field notes'");

@@ -6,7 +6,12 @@ const bridge = () => window.jarvis?.forgePreview;
 let activeNative = null;
 
 export async function launchApp(id, action = 'start', { signal, owner } = {}) {
-  const response = await fetch(`${base(id)}/${action}`, { method: 'POST', signal });
+  const result = await permissionAction(`${base(id)}/${action}`, { signal, owner });
+  changed(); return result;
+}
+
+export async function permissionAction(url, { signal, owner, body } = {}) {
+  const response = await fetch(url, { method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
   if (!response.ok) throw new Error(`${response.status}: ${(await response.json()).detail}`);
   const reader = response.body.getReader(), decoder = new TextDecoder();
   let pending = '', result = null, prompt = null;
@@ -22,7 +27,7 @@ export async function launchApp(id, action = 'start', { signal, owner } = {}) {
         if (!text.startsWith('data: ')) continue;
         const packet = JSON.parse(text.slice(6));
         if (packet.error) throw new Error(packet.error);
-        if (packet.status) { result = packet.status; changed(); }
+        if (packet.status) { result = packet.status; }
         if (packet.permission) {
           const request = packet.permission;
           const buttons = el('div');
@@ -42,7 +47,7 @@ export async function launchApp(id, action = 'start', { signal, owner } = {}) {
       }
       if (done) break;
     }
-    if (!result) throw new Error('App start ended before a status arrived.');
+    if (!result) throw new Error('The action ended before a result arrived.');
     return result;
   } finally { signal?.removeEventListener('abort', abort); prompt?.close(); reader.releaseLock(); }
 }
