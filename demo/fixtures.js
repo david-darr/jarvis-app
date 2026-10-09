@@ -516,6 +516,10 @@
     if (route.startsWith("/api/documents/")) return { ...docs[0], content: "# Design principles\n\nMake the important things easy to find." };
     if (route === "/api/skills") return list([
       ...(state.recordedSkills || []),
+      ...["build-custom-tab", "build-skill", "build-mcp-server", "build-automation"].map(slug => ({
+        slug, description: "Build with Kairos using the current app contract.",
+        curation: { source: "bundled", origin: null, scan: null, blocked_for_models: false, approved: false, lint: [] },
+      })),
       // Roadmap phase 6: an unreadable skill is listed with its reason.
       { slug: "broken-skill", description: "", error: "Can't be read: its SKILL.md is not UTF-8 text.", curation: null },
       { slug: "weekly-review", description: "Review the week and plan what comes next.",

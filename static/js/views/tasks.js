@@ -3,6 +3,7 @@ import { ICONS } from "../icons.js";
 import { renderBoard } from "./taskBoard.js";
 import { renderTriggers } from "./taskTriggers.js";
 import { shareButton } from "../storePublish.js";
+import { renderBuilderBrief } from "../builderBrief.js";
 import { runHistory, outcomeLabel, formatDuration, runTime, deliveryState } from "../runHistory.js";
 
 // Built-in tasks gallery (David's ask 2026-08-31, matching Odysseus's
@@ -22,6 +23,13 @@ export async function render(container) {
   ]);
 
   const builtinCard = el("div", { class: "glass card automation-library" });
+  const builder = el("details", { class: "disclosure-panel" });
+  builder.append(el("summary", { text: "Automation brief" }));
+  const buildButton = el("button", { type: "button", class: "btn primary", text: "Build with Kairos", "data-build-kind": "automation", "aria-expanded": "false" });
+  header.append(buildButton);
+  buildButton.addEventListener("click", () => { builder.open = !builder.open; if (builder.open) builder.scrollIntoView({ block: "nearest" }); });
+  builder.addEventListener("toggle", () => buildButton.setAttribute("aria-expanded", String(builder.open)));
+  renderBuilderBrief(builder, "automation");
   await refreshBuiltins(builtinCard);
 
   const form = el("details", { class: "disclosure-panel" });
@@ -84,7 +92,7 @@ export async function render(container) {
   const boardCard = el("div", { class: "glass card task-board-card" });
   // Webhook triggers (2026-10-05): outside events that start work.
   const triggersCard = el("div", { class: "glass card triggers-card" });
-  container.append(el("div", { class: "view-constrained" }, [header, boardCard, form, list, triggersCard, builtinCard]));
+  container.append(el("div", { class: "view-constrained" }, [header, builder, boardCard, form, list, triggersCard, builtinCard]));
   await renderBoard(boardCard);
   await renderTriggers(triggersCard).catch(() => triggersCard.remove()); // admin only
 

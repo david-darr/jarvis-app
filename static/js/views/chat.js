@@ -992,9 +992,9 @@ export async function render(container, tabId, options = {}) {
   backdropInstant = false;
   backdrop.ready.then(() => options.transitionReady?.());
 
-  // Tool Store tab builder handoff — the
+  // Builder brief handoff from Tool Store or Tasks: the
   // one deliberate exception to "Chat always lands on the welcome screen"
-  // above. tool-store.js creates a real session and stashes it here rather
+  // above. builderBrief.js creates a real session and stashes it here rather
   // than landing the user back at a blank welcome screen right after they
   // filled out the form. Consumed once (removeItem) so a later, ordinary
   // visit to this tab still resets to welcome as normal.

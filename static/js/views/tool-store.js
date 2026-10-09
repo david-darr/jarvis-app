@@ -2,6 +2,7 @@ import { api, el, toast, confirmDialog, customSelect } from "../api.js";
 import { ICONS } from "../icons.js";
 import { pill } from "../settingsKit.js";
 import { shareButton, githubStrip } from "../storePublish.js";
+import { builderMessage, startBuilderChat, renderBuilderBrief } from "../builderBrief.js";
 
 // Browse what Kairos can use. Skill content and live MCP tool schemas stay
 // behind their own read/describe calls; this view only loads catalog metadata.
@@ -30,6 +31,21 @@ export async function render(container) {
   const customServer = el("details", { class: "disclosure-panel tool-store-install", hidden: true });
   const tabBuilder = el("details", { class: "disclosure-panel tool-store-install", hidden: true });
   const tabInstaller = el("details", { class: "disclosure-panel tool-store-install", hidden: true });
+  const builders = [
+    { kind: "skills", brief: "skill", title: "Skill brief" },
+    { kind: "tools", brief: "mcp", title: "Tool brief" },
+  ].map(config => {
+    const button = el("button", { type: "button", class: "btn primary", text: "Build with Kairos", hidden: true,
+      "data-build-kind": config.kind, "aria-expanded": "false" });
+    const panel = el("details", { class: "disclosure-panel tool-store-install", hidden: true });
+    panel.append(el("summary", { text: config.title }));
+    button.addEventListener("click", () => { panel.open = !panel.open; panel.hidden = !panel.open; if (panel.open) panel.scrollIntoView({ block: "nearest" }); });
+    panel.addEventListener("toggle", () => {
+      button.setAttribute("aria-expanded", String(panel.open));
+      panel.hidden = !state.admin || state.kind !== config.kind || !panel.open;
+    });
+    return { ...config, button, panel };
+  });
   const managerHost = el("div", { class: "tool-store-manager", hidden: true });
   manageSkills.addEventListener("click", () => showSkillManager());
   manageTools.addEventListener("click", () => { customServer.open = true; customServer.scrollIntoView({ block: "nearest" }); });
@@ -59,9 +75,9 @@ export async function render(container) {
       ]),
     ]),
     el("div", { class: "tool-store-toolbar" }, [search, filters, installed]),
-    el("div", { class: "tool-store-summary" }, [count, el("div", { class: "tool-store-manage" }, [manageSkills, manageTools, buildTab, installTab, refreshCommunity])]),
+    el("div", { class: "tool-store-summary" }, [count, el("div", { class: "tool-store-manage" }, [manageSkills, manageTools, ...builders.map(b => b.button), buildTab, installTab, refreshCommunity])]),
     remoteInstall, customServer, managerHost,
-    tabBuilder, tabInstaller, results,
+    ...builders.map(b => b.panel), tabBuilder, tabInstaller, results,
   ]));
   results.append(el("div", { class: "tool-store-empty", role: "status", text: "Loading skills and tools…" }));
 
@@ -121,6 +137,7 @@ export async function render(container) {
   if (loaded[3].status === "fulfilled") state.tabs = loaded[3].value;
   else state.tabsError = "Tabs are unavailable right now.";
   state.admin = loaded[4].status === "fulfilled" && loaded[4].value.is_admin;
+  if (state.admin) for (const builder of builders) renderBuilderBrief(builder.panel, builder.brief);
   if (loaded[5].status === "fulfilled") setCommunity(loaded[5].value);
   else if (state.admin) state.communityError = loaded[5].reason?.message || "The community catalog is unavailable right now.";
   refreshCommunity.hidden = !state.admin;
@@ -226,6 +243,10 @@ export async function render(container) {
     manageSkills.hidden = ["tabs", "automations"].includes(state.kind);
     manageTools.hidden = ["tabs", "automations"].includes(state.kind);
     buildTab.hidden = state.kind !== "tabs";
+    for (const builder of builders) {
+      builder.button.hidden = !state.admin || state.kind !== builder.kind;
+      builder.panel.hidden = !state.admin || state.kind !== builder.kind || !builder.panel.open;
+    }
     installTab.hidden = state.kind !== "tabs" || !state.admin;
     if (state.kind === "tabs") managerHost.hidden = true;
     tabBuilder.hidden = state.kind !== "tabs" || !tabBuilder.open;
@@ -746,7 +767,7 @@ async function renderTabBuilder(container) {
   const endpoints = await api("/api/models").catch(() => []);
 
   const nameInput = el("input", { placeholder: "Tab name, e.g. \"School\"" });
-  const iconInput = el("input", { placeholder: "Icon idea (optional) — e.g. \"graduation cap\"" });
+  const iconInput = el("input", { placeholder: "Icon idea (optional), e.g. \"graduation cap\"" });
   const whatText = el("textarea", { rows: "4", placeholder: "What should this tab do?" });
 
   const selectedSources = new Set();
@@ -779,7 +800,7 @@ async function renderTabBuilder(container) {
     rows: "3",
     placeholder: "Walk me through an example of using this tab (optional, but helps a lot)",
   });
-  const lookFeelInput = el("input", { placeholder: "Look & feel reference (optional) — e.g. \"like the Tasks tab\"" });
+  const lookFeelInput = el("input", { placeholder: "Look & feel reference (optional), e.g. \"like the Tasks tab\"" });
 
   const modelOptions = endpoints.map((ep) => el("option", { value: ep.id, text: modelLabel(ep) }));
   const modelSelect = endpoints.length
@@ -787,7 +808,7 @@ async function renderTabBuilder(container) {
     : null;
   const modelField = el("div", { class: "tab-build-field" }, [
     el("label", { text: "Model to build it" }),
-    modelSelect || el("div", { class: "tab-build-error", text: "No models added yet — add one in Settings > Add Models first." }),
+    modelSelect || el("div", { class: "tab-build-error", text: "No models added yet. Add one in Settings > Add Models first." }),
   ]);
 
   const errorMsg = el("div", { class: "tab-build-error hidden" });
@@ -816,31 +837,12 @@ async function renderTabBuilder(container) {
     }
     if (exampleText.value.trim()) lines.push(`Example of how I'd use it: ${exampleText.value.trim()}`);
     if (lookFeelInput.value.trim()) lines.push(`Look and feel reference: ${lookFeelInput.value.trim()}`);
-    lines.push(
-      "",
-      "Build a folder tab in data/tabs/<slug>/ only. Include tab.json (slug matching ^[a-z][a-z0-9_]*$, " +
-        "name, version, description, api: 1, hooks: [], optional icon_svg, blurb, detail and reads), routes.py " +
-        "exposing a FastAPI router, view.js exporting render(), optional view.css, service.py and hooks.py. " +
-        "Use relative imports inside the tab. Import Kairos only through core.tab_api; bind " +
-        "api = tab_api.for_tab(__package__) for namespaced data storage, encryption, models and read-only sources. " +
-        "Keep user data in api.data_dir, never in the source folder. Hook names are start, stop, calendar_items " +
-        "and on_message. Follow this folder format even if an older build-custom-tab skill describes split files. " +
-        "No app-folder edits. Tell me to review and approve the source in Tool Store > Tabs when ready.",
-    );
-    const message = lines.join("\n");
+    const message = builderMessage("build-custom-tab", lines[0], lines.slice(2));
 
     buildBtn.disabled = true;
     buildBtn.textContent = "Starting...";
     try {
-      const session = await api("/api/sessions", { method: "POST", body: JSON.stringify({}) });
-      await api(`/api/sessions/${session.id}/model`, {
-        method: "POST",
-        body: JSON.stringify({ model_endpoint_id: modelSelect.value }),
-      });
-      // Consumed once by chat.js's render() — the one deliberate exception
-      // to "Chat always lands on the welcome screen" (see its own comment).
-      sessionStorage.setItem("jarvis:pendingChatHandoff", JSON.stringify({ sessionId: session.id, message }));
-      document.querySelector('.nav-item[data-tab="chat"]')?.click();
+      await startBuilderChat(message, modelSelect.value);
     } catch (e) {
       errorMsg.textContent = `Couldn't start: ${e.message}`;
       errorMsg.classList.remove("hidden");

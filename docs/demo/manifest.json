@@ -1,7 +1,7 @@
 {
  "built": {
-  "app.js": "11a4fe49f2e28ae8b246a16636eb31a53647008cb1c0bdaa5964daaa03ff1737",
-  "fixtures.js": "af1505fd809fc1d0673f5bca950b6c16a274a09ca360c82b34df4383830106e7",
+  "app.js": "3c24134a7e43269ce431017951a277b1b9317eb378816191b75fe5735f8b3be4",
+  "fixtures.js": "d8e51c1124509daabcc1c14ca7609ea1b5561c570633651d52562a963c422edc",
   "index.html": "876b0a30cc72b90dee0b600154fb85b90eceac5bb0f113984c97bf512bd68803",
   "shim.js": "f86b266cb59b6b654edb6ed26973802430586d7b84bdc2a9effbadb529c90945",
   "static/css/appearance.css": "3330eb656e91e4e74388048fd201ea62a4a2d80befd8748b22689836793f2ca0",
@@ -250,7 +250,7 @@
   "tabs/crm/view.css": "692abfe0aaa1180fd651584cb447b87e827a018b4e1959f28a6cdc91c7b6672b"
  },
  "sources": {
-  "demo/fixtures.js": "af1505fd809fc1d0673f5bca950b6c16a274a09ca360c82b34df4383830106e7",
+  "demo/fixtures.js": "d8e51c1124509daabcc1c14ca7609ea1b5561c570633651d52562a963c422edc",
   "demo/shim.js": "f86b266cb59b6b654edb6ed26973802430586d7b84bdc2a9effbadb529c90945",
   "scripts/build_site_demo.py": "80b3f2480106464f946e4060af6c0fb24a24cead93757e3e131616ba67ba0005",
   "static/css/appearance.css": "3330eb656e91e4e74388048fd201ea62a4a2d80befd8748b22689836793f2ca0",
@@ -306,6 +306,7 @@
   "static/js/auth.js": "d7cdd47194a76c15ccf1ebd9c7f0b2dc9bf64d68895ca2829aba762c5b09adc9",
   "static/js/brand.js": "350df7bb7471550c661d6261ba226a035472ad58e2af37b1d4261d6ec82b1f7e",
   "static/js/browserPane.js": "0df93306ae721c1ccc9527a94474dfdc317384228a8d58a017a85af609e38233",
+  "static/js/builderBrief.js": "81293359c6093cf929ca7dcb4034af464c059a6e237d1ea134accc5213e47879",
   "static/js/chatActivity.js": "b1e057983019b01bea4b0886ea6dae1077fd43bcd1cb1838443815f9e5242e3e",
   "static/js/chatBackdrop.js": "eb4e91d4a4b7689ba77f83f6a98302f09287e651202f1d0b7b606c2e45d0d702",
   "static/js/chatComputerPane.js": "36bca578ef1acd4aeebd874a65b3997a5681a66f124e094fd322ebf81892fdc7",
@@ -550,7 +551,7 @@
   "static/js/views/agents.js": "af903fbed226e8cd8f1def1bf6f706267ed1fa079a899b5f10b10f2e5b723f9b",
   "static/js/views/appearancePanel.js": "ae31be89fcf123b302319e993a8620c730c70557ebdaf1a70215b870e0002a69",
   "static/js/views/calendar.js": "929ba1b8832673c21be945302512574fee580b001d67b7eed11fe48caf82b275",
-  "static/js/views/chat.js": "3b8a9fb7f0731cfc7d9d05399d6aa322a8f1c66c1672931ab507f832b8e1f9d9",
+  "static/js/views/chat.js": "7cbbf9804e1406570eb909567d2c2db0f84ee17c75866d84ffab5ee5cadd3c20",
   "static/js/views/cookbook.js": "26d00630fe938e075bf751e0bc1150739091158143c639075f24865de960e412",
   "static/js/views/email.js": "281c5c0dad613ea5898b76ec9e121d4a9659d0807c54c4ecf3f83e79109bc3d0",
   "static/js/views/home.js": "608463635b76bf5adc43ef395677e13c2c6efb28c1e9b3d48737122e3c2af249",
@@ -565,8 +566,8 @@
   "static/js/views/swarm.js": "12f7e72d0a80eb5e48c4fc75396c33b3a846ac7f3d4adec2aa2a72137ff5af94",
   "static/js/views/taskBoard.js": "35e34c487133c27f899e9faae098ce5533eca3d93a3a15b77b4e9d63476e11f4",
   "static/js/views/taskTriggers.js": "03fcb4f3b6bcd86024b6741d4ddd2c4e475b0e956f2bf97e0ff4ff95b3458aa0",
-  "static/js/views/tasks.js": "915eebdab28677196d23300b1900d1db0c2e048a2a4b3cbbe712fe83e71d5e14",
-  "static/js/views/tool-store.js": "7f25640e9c1c83abeb4b1d5ef6716f06941d48091a550a21ddaec453ef3cc3c0",
+  "static/js/views/tasks.js": "b3100dfee4d6edce931aebac6968e5cb5e22899ccf1bd5c068100be5bc1dca65",
+  "static/js/views/tool-store.js": "08c4e7d16913e740889164e160c41044ec3c550548a9db8dd750204079436ca3",
   "static/js/voiceInput.js": "6f19a1757d3a5f4e17faac58cb5ab7a5dfaf32b5fb487d30838aca1da1aedf03",
   "static/js/voiceOutput.js": "2d69d40035da463d1bac221eeabac5b17e3cfa0876e3a896f619b6cd1716b21f",
   "tabs/crm/tab.json": "bc2ad32b9132508e347556c1eb386dd1f290f427b1ef9a05266b153b45d16668",

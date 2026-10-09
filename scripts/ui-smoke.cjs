@@ -486,17 +486,17 @@ app.whenReady().then(async () => {
           assert.deepEqual(await overflow(), [], label + " open tab file review overflow");
           await capture(label + "-tool-store-tabs-review");
           if (label === "desktop") {
-            await waitFor("!!document.querySelector('.tab-build-form')");
+            await waitFor("!!document.querySelector('.tab-build-form:not([data-builder])')");
             // The card at the end of Yours opens the same brief as the header button.
             await js("document.querySelector('.tool-store-build-card button').click()");
-            await waitFor("!document.querySelector('.tab-build-form').closest('details').hidden");
-            await js("document.querySelector('.tab-build-form input').value='Research'; document.querySelector('.tab-build-form textarea').value='Track my sources'; document.querySelector('.tab-build-build-btn').click()");
+            await waitFor("!document.querySelector('.tab-build-form:not([data-builder])').closest('details').hidden");
+            await js("document.querySelector('.tab-build-form:not([data-builder]) input').value='Research'; document.querySelector('.tab-build-form:not([data-builder]) textarea').value='Track my sources'; document.querySelector('.tab-build-form:not([data-builder]) .tab-build-build-btn').click()");
             await waitFor("document.querySelector('.nav-item[data-tab=chat]').classList.contains('active')");
             await waitFor("!!document.querySelector('.chat-layout')");
             await waitFor("sessionStorage.getItem('jarvis:pendingChatHandoff') === null");
             for (let i = 0; i < 80 && !writes.some(w => w.path === "/api/chat/stream" && w.body.includes('Research')); i++) await delay(50);
             const handoff = writes.find(w => w.path === "/api/chat/stream" && w.body.includes('Research'));
-            assert.ok(handoff && JSON.parse(handoff.body).message.includes('data/tabs/<slug>/') && JSON.parse(handoff.body).message.includes('core.tab_api'), "Build hands a folder-tab request to a model chat");
+            assert.ok(handoff && JSON.parse(handoff.body).message.startsWith('First call read_skill with slug "build-custom-tab"'), "Build reads the tab skill first");
             await navigate("tool-store");
           }
           writes.splice(tabStoreWrites);
@@ -1236,6 +1236,38 @@ app.whenReady().then(async () => {
     // Each action waits for its own request and each status for its own DOM.
     // They need the sample agents, so they run outside the empty pass, which
     // is restored for the checks after them.
+    // Each brief validates required answers and uses the same one-shot chat
+    // handoff at both viewport sizes. Synthetic writes are kept only here.
+    const emptyBeforeBuilders = demoState.empty;
+    demoState.empty = false;
+    for (const [label, width, height] of [['desktop', 1440, 900], ['mobile', 390, 844]]) {
+      win.setContentSize(width, height);
+      for (const [kind, category, skill] of [['skill', 'Skills', 'build-skill'], ['mcp', 'Tools', 'build-mcp-server'], ['automation', null, 'build-automation']]) {
+        await navigate(category ? 'tool-store' : 'tasks');
+        if (category) await js(`[...document.querySelectorAll('.tool-store-filters button')].find(b => b.textContent === ${JSON.stringify(category)}).click()`);
+        const scope = `[data-builder="${kind}"]`;
+        await waitFor(`!!document.querySelector('${scope} .tab-build-build-btn')`);
+        const buttonKind = kind === 'skill' ? 'skills' : kind === 'mcp' ? 'tools' : 'automation';
+        await js(`document.querySelector('[data-build-kind="${buttonKind}"]').click()`);
+        await waitFor(`document.querySelector('${scope}').closest('details').open`);
+        const start = writes.length;
+        await js(`document.querySelector('${scope} .tab-build-build-btn').click()`);
+        await waitFor(`!document.querySelector('${scope} .tab-build-error[role="status"]').classList.contains('hidden')`);
+        assert.equal(writes.length, start, label + ' ' + kind + ' empty brief creates no session');
+        await js(`document.querySelectorAll('${scope} textarea, ${scope} input').forEach((input, index) => { input.value = 'Builder ${kind} ${label} answer ' + index; })`);
+        assert.deepEqual(await overflow(), [], label + ' ' + kind + ' brief fits');
+        await capture(label + '-builder-' + kind);
+        await js(`document.querySelector('${scope} .tab-build-build-btn').click()`);
+        await waitFor("document.querySelector('.nav-item[data-tab=chat]').classList.contains('active') && sessionStorage.getItem('jarvis:pendingChatHandoff') === null");
+        const marker = `Builder ${kind} ${label} answer`;
+        for (let i = 0; i < 80 && !writes.slice(start).some(w => w.path === '/api/chat/stream' && w.body.includes(marker)); i++) await delay(50);
+        const handoff = writes.slice(start).find(w => w.path === '/api/chat/stream' && w.body.includes(marker));
+        assert.ok(handoff && JSON.parse(handoff.body).message.startsWith(`First call read_skill with slug "${skill}"`), label + ' ' + kind + ' reads its skill first');
+        assert.ok(writes.slice(start).some(w => /\/api\/sessions\/[^/]+\/model$/.test(w.path)), label + ' builder sets the selected model');
+        writes.splice(start);
+      }
+    }
+    demoState.empty = emptyBeforeBuilders;
     const emptyBeforeMentions = demoState.empty;
     demoState.empty = false;
     const waitForWrite = async (start, path, matches) => {

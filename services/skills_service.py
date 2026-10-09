@@ -33,7 +33,8 @@ SKILL_TEMPLATES_DIR = os.path.join(BASE_DIR, "skill_templates")
 # Before seed hashes were tracked, this exact bundled text was shipped.
 # Normalize line endings only: even a small user edit must prevent refresh.
 _LEGACY_SEED_HASHES = {
-    "build-custom-tab": {"c12313f03035060c100ceac976653c6c1ccbe8f759285a44925b700009141cb2"},
+    "build-custom-tab": {"c12313f03035060c100ceac976653c6c1ccbe8f759285a44925b700009141cb2",
+                         "0cc72be9661ec969572f1798c43b4d5e2b23d0bcd8f2de90a19dea18f5f034d4"},
 }
 
 
