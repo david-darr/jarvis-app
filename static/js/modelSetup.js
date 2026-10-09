@@ -156,7 +156,8 @@ export function mountModelSetup(host, { onConnected } = {}) {
           lastPrompt = progress.permission.id;
           showPermissionPrompt({ ...progress.permission, tool: "Install Codex" }, () => {}, { mount: approvalHost });
         }
-        if (progress.state === "error") { dismissPermissionPrompt(); problem(progress.error); screen.append(button("Try again", install)); return; }
+        // A finished job has nothing left to cancel: forget it, or Try again's stop() cancels it late.
+        if (progress.state === "error") { jobId = null; dismissPermissionPrompt(); problem(progress.error); screen.append(button("Try again", install)); return; }
         if (progress.state === "done") {
           dismissPermissionPrompt(); jobId = null; await refresh();
           if (!disposed && at === generation) cli("codex");

@@ -54,8 +54,11 @@ module.exports = async ({ js, win, waitFor, capture, delay, navigate, demoState,
       await js("document.querySelector('.permission-dialog [data-choice=reject]').click()");
       await waitFor(text('Installation cancelled'));
       assert.equal(demoState.modelSetup.codex.installed, false, label + ' denied install');
+      const retryStart = writes.length;
       await click('Try again');
       await waitFor("!!document.querySelector('.permission-dialog[open]')");
+      // The failed job has ended: Try again must not cancel it (that late cancel used to race the new job).
+      assert.ok(!writes.slice(retryStart).some(w => w.path.endsWith('/cancel')), label + ' Try again does not cancel the ended job');
       await js("document.querySelector('.permission-dialog [data-choice=once]').click()");
       await waitFor("document.querySelector('.model-setup-progress')?.textContent.includes('Installing Codex')");
       await waitFor(text('Sign in with ChatGPT'));
