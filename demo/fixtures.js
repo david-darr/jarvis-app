@@ -536,8 +536,8 @@
           lint: [] } },
     ]);
     if (route.startsWith('/api/skills/')) {
-      const skill = (state.recordedSkills || []).find(item => item.slug === route.split('/')[3]);
-      if (skill) return skill;
+      const skill = fixture(new URL('/api/skills', url)).find(item => item.slug === route.split('/')[3]);
+      if (skill) return { ...skill, body: skill.body || `## When to Use\n${skill.description}\n\n## Procedure\nReview the inputs, follow the skill and report the result.` };
     }
     if (route === "/api/vault/graph") return graph();
     if (route === "/api/vault/note") return { content: "---\nstatus: active\n---\n# Projects index\n\nA **connected place** for ideas and ongoing work. See [[Projects/note-1|the next note]]." };

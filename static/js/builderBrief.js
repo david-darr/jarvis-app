@@ -1,14 +1,16 @@
-import { api, el, customSelect } from "./api.js";
+import { api, el, customSelect, openPanelDialog } from "./api.js";
 
 export function builderMessage(skill, request, answers) {
   return [`First call read_skill with slug "${skill}" and follow it.`, "", request, ...answers].join("\n");
 }
 
-export async function startBuilderChat(message, modelEndpointId) {
-  const session = await api("/api/sessions", { method: "POST", body: JSON.stringify({}) });
+export async function startBuilderChat(message, modelEndpointId, { signal, onStarted } = {}) {
+  const session = await api("/api/sessions", { method: "POST", body: JSON.stringify({}), signal });
   await api(`/api/sessions/${session.id}/model`, {
-    method: "POST", body: JSON.stringify({ model_endpoint_id: modelEndpointId }),
+    method: "POST", body: JSON.stringify({ model_endpoint_id: modelEndpointId }), signal,
   });
+  if (signal?.aborted) return;
+  onStarted?.();
   sessionStorage.setItem("jarvis:pendingChatHandoff", JSON.stringify({ sessionId: session.id, message }));
   document.querySelector('.nav-item[data-tab="chat"]')?.click();
 }
@@ -37,7 +39,7 @@ export function builderBriefMessage(kind, answers) {
 }
 
 // All briefs share the tab builder's classes and one chat handoff.
-export async function renderBuilderBrief(container, kind) {
+export async function renderBuilderBrief(container, kind, dialog) {
   const config = BRIEFS[kind];
   const form = el("div", { class: "tab-build-form", "data-builder": kind });
   const inputs = config.fields.map(([label, placeholder, required], index) => {
@@ -48,7 +50,8 @@ export async function renderBuilderBrief(container, kind) {
     return input;
   });
   container.append(form);
-  const endpoints = await api("/api/models").catch(() => []);
+  const endpoints = await api("/api/models", { signal: dialog?.signal }).catch(() => []);
+  if (!container.isConnected) return;
   const model = endpoints.length ? customSelect({ style: "width:100%;", "aria-label": "Model to build it" },
     endpoints.map(ep => el("option", { value: ep.id, text: `${ep.name} (${ep.model || "CLI default"})` }))) : null;
   const error = el("div", { class: "tab-build-error hidden", role: "status" });
@@ -67,10 +70,18 @@ export async function renderBuilderBrief(container, kind) {
     const answers = inputs.flatMap((input, index) => input.value.trim()
       ? [`${config.fields[index][0]} ${input.value.trim()}`] : []);
     button.disabled = true; button.textContent = "Starting...";
-    try { await startBuilderChat(builderBriefMessage(kind, answers), model.value); }
+    try { await startBuilderChat(builderBriefMessage(kind, answers), model.value, { signal: dialog?.signal, onStarted: dialog?.close }); }
     catch (e) {
+      if (!container.isConnected) return;
       error.textContent = `Couldn't start: ${e.message}`; error.classList.remove("hidden");
       button.disabled = false; button.textContent = "Build with Kairos";
     }
   });
+}
+
+export function openBuilderBrief(opener, kind, title, owner) {
+  const body = el("div");
+  const dialog = openPanelDialog({ title, body, wide: true, group: "tool-store", opener, owner: owner?.firstElementChild });
+  renderBuilderBrief(body, kind, dialog);
+  return dialog;
 }

@@ -3,7 +3,7 @@ import { ICONS } from "./icons.js";
 
 // The Tool Store's local-skill management panel. Kept separate from catalog
 // cards so create/import/edit/delete and exact-content approval share one UI.
-export async function renderSkillManager(container, focusSlug = null) {
+export async function renderSkillManager(container, focusSlug = null, dialog = null) {
   container.replaceChildren();
   const form = el("div", { class: "glass card" });
   const nameInput = el("input", { placeholder: "Skill name...", style: "flex:1;" });
@@ -26,14 +26,18 @@ export async function renderSkillManager(container, focusSlug = null) {
   form.append(importReview);
 
   const list = el("div", { id: "skills-list", style: "margin-top:14px;" });
+  list.dialog = dialog;
   container.append(el("h3", { class: "tool-store-heading", text: "Your skills" }), form, list);
 
   addBtn.addEventListener("click", async () => {
     const name = nameInput.value.trim();
     if (!name) return;
-    await api("/api/skills", { method: "POST", body: JSON.stringify({ name, description: descInput.value.trim(), body: "" }) });
-    nameInput.value = ""; descInput.value = "";
-    await refresh(list);
+    try {
+      await api("/api/skills", { signal: dialog?.signal, method: "POST", body: JSON.stringify({ name, description: descInput.value.trim(), body: "" }) });
+      if (!container.isConnected) return;
+      nameInput.value = ""; descInput.value = "";
+      changed(list);
+    } catch (error) { if (container.isConnected) importStatus.textContent = error.message; }
   });
 
   fileInput.addEventListener("change", async () => {
@@ -41,7 +45,7 @@ export async function renderSkillManager(container, focusSlug = null) {
     fileInput.value = "";
     if (!file) return;
     const content = await file.text();
-    await importSkillFile(file.name, content, false);
+    if (container.isConnected) await importSkillFile(file.name, content, false);
   });
 
   // Imported skills are untrusted and scanned server-side before anything is
@@ -54,24 +58,29 @@ export async function renderSkillManager(container, focusSlug = null) {
     let res;
     try {
       res = await fetch("/api/skills/import", {
+        signal: dialog?.signal,
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename, content, confirmed }),
       });
     } catch (e) {
-      importStatus.textContent = "";
+      if (!container.isConnected) return;
+      importStatus.textContent = `Import failed: ${e.message}`;
       toast(`Import failed: ${e.message}`, "error");
       return;
     }
+    if (!container.isConnected) return;
     importStatus.textContent = "";
     const payload = await res.json().catch(() => ({}));
+    if (!container.isConnected) return;
     if (res.ok) {
-      await refresh(list);
       toast(`Imported ${filename}`, "success");
+      changed(list);
       return;
     }
     const detail = payload.detail;
     if (res.status !== 409 || typeof detail !== "object" || detail === null) {
+      importStatus.textContent = `Import failed: ${typeof detail === "string" ? detail : res.statusText}`;
       toast(`Import failed: ${typeof detail === "string" ? detail : res.statusText}`, "error");
       return;
     }
@@ -99,11 +108,19 @@ export async function renderSkillManager(container, focusSlug = null) {
   if (focusSlug) {
     const focused = Array.from(list.children).find((node) => node.dataset.skill === focusSlug);
     focused?.scrollIntoView({ block: "nearest" });
+    focused?.querySelector('button[aria-label="Edit skill"]')?.focus();
   }
 }
 
+function changed(list) {
+  if (!list.isConnected) return;
+  if (list.dialog) { list.dialog.changed = true; list.dialog.close(); }
+  else return refresh(list);
+}
+
 async function refresh(list) {
-  const skills = await api("/api/skills");
+  const skills = await api("/api/skills", { signal: list.dialog?.signal });
+  if (!list.isConnected) return;
   list.innerHTML = "";
   if (skills.length === 0) {
     list.appendChild(emptyState({
@@ -132,16 +149,22 @@ async function buildSkillCard(skill, list) {
       message: `"${skill.slug}" will be permanently deleted. This can't be undone.`,
       confirmLabel: "Delete skill",
     });
-    if (!ok) return;
-    await api(`/api/skills/${skill.slug}`, { method: "DELETE" });
-    await refresh(list);
-    toast("Skill deleted", "success");
+    if (!ok || !list.isConnected) return;
+    try {
+      await api(`/api/skills/${skill.slug}`, { method: "DELETE", signal: list.dialog?.signal });
+      if (!list.isConnected) return;
+      toast("Skill deleted", "success");
+      await changed(list);
+    } catch (error) { if (list.isConnected) card.append(el("div", { class: "meta", role: "status", text: error.message })); }
   }, { danger: true });
   const editBtn = iconButton(ICONS.edit, "Edit skill", async () => {
     // An unreadable skill (roadmap phase 6) has nothing to edit; the API says why.
     let full;
-    try { full = await api(`/api/skills/${skill.slug}`); } catch (problem) { toast(problem.message, "error"); return; }
-    card.replaceWith(buildSkillEditor(full, list));
+    try { full = await api(`/api/skills/${skill.slug}`, { signal: list.dialog?.signal }); } catch (problem) { if (card.isConnected) card.append(el("div", { class: "meta", role: "status", text: problem.message })); return; }
+    if (!card.isConnected) return;
+    const editor = buildSkillEditor(full, list);
+    card.replaceWith(editor);
+    editor.querySelector("input")?.focus();
   });
   const card = el("div", { class: "glass bracket card has-row-actions", "data-skill": skill.slug }, [
     el("div", { class: "card-row" }, [
@@ -183,10 +206,13 @@ function curationDetails(skill, list) {
         message: `"${skill.slug}" scanned as dangerous. Approving lets every model read and follow it as it is now; editing it later needs approving again.`,
         confirmLabel: "Approve",
       });
-      if (!ok) return;
-      await api(`/api/skills/${skill.slug}/approve`, { method: "POST" });
-      await refresh(list);
-      toast(`Approved ${skill.slug}`, "success");
+      if (!ok || !list.isConnected) return;
+      try {
+        await api(`/api/skills/${skill.slug}/approve`, { method: "POST", signal: list.dialog?.signal });
+        if (!list.isConnected) return;
+        toast(`Approved ${skill.slug}`, "success");
+        await changed(list);
+      } catch (error) { if (list.isConnected) approveBtn.after(el("div", { class: "meta", role: "status", text: error.message })); }
     } });
     parts.push(el("div", { class: "meta", style: "color:var(--danger);margin-top:4px;", text: "Hidden from models: its content scanned as dangerous." }), approveBtn);
   }
@@ -211,17 +237,18 @@ function buildSkillEditor(skill, list) {
 
   const errorMsg = el("div", { class: "meta", style: "color:var(--danger);" });
   const saveBtn = el("button", { class: "btn", text: "Save" });
-  const cancelBtn = el("button", { class: "btn", text: "Cancel", onclick: () => refresh(list) });
+  const cancelBtn = el("button", { class: "btn", text: "Cancel", onclick: () => refresh(list).catch(error => { if (list.isConnected) errorMsg.textContent = error.message; }) });
   saveBtn.addEventListener("click", async () => {
     try {
       await api(`/api/skills/${skill.slug}`, {
-        method: "PUT",
+        method: "PUT", signal: list.dialog?.signal,
         body: JSON.stringify({ description: descInput.value.trim(), body: bodyText.value }),
       });
-      await refresh(list);
+      if (!list.isConnected) return;
       toast(`Saved ${skill.slug}`, "success");
+      await changed(list);
     } catch (e) {
-      errorMsg.textContent = e.message;
+      if (list.isConnected) errorMsg.textContent = e.message;
     }
   });
 

@@ -97,38 +97,96 @@ export function el(tag, attrs = {}, children = []) {
 // the workspace picker and Calendar's archive rather than window.confirm() —
 // a native confirm is unstyleable OS chrome that breaks the glass look, the
 // same reason customSelect() exists (see its comment above).
+const panelDialogs = [];
+let dialogId = 0;
+
+// One lifecycle for panel dialogs, including nested destructive confirmations.
+// A group replaces its previous panel; confirmations can sit above that panel.
+export function openPanelDialog({ title, body, footer, wide = false, className = "", group = null,
+  opener = document.activeElement, owner = null, onClose, initialFocus }) {
+  const previous = group && panelDialogs.find(dialog => dialog.group === group);
+  if (previous) {
+    previous.close();
+    if (!opener?.isConnected) opener = previous.opener;
+  }
+  closeOptionMenu();
+  const controller = new AbortController();
+  const titleId = `panel-dialog-${++dialogId}`;
+  const closeButton = el("button", { type: "button", class: "modal-close-btn", "aria-label": "Close", text: "×" });
+  const panel = el("div", { class: `glass modal-panel panel-dialog${wide ? " panel-dialog-wide" : ""}${className ? ` ${className}` : ""}`,
+    role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, tabindex: "-1" }, [
+    el("h4", { class: "modal-header" }, [el("span", { id: titleId, text: title }), closeButton]),
+    el("div", { class: "modal-body" }, [body]),
+    footer ? el("div", { class: "modal-footer" }, [footer]) : null,
+  ]);
+  const backdrop = el("div", { class: "modal-backdrop" }, [panel]);
+  let closed = false;
+  const controls = () => [...panel.querySelectorAll('button, input, textarea, select, a[href], summary, [tabindex]')]
+    .filter(node => !node.disabled && !node.inert && node.tabIndex >= 0 && node.getClientRects().length);
+  const focus = () => (initialFocus?.isConnected ? initialFocus : controls()[0] || panel).focus();
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    if (top()) closeOptionMenu();
+    controller.abort();
+    observer?.disconnect();
+    document.removeEventListener("keydown", keydown);
+    document.removeEventListener("focusin", focusin);
+    backdrop.remove();
+    panelDialogs.splice(panelDialogs.indexOf(dialog), 1);
+    if (!panelDialogs.length) document.documentElement.classList.remove("panel-dialog-open");
+    onClose?.();
+    if (opener?.isConnected) opener.focus();
+  };
+  const top = () => panelDialogs.at(-1) === dialog;
+  const keydown = event => {
+    if (!top()) return;
+    if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); close(); }
+    else if (event.key === "Tab") {
+      const list = controls(), at = list.indexOf(document.activeElement);
+      if (!list.length || (event.shiftKey ? at <= 0 : at === -1 || at === list.length - 1)) {
+        event.preventDefault(); (event.shiftKey ? list.at(-1) : list[0] || panel)?.focus();
+      }
+    }
+  };
+  const focusin = event => { if (top() && !panel.contains(event.target) && !event.target.closest(".custom-select-menu")) focus(); };
+  owner ||= opener?.closest?.(".panel-dialog") || null;
+  const observer = owner ? new MutationObserver(() => { if (!owner.isConnected) close(); }) : null;
+  const dialog = { panel, backdrop, close, opener, group, signal: controller.signal };
+  panelDialogs.push(dialog);
+  opener?.setAttribute?.("aria-haspopup", "dialog");
+  closeButton.addEventListener("click", close, { signal: controller.signal });
+  backdrop.addEventListener("click", event => { if (event.target === backdrop && top()) close(); }, { signal: controller.signal });
+  document.addEventListener("keydown", keydown);
+  document.addEventListener("focusin", focusin);
+  document.documentElement.classList.add("panel-dialog-open");
+  document.body.append(backdrop);
+  observer?.observe(document.body, { childList: true, subtree: true });
+  focus();
+  return dialog;
+}
+
 export function confirmDialog({ title, message, confirmLabel = "Delete", danger = true }) {
   return new Promise((resolve) => {
     const cancelBtn = el("button", { class: "btn", text: "Cancel" });
     const confirmBtn = el("button", { class: danger ? "btn danger" : "btn", text: confirmLabel });
-    const panel = el("div", { class: "glass modal-panel confirm-panel" }, [
-      el("h4", { text: title }),
-      el("div", { class: "muted", text: message }),
-      el("div", { class: "modal-footer" }, [cancelBtn, confirmBtn]),
-    ]);
-    const backdrop = el("div", { class: "modal-backdrop" }, [panel]);
-    panel.addEventListener("click", (e) => e.stopPropagation());
-
     let settled = false;
     const finish = (result) => {
       if (settled) return;
       settled = true;
-      document.removeEventListener("keydown", onKey);
-      backdrop.remove();
+      dialog.close();
       resolve(result);
     };
-    const onKey = (e) => {
-      if (e.key === "Escape") { e.preventDefault(); finish(false); }
-      else if (e.key === "Enter") { e.preventDefault(); finish(true); }
-    };
-
-    backdrop.addEventListener("click", () => finish(false));
+    const dialog = openPanelDialog({ title, body: el("div", { class: "muted", text: message }),
+      footer: el("div", {}, [cancelBtn, confirmBtn]), className: "confirm-panel", initialFocus: confirmBtn,
+      onClose: () => { if (!settled) { settled = true; resolve(false); } } });
+    // Enter confirms, except on another focused button: Enter on Cancel cancels.
+    dialog.panel.addEventListener("keydown", event => {
+      if (event.key !== "Enter" || (event.target instanceof HTMLButtonElement && event.target !== confirmBtn)) return;
+      event.preventDefault(); finish(true);
+    }, { signal: dialog.signal });
     cancelBtn.addEventListener("click", () => finish(false));
     confirmBtn.addEventListener("click", () => finish(true));
-    document.addEventListener("keydown", onKey);
-
-    document.body.appendChild(backdrop);
-    confirmBtn.focus();
   });
 }
 

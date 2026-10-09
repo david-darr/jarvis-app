@@ -1,15 +1,14 @@
-import { api, el, toast } from "./api.js";
+import { api, el, toast, openPanelDialog } from "./api.js";
 
-const post = (path, body = {}) => api(path, { method: "POST", body: JSON.stringify(body) });
+const post = (path, body = {}, signal) => api(path, { method: "POST", body: JSON.stringify(body), signal });
 const slugPattern = /^[a-z][a-z0-9_]{0,63}$/;
 const versionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 export function shareButton(kind, localId) {
-  return el("button", { type: "button", class: "btn quiet store-share", text: "Share to store", onclick: () => publishDialog(kind, localId) });
+  return el("button", { type: "button", class: "btn quiet store-share", text: "Share to store", "aria-haspopup": "dialog", onclick: event => publishDialog(kind, localId, event.currentTarget) });
 }
 
-export async function publishDialog(kind, localId) {
-  const opener = document.activeElement;
+export async function publishDialog(kind, localId, opener = document.activeElement) {
   const fields = {};
   const form = el("div", { class: "store-publish-fields" });
   for (const [key, label, max] of [["slug", "Slug", 64], ["name", "Name", 120], ["description", "Description", 2000], ["version", "Version", 100]]) {
@@ -26,28 +25,15 @@ export async function publishDialog(kind, localId) {
   const previewButton = el("button", { type: "button", class: "btn", text: "Preview", disabled: true });
   const publishButton = el("button", { type: "button", class: "btn primary", text: "Open pull request", disabled: true });
   const closeButton = el("button", { type: "button", class: "btn quiet", text: "Cancel" });
-  const panel = el("div", { class: "glass modal-panel store-publish-panel", role: "dialog", "aria-modal": "true", "aria-labelledby": "store-publish-title" }, [
-    el("h4", { id: "store-publish-title", text: "Share to store" }),
+  const body = el("div", { class: "store-publish-body" }, [
     el("p", { class: "muted", text: "Review every file before opening a public GitHub pull request. Store items are available after review and merge." }),
-    form, message, files, consent, el("div", { class: "modal-footer" }, [closeButton, previewButton, publishButton]),
+    form, message, files, consent,
   ]);
-  const backdrop = el("div", { class: "modal-backdrop" }, [panel]);
+  const dialog = openPanelDialog({ title: "Share to store", body, wide: true, className: "store-publish-panel",
+    group: "tool-store", opener, owner: document.querySelector("#view-content")?.firstElementChild, footer: el("div", {}, [closeButton, previewButton, publishButton]) });
+  const { backdrop, close, signal } = dialog;
   let preview = null, busy = false, generation = 0;
-  const close = () => { document.removeEventListener("keydown", keydown); backdrop.remove(); opener?.focus(); };
-  const keydown = event => {
-    if (event.key === "Escape") { event.preventDefault(); close(); }
-    if (event.key === "Tab") {
-      const controls = [...panel.querySelectorAll("input, textarea, button, a[href]")].filter(n => !n.disabled && n.getClientRects().length);
-      if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls.at(-1)?.focus(); }
-      else if (!event.shiftKey && document.activeElement === controls.at(-1)) { event.preventDefault(); controls[0]?.focus(); }
-    }
-  };
-  panel.addEventListener("click", event => event.stopPropagation());
-  backdrop.addEventListener("click", close);
-  closeButton.addEventListener("click", close);
-  document.addEventListener("keydown", keydown);
-  document.body.append(backdrop);
-  closeButton.focus();
+  closeButton.addEventListener("click", close, { signal });
   const values = () => ({ kind, local_id: localId, ...Object.fromEntries(Object.entries(fields).map(([key, input]) => [key, input.value.trim()])) });
   const valid = () => slugPattern.test(fields.slug.value.trim()) && !["routes", "services", "views", "con", "prn", "aux", "nul"].includes(fields.slug.value.trim())
     && !/^(com|lpt)[1-9]$/.test(fields.slug.value.trim()) && versionPattern.test(fields.version.value.trim())
@@ -61,40 +47,42 @@ export async function publishDialog(kind, localId) {
     const current = generation;
     busy = true; preview = null; publicCheck.checked = false; buttons(); message.textContent = "Checking every file...";
     try {
-      const result = await post("/api/store/publish/prepare", values());
+      const result = await post("/api/store/publish/prepare", values(), signal);
       if (current !== generation || !backdrop.isConnected) return;
       preview = result;
       files.replaceChildren(...Object.entries(result.files).map(([path, content]) => el("section", {}, [el("h5", { text: path }), el("pre", { text: content })])));
       if (result.removed_files?.length) files.append(el("p", { text: "Files removed by this update:\n" + result.removed_files.join("\n") }));
       files.hidden = consent.hidden = false;
       message.textContent = "These are the exact files that will be uploaded.";
-    } catch (error) { message.textContent = error.message; }
-    finally { busy = false; buttons(); }
+    } catch (error) { if (backdrop.isConnected) message.textContent = error.message; }
+    finally { if (backdrop.isConnected) { busy = false; buttons(); } }
   });
   publishButton.addEventListener("click", async () => {
     if (!preview || !publicCheck.checked || busy) return;
     busy = true; buttons(); message.textContent = "Opening your pull request...";
     Object.values(fields).forEach(input => { input.disabled = true; }); publicCheck.disabled = true;
     try {
-      const result = await post("/api/store/publish", { ...values(), preview_hash: preview.preview_hash, confirmed_public: true });
+      const result = await post("/api/store/publish", { ...values(), preview_hash: preview.preview_hash, confirmed_public: true }, signal);
+      if (!backdrop.isConnected) return;
       message.replaceChildren(el("a", { class: "store-pr-link", href: result.url, target: "_blank", rel: "noopener", text: `Pull request #${result.number}` }));
       toast("Pull request opened", "success"); closeButton.textContent = "Done";
       previewButton.hidden = publishButton.hidden = true;
       document.dispatchEvent(new CustomEvent("kairos:store-published"));
     } catch (error) {
+      if (!backdrop.isConnected) return;
       message.textContent = error.message;
       preview = null; publicCheck.checked = false; files.hidden = consent.hidden = true;
       Object.values(fields).forEach(input => { input.disabled = false; }); publicCheck.disabled = false;
-    } finally { busy = false; buttons(); }
+    } finally { if (backdrop.isConnected) { busy = false; buttons(); } }
   });
   const initialGeneration = generation;
   try {
-    const defaults = await post("/api/store/publish/export", { kind, local_id: localId });
+    const defaults = await post("/api/store/publish/export", { kind, local_id: localId }, signal);
     if (!backdrop.isConnected || generation !== initialGeneration) return;
     for (const [key, input] of Object.entries(fields)) input.value = defaults[key];
     message.textContent = "Use a slug starting with a lowercase letter, then lowercase letters, digits or underscores.";
     buttons(); fields.slug.focus();
-  } catch (error) { message.textContent = error.message; }
+  } catch (error) { if (backdrop.isConnected) message.textContent = error.message; }
 }
 
 export async function githubStrip(host) {

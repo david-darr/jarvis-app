@@ -1080,6 +1080,25 @@ input[type="checkbox"]:checked::after {
 .workspace-row:hover { background: var(--accent-dim); }
 .workspace-empty { padding: 14px; color: var(--text-faint); font-size: 12px; text-align: center; }
 .modal-footer { display: flex; justify-content: flex-end; gap: 8px; }
+/* Shared panel dialogs keep their header and actions above a scrolling body. */
+.panel-dialog-open, .panel-dialog-open body { overflow: hidden; }
+.panel-dialog-open #view-content { overflow: hidden; }
+.panel-dialog { gap: 12px; max-height: 90dvh; overflow: hidden; }
+.panel-dialog-wide { width: 720px; }
+.panel-dialog .modal-header { flex: none; gap: 12px; min-width: 0; }
+.panel-dialog .modal-header span { overflow-wrap: anywhere; }
+.panel-dialog .modal-body { min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; }
+.panel-dialog .modal-footer { flex: none; flex-wrap: wrap; }
+.panel-dialog .modal-footer > div { display: flex; gap: 8px; flex-wrap: wrap; }
+.panel-dialog .tab-build-form { max-width: none; }
+.panel-dialog .card-row { flex-wrap: wrap; }
+.panel-dialog .card-row input { min-width: 0; }
+@media (max-width: 768px) {
+  /* Full screen on a phone, so solid: glass would show the page through it. */
+  .modal-backdrop > .panel-dialog { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; padding: 16px;
+    background: var(--bg-panel-solid); }
+  .panel-dialog .modal-body { flex: 1; }
+}
 
 /* -- Settings window (David's ask, 2026-08-31: "more of a popup that can be
    closed or minimized, with a similar UI to Odysseus" — their own Settings
@@ -1959,8 +1978,6 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
 .tool-store-installed input { accent-color: var(--accent); }
 .tool-store-summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; min-height: 38px; }
 .tool-store-manage { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
-.tool-store-install { margin: 12px 0; }
-.tool-store-manager:not([hidden]) { margin: 14px 0 20px; padding: 4px 0 18px; border-bottom: 1px solid var(--border); }
 .tool-store-manager > .tool-store-heading { margin: 8px 0 10px; }
 .tool-store-manager .card { margin-bottom: 10px; }
 .tool-store-install p { margin: 0 0 12px; }
@@ -1988,7 +2005,6 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
 .tool-store-card[data-tab-slug] .tool-store-card-foot .btn { padding: 6px 12px; font-size: 12px; }
 .tool-store-card-foot .btn.quiet.danger { color: var(--danger); }
 .tool-store-card[data-tab-slug] p { flex: none; }
-.tool-store-tab-review { margin: 0 0 14px; }
 .tool-store-tab-review p { margin: 0 0 10px; }
 .tool-store-tab-files { margin: 0 0 12px; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-store-tab-hash { overflow-wrap: anywhere; }
@@ -1996,9 +2012,7 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
 .tool-store-card-foot a, .tool-store-action a { color: var(--accent); font-size: 12px; text-decoration: none; }
 .tool-store-card-foot a:hover, .tool-store-action a:hover { text-decoration: underline; }
 .tool-store-action { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
-.tool-store-detail { margin-top: 0; }
-.tool-store-detail:not(:empty) { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
-.tool-store-skill-body { max-height: 240px; overflow: auto; margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-dim); font: inherit; font-size: 12px; }
+.tool-store-skill-body { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-dim); font: inherit; font-size: 12px; }
 .tool-store-notice, .tool-store-empty { margin-top: 24px; padding: 22px; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-dim); }
 @media (max-width: 768px) {
   .tool-store-toolbar { align-items: stretch; }
@@ -2016,7 +2030,7 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
 .store-submission a { flex: 1; min-width: 160px; font-size: 12px; }
 .submission-closed { color: var(--text-faint); background: var(--surface-2); }
 .submission-merged { color: var(--success); }
-.store-publish-panel { width: 720px; max-height: 90vh; overflow-y: auto; gap: 12px; }
+.store-publish-body { display: flex; flex-direction: column; gap: 12px; }
 .store-publish-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 .store-publish-fields .field { min-width: 0; }
 .store-publish-fields input, .store-publish-fields textarea { width: 100%; box-sizing: border-box; }
