@@ -310,7 +310,7 @@ async function renderEditor(container, docId) {
   });
   contentArea.value = doc.content; // el() sets textContent via "text", but a <textarea>'s live value needs .value too
 
-  container.append(header, contentArea);
+  container.append(el("div", { class: "view-constrained library-editor" }, [header, contentArea]));
 
   // Unsaved-changes guard (audit 2026-09-03) — leaving the editor used to
   // silently discard everything typed since the last save.

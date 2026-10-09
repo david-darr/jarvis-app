@@ -55,7 +55,9 @@
   --radius: 12px;
   --sidebar-width: 204px;
   --sidebar-rail-width: 52px;
-  --chat-column: 780px;
+  --chat-column: 860px;
+  --page-max: 1200px;
+  --library-max: 1440px;
   --shadow-elevated: 0 12px 40px rgba(var(--shade-rgb), .10);
   /* Every menu and picker (the popup block further down). */
   --popup-shadow: 0 1px 2px rgba(var(--shade-rgb), .06), 0 14px 36px rgba(var(--shade-rgb), .14);
@@ -251,7 +253,8 @@ nav#nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: 
    unfinished. Applied via a wrapper class rather than to .view itself so
    full-bleed views (Home's 3D core, Chat's two-column layout, Calendar's
    grid, Brain's vault graph) can opt out by simply not using it. */
-.view-constrained { width: 100%; max-width: 1080px; margin: 0 auto; }
+.view-constrained { width: 100%; max-width: var(--page-max); margin: 0 auto; }
+.view-constrained.library-view, .view-constrained.library-editor { max-width: var(--library-max); }
 
 .view-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -1315,6 +1318,7 @@ input[type="checkbox"]:checked::after { border-color: var(--text); }
 .automation-card > div:last-child { flex-direction: row !important; }
 .automation-card .custom-select { flex: 1; }
 .library-view .view-header { margin-bottom: 18px; }
+.library-editor { display: flex; flex-direction: column; flex: 1; }
 .library-view > .glass.card { padding: 14px; }
 .library-view > .glass.card .card-row { flex-wrap: wrap; }
 .library-view > .glass.card input { min-width: min(100%, 220px); }
@@ -1392,7 +1396,7 @@ input[type="checkbox"]:checked::after { border-color: var(--text); }
 .google-sheet-grid input { width: 100%; min-width: 78px; padding: 7px; border: 1px solid var(--border); border-radius: 0; background: transparent; font-size: 11px; }
 .google-form-responses pre { padding: 10px; border: 1px solid var(--border); border-radius: 8px; overflow: auto; font-size: 11px; }
 @media (max-width: 760px) { .google-browser { display: flex; flex-direction: column; } .google-file-list { max-height: 300px; border-right: 0; border-bottom: 1px solid var(--border); } .google-detail { max-height: none; } }
-.library-vault-page { width: 100%; max-width: 1440px; margin: 0 auto; padding-bottom: 24px; }
+.library-vault-page { width: 100%; max-width: var(--library-max); margin: 0 auto; padding-bottom: 24px; }
 .library-vault-page .view-header { margin-bottom: 20px; }
 .library-vault-intro { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 24px 0 14px; }
 .library-vault-intro h3 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.02em; }

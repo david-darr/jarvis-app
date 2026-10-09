@@ -210,6 +210,31 @@ app.whenReady().then(async () => {
     await waitFor("Math.round(document.querySelector('#sidebar').getBoundingClientRect().width) === 204");
     assert.equal(Math.round(await railWidth()), 204, "Keyboard expands sidebar");
     await js("document.activeElement.blur()");
+    // Page widths on a wide desktop.
+    const previousSize = win.getContentSize();
+    try {
+      win.setContentSize(1920, 1080);
+      await delay(100);
+      for (const section of ["documents", "vault", "google"]) {
+        await navigate("library", { section });
+        await waitFor("!!document.querySelector('#view-content .library-view, #view-content .library-vault-page')");
+        assert.equal(await js("document.querySelector('#view-content .library-view, #view-content .library-vault-page').getBoundingClientRect().width"), 1440, "Library " + section + " is 1440px wide");
+      }
+      await navigate("library", { section: "documents" });
+      await waitFor("!!document.querySelector('.library-document-card')");
+      await js("document.querySelector('.library-document-card').click()");
+      await waitFor("!!document.querySelector('#view-content .library-editor')");
+      assert.equal(await js("document.querySelector('#view-content .library-editor').getBoundingClientRect().width"), 1440, "Library document editor is 1440px wide");
+      await navigate("library", { section: "documents" });
+      for (const tab of ["agents", "tasks", "notes", "email", "cookbook", "tool-store"]) {
+        await navigate(tab);
+        await waitFor("!!document.querySelector('#view-content .view-constrained')");
+        assert.equal(await js("document.querySelector('#view-content .view-constrained').getBoundingClientRect().width"), 1200, tab + " is 1200px wide");
+      }
+    } finally {
+      win.setContentSize(...previousSize);
+      await delay(100);
+    }
     for (const [label, width, height] of [["desktop", 1440, 900], ["mobile", 390, 844]]) {
       demoState.stoppedOwners = [];
       demoState.takenOwners = [];
