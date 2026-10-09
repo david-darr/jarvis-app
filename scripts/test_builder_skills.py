@@ -99,12 +99,25 @@ console.log('Builder brief handoffs passed');
             target.write_text(edited, encoding="utf-8")
             skills_service.seed_default_skills()
             self.assertEqual(target.read_text(encoding="utf-8"), edited)
-            old = subprocess.check_output(["git", "show", "HEAD:skill_templates/build-custom-tab/SKILL.md"], cwd=ROOT).decode().replace("\r\n", "\n")
-            self.assertIn(hashlib.sha256(old.encode()).hexdigest(), skills_service._LEGACY_SEED_HASHES["build-custom-tab"])
-            target.write_text(old, encoding="utf-8")
+            # Every version Kairos ever shipped refreshes to the current one.
+            current = (ROOT / "skill_templates/build-custom-tab/SKILL.md").read_text(encoding="utf-8")
+            log = subprocess.check_output(["git", "log", "--format=%h", "--", "skill_templates/build-custom-tab/SKILL.md"], cwd=ROOT).decode().split()
+            for commit in log:
+                old = subprocess.check_output(["git", "show", f"{commit}:skill_templates/build-custom-tab/SKILL.md"], cwd=ROOT).decode().replace("\r\n", "\n")
+                if old == current.replace("\r\n", "\n"):
+                    continue
+                with self.subTest(commit=commit):
+                    self.assertIn(hashlib.sha256(old.encode()).hexdigest(), skills_service._LEGACY_SEED_HASHES["build-custom-tab"])
+                    target.write_text(old, encoding="utf-8")
+                    saved["seeded_skill_hashes"] = {}
+                    skills_service.seed_default_skills()
+                    self.assertEqual(target.read_text(encoding="utf-8"), current)
+            # The pre-bundling draft early installs kept under this slug.
+            draft = (Path(__file__).resolve().parent / "fixtures" / "build-custom-tab-2026-09-07.md").read_text(encoding="utf-8")
+            target.write_text(draft, encoding="utf-8")
             saved["seeded_skill_hashes"] = {}
             skills_service.seed_default_skills()
-            self.assertEqual(target.read_text(encoding="utf-8"), (ROOT / "skill_templates/build-custom-tab/SKILL.md").read_text(encoding="utf-8"))
+            self.assertEqual(target.read_text(encoding="utf-8"), current)
 
     def test_pinned_facts(self):
         texts = {slug: (ROOT / "skill_templates" / slug / "SKILL.md").read_text(encoding="utf-8") for slug in BUILDERS}
