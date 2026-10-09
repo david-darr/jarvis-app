@@ -419,6 +419,30 @@ app.whenReady().then(async () => {
           assert.ok(writes.slice(communityWrites).some(w => w.path === '/api/store/install' && JSON.parse(w.body).kind === 'automation'), label + ' Community install uses the store gate');
           await js("document.querySelector('[data-community-heading]').scrollIntoView({ block: 'start' })");
           await capture(label + '-tool-store-community');
+          const publishWrites = writes.length;
+          await js("[...document.querySelectorAll('.store-github-strip button')].find(b=>b.textContent==='Sign in with GitHub').click()");
+          await waitFor("document.querySelector('.store-device-code')?.textContent === 'KAIROS42'");
+          await capture(label + '-store-device-code');
+          await waitFor("document.querySelector('.store-github-strip').textContent.includes('@alex-demo')");
+          await waitFor("document.querySelector('.store-submissions').textContent.includes('Meeting notes')");
+          await js("[...document.querySelectorAll('.tool-store-filters button')].find(b=>b.textContent==='Tabs').click(); document.querySelector('[data-tab-slug=project_tracker] .store-share').click()");
+          await waitFor("!!document.querySelector('.store-publish-panel') && ![...document.querySelectorAll('.store-publish-panel button')].find(b=>b.textContent==='Preview').disabled");
+          await js("[...document.querySelectorAll('.store-publish-panel button')].find(b=>b.textContent==='Preview').click()");
+          await waitFor("document.querySelectorAll('.store-publish-preview pre').length === 4");
+          assert.ok(await js("document.querySelector('.store-publish-preview').textContent.includes('manifest.json') && document.querySelector('.store-publish-preview').textContent.includes('from fastapi import APIRouter')"), label + ' full publish files and manifest');
+          assert.ok(await js("[...document.querySelectorAll('.store-publish-panel button')].find(b=>b.textContent==='Open pull request').disabled"), label + ' public confirmation required');
+          assert.deepEqual(await overflow(), [], label + ' publish preview mobile overflow');
+          assert.ok(await js("[...document.querySelectorAll('.store-publish-panel, .store-publish-preview')].every(n=>n.scrollWidth<=n.clientWidth+2)"), label + ' dialog content fits the viewport');
+          await capture(label + '-store-publish-preview');
+          await js("document.querySelector('[data-public-confirm]').click(); [...document.querySelectorAll('.store-publish-panel button')].find(b=>b.textContent==='Open pull request').click()");
+          await waitFor("document.querySelector('.store-pr-link')?.href === 'https://github.com/david-darr/kairos-store/pull/42'");
+          await capture(label + '-store-published');
+          await js("[...document.querySelectorAll('.store-publish-panel button')].find(b=>b.textContent==='Done').click(); [...document.querySelectorAll('.tool-store-filters button')].find(b=>b.textContent==='All').click()");
+          await waitFor("document.querySelector('.store-submissions').textContent.includes('#42')");
+          await js("[...document.querySelectorAll('.store-github-strip button')].find(b=>b.textContent==='Sign out of GitHub').click()");
+          await waitFor("document.querySelector('.store-github-strip').textContent.includes('Sign in with GitHub')");
+          demoState.githubSignedIn = false; demoState.storePublished = false;
+          writes.splice(publishWrites);
           // Reset the synthetic install so both viewport passes exercise Install.
           demoState.communityInstalls = {};
           writes.splice(communityWrites);
@@ -458,7 +482,7 @@ app.whenReady().then(async () => {
           await capture(label + "-tool-store-tabs");
           await js("document.querySelector('[data-tab-slug=project_tracker] .disclosure-panel').open=true; document.querySelector('[data-tab-slug=project_tracker]').scrollIntoView({block:'start'})");
           assert.ok(await js("getComputedStyle(document.querySelector('[data-tab-slug=project_tracker] summary')).listStyleType === 'none'"), label + " app disclosure style");
-          assert.deepEqual(await js("[...document.querySelectorAll('[data-tab-slug] .tool-store-card-foot')].filter(foot=>{const buttons=[...foot.querySelectorAll('button')];return buttons.some(b=>Math.abs(b.getBoundingClientRect().top-buttons[0].getBoundingClientRect().top)>2)}).map(foot=>foot.closest('[data-tab-slug]').dataset.tabSlug)"), [], label + " tab actions stay in one row");
+          assert.ok(await js("!!document.querySelector('[data-tab-slug=project_tracker] .store-share')"), label + " Yours offers Share to store with wrapping actions");
           assert.deepEqual(await overflow(), [], label + " open tab file review overflow");
           await capture(label + "-tool-store-tabs-review");
           if (label === "desktop") {

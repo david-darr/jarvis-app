@@ -1984,7 +1984,7 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
 .tool-store-card h4 { margin: 15px 0 4px; overflow-wrap: anywhere; font-size: 14px; font-weight: 600; }
 .tool-store-card p { flex: 1; margin: 0 0 19px; color: var(--text-dim); font-size: 12.5px; line-height: 1.55; }
 .tool-store-card-foot { min-height: 29px; }
-.tool-store-card[data-tab-slug] .tool-store-card-foot { margin-top: auto; justify-content: flex-start; gap: 6px; }
+.tool-store-card[data-tab-slug] .tool-store-card-foot { margin-top: auto; justify-content: flex-start; gap: 6px; flex-wrap: wrap; }
 .tool-store-card[data-tab-slug] .tool-store-card-foot .btn { padding: 6px 12px; font-size: 12px; }
 .tool-store-card-foot .btn.quiet.danger { color: var(--danger); }
 .tool-store-card[data-tab-slug] p { flex: none; }
@@ -2008,6 +2008,28 @@ button.dashboard-row:hover { background: rgba(var(--ink-rgb), .035); }
 }
 
 /* Drive keeps navigation, files and the reader together at every width. */
+.store-github { margin: 0 0 18px; }
+.store-github-strip, .store-submission { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.store-github h4 { margin: 14px 0 8px; font-size: 13px; }
+.store-device-code { user-select: all; letter-spacing: .12em; }
+.store-github a, .store-publish-panel a { color: var(--accent); overflow-wrap: anywhere; }
+.store-submission a { flex: 1; min-width: 160px; font-size: 12px; }
+.submission-closed { color: var(--text-faint); background: var(--surface-2); }
+.submission-merged { color: var(--success); }
+.store-publish-panel { width: 720px; max-height: 90vh; overflow-y: auto; gap: 12px; }
+.store-publish-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.store-publish-fields .field { min-width: 0; }
+.store-publish-fields input, .store-publish-fields textarea { width: 100%; box-sizing: border-box; }
+.store-publish-preview { flex-shrink: 0; max-height: 35vh; overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); }
+.store-publish-preview h5 { overflow-wrap: anywhere; margin: 0 0 6px; }
+.store-publish-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; margin: 0 0 18px; }
+.store-publish-panel .modal-footer { flex-wrap: wrap; }
+.tool-store-card-foot:has(.store-share) { flex-wrap: wrap; }
+@media (max-width: 768px) {
+  .store-publish-fields { grid-template-columns: minmax(0, 1fr); }
+  .store-publish-panel { padding: 16px; }
+}
+
 .google-rail { display: flex; flex-direction: column; gap: 6px; padding: 14px; border-right: 1px solid var(--border); min-width: 0; }
 .google-section { text-align: left; }
 .google-section[aria-current='true'] { background: var(--accent-dim); color: var(--accent); }

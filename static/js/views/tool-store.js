@@ -1,6 +1,7 @@
 import { api, el, toast, confirmDialog, customSelect } from "../api.js";
 import { ICONS } from "../icons.js";
 import { pill } from "../settingsKit.js";
+import { shareButton, githubStrip } from "../storePublish.js";
 
 // Browse what Kairos can use. Skill content and live MCP tool schemas stay
 // behind their own read/describe calls; this view only loads catalog metadata.
@@ -13,6 +14,7 @@ export async function render(container) {
     el("input", { type: "checkbox" }), el("span", { text: "Added only" }),
   ]);
   const results = el("div", { class: "tool-store-results" });
+  const githubHost = el("div", { class: "store-github" });
   const count = el("span", { class: "meta", "aria-live": "polite" });
   const manageSkills = el("button", { type: "button", class: "btn quiet", text: "Manage skills" });
   const manageTools = el("button", { type: "button", class: "btn quiet", text: "Add MCP server", disabled: true });
@@ -126,6 +128,7 @@ export async function render(container) {
   renderTabBuilder(tabBuilder);
   if (state.admin) setupTabInstaller();
   draw();
+  if (state.admin) githubStrip(githubHost);
 
   async function showSkillManager(focusSlug = null) {
     if (!focusSlug && !managerHost.hidden) {
@@ -273,6 +276,7 @@ export async function render(container) {
     }
     if (state.admin) {
       results.append(el("h3", { class: "tool-store-heading", text: `Community · ${community.length}`, "data-community-heading": "" }));
+      results.append(githubHost);
       if (state.communityError) results.append(el("div", { class: "tool-store-notice", role: "status", text: state.communityError }));
       const grid = el("div", { class: "tool-store-grid tool-store-community" });
       for (const item of community) grid.append(communityCard(item));
@@ -439,6 +443,7 @@ export async function render(container) {
           link.click();
           setTimeout(() => URL.revokeObjectURL(url), 1000);
         }));
+        if (item.format === "folder") actions.append(shareButton("tab", item.slug));
       }
     }
     return el("article", { class: "tool-store-card", "data-tab-slug": item.slug, "data-tab-kind": item.kind }, [
@@ -609,6 +614,7 @@ export async function render(container) {
       el("div", { class: "tool-store-card-foot" }, [
         item.version ? el("span", { class: "tool-store-version" }, [sourceLabel, el("span", { class: "meta", text: ` · v${item.version}` })]) : sourceLabel,
         button,
+        state.admin && ["user", "imported", "recorded", "unknown"].includes(source) ? shareButton("skill", item.slug) : null,
       ]),
       detail,
     ]);
@@ -656,6 +662,7 @@ export async function render(container) {
       el("div", { class: "tool-store-card-foot" }, [
         server.docs ? el("a", { href: server.docs, target: "_blank", rel: "noopener", text: "Documentation" }) : el("span"),
         actionHost,
+        state.admin && integration?.mcp_type === "http" ? shareButton("tool", integration.id) : null,
       ]),
     ]);
   }
@@ -680,6 +687,7 @@ export async function render(container) {
       el("div", { class: "tool-store-card-foot" }, [
         el("button", { type: "button", class: "btn quiet", text: "Manage", onclick: () => navigate("settings", { section: "integrations" }) }),
         actionHost,
+        state.admin && item.mcp_type === "http" ? shareButton("tool", item.id) : null,
       ]),
     ]);
   }
