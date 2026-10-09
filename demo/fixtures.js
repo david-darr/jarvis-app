@@ -161,6 +161,30 @@
     return { name: 'example-com-click', description, body, steps, labels, content: `---\ndescription: ${description}\n---\n\n${body}` };
   }
   function mutate(route, method, body = {}) {
+    if (route === '/api/store/github/start') { state.githubPending = true; return { user_code: 'KAIROS42', verification_uri: 'https://github.com/login/device', expires_in: 900, interval: 1 }; }
+    if (route === '/api/store/github/poll') { state.githubSignedIn = true; state.githubPending = false; return { configured: true, signed_in: true, login: 'alex-demo', state: 'signed_in' }; }
+    if (route === '/api/store/github/sign-out') { state.githubSignedIn = false; return { configured: true, signed_in: false, login: null }; }
+    if (route === '/api/store/publish/export') {
+      const names = { tab: 'Project tracker', skill: 'Meeting notes', tool: 'Reference server', automation: 'Weekly review' };
+      return { slug: body.local_id.replace(/[^a-z0-9_]/g, '_'), name: names[body.kind], description: 'Keep track of project notes.', version: '1.0.0' };
+    }
+    if (route === '/api/store/publish/prepare') {
+      const payloads = {
+        tab: { 'tab.json': JSON.stringify({ slug: body.slug, name: body.name, description: body.description, version: body.version, api: 1, hooks: [] }, null, 2),
+          'routes.py': 'from fastapi import APIRouter\nrouter = APIRouter()\n', 'view.js': 'export function render(container) { container.textContent = "Project notes"; }\n' },
+        skill: { 'SKILL.md': '---\ndescription: Review supplied notes\n---\n\nList decisions and next steps.\n', 'references/format.md': 'List owners only when stated.\n' },
+        tool: { 'server.json': JSON.stringify({ name: body.name, url: 'https://example.com/mcp', transport: 'http', auth_type: 'none' }, null, 2) },
+        automation: { 'automation.json': JSON.stringify({ title: body.name, prompt: 'Review supplied notes', schedule: { schedule_kind: 'daily', run_time: '06:00' } }, null, 2) },
+      };
+      const payload = payloads[body.kind];
+      const manifest = { kind: body.kind, slug: body.slug, name: body.name, description: body.description, author: 'alex-demo', version: body.version, license: 'MIT', files: Object.keys(payload).sort() };
+      const prefix = `items/${body.kind}/${body.slug}/`;
+      return { manifest, preview_hash: 'e'.repeat(64), update: false, removed_files: [], files: {
+        [prefix + 'manifest.json']: JSON.stringify(manifest, null, 2),
+        ...Object.fromEntries(Object.entries(payload).map(([name, content]) => [prefix + name, content])),
+      } };
+    }
+    if (route === '/api/store/publish') { state.storePublished = true; return { number: 42, url: 'https://github.com/david-darr/kairos-store/pull/42' }; }
     if (route === '/api/store/refresh') return communityCatalog();
     if (route === '/api/store/install' && method === 'POST') {
       if (body.kind === 'tab' && !body.confirmed) return { _status: 409, detail: { needs_confirmation: true,
@@ -355,6 +379,11 @@
   }
   function fixture(url) {
     if (url.pathname === '/api/store/catalog') return communityCatalog();
+    if (url.pathname === '/api/store/github') return { configured: state.githubConfigured !== false, signed_in: !!state.githubSignedIn, login: state.githubSignedIn ? 'alex-demo' : null };
+    if (url.pathname === '/api/store/submissions') return state.empty ? [] : [
+      { number: 41, title: 'Add skill: Meeting notes 1.0.0', state: 'merged', url: 'https://github.com/david-darr/kairos-store/pull/41', updated_at: future(-24) },
+      ...(state.storePublished ? [{ number: 42, title: 'Add tab: Project tracker 1.0.0', state: 'open', url: 'https://github.com/david-darr/kairos-store/pull/42', updated_at: future(0) }] : []),
+    ];
     const route = url.pathname;
     const list = (data) => state.empty ? [] : data;
     if (route === "/api/auth/status") return { auth_enabled: false, setup_required: false, username: "Alex", is_admin: true, instance: state.empty ? "dev" : "" };
@@ -548,6 +577,10 @@
     if (route.startsWith("/api/documents/")) return { ...docs[0], content: "# Design principles\n\nMake the important things easy to find." };
     if (route === "/api/skills") return list([
       ...(state.recordedSkills || []),
+      ...["build-custom-tab", "build-skill", "build-mcp-server", "build-automation"].map(slug => ({
+        slug, description: "Build with Kairos using the current app contract.",
+        curation: { source: "bundled", origin: null, scan: null, blocked_for_models: false, approved: false, lint: [] },
+      })),
       // Roadmap phase 6: an unreadable skill is listed with its reason.
       { slug: "broken-skill", description: "", error: "Can't be read: its SKILL.md is not UTF-8 text.", curation: null },
       { slug: "weekly-review", description: "Review the week and plan what comes next.",
@@ -564,8 +597,8 @@
           lint: [] } },
     ]);
     if (route.startsWith('/api/skills/')) {
-      const skill = (state.recordedSkills || []).find(item => item.slug === route.split('/')[3]);
-      if (skill) return skill;
+      const skill = fixture(new URL('/api/skills', url)).find(item => item.slug === route.split('/')[3]);
+      if (skill) return { ...skill, body: skill.body || `## When to Use\n${skill.description}\n\n## Procedure\nReview the inputs, follow the skill and report the result.` };
     }
     if (route === "/api/vault/graph") return graph();
     if (route === "/api/vault/note") return { content: "---\nstatus: active\n---\n# Projects index\n\nA **connected place** for ideas and ongoing work. See [[Projects/note-1|the next note]]." };

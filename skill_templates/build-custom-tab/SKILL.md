@@ -94,13 +94,14 @@ Module functions (call as `tab_api.<name>`):
 - `email_accounts()`: connected mail account IDs, emails and names, without credentials.
 - `send_email(user, account_id, to, subject, body, in_reply_to=None)`: one plain-text email; admin only, and only from a button the person pressed after confirming the recipient. Never from background work or a model's say.
 - `open_mailbox(account_id, folder)`: read-only IMAP context manager; UID search, fetch of `RFC822.SIZE`/`BODY.PEEK[]`, and `response("UIDVALIDITY")` only.
-- `message_time(value)`: parse an RFC mail timestamp with timezone, or return `None`.
+- `message_time(value)`: return an ISO timestamp string with timezone from an RFC mail timestamp, or `None`.
 - `message_connections()`: connection kind, ID and label for supported messaging sources.
 - `documents()`: Library document IDs and titles.
 - `document(document_id)`: read one Library document.
 - `backlog_card(card_id)`: read a work card.
 - `create_backlog_card(title, description, agent_id)`: create a backlog card for an agent.
 - `delete_backlog_card(card_id)`: delete a work card.
+- `unregister_sync(slug)`: remove a tab's sync providers; the loader handles this on retirement. Do not unregister other tabs.
 
 Bound handle members (call as `api.<name>`):
 
@@ -112,7 +113,7 @@ Bound handle members (call as `api.<name>`):
 - `adopt_data_file(old_name)`: migrate only this tab's legacy `<slug>.json`, including old tab-owned encrypted values.
 - `encrypt(text)`: encrypt this tab's own secret with authenticated tab ownership.
 - `decrypt(token)`: decrypt only this tab's tokens, refusing app credentials and other tabs' values.
-- `chat_session(key, title, untrusted=None, model_endpoint_id=None)`: get/create a persistent tab chat; pass `untrusted="<what>"` whenever you put outside text in it (shell commands then ask first).
+- `chat_session(key, title, untrusted=None, model_endpoint_id=None)`: get/create a persistent tab chat; pass `untrusted="<what>"` whenever you put outside text in it to mark its turns for permission checks.
 - `append_chat_message(session_id, role, text)`: append context to chat history without a model turn.
 - `register_sync(name, fn)`: register an async daily-sync provider that runs only while the tab is on; app removal unregisters it.
 
@@ -154,13 +155,17 @@ Clear the supplied container and build into it. Import helpers by their
 absolute app URL: `import { api, el } from "/static/js/api.js"`; relative
 `../api.js` resolves incorrectly. `api(path, options)` parses JSON and throws
 on network/non-2xx failures; `el(tag, attrs, children)` builds DOM (`text`
-sets textContent; `onclick` etc. wire listeners). Use relative imports for
-local JS helpers. To show a tab chat, use `mountSessionChat(host, { sessionId,
+sets textContent; `onclick` etc. wire listeners). Only view.js and view.css
+are served by the tab-file route; keep local JavaScript helpers in view.js.
+To show a tab chat, use `mountSessionChat(host, { sessionId,
 modelPicker: true, openInChats: true })` from `/static/js/sessionChat.js`;
 it streams and shows permission prompts. Give `host` a fixed height. Use existing `.view-constrained`, `.view-header`, `.card`,
 `.title`, `.meta`, `.btn`, `.btn.primary`, `.btn.quiet`, `.disclosure-panel`
 and theme tokens such as `--text`, `--bg-panel`, `--border`, `--accent`.
 Use currentColor stroke SVGs; the manifest icon needs no shared icon edit.
+The current `.view-constrained` maximum width is 1200px; Library pages use
+1440px. Let content shrink on phones. The existing `.tab-build-form` is a
+560px maximum-width column with 16px gaps and `.tab-build-field` labels.
 
 Read `tabs/school/` (routes, service, sync hook and view) and `tabs/crm/`
 (passive capture, background cleanup, calendar items and styles) as worked
@@ -182,7 +187,8 @@ release them on tab switch. Use textContent for external text.
 
 After writing, the tab appears in **Tool Store > Tabs > Yours** as **Needs
 approval**. An admin reviews the file list/source and approves that exact
-fingerprint. Approved folder code loads without a restart or edits to Kairos.
+fingerprint. A newly approved folder can load without a restart or app edits.
+Changes to already mounted Python code require an app restart to load.
 Changing any source file requires approval again. Source in the user data
 folder survives app updates; removing/replacing source keeps saved tab data.
 
@@ -195,3 +201,14 @@ Before handing it over, run this checklist using the files you wrote:
 - Check initial loads, empty results and failed requests, including async actions, produce visible states.
 - Check delayed updates and cleanup, phone-width layout, and tab-owned encrypted storage if used.
 - Tell the user where to review and approve it, and what sources/data it reads.
+
+## Share it to the Kairos Store
+
+Use **Share to store** in **Tool Store > Tabs > Yours**. Review the public
+MIT submission after GitHub sign-in and use a semver version. The Store slug
+must match `[a-z][a-z0-9_]{0,63}` (not `routes`, `services` or `views`), and
+tab.json's slug must match it. Share source only, with no secrets, saved user
+data or insecure HTTP URLs. Allowed text file types: `.md .txt .py .sh .bash
+.js .ts .rb .yaml .yml .json .toml .cfg .ini .conf .html .css .xml .tex .r .jl
+.pl .php`. Limits: 500 files, 20 MiB total, 20 MiB per file and 5 MiB compressed.
+The Store manifest is at most 16,384 bytes. Preview the files before confirming.

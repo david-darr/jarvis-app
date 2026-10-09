@@ -2,6 +2,8 @@ import { api, el, customSelect, toast, confirmDialog, iconButton, emptyState } f
 import { ICONS } from "../icons.js";
 import { renderBoard } from "./taskBoard.js";
 import { renderTriggers } from "./taskTriggers.js";
+import { shareButton } from "../storePublish.js";
+import { openBuilderBrief } from "../builderBrief.js";
 import { runHistory, outcomeLabel, formatDuration, runTime, deliveryState } from "../runHistory.js";
 
 // Built-in tasks gallery (David's ask 2026-08-31, matching Odysseus's
@@ -21,6 +23,9 @@ export async function render(container) {
   ]);
 
   const builtinCard = el("div", { class: "glass card automation-library" });
+  const buildButton = el("button", { type: "button", class: "btn primary", text: "Build with Kairos", "data-build-kind": "automation", "aria-haspopup": "dialog" });
+  header.append(buildButton);
+  buildButton.addEventListener("click", () => openBuilderBrief(buildButton, "automation", "Automation brief", container));
   await refreshBuiltins(builtinCard);
 
   const form = el("details", { class: "disclosure-panel" });
@@ -176,7 +181,7 @@ const POLL_MS = 5000;
 
 async function refresh(list) {
   clearTimeout(list.pollTimer);
-  const [allTasks, channels, models] = await Promise.all([api("/api/tasks"), api("/api/channels"), api("/api/models").catch(() => [])]);
+  const [allTasks, channels, models, auth] = await Promise.all([api("/api/tasks"), api("/api/channels"), api("/api/models").catch(() => []), api("/api/auth/status").catch(() => ({}))]);
   // Cards live on the work board above, not in the scheduled list.
   const tasks = allTasks.filter((t) => t.schedule_kind !== "card");
   list.innerHTML = "";
@@ -273,6 +278,7 @@ async function refresh(list) {
           el("div", { class: "meta", text: schedText }),
         ]),
         el("div", { class: "card-row", style: "gap:6px;" }, [modelSelect, deliverySelect, task.run_started_at ? stopBtn : runBtn,
+          auth.is_admin && !task.builtin_action ? shareButton("automation", task.id) : null,
           el("div", { class: "row-actions" }, [delBtn])]),
       ]),
       runsHost,

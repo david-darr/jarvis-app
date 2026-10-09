@@ -184,7 +184,7 @@ def _audit(spec: ToolSpec, args: dict, ctx: ToolContext, result: str | ToolResul
     service, in the permission audit. Never fails the call."""
     from core import permissions
     text = result.text if isinstance(result, ToolResult) else result
-    outcome = ("tool refused" if text.startswith(("Not run:", "Not opened:", "Not pressed:", "Not typed:", "Stopped:", "Stopped before pressing")) else
+    outcome = ("tool refused" if text.startswith(("Not saved:", "Not added:", "Not run:", "Not opened:", "Not pressed:", "Not typed:", "Stopped:", "Stopped before pressing")) else
                "tool failed" if text.startswith("Tool error:") else "tool used")
     try:
         if spec.name == "computer":
@@ -467,7 +467,7 @@ async def _delete_note(args, ctx):
 
 @register(
     "create_task",
-    "Create a new scheduled/automated Task. schedule_kind is 'once' (needs run_at, an ISO "
+    "Read the build-automation skill first for a new automation. Create a new scheduled/automated Task. schedule_kind is 'once' (needs run_at, an ISO "
     "datetime), 'interval' (needs interval_seconds), or 'daily' (needs run_time — use this "
     "whenever the user names a time of day, e.g. 'every morning at 6am'), or 'card' for one-off "
     "work on the board: Kairos runs a 'ready' card by itself and puts the result up for the "
@@ -500,7 +500,7 @@ async def _create_task(args, ctx):
 @register(
     "update_task",
     "Update an existing Task by id (from list_tasks) — only pass the fields you want to change. "
-    "Use enabled=false to pause it.",
+    "Use enabled=false to pause it. Read the build-automation skill first for a new automation.",
     _object({"task_id": _str(), "name": _str(), "prompt": _str(), "enabled": {"type": "boolean"},
              "deliver_to_channel": _str(),
              "depends_on": {"type": "array", "items": {"type": "string"}, "description": "Cards only: ids of cards it waits for"}},
@@ -974,6 +974,130 @@ async def _delegate(args, ctx):
 async def _helper_results(args, ctx):
     from core import helpers
     return helpers.results_text(args.get("batch_id"), ctx)
+
+
+# Builder writes use the same import/add gates as their manual counterparts.
+_BUILDER_CHOICES = [
+    {"id": "once", "label": "Allow once", "behavior": "allow", "scope": "once"},
+    {"id": "reject", "label": "Reject", "behavior": "deny", "scope": "once"},
+]
+
+
+@register(
+    "save_skill",
+    "Read the build-skill skill first. Save a reusable skill through Kairos's import scan. "
+    "Flagged or tainted content asks for review; replacement requires replace=true and approval.",
+    _object({"name": _str(), "description": _str(), "body": _str(),
+             "files": {"type": "object", "additionalProperties": {"type": "string"},
+                       "description": "Optional relative path -> supporting text, excluding SKILL.md"},
+             "replace": {"type": "boolean"}}, ("name", "description", "body")),
+    admin_only=True, effect=WRITE,
+)
+async def _save_skill(args, ctx):
+    import os
+    from core import permissions, tab_folders
+    from core.store_schema import safe_path
+    from services import skills_service, skill_curator
+
+    try:
+        name, description, body = (args.get(k) for k in ("name", "description", "body"))
+        if not all(isinstance(v, str) and v.strip() for v in (name, description, body)):
+            raise ValueError("name, description and body are required text")
+        if any(c in name + description for c in "\r\n"):
+            raise ValueError("name and description must each be one line")
+        slug = skills_service._slugify(name)
+        path = skills_service._skill_path(slug)
+        files = args.get("files", {})
+        if not isinstance(files, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in files.items()):
+            raise ValueError("files must be a map of relative paths to text")
+        files = dict(files)
+        seen = {"skill.md"}
+        for relative in files:
+            safe_path(relative)
+            if relative.casefold() in seen:
+                raise ValueError("Duplicate supporting file or reserved SKILL.md")
+            seen.add(relative.casefold())
+        supporting = {k: v.encode("utf-8") for k, v in files.items()}
+        folder = os.path.dirname(path)
+        exists = os.path.lexists(folder)
+        replace = args.get("replace") is True
+        if exists and not replace:
+            return f"Not saved: {slug} already exists. Replacement needs replace=true and approval."
+        fingerprint = tab_folders.fingerprint(folder, user=False)[0] if exists else None
+        raw = skills_service._render(description, body, "name: " + slug)
+        refused = None
+        try:
+            scan = skill_curator.check_import(slug, raw, supporting_files=supporting)
+            report, verdict = scan["report"], scan["verdict"]
+        except skill_curator.SkillImportRefused as e:
+            refused = e
+            report, verdict = e.report, "caution" if e.needs_confirmation else "dangerous"
+        # Refuse before asking: no approval can unblock a dangerous verdict.
+        if verdict == "dangerous":
+            return "Not saved: dangerous skills are blocked by the import policy.\n" + report
+        tainted = bool(ctx.turn_taint and ctx.turn_taint.tainted)
+        confirmed = False
+        if refused or exists or tainted:
+            decision = await permissions.decide(
+                surface=ctx.permission_surface, tool="save_skill",
+                arguments={"name": slug, "description": description, "body": body, "files": files, "replace": exists},
+                title=("Replace" if exists else "Save") + f" skill {slug}",
+                description=(f"This turn read {ctx.turn_taint.reason}.\n" if tainted else "") + report,
+                is_admin=ctx.is_admin, force_prompt=True, choices=_BUILDER_CHOICES)
+            if decision.behavior != "allow":
+                return f"Not saved: {decision.reason or 'skill was not approved'}"
+            confirmed = True
+        # Approval belongs to this snapshot, not a skill changed during review.
+        if exists and tab_folders.fingerprint(folder, user=False)[0] != fingerprint:
+            return "Not saved: the existing skill changed during review. Try again."
+        saved = skills_service.import_skill(slug + ".md", raw, confirmed=confirmed,
+            name=slug, replace=exists and replace and confirmed, supporting_files=supporting,
+            origin="Kairos builder chat")
+        # import_skill records imported provenance and current visibility.
+        return f"Saved skill {saved['slug']} (scan: {saved['scan']}). Find it in Tool Store > Skills."
+    except (ValueError, OSError, skill_curator.SkillImportRefused) as e:
+        return f"Not saved: {e}"
+
+
+@register(
+    "add_mcp_server",
+    "Read the build-mcp-server skill first. Add and check an HTTP(S) MCP connection. "
+    "Always asks the person, even in Auto. Does not accept held tools; review them in Tool Store > Tools.",
+    _object({"name": _str(), "url": _str(), "auth": {"type": "string", "enum": ["none", "oauth"]}},
+            ("name", "url", "auth")), admin_only=True, effect=WRITE,
+)
+async def _add_mcp_server(args, ctx):
+    import json
+    from urllib.parse import urlsplit
+    from core import permissions
+    from routes import integrations_routes
+    name, url, auth = (args.get(k) for k in ("name", "url", "auth"))
+    if not isinstance(name, str) or not name.strip() or not isinstance(url, str):
+        return "Not added: name and HTTP(S) URL are required."
+    name, url = name.strip(), url.strip()
+    try:
+        parsed = urlsplit(url)
+        parsed.port  # validate malformed ports before asking
+        if (parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username
+                or parsed.password or parsed.fragment or any(c.isspace() for c in url)):
+            raise ValueError("Use an HTTP(S) URL without credentials or a fragment, as in the add-server form.")
+        if auth not in ("none", "oauth"):
+            raise ValueError("auth must be none or oauth")
+    except ValueError as e:
+        return f"Not added: {e}"
+    decision = await permissions.decide(
+        surface=ctx.permission_surface, tool="add_mcp_server",
+        arguments={"name": name, "url": url, "auth": auth}, title="Add MCP server",
+        description=f"Connect {name} at {url} (auth: {auth}). Check its tools; held tools need separate review.",
+        is_admin=ctx.is_admin, force_prompt=True, choices=_BUILDER_CHOICES)
+    if decision.behavior != "allow":
+        return f"Not added: {decision.reason or 'server was not approved'}"
+    result = await integrations_routes.add_mcp_server(integrations_routes.CreateMcpServerRequest(
+        name=name, mcp_type="http", url=url, auth="oauth" if auth == "oauth" else None))
+    held = ", ".join(tool["name"] for tool in result.get("held_tools", [])) or "none"
+    return ("Added MCP server. Check result: " + json.dumps(result, ensure_ascii=False)
+            + f"\nTools needing acceptance in Tool Store > Tools: {held}."
+            + (" Sign in there, then Check again." if auth == "oauth" and not result.get("signed_in") else ""))
 
 
 # -- handing work to an agent, from any admin chat (services/agent_handoff.py) --

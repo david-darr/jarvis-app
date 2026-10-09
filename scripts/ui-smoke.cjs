@@ -148,7 +148,45 @@ app.whenReady().then(async () => {
     // Home to Chat animates (a view transition); captures wait for it to end.
     await waitFor("!document.documentElement.classList.contains('tab-transition')");
   };
-  const overflow = async () => js(`Array.from(document.querySelectorAll('#view-content, #view-content .view-constrained, .chat-input-bar, .settings-content, .cal-left')).filter(e => e.clientWidth > 0 && e.scrollWidth > e.clientWidth + 2).map(e => ({class: e.className, width:e.clientWidth, scroll:e.scrollWidth}))`);
+  const overflow = async () => js(`Array.from(document.querySelectorAll('#view-content, #view-content .view-constrained, .chat-input-bar, .settings-content, .cal-left, .panel-dialog, .panel-dialog .modal-body')).filter(e => e.clientWidth > 0 && e.scrollWidth > e.clientWidth + 2).map(e => ({class: e.className, width:e.clientWidth, scroll:e.scrollWidth}))`);
+  const openPopup = async (opener, ready, label) => {
+    await js(`window.__popupOpener = ${opener}; window.__popupOpener.focus(); window.__popupOpener.click()`);
+    await waitFor(`!!document.querySelector('.modal-panel[role="dialog"][aria-modal="true"]') && (${ready})`);
+    await delay(220);
+    assert.equal(await js("window.__popupOpener.getAttribute('aria-haspopup')"), 'dialog', label + ' opener announces a dialog');
+    assert.equal(await js("window.__popupOpener.hasAttribute('aria-expanded')"), false, label + ' has no inline expanded state');
+    assert.equal(await js("document.querySelectorAll('.panel-dialog').length"), 1, label + ' opens one panel');
+    assert.ok(await js("document.querySelector('.modal-panel').contains(document.activeElement)"), label + ' moves focus inside');
+    assert.ok(await js("!!document.querySelector('.modal-panel button[aria-label=Close]')"), label + ' has a close button');
+    assert.ok(await js("getComputedStyle(document.getElementById('view-content')).overflowY === 'hidden'"), label + ' locks page scrolling');
+    assert.ok(await js("getComputedStyle(document.querySelector('.modal-panel .modal-body')).overflowY === 'auto'"), label + ' scrolls the panel body');
+    await js(`(() => {
+      const panel = document.querySelector('.modal-panel');
+      const controls = [...panel.querySelectorAll('button, input, textarea, select, a[href], summary, [tabindex]')].filter(n => !n.disabled && n.tabIndex >= 0 && n.getClientRects().length);
+      controls.at(-1).focus();
+      document.dispatchEvent(new KeyboardEvent('keydown', {key:'Tab', bubbles:true, cancelable:true}));
+      window.__trapForward = document.activeElement === controls[0];
+      document.dispatchEvent(new KeyboardEvent('keydown', {key:'Tab', shiftKey:true, bubbles:true, cancelable:true}));
+      window.__trapBackward = document.activeElement === controls.at(-1);
+    })()`);
+    assert.ok(await js("window.__trapForward && window.__trapBackward"), label + ' traps focus in both directions');
+    if (await js('innerWidth <= 768')) assert.ok(await js("(() => { const r = document.querySelector('.modal-panel').getBoundingClientRect(); return Math.abs(r.left)<1 && Math.abs(r.top)<1 && Math.abs(r.width-innerWidth)<1 && Math.abs(r.height-innerHeight)<1; })()"), label + ' fills the phone viewport');
+    assert.deepEqual(await overflow(), [], label + ' popup overflow');
+  };
+  const closePopup = async (mode, label) => {
+    await js(mode === 'backdrop' ? "document.querySelector('.panel-dialog').parentElement.click()" : mode === 'button'
+      ? "document.querySelector('.modal-panel button[aria-label=Close]').click()"
+      : "document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true, cancelable:true}))");
+    await waitFor("!document.querySelector('.panel-dialog')");
+    assert.ok(await js("document.activeElement === window.__popupOpener"), label + ' returns focus after ' + mode);
+    assert.ok(await js("!document.documentElement.classList.contains('panel-dialog-open')"), label + ' unlocks scrolling');
+  };
+  const popupDismissals = async (opener, ready, label) => {
+    await openPopup(opener, ready, label);
+    await closePopup('escape', label);
+    await openPopup(opener, ready, label);
+    await closePopup('backdrop', label);
+  };
   try {
     await win.loadURL(base);
     // Offscreen windows do not receive native focus. Once a page exists,
@@ -417,6 +455,38 @@ app.whenReady().then(async () => {
           await navigate('agents');
         }
         if (tab === "tool-store" && !demoState.empty) {
+          const headerButton = text => `[...document.querySelectorAll('.tool-store-manage button')].find(b => b.textContent === ${JSON.stringify(text)})`;
+          for (const [text, ready] of [
+            ['Install a single-file skill from GitHub', `!!document.querySelector('.modal-panel input[aria-label="GitHub SKILL.md URL"]')`],
+            ['Add MCP server', `!!document.querySelector('.modal-panel input[aria-label="MCP server URL"]')`],
+            ['Manage skills', `!!document.querySelector('.modal-panel #skills-list .card')`],
+          ]) await popupDismissals(headerButton(text), ready, label + ' ' + text);
+          const viewSkill = `[...document.querySelectorAll('.tool-store-card')].find(c=>c.querySelector('h4')?.textContent==='build-custom-tab').querySelector('button')`;
+          await popupDismissals(viewSkill, "!!document.querySelector('.modal-panel .tool-store-skill-body')", label + ' View skill');
+          await openPopup(viewSkill, "!!document.querySelector('.modal-panel .tool-store-skill-body')", label + ' View skill');
+          assert.ok(await js("document.querySelector('.modal-panel .tool-store-skill-body').textContent.includes('Procedure')"), label + ' skill body is readable');
+          await capture(label + '-tool-store-view-skill');
+          // Switching from viewing to managing replaces the popup and focuses that skill.
+          await js("document.querySelector('.modal-panel .btn').focus(); document.querySelector('.modal-panel .btn').click()");
+          await waitFor("!!document.querySelector('.modal-panel .tool-store-manager #skills-list .card')");
+          assert.equal(await js("document.querySelectorAll('.panel-dialog').length"), 1, label + ' Manage skill replaces View skill');
+          assert.ok(await js("document.activeElement.closest('[data-skill]')?.dataset.skill === 'build-custom-tab'"), label + ' manager focuses the selected skill');
+          await js("document.activeElement.click()");
+          await waitFor("!!document.querySelector('.modal-panel #skills-list textarea')");
+          assert.ok(await js("document.querySelector('.modal-panel #skills-list textarea').value.includes('Procedure')"), label + ' skill editor keeps its body');
+          await closePopup('escape', label + ' Manage skill');
+          const managerWrites = writes.length;
+          await openPopup(headerButton('Manage skills'), "!!document.querySelector('.modal-panel #skills-list [data-skill=\"build-custom-tab\"]')", label + ' skill save');
+          await js("document.querySelector('.modal-panel [data-skill=\"build-custom-tab\"] button[aria-label=\"Edit skill\"]').click()");
+          await waitFor("!!document.querySelector('.modal-panel #skills-list textarea')");
+          await js("document.querySelector('.modal-panel #skills-list textarea').value='Updated in the popup.'; [...document.querySelectorAll('.modal-panel #skills-list button')].find(b=>b.textContent==='Save').click()");
+          await waitFor("!document.querySelector('.panel-dialog')");
+          assert.ok(writes.slice(managerWrites).some(w=>w.path==='/api/skills/build-custom-tab' && w.method==='PUT' && JSON.parse(w.body).body.includes('Updated in the popup.')), label + ' saving a skill closes the popup and keeps the edited content');
+          writes.splice(managerWrites);
+          await openPopup(headerButton('Add MCP server'), `!!document.querySelector('.modal-panel input[aria-label="MCP server URL"]')`, label + ' server validation');
+          await js("document.querySelector('.modal-panel input[aria-label=\"Server name\"]').value='Example'; document.querySelector('.modal-panel input[aria-label=\"MCP server URL\"]').value='invalid'; [...document.querySelectorAll('.modal-panel button')].find(b=>b.textContent==='Add server').click()");
+          await waitFor("document.querySelector('.modal-panel [role=status]').textContent.includes('HTTP or HTTPS')");
+          await closePopup('button', label + ' server validation');
           await waitFor("document.querySelectorAll('[data-community-slug]').length === 4");
           assert.ok(await js("document.querySelector('[data-community-heading]').textContent.includes('Community')"), label + " Community section renders");
           assert.equal(await js("document.querySelector('[data-community-slug=meeting_summary] .tool-store-badge').textContent"), 'Update available', label + ' Community update badge');
@@ -426,6 +496,30 @@ app.whenReady().then(async () => {
           assert.ok(writes.slice(communityWrites).some(w => w.path === '/api/store/install' && JSON.parse(w.body).kind === 'automation'), label + ' Community install uses the store gate');
           await js("document.querySelector('[data-community-heading]').scrollIntoView({ block: 'start' })");
           await capture(label + '-tool-store-community');
+          const publishWrites = writes.length;
+          await js("[...document.querySelectorAll('.store-github-strip button')].find(b=>b.textContent==='Sign in with GitHub').click()");
+          await waitFor("document.querySelector('.store-device-code')?.textContent === 'KAIROS42'");
+          await capture(label + '-store-device-code');
+          await waitFor("document.querySelector('.store-github-strip').textContent.includes('@alex-demo')");
+          await waitFor("document.querySelector('.store-submissions').textContent.includes('Meeting notes')");
+          await js("[...document.querySelectorAll('.tool-store-filters button')].find(b=>b.textContent==='Tabs').click(); document.querySelector('[data-tab-slug=project_tracker] .store-share').click()");
+          await waitFor("!!document.querySelector('.store-publish-panel') && ![...document.querySelectorAll('.store-publish-panel button')].find(b=>b.textContent==='Preview').disabled");
+          await js("[...document.querySelectorAll('.store-publish-panel button')].find(b=>b.textContent==='Preview').click()");
+          await waitFor("document.querySelectorAll('.store-publish-preview pre').length === 4");
+          assert.ok(await js("document.querySelector('.store-publish-preview').textContent.includes('manifest.json') && document.querySelector('.store-publish-preview').textContent.includes('from fastapi import APIRouter')"), label + ' full publish files and manifest');
+          assert.ok(await js("[...document.querySelectorAll('.store-publish-panel button')].find(b=>b.textContent==='Open pull request').disabled"), label + ' public confirmation required');
+          assert.deepEqual(await overflow(), [], label + ' publish preview mobile overflow');
+          assert.ok(await js("[...document.querySelectorAll('.store-publish-panel, .store-publish-preview')].every(n=>n.scrollWidth<=n.clientWidth+2)"), label + ' dialog content fits the viewport');
+          await capture(label + '-store-publish-preview');
+          await js("document.querySelector('[data-public-confirm]').click(); [...document.querySelectorAll('.store-publish-panel button')].find(b=>b.textContent==='Open pull request').click()");
+          await waitFor("document.querySelector('.store-pr-link')?.href === 'https://github.com/david-darr/kairos-store/pull/42'");
+          await capture(label + '-store-published');
+          await js("[...document.querySelectorAll('.store-publish-panel button')].find(b=>b.textContent==='Done').click(); [...document.querySelectorAll('.tool-store-filters button')].find(b=>b.textContent==='All').click()");
+          await waitFor("document.querySelector('.store-submissions').textContent.includes('#42')");
+          await js("[...document.querySelectorAll('.store-github-strip button')].find(b=>b.textContent==='Sign out of GitHub').click()");
+          await waitFor("document.querySelector('.store-github-strip').textContent.includes('Sign in with GitHub')");
+          demoState.githubSignedIn = false; demoState.storePublished = false;
+          writes.splice(publishWrites);
           // Reset the synthetic install so both viewport passes exercise Install.
           demoState.communityInstalls = {};
           writes.splice(communityWrites);
@@ -463,23 +557,36 @@ app.whenReady().then(async () => {
           assert.ok(await js("document.querySelector('.tool-store-build-card')?.textContent.includes('Build your own tab') && !!document.querySelector('.tool-store-build-card .btn.primary')"), label + " Yours ends with a Build your own tab card");
           await js("document.getElementById('view-content').scrollTop=0");
           await capture(label + "-tool-store-tabs");
-          await js("document.querySelector('[data-tab-slug=project_tracker] .disclosure-panel').open=true; document.querySelector('[data-tab-slug=project_tracker]').scrollIntoView({block:'start'})");
-          assert.ok(await js("getComputedStyle(document.querySelector('[data-tab-slug=project_tracker] summary')).listStyleType === 'none'"), label + " app disclosure style");
-          assert.deepEqual(await js("[...document.querySelectorAll('[data-tab-slug] .tool-store-card-foot')].filter(foot=>{const buttons=[...foot.querySelectorAll('button')];return buttons.some(b=>Math.abs(b.getBoundingClientRect().top-buttons[0].getBoundingClientRect().top)>2)}).map(foot=>foot.closest('[data-tab-slug]').dataset.tabSlug)"), [], label + " tab actions stay in one row");
-          assert.deepEqual(await overflow(), [], label + " open tab file review overflow");
+          const reviewOpener = `[...document.querySelectorAll('[data-tab-slug=project_tracker] button')].find(b=>b.textContent==='Review files')`;
+          const reviewReady = "!!document.querySelector('.modal-panel .tool-store-tab-review')";
+          await popupDismissals(reviewOpener, reviewReady, label + ' Review files');
+          await openPopup(reviewOpener, reviewReady, label + ' Review files');
+          assert.ok(await js("document.querySelector('.modal-panel .tool-store-tab-files').textContent.includes('routes.py') && document.querySelector('.modal-panel .tool-store-tab-hash').textContent.includes('a'.repeat(64))"), label + ' file review includes source list and fingerprint');
+          assert.ok(await js("!!document.querySelector('.modal-panel .store-share') && ['Approve','Remove','Export'].every(text=>[...document.querySelectorAll('.modal-panel button')].some(b=>b.textContent===text))"), label + ' review keeps every action');
           await capture(label + "-tool-store-tabs-review");
+          await closePopup('button', label + ' Review files');
+          await popupDismissals(headerButton('Install a tab'), "!!document.querySelector('.modal-panel input[aria-label=\"Tab archive\"]')", label + ' Install a tab');
+          await popupDismissals(headerButton('Build a tab'), "!!document.querySelector('.modal-panel .tab-build-form:not([data-builder])')", label + ' Build a tab');
+          await popupDismissals("document.querySelector('.tool-store-build-card button')", "!!document.querySelector('.modal-panel .tab-build-form:not([data-builder])')", label + ' Build your own tab');
+          // The approval request must carry the fingerprint displayed in the review.
+          await openPopup(reviewOpener, reviewReady, label + ' approval');
+          const reviewedFingerprint = await js("document.querySelector('.modal-panel .tool-store-tab-hash').textContent.replace('SHA-256: ', '')");
+          await js("[...document.querySelectorAll('.modal-panel button')].find(b=>b.textContent==='Approve').focus(); [...document.querySelectorAll('.modal-panel button')].find(b=>b.textContent==='Approve').click()");
+          await waitFor("!!document.querySelector('.confirm-panel')");
+          await js("[...document.querySelectorAll('.confirm-panel button')].find(b=>b.textContent==='Approve source').click()");
+          await waitFor("!document.querySelector('.panel-dialog') && document.querySelector('[data-tab-slug=project_tracker] .set-pill-ok')?.textContent === 'On'");
+          assert.ok(writes.slice(tabStoreWrites).some(w=>w.path==='/api/system/custom-tabs/project_tracker/approve' && JSON.parse(w.body).fingerprint===reviewedFingerprint), label + ' approval binds to the reviewed fingerprint');
+          fixture(new URL('/api/system/tabs', base)).find(t=>t.slug==='project_tracker').status='needs_approval';
           if (label === "desktop") {
-            await waitFor("!!document.querySelector('.tab-build-form')");
             // The card at the end of Yours opens the same brief as the header button.
-            await js("document.querySelector('.tool-store-build-card button').click()");
-            await waitFor("!document.querySelector('.tab-build-form').closest('details').hidden");
-            await js("document.querySelector('.tab-build-form input').value='Research'; document.querySelector('.tab-build-form textarea').value='Track my sources'; document.querySelector('.tab-build-build-btn').click()");
+            await openPopup("document.querySelector('.tool-store-build-card button')", "!!document.querySelector('.modal-panel .tab-build-form:not([data-builder])')", label + ' tab build handoff');
+            await js("document.querySelector('.modal-panel .tab-build-form:not([data-builder]) input').value='Research'; document.querySelector('.modal-panel .tab-build-form:not([data-builder]) textarea').value='Track my sources'; document.querySelector('.modal-panel .tab-build-form:not([data-builder]) .tab-build-build-btn').click()");
             await waitFor("document.querySelector('.nav-item[data-tab=chat]').classList.contains('active')");
             await waitFor("!!document.querySelector('.chat-layout')");
             await waitFor("sessionStorage.getItem('jarvis:pendingChatHandoff') === null");
             for (let i = 0; i < 80 && !writes.some(w => w.path === "/api/chat/stream" && w.body.includes('Research')); i++) await delay(50);
             const handoff = writes.find(w => w.path === "/api/chat/stream" && w.body.includes('Research'));
-            assert.ok(handoff && JSON.parse(handoff.body).message.includes('data/tabs/<slug>/') && JSON.parse(handoff.body).message.includes('core.tab_api'), "Build hands a folder-tab request to a model chat");
+            assert.ok(handoff && JSON.parse(handoff.body).message.startsWith('First call read_skill with slug "build-custom-tab"'), "Build reads the tab skill first");
             await navigate("tool-store");
           }
           writes.splice(tabStoreWrites);
@@ -1219,6 +1326,40 @@ app.whenReady().then(async () => {
     // Each action waits for its own request and each status for its own DOM.
     // They need the sample agents, so they run outside the empty pass, which
     // is restored for the checks after them.
+    // Each brief validates required answers and uses the same one-shot chat
+    // handoff at both viewport sizes. Synthetic writes are kept only here.
+    const emptyBeforeBuilders = demoState.empty;
+    demoState.empty = false;
+    for (const [label, width, height] of [['desktop', 1440, 900], ['mobile', 390, 844]]) {
+      win.setContentSize(width, height);
+      for (const [kind, category, skill] of [['skill', 'Skills', 'build-skill'], ['mcp', 'Tools', 'build-mcp-server'], ['automation', 'Automations', 'build-automation'], ['automation', null, 'build-automation']]) {
+        await navigate(category ? 'tool-store' : 'tasks');
+        if (category) await js(`[...document.querySelectorAll('.tool-store-filters button')].find(b => b.textContent === ${JSON.stringify(category)}).click()`);
+        const scope = `.modal-panel [data-builder="${kind}"]`;
+        const buttonKind = kind === 'skill' ? 'skills' : kind === 'mcp' ? 'tools' : category ? 'automations' : 'automation';
+        const opener = `document.querySelector('[data-build-kind="${buttonKind}"]')`;
+        const ready = `!!document.querySelector('${scope} .tab-build-build-btn')`;
+        await popupDismissals(opener, ready, label + ' ' + kind + ' brief');
+        await openPopup(opener, ready, label + ' ' + kind + ' brief');
+        const start = writes.length;
+        await js(`document.querySelector('${scope} .tab-build-build-btn').click()`);
+        await waitFor(`!document.querySelector('${scope} .tab-build-error[role="status"]').classList.contains('hidden')`);
+        assert.equal(writes.length, start, label + ' ' + kind + ' empty brief creates no session');
+        await js(`document.querySelectorAll('${scope} textarea, ${scope} input').forEach((input, index) => { input.value = 'Builder ${kind} ${label} answer ' + index; })`);
+        assert.deepEqual(await overflow(), [], label + ' ' + kind + ' brief fits');
+        await capture(label + '-builder-' + kind + (category === 'Automations' ? '-store' : ''));
+        await js(`document.querySelector('${scope} .tab-build-build-btn').click()`);
+        await waitFor("document.querySelector('.nav-item[data-tab=chat]').classList.contains('active') && sessionStorage.getItem('jarvis:pendingChatHandoff') === null");
+        assert.equal(await js("document.querySelector('.panel-dialog')"), null, label + ' build handoff closes its popup');
+        const marker = `Builder ${kind} ${label} answer`;
+        for (let i = 0; i < 80 && !writes.slice(start).some(w => w.path === '/api/chat/stream' && w.body.includes(marker)); i++) await delay(50);
+        const handoff = writes.slice(start).find(w => w.path === '/api/chat/stream' && w.body.includes(marker));
+        assert.ok(handoff && JSON.parse(handoff.body).message.startsWith(`First call read_skill with slug "${skill}"`), label + ' ' + kind + ' reads its skill first');
+        assert.ok(writes.slice(start).some(w => /\/api\/sessions\/[^/]+\/model$/.test(w.path)), label + ' builder sets the selected model');
+        writes.splice(start);
+      }
+    }
+    demoState.empty = emptyBeforeBuilders;
     const emptyBeforeMentions = demoState.empty;
     demoState.empty = false;
     const waitForWrite = async (start, path, matches) => {

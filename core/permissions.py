@@ -282,10 +282,13 @@ async def decide(*, surface: str, tool: str, arguments: dict, title: str = "", d
                  force_prompt: bool = False) -> Decision:
     """Answer from a rule, or ask the person and wait."""
     target = target if target is not None else derive_target(tool, arguments)
+    # Builder imports/connections always need the person's explicit review
+    # when requested, even on an Auto surface. Other Auto behavior is unchanged.
+    explicit_review = force_prompt and tool in {"save_skill", "add_mcp_server"}
     # Auto is an explicit, per-chat admin choice. It answers broker requests
     # for this chat only, including requests from a tainted turn; it does not
     # add a standing grant or change the policy for other chats/tasks.
-    if is_admin and surface.startswith("chat:"):
+    if is_admin and surface.startswith("chat:") and not explicit_review:
         from core.session_manager import session_manager
         session_id = surface.removeprefix("chat:")
         session = session_manager.get_session(session_id)
@@ -299,7 +302,7 @@ async def decide(*, surface: str, tool: str, arguments: dict, title: str = "", d
     # agent's own runs are approved like an Auto chat's, tainted turns
     # included, and every one is audited. Only admins can create and direct
     # agents (routes/agent_routes.py).
-    if surface.startswith("agent:"):
+    if surface.startswith("agent:") and not explicit_review:
         data = _load()
         _record(data, {"decision": "allow", "source": "agent_auto", "surface": surface,
                        "tool": tool, "content": target})

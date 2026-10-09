@@ -33,7 +33,15 @@ SKILL_TEMPLATES_DIR = os.path.join(BASE_DIR, "skill_templates")
 # Before seed hashes were tracked, this exact bundled text was shipped.
 # Normalize line endings only: even a small user edit must prevent refresh.
 _LEGACY_SEED_HASHES = {
-    "build-custom-tab": {"c12313f03035060c100ceac976653c6c1ccbe8f759285a44925b700009141cb2"},
+    # Every shipped version (git log of skill_templates/build-custom-tab), plus
+    # the pre-bundling 2026-09-07 draft that early installs already had under
+    # this slug, which seeding then refused to overwrite.
+    "build-custom-tab": {"9208f6c1ecd88727c39e4da118b643adda15ab4d6b9fcff5be2ffe91c678ac50",
+                         "3a9fe0fa1ecda46b4c6a9ef85249d97656896d04148959b52adb7578af88d1d9",
+                         "e60c90b88115d35ce33364de4bc943dfdd2adf83ad80556a5fcd3a7065513319",
+                         "c12313f03035060c100ceac976653c6c1ccbe8f759285a44925b700009141cb2",
+                         "ce52b531d9813c5fa122cc2b35ae511d4c2525ec4d5639d97411a072eea9946d",
+                         "0cc72be9661ec969572f1798c43b4d5e2b23d0bcd8f2de90a19dea18f5f034d4"},
 }
 
 

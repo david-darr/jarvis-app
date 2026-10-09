@@ -49,7 +49,7 @@ CLAUDE_APPROVED_BEFORE = {f"mcp__hive_mind__{name}" for name in (
     # Helpers (roadmap phase 5, 2026-10-06): delegate and collect.
     "delegate helper_results computer "
     # Agent mentions (2026-10-08): hand work to a named agent from a chat.
-    "hand_to_agent").split()}
+    "hand_to_agent save_skill add_mcp_server").split()}
 
 
 def load_cli():
