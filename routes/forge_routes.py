@@ -157,6 +157,7 @@ class CreateForgeSessionRequest(BaseModel):
     project_id: str
     task: str = Field(min_length=1, max_length=4000)
     model_endpoint_id: str | None = None
+    model_override: str | None = Field(default=None, max_length=160)
     mode: Literal['build', 'plan'] = 'build'
     isolation: Literal['new_worktree', 'existing_branch', 'in_place'] = 'new_worktree'
     branch: str | None = None
@@ -182,7 +183,7 @@ class RevertHunkRequest(RevertFileRequest):
 @router.post('/sessions')
 def create_forge_session(body: CreateForgeSessionRequest, user: str = Depends(require_admin)):
     return _for_client(call(forge_sessions.create, body.project_id, body.task, body.model_endpoint_id,
-                            body.mode, body.isolation, body.branch, body.base_branch, user))
+                            body.mode, body.isolation, body.branch, body.base_branch, user, body.model_override))
 
 
 @router.get('/projects/{project_id}/sessions')

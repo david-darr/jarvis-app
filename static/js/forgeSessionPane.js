@@ -10,7 +10,8 @@ export async function mountForgeSession(panel, session, project, models, { initi
   const appController = new AbortController();
   let appDialogCleanup = () => {}, appStarting = false, appStatus = null;
   const status = el('p', { class: 'forge-review-status', role: 'alert' });
-  const agentLabel = el('span', { class: 'meta', text: models.find(m => m.id === session.model_endpoint_id)?.name || 'Default agent' });
+  const agentText = (endpoint, override) => [endpoint?.name || 'Default agent', override].filter(Boolean).join(' · ');
+  const agentLabel = el('span', { class: 'meta', text: agentText(models.find(m => m.id === session.model_endpoint_id), session.model_override) });
   const mode = customSelect({}, ['build', 'plan'].map(value => el('option', { value, text: value === 'build' ? 'Build' : 'Plan' })));
   mode.value = session.forge.mode;
   mode.querySelector('button').setAttribute('aria-label', 'Session mode');
@@ -57,7 +58,7 @@ export async function mountForgeSession(panel, session, project, models, { initi
       onDiff, onChanges,
       queue: true, readOnly: !!session.forge.removed, initialMessage, placeholder: 'Message your agent',
       emptyText: 'Describe the next step for this project.', onTurnEnd: onReview,
-      onModelChange: model => { agentLabel.textContent = model?.name || 'Default agent'; },
+      onModelChange: (model, override) => { agentLabel.textContent = agentText(model, override); },
     });
     if (disposed) mounted(); else chatCleanup = mounted;
   } catch (error) { if (!disposed) status.textContent = error.message; }

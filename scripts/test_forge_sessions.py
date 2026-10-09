@@ -73,6 +73,18 @@ class ForgeSessionTests(unittest.TestCase):
     def create(self, **kwargs):
         return self.service.create(self.project['id'], 'Fix garden', 'chosen', **kwargs)
 
+    def test_session_starts_with_the_exact_model_chosen(self):
+        session = self.create(model_override='claude-sonnet-5')
+        self.assertEqual(session_manager.get_session(session['id'])['model_override'], 'claude-sonnet-5')
+        self.assertIsNone(session_manager.get_session(self.create(model_override='  ')['id'])['model_override'])
+        for bad in ('-flag', 'a b', 'x' * 161, 'model;rm'):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, 'valid model ID'):
+                self.create(model_override=bad)
+        # Same rule as Chat: exact models only for CLI and API agents.
+        with patch.object(sessions_module.model_endpoints, 'get_endpoint', return_value={'id': 'chosen', 'kind': 'local', 'model': 'm'}):
+            with self.assertRaisesRegex(ValueError, 'CLI and API'):
+                self.create(model_override='claude-sonnet-5')
+
     def test_new_worktree_chat_metadata_and_listing(self):
         session = self.create()
         details = session['forge']; folder = Path(session['workspace_dir'])

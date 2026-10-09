@@ -29,7 +29,7 @@ const pausedQueues = new Set();
 //   initialMessage sends the first task after loading a new session
 //   queue         editable follow-ups; paused after Stop or leaving the view
 //   readOnly      show history with sending disabled
-//   onModelChange called after saving a model connection
+//   onModelChange called after saving a model connection (endpoint, exact model or null)
 // Returns a cleanup function.
 export async function mountSessionChat(host, options = {}) {
   let sessionId = options.sessionId || null;
@@ -206,7 +206,7 @@ export async function mountSessionChat(host, options = {}) {
           body: JSON.stringify({ model_endpoint_id: connection.value || null, model_override: override }) });
         status.textContent = '';
         current.model_endpoint_id = connection.value || null; current.model_override = override;
-        options.onModelChange?.(endpoints.find(e => e.id === connection.value));
+        options.onModelChange?.(endpoints.find(e => e.id === connection.value), override);
       } catch (problem) { connection.value = current.model_endpoint_id || ''; variantNode.value = current.model_override || ''; status.textContent = problem.message; }
       finally { modelSaving = false; syncSend(); }
     };

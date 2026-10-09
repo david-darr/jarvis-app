@@ -259,7 +259,7 @@
       if (!project || project.id === 'fp2') return { _status: 400, detail: 'Forge sessions require a Git repository root with an initial commit.' };
       const id = 'fs' + (Object.keys(forgeSessions).length + 1);
       const worktree = body.isolation === 'in_place' ? project.path : project.path + '-worktrees\\task-' + id;
-      const session = { id, title: body.task.slice(0, 120), created_at: now, updated_at: now, model_endpoint_id: body.model_endpoint_id, workspace_dir: worktree, messages: [],
+      const session = { id, title: body.task.slice(0, 120), created_at: now, updated_at: now, model_endpoint_id: body.model_endpoint_id, model_override: body.model_override || null, workspace_dir: worktree, messages: [],
         forge: { project_id: project.id, worktree, branch: body.isolation === 'in_place' ? 'main' : body.branch || 'forge/task-' + id, base_branch: body.branch || 'main', base_commit: 'a'.repeat(40), mode: body.mode || 'build', isolation: body.isolation || 'new_worktree' } };
       forgeSessions[id] = session; forgeReviews[id] = { files: [], checkpoints: [] }; return session;
     }

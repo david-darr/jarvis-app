@@ -1,7 +1,7 @@
 {
  "built": {
-  "app.js": "0ad65c3c707616906e1781b744c6078326fd98ae5a15919f86b3a45234cc1268",
-  "fixtures.js": "72af45c6355540b16d9cdd9c4aa9615e35d42dfc2120b57ff26f3d66952c0844",
+  "app.js": "afa4e99202cb4c6172c85e32454b77aa5e2ab54d4fd9f4bde7760a9a8c1f7df3",
+  "fixtures.js": "a9639550ffd0c514c4444795f378c0d81486191db42e071602583742d2c8409c",
   "index.html": "876b0a30cc72b90dee0b600154fb85b90eceac5bb0f113984c97bf512bd68803",
   "shim.js": "92cb8b7792cf73e7ec049862e100a1f7e2501bee49b3c2e2400e9840b3403b61",
   "static/css/appearance.css": "3330eb656e91e4e74388048fd201ea62a4a2d80befd8748b22689836793f2ca0",
@@ -250,7 +250,7 @@
   "tabs/crm/view.css": "692abfe0aaa1180fd651584cb447b87e827a018b4e1959f28a6cdc91c7b6672b"
  },
  "sources": {
-  "demo/fixtures.js": "72af45c6355540b16d9cdd9c4aa9615e35d42dfc2120b57ff26f3d66952c0844",
+  "demo/fixtures.js": "a9639550ffd0c514c4444795f378c0d81486191db42e071602583742d2c8409c",
   "demo/shim.js": "92cb8b7792cf73e7ec049862e100a1f7e2501bee49b3c2e2400e9840b3403b61",
   "scripts/build_site_demo.py": "80b3f2480106464f946e4060af6c0fb24a24cead93757e3e131616ba67ba0005",
   "static/css/appearance.css": "3330eb656e91e4e74388048fd201ea62a4a2d80befd8748b22689836793f2ca0",
@@ -328,7 +328,7 @@
   "static/js/forgeCharts.js": "03cee0a120920ea34b55a4d1d1e02a9a6cf8458c889778af71d6870a3d689384",
   "static/js/forgeProjectForms.js": "4061b43c1d528699098867c47c62c65e63906fb18e9cbb5eedfca247ca9637b3",
   "static/js/forgeRail.js": "6a0955a0c82ab56b82830e023fd5fd98d20121b851e9b3c93ce123fb8f83728f",
-  "static/js/forgeSessionPane.js": "846511f3a1b2dfb7031f73c090c2b1294ce33f273561e7e99dbc623ec2520285",
+  "static/js/forgeSessionPane.js": "d272ba5f081a64fc17399c1451ef8c65ae7f198855b5f5add74bce2aac0a518b",
   "static/js/forgeSurfaces.js": "585bf7cfba012667edd300e516e695b6c98a6f9128c5fd10c70d63e170ee4f9a",
   "static/js/forgeTranscript.js": "5c3e158354ea571b1006e7bb29699ba8a7fe7ba502f07fc3bafef0775bf2f929",
   "static/js/forgeUi.js": "512d546320fe5c4dd27512d04bf078efce2a562338e506f3b06eb19ce98ca81b",
@@ -345,7 +345,7 @@
   "static/js/runHistory.js": "29206bf0fb56af44e24cec0e878669d39d05171ee7088af18b0734cad1cb5d62",
   "static/js/runTimeline.js": "81686633464bbeba4649d0ea9b72143e05a3900c2534fb5a6063ecc878adfada",
   "static/js/screenCapture.js": "1286c2e107b7e2c351a0e911d168047d510fb6935351626c41e08275691b8b75",
-  "static/js/sessionChat.js": "a93bd6bbfe9cc7a3f83ab4408aebf06799af8180cae1fad546999ef0997aa363",
+  "static/js/sessionChat.js": "a2433c4d71d98903db2bdae907f867798d0c9495edfc0bd50962fa9703b06ecf",
   "static/js/settingsKit.js": "320c368353016cd67713dfff7f8a85deb78519a5f8f539bf0d0c8d3618fbe331",
   "static/js/sideChat.js": "b6495146b10dfc7ac8679593847d69b1813103bb271a2722490b4ed99123e9ef",
   "static/js/sidebar.js": "f49acf5596f0ff90000bf2cdf510198a415cdcee02f87b601ac936ddd44f8712",
@@ -566,7 +566,7 @@
   "static/js/views/chat.js": "04caeb4b54a3a8e79143fe79f1e5ebc446cf31a59c936ff9859b8c08099e6617",
   "static/js/views/cookbook.js": "26d00630fe938e075bf751e0bc1150739091158143c639075f24865de960e412",
   "static/js/views/email.js": "281c5c0dad613ea5898b76ec9e121d4a9659d0807c54c4ecf3f83e79109bc3d0",
-  "static/js/views/forgeHome.js": "b084ccbac8b41083e199f5327e8a4b4ef52d4e99ec921f6ae928f05391be61a0",
+  "static/js/views/forgeHome.js": "7a625d482169e272137198dfe4ae8d932123d6db2e6f6f1af66f07d0fcea6ca6",
   "static/js/views/forgeShell.js": "dcbb9e3ff30441645df1b15db010ba0ab77e4a53b4155f1a6cc9edebb06a34f6",
   "static/js/views/home.js": "608463635b76bf5adc43ef395677e13c2c6efb28c1e9b3d48737122e3c2af249",
   "static/js/views/layoutPanel.js": "6d60cb73baa7b7c1de31631b54702058d7aeae6e64fbbce83a83241c2e1afccd",

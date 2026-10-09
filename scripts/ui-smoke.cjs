@@ -307,7 +307,13 @@ app.whenReady().then(async () => {
       assert.ok(await js("!document.querySelector('.forge-composer button[type=submit]').disabled"), label + ' branch selection enables start');
       await js(`(() => { const picker = document.querySelector('[aria-label="Where it runs"]').parentElement; picker.value = 'in_place'; picker.dispatchEvent(new Event('change')); })()`);
       assert.ok(await js("document.querySelector('.forge-location-note.forge-warning').textContent.includes('directly')"), label + ' in-place warning is visible');
-      await js(`(() => { const picker = document.querySelector('[aria-label="Where it runs"]').parentElement; picker.value = 'new_worktree'; picker.dispatchEvent(new Event('change')); document.querySelector('[aria-label="Agent for new session"]').parentElement.value = 'm2'; document.querySelector('#forge-message').value = 'Build the Forge fixture'; })()`);
+      await js(`(() => { const picker = document.querySelector('[aria-label="Where it runs"]').parentElement; picker.value = 'new_worktree'; picker.dispatchEvent(new Event('change')); const agent = document.querySelector('[aria-label="Agent for new session"]').parentElement; agent.value = 'm2'; agent.dispatchEvent(new Event('change')); document.querySelector('#forge-message').value = 'Build the Forge fixture'; })()`);
+      // The exact model for that agent, from the same catalog as Chat's picker.
+      // customSelect keeps its options in memory, so check the value it accepted and its label.
+      await waitFor("!!document.querySelector('[aria-label=\"Model for new session\"]')");
+      await js("document.querySelector('[aria-label=\"Model for new session\"]').parentElement.value = 'workspace-fast'");
+      assert.equal(await js("document.querySelector('[aria-label=\"Model for new session\"]').parentElement.value"), 'workspace-fast', label + ' exact model is selectable');
+      assert.equal(await js("document.querySelector('[aria-label=\"Model for new session\"]').textContent.trim()"), 'Workspace Fast', label + ' exact model shows its name');
       assert.deepEqual(await overflow(), [], label + ' Forge composer overflow');
       await capture(label + '-forge-home-composer');
       // This index belongs to this viewport pass, even when both send the same task.
@@ -320,7 +326,7 @@ app.whenReady().then(async () => {
       const handoffWrites = writes.slice(handoffStart);
       const createWrite = handoffWrites.find(w => w.path === '/api/forge/sessions' && w.method === 'POST');
       const streamWrite = handoffWrites.findLast(w => w.path === '/api/chat/stream');
-      assert.deepEqual(JSON.parse(createWrite.body), { project_id: 'fp1', task: 'Build the Forge fixture', model_endpoint_id: 'm2', mode: 'build', isolation: 'new_worktree', branch: null }, label + ' creates the selected Forge session');
+      assert.deepEqual(JSON.parse(createWrite.body), { project_id: 'fp1', task: 'Build the Forge fixture', model_endpoint_id: 'm2', model_override: 'workspace-fast', mode: 'build', isolation: 'new_worktree', branch: null }, label + ' creates the selected Forge session');
       assert.equal(JSON.parse(streamWrite.body).message, 'Build the Forge fixture', label + ' sends the first message');
       assert.ok(handoffWrites.indexOf(createWrite) < handoffWrites.indexOf(streamWrite), label + ' creates Forge before sending');
       assert.ok(!handoffWrites.some(w => w.path === '/api/sessions' || /\/(workspace|model)$/.test(w.path)), label + ' has no Phase 1 chat bridge');
@@ -328,7 +334,7 @@ app.whenReady().then(async () => {
       const forgeBase = '/api/forge/sessions/' + forgeSessionId;
       await waitFor(`document.querySelector('.side-chat-send')?.textContent === 'Send' && document.querySelector('[data-session-id="${forgeSessionId}"]')`);
       assert.equal(await js("document.documentElement.dataset.appMode"), 'forge', label + ' stays in Forge');
-      assert.ok(await js("document.querySelector('.forge-session-header').textContent.includes('Kairos garden') && document.querySelector('.forge-session-header').textContent.includes('Codex')"), label + ' session header');
+      assert.ok(await js("document.querySelector('.forge-session-header').textContent.includes('Kairos garden') && document.querySelector('.forge-session-header').textContent.includes('Codex') && document.querySelector('.forge-session-header').textContent.includes('workspace-fast')"), label + ' session header shows the agent and its exact model');
       assert.ok(await js("!document.querySelector('.forge-project-sidebar').hidden"), label + ' starting opens project sidebar');
       if (width <= 768) await js("document.querySelector('[aria-label=\"Close project sidebar\"]').click()");
       await capture(label + '-forge-shell');

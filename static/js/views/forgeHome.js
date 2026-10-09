@@ -37,6 +37,10 @@ export function render(container, tabId, options = {}) {
   page.append(hero, el('div', { class: 'forge-toolbar' }, [el('span', { class: 'meta', text: 'Your work, in view' }), customize]), grid);
   container.append(page);
   let disposed = false, dialog = null, projectSelect = null, modelSelect = null, lifespanSelect = null, projects = [], busy = false;
+  // The exact model for the chosen agent (e.g. Sonnet 5, gpt-6.1-sol), from the
+  // same catalog as Chat's model picker; hidden for agents without one.
+  let models = [], variantSelect = null, variantVersion = 0;
+  const variantField = el('label', { class: 'forge-picker-field', hidden: true });
   let isolationSelect, modeSelect, branchSelect, branchField, branchVersion = 0, starting = false, branchesReady = false, sessionGroups = [];
   const drawWorking = () => {
     if (disposed) return;
@@ -141,7 +145,7 @@ export function render(container, tabId, options = {}) {
       if (disposed) return;
       if (results[0].status === 'rejected') throw results[0].reason;
       projects = results[0].value;
-      const models = results[1].status === 'fulfilled' ? results[1].value : [];
+      models = results[1].status === 'fulfilled' ? results[1].value : [];
       projectSelect = projectPicker(projects, 'Project for new session');
       modelSelect = customSelect({}, models.map(m => el('option', { value: m.id, text: `${m.name} · ${m.model || 'CLI default'}` })));
       modelSelect.querySelector('button').setAttribute('aria-label', 'Agent for new session');
@@ -151,8 +155,10 @@ export function render(container, tabId, options = {}) {
       modeSelect = customSelect({}, [el('option', { value: 'build', text: 'Build' }), el('option', { value: 'plan', text: 'Plan' })]);
       modeSelect.querySelector('button').setAttribute('aria-label', 'Mode for new session');
       branchField = el('label', { class: 'forge-picker-field', hidden: true });
-      pickers.append(field('Project', projectSelect), field('Where it runs', isolationSelect), field('Agent', modelSelect), field('Mode', modeSelect), branchField);
-      projectSelect.addEventListener('change', locationChanged); isolationSelect.addEventListener('change', locationChanged); modelSelect.addEventListener('change', updateSend);
+      pickers.append(field('Project', projectSelect), field('Where it runs', isolationSelect), field('Agent', modelSelect), variantField, field('Mode', modeSelect), branchField);
+      projectSelect.addEventListener('change', locationChanged); isolationSelect.addEventListener('change', locationChanged);
+      modelSelect.addEventListener('change', () => { updateSend(); loadVariants(); });
+      loadVariants();
       if (options.projectId && projects.some(p => p.id === options.projectId)) projectSelect.value = options.projectId;
       locationChanged();
       if (!projects.length || !models.length) pickers.append(el('button', { type: 'button', class: 'btn quiet', text: !projects.length ? 'Add a project' : 'Add a model', onclick: event => !projects.length ? openProjectForm('existing', { owner: page, opener: event.currentTarget, onSaved: () => { document.dispatchEvent(new Event('kairos:forge-projects')); navigate('forgeHome'); } }) : navigate('settings', { section: 'add-models' }) }));
@@ -175,12 +181,26 @@ export function render(container, tabId, options = {}) {
     if (!project || !model) return;
     starting = true; updateSend();
     try {
-      const session = await api('/api/forge/sessions', { method: 'POST', body: JSON.stringify({ project_id: project.id, task: text, model_endpoint_id: model, mode: modeSelect.value, isolation: isolationSelect.value, branch: isolationSelect.value === 'existing_branch' ? branchSelect.value : null }) });
+      const session = await api('/api/forge/sessions', { method: 'POST', body: JSON.stringify({ project_id: project.id, task: text, model_endpoint_id: model, model_override: variantSelect?.value || null, mode: modeSelect.value, isolation: isolationSelect.value, branch: isolationSelect.value === 'existing_branch' ? branchSelect.value : null }) });
       if (!disposed) navigate('forgeSession', { sessionId: session.id, initialMessage: text });
     } catch (error) {
       toast('Could not start session. Your message is still here.', 'error');
     } finally { starting = false; updateSend(); }
   };
+  async function loadVariants() {
+    const version = ++variantVersion;
+    const endpoint = models.find(m => m.id === modelSelect?.value);
+    variantSelect = null; variantField.hidden = true; variantField.replaceChildren();
+    if (!endpoint || !['claude_cli', 'codex_cli', 'api'].includes(endpoint.kind)) return;
+    let choices = [];
+    try { choices = await api(`/api/models/${encodeURIComponent(endpoint.id)}/catalog`); } catch { /* Default model only. */ }
+    if (disposed || version !== variantVersion) return;
+    variantSelect = customSelect({}, [el('option', { value: '', text: 'Default model' }),
+      ...choices.map(m => el('option', { value: m.id, text: m.display_name || m.id }))]);
+    variantSelect.querySelector('button').setAttribute('aria-label', 'Model for new session');
+    variantField.replaceChildren(el('span', { class: 'meta', text: 'Model' }), variantSelect);
+    variantField.hidden = false;
+  }
   message.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); composer.requestSubmit(); } };
   load();
   document.addEventListener('kairos:forge-apps', refreshActivity);

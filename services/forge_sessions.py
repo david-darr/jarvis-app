@@ -133,13 +133,23 @@ class ForgeSessions:
         return destination
 
     def create(self, project_id, task, model_endpoint_id=None, mode='build', isolation='new_worktree',
-               branch=None, base_branch=None, owner_user=None):
+               branch=None, base_branch=None, owner_user=None, model_override=None):
         if mode not in ('build', 'plan') or isolation not in ('new_worktree', 'existing_branch', 'in_place'):
             raise ValueError('Choose a valid mode and isolation.')
         if not task.strip():
             raise ValueError('Describe the task.')
-        if model_endpoint_id and not model_endpoints.get_endpoint(model_endpoint_id):
+        endpoint = model_endpoints.get_endpoint(model_endpoint_id) if model_endpoint_id else None
+        if model_endpoint_id and not endpoint:
             raise ValueError('Model endpoint not found.')
+        # The exact model, with the same rules as a chat's model picker
+        # (routes/session_routes.py set_session_model).
+        if model_override is not None:
+            model_override = model_override.strip() or None
+        if model_override is not None:
+            if not endpoint or endpoint['kind'] not in ('claude_cli', 'codex_cli', 'api'):
+                raise ValueError('Exact models are available only for CLI and API agents.')
+            if len(model_override) > 160 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/+\[\]-]*', model_override):
+                raise ValueError('Enter a valid model ID (160 characters maximum).')
         with self.lock:
             project, repo = self.project(project_id)
             current = forge_git.run_git(repo, 'branch', check=False)[1].strip() or 'HEAD'
@@ -172,7 +182,7 @@ class ForgeSessions:
                 projects_module.vet_project(str(worktree))
                 session = self.sessions.create_session(task.strip()[:120], owner_user=owner_user)
                 self.sessions.set_workspace(session['id'], str(worktree))
-                self.sessions.set_model_endpoint(session['id'], model_endpoint_id)
+                self.sessions.set_model_endpoint(session['id'], model_endpoint_id, model_override)
                 details = dict(project_id=project_id, worktree=str(worktree), branch=branch,
                                base_branch=base_branch, base_commit=base_commit, mode=mode, isolation=isolation)
                 if root:
