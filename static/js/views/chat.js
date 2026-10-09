@@ -705,6 +705,9 @@ export async function render(container, tabId, options = {}) {
   fileInput.addEventListener("change", () => handleFilePicked(fileInput, attachStrip));
 
   const attachItem = menuItem(ICON_ATTACH, "Attach files", () => { closeMenu(overflowMenu); fileInput.click(); });
+  const captureItem = menuItem(ICON_CAPTURE, "Capture screen", () => { closeMenu(overflowMenu); captureScreenshot(attachStrip); });
+  captureItem.title = "Capture screen";
+  captureItem.setAttribute("aria-label", "Capture from this device");
   const docItem = menuItem(ICON_DOC, "Documents", () => { closeMenu(overflowMenu); openDocumentsMenu(docItem); });
   const workspaceItem = menuItem(ICON_WORKSPACE, "Workspace", () => { closeMenu(overflowMenu); openWorkspaceModal(); });
   const promptItem = menuItem(ICON_PROMPT, "Prompt", () => { closeMenu(overflowMenu); openPromptMenu(promptItem); });
@@ -714,7 +717,21 @@ export async function render(container, tabId, options = {}) {
   // a link in a reply (see app.js's onOpenRequest). Nothing opens it
   // automatically, and no agent tool reads from it.
   const browseItem = menuItem(ICON_GLOBE, "Browse the web", () => { closeMenu(overflowMenu); openBrowser(''); });
-  overflowMenu.append(attachItem, docItem, workspaceItem, browseItem, integrationsItem, promptItem);
+  const computerBtn = menuItem(ICONS.computer, 'Computer', () => { closeMenu(overflowMenu); showComputer(); });
+  computerBtn.classList.add('chat-computer-toggle');
+  computerBtn.title = 'Computer';
+  computerBtn.setAttribute('aria-label', 'Computer');
+  computerBtn.hidden = true;
+  // Compact (David's ask 2026-09-21; in the + menu since 2026-10-08) —
+  // appears once the context meter shows this chat getting full. Shrinks what gets sent to the model on
+  // future turns; never deletes anything already saved (see
+  // core/session_manager.py's compact_session/effective_messages).
+  const compactBtn = menuItem(ICON_COMPACT, "Compact", () => { closeMenu(overflowMenu); runCompact(compactBtn); });
+  compactBtn.id = "chat-compact";
+  compactBtn.title = "Compact this chat";
+  compactBtn.setAttribute("aria-label", "Compact this chat to free up context");
+  compactBtn.hidden = true;
+  overflowMenu.append(attachItem, captureItem, docItem, workspaceItem, browseItem, computerBtn, integrationsItem, promptItem, compactBtn);
   const overflowWrap = el("div", { class: "overflow-wrapper" }, [overflowBtn, overflowMenu, fileInput]);
 
   const workspacePill = el("div", { id: "workspace-pill-slot" });
@@ -730,9 +747,6 @@ export async function render(container, tabId, options = {}) {
   const showComputer = () => {
     if (activeSessionId && computerInfo) openChatComputer(activeSessionId, computerInfo, { onDismiss: dismissComputer });
   };
-  const computerBtn = el('button', { type: 'button', class: 'input-icon-btn chat-computer-toggle',
-    title: 'Computer', 'aria-label': 'Computer', hidden: true, onclick: showComputer });
-  computerBtn.insertAdjacentHTML('beforeend', ICONS.computer);
   const computerWatch = el('button', { type: 'button', class: 'btn quiet computer-watch',
     text: 'Computer is open - watch', hidden: true, onclick: showComputer });
   const computerTurn = (sessionId, entry) => {
@@ -793,24 +807,11 @@ export async function render(container, tabId, options = {}) {
   // cumulative token spend. Hidden until a turn actually reports usable
   // usage, so it never occupies the composer with a placeholder.
   const contextPill = el("div", { id: "context-pill", class: "context-pill", hidden: true, role: "status" });
-  // Compact (David's ask 2026-09-21) — appears once the context meter above
-  // shows this chat getting full. Shrinks what gets sent to the model on
-  // future turns; never deletes anything already saved (see
-  // core/session_manager.py's compact_session/effective_messages).
-  const compactBtn = el("button", {
-    type: "button", class: "input-icon-btn", id: "chat-compact", title: "Compact this chat",
-    "aria-label": "Compact this chat to free up context", hidden: true,
-    onclick: () => runCompact(compactBtn),
-  });
-  compactBtn.insertAdjacentHTML("beforeend", ICON_COMPACT);
 
   const sendBtn = el("button", { class: "btn", id: "chat-send", title: "Send" });
   sendBtn.insertAdjacentHTML("beforeend", ICON_SEND);
 
-  const captureBtn = el("button", { type: "button", class: "input-icon-btn", title: "Capture screen",
-    "aria-label": "Capture from this device", onclick: () => captureScreenshot(attachStrip) });
-  captureBtn.insertAdjacentHTML("beforeend", ICON_CAPTURE);
-  const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, captureBtn, filesBtn, computerBtn, computerWatch, permissionControl, workspacePill, contextPill, compactBtn]);
+  const inputLeft = el("div", { class: "chat-input-left" }, [overflowWrap, filesBtn, computerWatch, permissionControl, workspacePill, contextPill]);
   // Dictation (David's ask 2026-09-15). Hidden outright when the browser
   // cannot record, rather than offered and then failing on click.
   const micBtn = el("button", { type: "button", class: "input-icon-btn chat-mic-btn", id: "chat-mic", title: "Dictate", "aria-label": "Dictate a message" });
@@ -1711,7 +1712,10 @@ async function runCompact(button) {
   if (!sessionId || button.disabled) return;
   button.disabled = true;
   const previousTitle = button.title;
+  const label = button.querySelector('span');
+  const previousLabel = label.textContent;
   button.title = 'Compacting…';
+  label.textContent = 'Compacting…';
   try {
     await api('/api/chat/compact', { method: 'POST', body: JSON.stringify({ session_id: sessionId }) });
     toast('Chat compacted — nothing was deleted, it’s all still above.', 'success');
@@ -1725,6 +1729,7 @@ async function runCompact(button) {
   } finally {
     button.disabled = false;
     button.title = previousTitle;
+    label.textContent = previousLabel;
   }
 }
 

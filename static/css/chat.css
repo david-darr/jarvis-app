@@ -215,6 +215,7 @@
 /* Context: a small ring, the share of the window this chat now fills. */
 .context-pill { display: flex; align-items: center; gap: 5px; padding: 4px 6px; border-radius: 999px; font-size: 11px; color: var(--text-faint); cursor: default; }
 .context-pill[hidden] { display: none; }
+#overflow-menu .overflow-menu-item[hidden] { display: none; }
 .context-ring { width: 16px; height: 16px; flex-shrink: 0; }
 .context-ring-track { fill: none; stroke: var(--border-strong); stroke-width: 2.2; }
 .context-ring-fill { fill: none; stroke: var(--text-dim); stroke-width: 2.2; stroke-linecap: round; transition: stroke-dasharray 240ms ease-out; }

@@ -248,7 +248,7 @@ app.whenReady().then(async () => {
           assert.ok(await js("document.querySelector('.chat-backdrop').clientWidth > 0"), label + " default Chat draws the halftone background");
           await waitFor("!!document.querySelector('.session-item[data-session-id=s1]')");
           await js("document.querySelector('.session-item[data-session-id=s1]').click()");
-          await waitFor("!!document.querySelector('.chat-computer-toggle:not([hidden])')");
+          await waitFor("!!document.querySelector('#overflow-menu .chat-computer-toggle:not([hidden])')");
           const chatComputerStart = writes.length;
           await waitFor("document.querySelector('.chat-computer-history .computer-thumbnail')?.naturalWidth > 0");
           await capture(label + '-chat-computer-history');
@@ -271,7 +271,10 @@ app.whenReady().then(async () => {
             await delay(300);
             assert.ok(await js("!document.querySelector('.chat-computer-pane')"), 'A dismissed pane does not reopen in the same turn');
           }
-          await js("document.querySelector('.chat-computer-toggle').click()");
+          await waitFor("!!document.querySelector('#overflow-menu .chat-computer-toggle:not([hidden])')");
+          await js("document.body.click(); document.querySelector('#overflow-plus-btn').click()");
+          await js("document.querySelector('#overflow-menu .chat-computer-toggle').click()");
+          assert.ok(await js("document.querySelector('#overflow-menu').classList.contains('hidden')"), label + ' Computer closes the + menu');
           await waitFor("document.querySelector('.computer-frame')?.complete && document.querySelector('.computer-frame')?.naturalWidth > 0");
           await capture(label + '-chat-computer');
           await js("document.querySelector('.computer-actions button:nth-child(1)').click()");
@@ -999,6 +1002,10 @@ app.whenReady().then(async () => {
     assert.ok(await js(popupLook + "(document.querySelector('#model-picker-menu'))"), "Model menu: shared popup look, above the composer");
     await js("document.body.click(); document.querySelector('#overflow-plus-btn').click()");
     assert.ok(await js(popupLook + "(document.querySelector('#overflow-menu'))"), "+ menu: shared popup look, above the composer");
+    assert.ok(await js("[...document.querySelectorAll('.chat-input-bar button')].filter(b => !b.closest('#overflow-menu')).every(b => !b.classList.contains('chat-computer-toggle') && b.id !== 'chat-compact' && !['Capture screen', 'Computer', 'Compact'].includes(b.title) && !['Capture screen', 'Computer', 'Compact'].includes(b.textContent.trim()) && b.getAttribute('aria-label') !== 'Capture from this device')"), "Capture screen, Computer and Compact are absent from the composer bar outside the + menu");
+    assert.ok(await js("[...document.querySelectorAll('#overflow-menu .overflow-menu-item')].some(b => b.textContent.trim() === 'Capture screen' && !b.hidden)"), "+ menu always contains Capture screen");
+    assert.deepEqual(await js("[...document.querySelectorAll('#overflow-menu .overflow-menu-item')].map(b => b.textContent.trim())"), ['Attach files', 'Capture screen', 'Documents', 'Workspace', 'Browse the web', 'Computer', 'Integrations', 'Prompt', 'Compact'], "+ menu keeps the requested item order");
+    assert.ok(await js("[...document.querySelectorAll('#overflow-menu .overflow-menu-item[hidden]')].every(b => getComputedStyle(b).display === 'none')"), "Hidden + menu items leave no gaps");
     await capture("desktop-plus-menu");
     await js("document.body.click()");
     // Native <select>s (the composer's Mode here) open the app's own menu,
