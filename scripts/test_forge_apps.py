@@ -46,9 +46,20 @@ def tearDownModule():
 
 
 class AppTests(unittest.TestCase):
+    def _cleanup_temp(self):
+        # Every app process is gone by now (the job waits for it), but Windows
+        # can keep a freshly written folder locked for a moment from outside
+        # Kairos (measured 2026-10-09: about 60 ms, WinError 32). Retry briefly.
+        for _ in range(40):
+            try:
+                return self.temp.cleanup()
+            except PermissionError:
+                time.sleep(0.05)
+        self.temp.cleanup()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='forge-app-fixture-')
-        self.addCleanup(self.temp.cleanup)
+        self.addCleanup(self._cleanup_temp)
         self.root = Path(self.temp.name)
         self.repo = self.root / 'repo with spaces'; self.repo.mkdir()
         self.projects = projects_module.ForgeProjects(self.root / 'projects.json')
@@ -156,6 +167,20 @@ class AppTests(unittest.TestCase):
         lines = self.apps.logs(self.sid, 2000)['lines']; self.assertEqual(len(lines), 2000)
         self.assertTrue(lines[0].startswith('line ')); self.assertNotIn('line 0', lines)
         self.assertEqual(forge_routes.app_allowed_ports(self.sid)['ports'], status['ports'])
+
+    def test_late_reader_after_stop_does_not_cancel_a_restart(self):
+        # Found 2026-10-09: the stopped process's output reader finished later
+        # and called _stop again, moving the epoch, so Restart's new start was
+        # refused as "cancelled because the session stopped".
+        with self.approved():
+            self.start()
+            record = self.apps.records[self.sid]
+            self.apps.stop(self.sid)
+            epoch = self.apps.epochs[self.sid]
+            record['reader'].join(timeout=5)
+            self.assertFalse(record['reader'].is_alive())
+            self.assertEqual(self.apps.epochs[self.sid], epoch, 'a finished reader must not stop an already-stopped app again')
+            self.assertTrue(self.start()['running'])
 
     def test_stop_restart_end_remove_and_shutdown_kill_tree(self):
         with self.approved():

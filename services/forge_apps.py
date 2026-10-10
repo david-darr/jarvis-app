@@ -138,6 +138,39 @@ class WindowsJob:
             if handle:
                 self.kernel.CloseHandle(handle)
 
+    def terminate_and_wait(self, timeout=5.0):
+        """Kill every process in the job and wait until none is left.
+
+        Closing a kill-on-close job ends its processes asynchronously, so a
+        descendant could still hold the worktree folder after the launcher
+        exited (found 2026-10-09: a venv python.exe is a launcher whose real
+        interpreter is a child). Returns True when the job emptied in time.
+        """
+        import ctypes
+        import time
+        from ctypes import wintypes as w
+        if not getattr(self, 'handle', None):
+            return True
+        class Accounting(ctypes.Structure):
+            _fields_ = [('TotalUserTime', ctypes.c_int64), ('TotalKernelTime', ctypes.c_int64),
+                        ('ThisPeriodTotalUserTime', ctypes.c_int64), ('ThisPeriodTotalKernelTime', ctypes.c_int64),
+                        ('TotalPageFaultCount', w.DWORD), ('TotalProcesses', w.DWORD),
+                        ('ActiveProcesses', w.DWORD), ('TotalTerminatedProcesses', w.DWORD)]
+        self.kernel.TerminateJobObject.argtypes = [w.HANDLE, w.UINT]
+        self.kernel.QueryInformationJobObject.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, ctypes.c_void_p]
+        self.kernel.TerminateJobObject(self.handle, 1)
+        info = Accounting()
+        deadline = time.monotonic() + timeout
+        while True:
+            # 1 = JobObjectBasicAccountingInformation
+            if not self.kernel.QueryInformationJobObject(self.handle, 1, ctypes.byref(info), ctypes.sizeof(info), None):
+                return False
+            if info.ActiveProcesses == 0:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.02)
+
     def close(self):
         if getattr(self, 'handle', None):
             self.kernel.CloseHandle(self.handle)
@@ -304,8 +337,10 @@ class ForgeApps:
         finally:
             pipe.close()
             # A failed launcher must not leave its children serving indefinitely.
+            # Only for a record not already stopped: _stop moves the epoch, and a
+            # late reader on a stopped app would cancel a Restart's new start.
             with self.lock:
-                if self.records.get(record['session_id']) is record:
+                if self.records.get(record['session_id']) is record and not record.get('terminated'):
                     self._stop(record['session_id'])
 
     def _wait_ready(self, record):
@@ -341,6 +376,8 @@ class ForgeApps:
             return
         record['terminated'] = True
         if record.get('job'):
+            # Wait for descendants too, so the worktree is free when stop returns.
+            record['job'].terminate_and_wait()
             record['job'].close()
         else:
             try:

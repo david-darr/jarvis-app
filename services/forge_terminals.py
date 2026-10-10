@@ -156,6 +156,7 @@ class ForgeTerminals:
         record['closing'] = True
         with record['io_lock']:
             if record['job']:
+                record['job'].terminate_and_wait()
                 record['job'].close()
             elif os.name != 'nt' and not self.spawn:
                 try: os.killpg(record['process'].pid, signal.SIGKILL)
