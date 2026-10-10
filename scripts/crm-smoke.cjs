@@ -103,7 +103,7 @@ app.whenReady().then(async () => {
   const overflow = () => js(`document.querySelector('.crm-view').scrollWidth > document.querySelector('.crm-view').clientWidth + 2`);
   try {
     await win.loadURL(base);
-    await wait("document.querySelectorAll('.dashboard-stat').length===4");
+    await wait("[...document.querySelectorAll('.dashboard-stat:not([data-stat=waiting]) .dashboard-stat-value')].filter(n => n.textContent !== '…').length === 4");
     await js("document.getElementById('onboarding-overlay')?.classList.add('hidden')");
     await js("import('/static/js/app.js').then(m=>m.switchTab('crm'))");
     await wait("document.querySelectorAll('.crm-task').length===1");

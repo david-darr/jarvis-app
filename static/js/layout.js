@@ -11,12 +11,14 @@ export const SIDEBAR_GROUPS = [
 ];
 export const HOME_SECTIONS = [
   { id: "stats", label: "Summary numbers" },
-  { id: "chats", label: "Pick up where you left off" },
-  { id: "schedule", label: "On the horizon" },
-  { id: "projects", label: "Your projects" },
-  { id: "models", label: "Your models" },
-  { id: "activity", label: "Recent activity" },
-  { id: "system", label: "Connected systems" },
+  { id: "chats", label: "Recent chats" },
+  { id: "schedule", label: "Upcoming" },
+  { id: "agents", label: "Agents" },
+  { id: "models", label: "Models" },
+  { id: "store", label: "Tool Store" },
+  { id: "projects", label: "Projects" },
+  { id: "activity", label: "Activity" },
+  { id: "system", label: "Systems" },
 ];
 // Home is never hidden: it's the way back from anywhere.
 export const ALWAYS_SHOWN = "home";

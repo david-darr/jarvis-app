@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -126,6 +127,21 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         calls = len(self.calls)
         await self.service.catalog()
         self.assertEqual(len(self.calls), calls)
+
+    async def test_cache_only_read_never_fetches(self):
+        # Home reads the catalog cache-only (2026-10-09): no cache means no
+        # items and no request; a cached catalog is served even when stale,
+        # still without a request, and installs are not reconciled.
+        self.fresh_cache()
+        self.assertEqual(await self.service.catalog(cache_only=True), {"items": None, "cached": False})
+        self.assertEqual(self.calls, [])
+        self.add("skill")
+        await self.service.snapshot()
+        calls = len(self.calls)
+        with patch.object(catalog_module.time, "time", return_value=time.time() + catalog_module.TTL + 60):
+            result = await self.service.catalog(cache_only=True)
+        self.assertEqual(len(self.calls), calls)
+        self.assertEqual([i["slug"] for i in result["items"]], ["fixture"])
 
     async def test_refresh_resolves_a_new_head(self):
         await self.service.snapshot()

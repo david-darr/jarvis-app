@@ -231,7 +231,7 @@ app.whenReady().then(async () => {
     // emulate it for real DOM focus/keyboard events.
     win.webContents.debugger.attach("1.3");
     await win.webContents.debugger.sendCommand("Emulation.setFocusEmulationEnabled", { enabled: true });
-    await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
+    await waitFor("[...document.querySelectorAll('.dashboard-stat:not([data-stat=waiting]) .dashboard-stat-value')].filter(n => n.textContent !== '…').length === 4");
     assert.ok(await js("document.querySelector('.dashboard-hero').contains(document.querySelector('.dashboard-header')) && !document.querySelector('.dashboard-hero').contains(document.querySelector('.dashboard-stats'))"), "Home keeps the header and introduction in one card above the summary strip");
     // Home's banner is the Kairos figure as halftone (static/js/dither.js): still, no status dot, no motion control.
     await waitFor("document.querySelector('.dashboard-core').classList.contains('is-dithered') && !!document.querySelector('.dashboard-core canvas')");
@@ -597,12 +597,12 @@ app.whenReady().then(async () => {
       }
       demoState.isAdmin = false;
       await js("localStorage.setItem('kairos:app-mode', 'forge')"); await win.loadURL(base);
-      await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
+      await waitFor("[...document.querySelectorAll('.dashboard-stat:not([data-stat=waiting]) .dashboard-stat-value')].filter(n => n.textContent !== '…').length === 4");
       assert.ok(await js("!document.querySelector('#forge-mode-switch, #nav [data-tab=forgeHome], #nav [data-tab=forgeProjects], #nav [data-tab=forgeSessions]')"), label + ' non-admin sees no Forge switch');
       await navigate('forgeHome');
       assert.equal(await js("document.getElementById('view-content').dataset.view"), 'home', label + ' non-admin cannot route to Forge');
       demoState.isAdmin = true; delete demoState.sessionFields;
-      await win.loadURL(base); await waitFor("!!document.querySelector('#forge-mode-switch') && document.querySelectorAll('.dashboard-stat').length === 4");
+      await win.loadURL(base); await waitFor("!!document.querySelector('#forge-mode-switch') && [...document.querySelectorAll('.dashboard-stat:not([data-stat=waiting]) .dashboard-stat-value')].filter(n => n.textContent !== '…').length === 4");
     }
     writes.splice(forgeWrites);
     win.setContentSize(1440, 900); await delay(350);
@@ -621,7 +621,7 @@ app.whenReady().then(async () => {
     assert.ok(await js("[...document.querySelectorAll('#nav button')].every(b => b.getAttribute('aria-label') && b.querySelector('svg'))"), "Every icon-only tab has an accessible name and an icon");
     await capture("desktop-sidebar-collapsed");
     await win.loadURL(base);
-    await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
+    await waitFor("[...document.querySelectorAll('.dashboard-stat:not([data-stat=waiting]) .dashboard-stat-value')].filter(n => n.textContent !== '…').length === 4");
     await delay(350);
     assert.equal(await railWidth(), 52, "Collapsed state survives reload");
     for (const tab of ["chat", "notes", "library", "calendar", "tasks", "email", "tool-store", "cookbook", "school"]) {
@@ -765,7 +765,7 @@ app.whenReady().then(async () => {
           demoState.computerTurn = false; demoState.moreComputerActions = false;
         }
         if (tab === "home") {
-          await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
+          await waitFor("[...document.querySelectorAll('.dashboard-stat:not([data-stat=waiting]) .dashboard-stat-value')].filter(n => n.textContent !== '…').length === 4");
           assert.ok(await js("document.querySelector('.dashboard-content').classList.contains('is-filled') && getComputedStyle(document.querySelector('.dashboard-section-body')).animationName === 'home-fill'"), label + " Home's first fill animates in");
           await waitFor("document.querySelectorAll('.dashboard-model-usage').length > 0");
           // Only the local model carries a usage label, and it is tokens
@@ -1609,9 +1609,24 @@ app.whenReady().then(async () => {
     // (quotaReadings.js), once per account, with signed-out and stale states.
     await navigate("home");
     await waitFor("document.querySelectorAll('.dashboard-quota').length === 2");
-    assert.ok(await js("(() => { const c = document.querySelector('.dashboard-quota[data-provider=claude]'); return c.querySelectorAll('.dashboard-quota-window').length === 2 && c.textContent.includes('34% Used · 66% left') && c.textContent.includes('Resets') && !!c.querySelector('.tone-ample'); })()"), "Claude's limits show on Home");
+    assert.ok(await js("(() => { const c = document.querySelector('.dashboard-quota[data-provider=claude]'); return c.querySelectorAll('.dashboard-quota-window').length === 2 && c.textContent.includes('5h · 34%') && c.textContent.includes('resets') && [...c.querySelectorAll('.dashboard-quota-head')].some(h => h.title.includes('34% Used · 66% left')) && !!c.querySelector('.tone-ample'); })()"), "Claude's limits show on Home (compact label, full reading on hover)");
     assert.ok(await js("!!document.querySelector('.dashboard-quota[data-provider=codex] .tone-crit')"), "A limit past 80% shows as critical");
     await capture("desktop-home-limits");
+    // Compact Home (2026-10-09): Agents and Tool Store cards and the "waiting on
+    // you" chip for admins, hidden for everyone else; the Store card never fetches.
+    await waitFor("!document.querySelector('[data-home-section=agents]').hidden && document.querySelectorAll('[data-home-section=agents] .dashboard-agent-dot').length > 0");
+    assert.ok(await js("document.querySelector('[data-home-section=store]').textContent.includes('Installed') && !document.querySelector('.dashboard-stat[data-stat=waiting]').hidden"), "Admins see Agents, Tool Store and waiting on you");
+    const catalogReads = reads.filter(r => r.path === '/api/store/catalog');
+    assert.ok(catalogReads.some(r => r.query.cache_only === 'true'), "Home reads the store catalog from cache only");
+    await js("document.querySelector('.dashboard-stat[data-stat=waiting]').click()");
+    await waitFor("document.getElementById('view-content').dataset.view === 'agents'");
+    demoState.isAdmin = false;
+    await navigate("home");
+    await waitFor("[...document.querySelectorAll('.dashboard-stat:not([data-stat=waiting]) .dashboard-stat-value')].filter(n => n.textContent !== '…').length === 4");
+    await delay(300);
+    assert.ok(await js("document.querySelector('[data-home-section=agents]').hidden && document.querySelector('[data-home-section=store]').hidden && document.querySelector('.dashboard-stat[data-stat=waiting]').hidden"), "Non-admins don't see Agents, Tool Store or waiting on you");
+    demoState.isAdmin = true;
+    await navigate("home");
     demoState.quotas = { providers: [
       { provider: "claude", status: "needs_sign_in", updated_at: 0, note: "", windows: [] },
       { provider: "codex", status: "ok", updated_at: Math.floor(Date.now() / 1000) - 3600, note: "", windows: [{ name: "5-hour", used_percent: 40, resets_at: Math.floor(Date.now() / 1000) + 600 }] },
@@ -1627,12 +1642,12 @@ app.whenReady().then(async () => {
     assert.deepEqual((await navOrder()).slice(0, 3), ["home", "chat", "agents"], "Agents sits with Home and Chats");
     await js(`import('/static/js/layout.js').then(m => { const l = m.getLayout(); l.groups.main = ['home', 'notes', 'chat', 'agents']; l.groups.workspace = l.groups.workspace.filter(t => t !== 'notes'); l.hiddenTabs = ['cookbook']; l.home = ['models', 'stats', 'chats', 'schedule', 'projects', 'activity', 'system']; l.hiddenHome = ['projects']; m.saveLayout(l); })`);
     await waitFor("document.querySelectorAll('#nav .nav-item[data-tab]')[1]?.dataset.tab === 'notes'");
-    assert.ok(await js("!document.querySelector('#nav .nav-item[data-tab=cookbook]') && document.querySelector('.dashboard-grid').firstElementChild === document.querySelector('.dashboard-grid .dashboard-section:has(.dashboard-quota)') && document.querySelectorAll('.dashboard-grid > .dashboard-section').length === 5"), "Layout changes apply live");
+    assert.ok(await js("!document.querySelector('#nav .nav-item[data-tab=cookbook]') && document.querySelector('.dashboard-grid').firstElementChild === document.querySelector('.dashboard-grid .dashboard-section:has(.dashboard-quota)') && document.querySelectorAll('.dashboard-grid > .dashboard-section').length === 7 && document.querySelector('.dashboard-grid > [data-home-section=store]') === document.querySelector('.dashboard-grid').lastElementChild"), "Layout changes apply live; sections added later join at the end");
     await win.loadURL(base);
     await waitFor("document.querySelectorAll('#nav .nav-item[data-tab]').length >= 10");
     assert.deepEqual((await navOrder()).slice(0, 4), ["home", "notes", "chat", "agents"], "The sidebar layout survives a reload");
-    await waitFor("document.querySelectorAll('.dashboard-grid > *').length === 6");
-    assert.ok(await js("!document.querySelector('#nav .nav-item[data-tab=cookbook]') && document.querySelector('.dashboard-grid').firstElementChild.querySelector('.dashboard-section-header h2').textContent === 'Your models'"), "Home's layout survives a reload");
+    await waitFor("document.querySelectorAll('.dashboard-grid > *').length === 8");
+    assert.ok(await js("!document.querySelector('#nav .nav-item[data-tab=cookbook]') && document.querySelector('.dashboard-grid').firstElementChild.querySelector('.dashboard-section-header h2').textContent === 'Models'"), "Home's layout survives a reload");
     // The Layout page lists every tab, with Home's switch locked on.
     await js("document.querySelector('.sidebar-settings-btn').click()");
     await waitFor("!!document.querySelector('.settings-nav-item[data-section=layout]')");

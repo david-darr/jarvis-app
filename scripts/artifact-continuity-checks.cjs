@@ -58,7 +58,7 @@ module.exports = async function checkArtifactContinuity({ js, win, waitFor, capt
   await capture('artifact-foreign-comment-bar');
   // Drafts restore; only the selected tab has a renderer after restart.
   const readStart = reads.length;
-  await win.loadURL(base); await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
+  await win.loadURL(base); await waitFor("[...document.querySelectorAll('.dashboard-stat:not([data-stat=waiting]) .dashboard-stat-value')].filter(n => n.textContent !== '…').length === 4");
   await navigate('chat', { sessionId: 's2' });
   await waitFor(`!!document.querySelector('${active} .artifact-document')`);
   assert.equal(await count(), 2); assert.equal(await heading(), `1 comment for ${title}`);
@@ -146,7 +146,7 @@ module.exports = async function checkArtifactContinuity({ js, win, waitFor, capt
   win.setContentSize(1920, 1080); await delay(200);
   const stale = '/generated-files/012345abcdef_deleted.md'; demoState.staleArtifacts = [stale];
   await js(`(() => { const saved = JSON.parse(localStorage.getItem('jarvis:artifact-pane')); saved.tabs.push({sessionId:'s1', url:${JSON.stringify(stale)}, name:'deleted.md'}); const foreign = saved.tabs.find(t => t.sessionId === 's1' && t.url !== ${JSON.stringify(stale)}); foreign.comments = [{kind:'artifact_comment', url: foreign.url, comment:'Queued before restart', label: foreign.name, picks:['text:line=1']}]; foreign.queued = true; localStorage.setItem('jarvis:artifact-pane', JSON.stringify(saved)); })()`);
-  await win.loadURL(base); await waitFor("document.querySelectorAll('.dashboard-stat').length === 4"); await navigate('chat', {sessionId:'s2'});
+  await win.loadURL(base); await waitFor("[...document.querySelectorAll('.dashboard-stat:not([data-stat=waiting]) .dashboard-stat-value')].filter(n => n.textContent !== '…').length === 4"); await navigate('chat', {sessionId:'s2'});
   assert.equal(await count(), 2);
   // A send queued before a restart comes back as a draft and never fires on its own.
   const queuedWrites = writes.length;

@@ -250,7 +250,7 @@ module.exports = async function checkAppearance({ js, win, waitFor, capture, bas
   await set({ tint: .35 });
   await capture('appearance-image-settings');
   await win.loadURL(base);
-  await waitFor("document.querySelectorAll('.dashboard-stat').length===4");
+  await waitFor("[...document.querySelectorAll('.dashboard-stat:not([data-stat=waiting]) .dashboard-stat-value')].filter(n => n.textContent !== '…').length === 4");
   assert.equal((await state()).mode, 'image'); assert.equal((await state()).hasImage, true, 'Image survives reload');
   // A different signed-in user on this device receives their own preferences.
   await js("import('/static/js/appearance.js').then(m=>m.initAppearance('Other fixture user'))");
@@ -276,7 +276,7 @@ module.exports = async function checkAppearance({ js, win, waitFor, capture, bas
   })()`), 'done');
   assert.equal((await state()).hasImage, true, 'Concurrent image writes leave an image in memory');
   await win.loadURL(base);
-  await waitFor("document.querySelectorAll('.dashboard-stat').length===4");
+  await waitFor("[...document.querySelectorAll('.dashboard-stat:not([data-stat=waiting]) .dashboard-stat-value')].filter(n => n.textContent !== '…').length === 4");
   assert.equal((await state()).hasImage, true, 'Concurrent image writes persist consistently');
   // A reset racing an in-flight write must win outright. If the write landed
   // after the delete, the image would come back on the next launch.
@@ -288,7 +288,7 @@ module.exports = async function checkAppearance({ js, win, waitFor, capture, bas
   })()`), 'done');
   assert.equal((await state()).hasImage, false, 'Reset wins the race in memory');
   await win.loadURL(base);
-  await waitFor("document.querySelectorAll('.dashboard-stat').length===4");
+  await waitFor("[...document.querySelectorAll('.dashboard-stat:not([data-stat=waiting]) .dashboard-stat-value')].filter(n => n.textContent !== '…').length === 4");
   assert.equal((await state()).hasImage, false, 'Reset racing a write does not resurrect the image');
   assert.equal((await state()).mode, 'default');
   await open();
@@ -302,7 +302,7 @@ module.exports = async function checkAppearance({ js, win, waitFor, capture, bas
   assert.equal((await state()).hasImage, false);
   assert.equal((await state()).mode, 'default');
   await win.loadURL(base);
-  await waitFor("document.querySelectorAll('.dashboard-stat').length===4");
+  await waitFor("[...document.querySelectorAll('.dashboard-stat:not([data-stat=waiting]) .dashboard-stat-value')].filter(n => n.textContent !== '…').length === 4");
   assert.equal((await state()).hasImage, false, 'Reset removes persisted image');
   // The halftone slot cards at phone width (mode is back to Kairos default,
   // which shows them): the window is already narrow here, with nothing left

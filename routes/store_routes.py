@@ -41,8 +41,8 @@ async def _answer(call):
 
 
 @router.get("/catalog")
-async def catalog(user: str = Depends(require_admin)):
-    return await _answer(store_catalog.catalog())
+async def catalog(cache_only: bool = False, user: str = Depends(require_admin)):
+    return await _answer(store_catalog.catalog(cache_only=cache_only))
 
 
 @router.post("/refresh")

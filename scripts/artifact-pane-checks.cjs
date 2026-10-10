@@ -40,7 +40,7 @@ module.exports = async function checkArtifactPanes({ js, win, waitFor, capture, 
   await close(); await open('project-brief.md'); await split(dragged);
   // Persistence also survives a fresh document/module instance.
   await win.loadURL(base);
-  await waitFor("document.querySelectorAll('.dashboard-stat').length === 4");
+  await waitFor("[...document.querySelectorAll('.dashboard-stat:not([data-stat=waiting]) .dashboard-stat-value')].filter(n => n.textContent !== '…').length === 4");
   await navigate('chat', { sessionId: 's1' });
   await open('project-brief.md'); await split(dragged);
   const arrow = key => js(`document.querySelector('.chat-pane-resizer').dispatchEvent(new KeyboardEvent('keydown', { key: '${key}', bubbles: true, cancelable: true }))`);

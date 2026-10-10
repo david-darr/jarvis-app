@@ -176,10 +176,16 @@ class StoreCatalog:
             self.save_installs(records)
         return records
 
-    async def catalog(self, refresh=False):
-        snapshot = await self.snapshot(refresh)
+    async def catalog(self, refresh=False, cache_only=False):
+        # Home must never refresh GitHub or change installed items on a read.
+        snapshot = self._cache() if cache_only else await self.snapshot(refresh)
+        if snapshot is None:
+            return {"items": None, "cached": False}
+        if cache_only:
+            snapshot = {**snapshot, "stale": time.time() - snapshot["fetched_at"] >= TTL}
         async with self.lock:
-            records = await self.reconcile(snapshot)
+            records = ({key: rec for key, rec in self.installs().items() if self._exists(rec)}
+                       if cache_only else await self.reconcile(snapshot))
             items = []
             keys = set()
             for item in snapshot["index"]["items"]:
