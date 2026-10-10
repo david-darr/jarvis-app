@@ -262,12 +262,53 @@ def required_distributions() -> list:
     stripped. This answers "is the package there at all", which is the thing
     that actually goes wrong.
     """
-    names = []
+    return [name for name, _ in required_with_markers()]
+
+
+def required_with_markers() -> list:
+    """[name, environment marker or None] for each requirements.txt package.
+
+    The runtime check evaluates the marker inside the runtime itself, so a
+    platform-only package (pywinpty on Windows, ptyprocess elsewhere) is
+    required only where it applies. Found 2026-10-09: the Windows build
+    refused to finish because ptyprocess, marked `sys_platform != "win32"`,
+    was correctly not installed.
+    """
+    rows, seen = [], set()
     for line in _requirement_lines():
         name = _normalise(re.split(r"[<>=!~\[;\s]", line, maxsplit=1)[0])
-        if name and name not in names:
-            names.append(name)
-    return names
+        marker = line.split(";", 1)[1].strip() if ";" in line else None
+        if name and name not in seen:
+            seen.add(name)
+            rows.append([name, marker or None])
+    return rows
+
+
+def _marker(text):
+    try:
+        from pip._vendor.packaging.markers import Marker
+    except ImportError:  # pragma: no cover - pip always ships it
+        from packaging.markers import Marker
+    return Marker(text)
+
+
+def runtime_marker_environment(python_exe: str) -> dict:
+    """PEP 508 marker values as the runtime itself reports them, since the
+    build host's Python can differ from the bundled one."""
+    probe = "\n".join([
+        "import json,os,platform,sys",
+        "v=sys.implementation.version",
+        "iv='%d.%d.%d'%(v.major,v.minor,v.micro)+('' if v.releaselevel=='final' else v.releaselevel[0]+str(v.serial))",
+        "print(json.dumps({'implementation_name':sys.implementation.name,'implementation_version':iv,"
+        "'os_name':os.name,'platform_machine':platform.machine(),'platform_release':platform.release(),"
+        "'platform_system':platform.system(),'platform_version':platform.version(),"
+        "'python_full_version':platform.python_version(),'platform_python_implementation':platform.python_implementation(),"
+        "'python_version':'.'.join(platform.python_version_tuple()[:2]),'sys_platform':sys.platform}))",
+    ])
+    result = subprocess.run([python_exe, "-c", probe], cwd=BASE_DIR, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError("runtime environment probe failed:\n" + result.stderr.strip())
+    return json.loads(result.stdout.strip())
 
 
 def missing_distributions(python_exe: str) -> list:
@@ -278,6 +319,9 @@ def missing_distributions(python_exe: str) -> list:
     docx, discord.py -> discord, llama-cpp-python -> llama_cpp) that a
     name-mapping table would just be a second source of drift.
     """
+    environment = runtime_marker_environment(python_exe)
+    names = [name for name, marker in required_with_markers()
+             if not marker or _marker(marker).evaluate(environment)]
     probe = "\n".join([
         "import json,sys",
         "from importlib.metadata import distribution, PackageNotFoundError",
@@ -288,7 +332,7 @@ def missing_distributions(python_exe: str) -> list:
         "print(json.dumps(missing))",
     ])
     result = subprocess.run(
-        [python_exe, "-c", probe, json.dumps(required_distributions())],
+        [python_exe, "-c", probe, json.dumps(names)],
         cwd=BASE_DIR, capture_output=True, text=True,
     )
     if result.returncode != 0:

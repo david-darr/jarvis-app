@@ -1828,6 +1828,18 @@ class DependencyPinningTests(unittest.TestCase):
         lock.write_text("claude-agent-sdk==0.2.159\n", encoding="utf-8")
         self.assertFalse(self.build.runtime_matches_lock())
 
+    def test_runtime_check_honours_platform_markers(self):
+        # A package marked for another platform is not required here; an
+        # applicable one still is (found 2026-10-09: ptyprocess on Windows).
+        requirements = Path(self.tmp.name) / "requirements.txt"
+        other = 'sys_platform != "win32"' if sys.platform == "win32" else 'sys_platform == "win32"'
+        requirements.write_text(
+            f"kairos-not-a-real-package-a>=1,<2; {other}\n"
+            "kairos-not-a-real-package-b>=1,<2; python_version >= \"3\"\n"
+            "pip>=1,<999\n", encoding="utf-8")
+        self.build.REQUIREMENTS = str(requirements)
+        self.assertEqual(self.build.missing_distributions(sys.executable), ["kairos-not-a-real-package-b"])
+
     def _policy_check(self, requirements, lock):
         root = Path(self.tmp.name)
         (root / "requirements.txt").write_text(requirements, encoding="utf-8")
