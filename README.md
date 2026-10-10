@@ -4,11 +4,15 @@ An open-source AI workspace that runs on your own machine. Keep chats, notes, do
 
 This is the real product (v2). [jarvis-starter-kit](https://github.com/david-darr/jarvis-starter-kit) is the earlier clone-and-wizard v1, kept as a separate working reference.
 
-**[Website](https://david-darr.github.io/kairos/)** · **[Download the latest release](https://github.com/david-darr/kairos/releases/latest)**
+**[Website](https://www.kairos-agents.com/)** · **[Download the latest release](https://github.com/david-darr/kairos/releases/latest)**
 
-![Kairos Home dashboard with its ring mark and connected workspace](docs/img/home.png)
+[![Watch Kairos in 30 seconds](docs/media/kairos-ad-poster.jpg)](https://www.kairos-agents.com/#film)
 
-*Development UI preview with sample data. The latest packaged release may differ.*
+*Kairos in 30 seconds: [watch on the website](https://www.kairos-agents.com/#film) or [download the MP4](docs/media/kairos-ad.mp4).*
+
+![Kairos Home: the main card, number chips and compact cards for chats, upcoming events, agents, models, Tool Store, projects, activity and systems](docs/img/home.png)
+
+*Kairos 2.0 with sample data.*
 
 ## What it does
 
@@ -38,6 +42,8 @@ Memory is a folder of markdown notes, not a database, so it stays readable, port
 | **Chat**: per-conversation model choice, attachments, folder-scoped workspaces | **Tasks**: built-in and custom automations, delivered where you want them |
 | ![Vault graph](docs/img/vault.png) | ![Settings](docs/img/settings.png) |
 | **Library > Vault > Map**: your notes rendered as a linked graph | **Models**: Claude, local servers, or any API provider |
+| ![Model setup guide](docs/img/model-setup.png) | ![Forge](docs/img/forge.png) |
+| **Model setup**: a first-run guide to connecting Claude, Codex, an API key or a local model | **Forge (Preview)**: sessions in their own worktrees, with an editor, terminal and Git panel |
 
 <details>
 <summary>See the compact sidebar</summary>

@@ -1,0 +1,4 @@
+# Deploy only the static website (docs/). Never the app or its backend.
+/*
+!/docs
+!/vercel.json

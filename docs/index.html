@@ -7,20 +7,20 @@
 <meta name="theme-color" content="#F3EADB">
 <title>Kairos | Not more time. The right time.</title>
 <meta name="description" content="Kairos is a free, open-source AI workspace that runs on your own computer. Chat with the models you choose, keep a memory you own, and let agents work on schedule.">
-<link rel="canonical" href="https://david-darr.github.io/kairos/">
+<link rel="canonical" href="https://www.kairos-agents.com/">
 <link rel="icon" type="image/svg+xml" href="img/favicon.svg">
 <link rel="icon" type="image/png" href="img/favicon.png">
 <link rel="preload" href="fonts/Jost-Variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Kairos">
-<meta property="og:url" content="https://david-darr.github.io/kairos/">
+<meta property="og:url" content="https://www.kairos-agents.com/">
 <meta property="og:title" content="Kairos | Not more time. The right time.">
 <meta property="og:description" content="A free, open-source AI workspace on your own computer. Your models, your memory, your agents.">
-<meta property="og:image" content="https://david-darr.github.io/kairos/img/og.jpg">
+<meta property="og:image" content="https://www.kairos-agents.com/img/og.jpg">
 <meta property="og:image:alt" content="The Kairos wordmark and tagline over a painted sky with the winged figure of Kairos.">
 <meta name="twitter:card" content="summary_large_image">
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Kairos","applicationCategory":"ProductivityApplication","operatingSystem":"Windows 10, Windows 11, macOS (Apple Silicon)","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"license":"https://opensource.org/licenses/MIT","url":"https://david-darr.github.io/kairos/","codeRepository":"https://github.com/david-darr/kairos"}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Kairos","applicationCategory":"ProductivityApplication","operatingSystem":"Windows 10, Windows 11, macOS (Apple Silicon)","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"license":"https://opensource.org/licenses/MIT","url":"https://www.kairos-agents.com/","codeRepository":"https://github.com/david-darr/kairos"}</script>
 <script src="site.js" defer></script>
 </head>
 <body>
@@ -30,6 +30,7 @@
   <a class="brand" href="#top" aria-label="Kairos home"><img src="img/kairos-wordmark.svg" width="132" height="23" alt="Kairos"></a>
   <button class="menu-button" type="button" aria-expanded="false" aria-controls="nav-links"><span class="menu-icon" aria-hidden="true"></span><span class="sr-only">Menu</span></button>
   <div class="nav-links" id="nav-links">
+    <a href="#film">Watch</a>
     <a href="#features">Features</a>
     <a href="#everything">Everything</a>
     <a href="#tour">Tour</a>
@@ -64,6 +65,16 @@
   </div>
 </header>
 
+<section class="section wrap film" id="film" aria-labelledby="film-title">
+  <div class="section-heading center"><p class="eyebrow">Kairos in 30 seconds</p><h2 id="film-title">Every part of Kairos. <span>In half a minute.</span></h2></div>
+  <figure class="film-window">
+    <video controls preload="metadata" playsinline poster="media/kairos-ad-poster.jpg" width="1920" height="1080" aria-label="A 30-second tour of Kairos: Home, chats, agents, library, calendar and email, tasks, Tool Store, Cookbook, your own tabs and Forge.">
+      <source src="media/kairos-ad.mp4" type="video/mp4">
+      <a href="media/kairos-ad.mp4">Watch the 30-second tour (MP4)</a>
+    </video>
+  </figure>
+</section>
+
 <section class="idea wrap" id="idea" aria-labelledby="idea-title">
   <div>
     <p class="eyebrow" id="idea-title">The name</p>
@@ -79,7 +90,7 @@
       <span class="feature-mark" aria-hidden="true">01</span>
       <h3>Start with a model guide</h3>
       <p>Sign in to bundled Claude Code, install Codex with your permission, test an API key, or download a local model through Cookbook. There is no default model. Choose one for each chat.</p>
-      <img src="img/feature-models.webp" width="1200" height="750" loading="lazy" alt="Settings listing connected models. Demo data.">
+      <img src="img/feature-models.webp" width="1200" height="750" loading="lazy" alt="The first-run guide with four ways to connect a model. Demo data.">
     </article>
     <article class="feature">
       <span class="feature-mark" aria-hidden="true">02</span>
@@ -103,7 +114,7 @@
       <span class="feature-mark" aria-hidden="true">05</span>
       <h3>Run history</h3>
       <p>Review recorded tool calls, timings, errors and outcomes for chats, tasks and agents. Saved timelines help you follow the work.</p>
-      <img src="img/feature-runs.webp" width="1200" height="750" loading="lazy" alt="A run opened to its timeline of tool calls. Demo data.">
+      <img src="img/feature-runs.webp" width="1200" height="750" loading="lazy" alt="Runs in Settings, one opened to its tool calls. Demo data.">
     </article>
     <article class="feature">
       <span class="feature-mark" aria-hidden="true">06</span>
@@ -241,7 +252,11 @@
     </article>
     <article class="tour-row reverse">
       <div class="tour-copy"><span class="section-number">Your setup</span><h3>Choose how Kairos thinks.</h3><p>The first-run guide checks this computer and helps you sign in, install Codex, test an API key or start a local download.</p><p class="detail">Claude Code is bundled. No default model is selected. Reopen the guide from Settings > Add Models or type /setup.</p></div>
-      <a class="screenshot" href="img/settings.png"><img src="img/settings.png" width="1440" height="900" loading="lazy" alt="Settings for connecting models. Empty example fields, no credentials."></a>
+      <a class="screenshot" href="img/model-setup.png"><img src="img/model-setup.png" width="1440" height="900" loading="lazy" alt="The first-run guide: choose how Kairos thinks. Demo data."></a>
+    </article>
+    <article class="tour-row">
+      <div class="tour-copy"><span class="section-number">Forge</span><h3>A workstation for code.</h3><p>Open a project and start a session. The agent works in its own Git worktree while you watch, edit files beside it and run the app.</p><p class="detail">Review every change, commit, and merge back when you are happy. Pushes always ask first.</p></div>
+      <a class="screenshot" href="img/forge.png"><img src="img/forge.png" width="1440" height="900" loading="lazy" alt="Forge with a session, its file explorer and the editor. Demo data."></a>
     </article>
   </div>
 </section>

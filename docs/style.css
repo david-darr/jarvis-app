@@ -92,6 +92,8 @@ h1 span, h2 span { display: block; color: var(--faint); }
 .release-line { color: var(--faint); font-size: 12px; margin: 18px 0 0; }
 /* The live demo, framed as a window. */
 .demo-window { margin: 0; }
+.film-window { margin: 0; }
+.film-window video { display: block; width: 100%; height: auto; aspect-ratio: 16/9; border: 1px solid var(--strong); border-radius: 16px; background: var(--sunk); box-shadow: 0 30px 80px rgba(58,42,32,.2); }
 .demo-chrome { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 14px; border: 1px solid var(--strong); border-bottom: 0; border-radius: 16px 16px 0 0; background: var(--sunk); }
 .demo-dots { display: flex; gap: 6px; }
 .demo-dots i { width: 9px; height: 9px; border-radius: 50%; background: rgba(58,42,32,.18); }
