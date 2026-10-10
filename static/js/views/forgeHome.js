@@ -18,23 +18,36 @@ function projectPicker(projects, label) {
   picker.querySelector('button').setAttribute('aria-label', label);
   return picker;
 }
+// Keep customSelect's values, change events and shared app menu; only the
+// trigger's presentation belongs to the Forge composer.
+function composerPicker(label, choices, prefix) {
+  const picker = customSelect({ class: 'model-picker-wrap forge-composer-picker' }, choices);
+  const button = picker.querySelector('button');
+  button.classList.add('model-picker-btn');
+  button.setAttribute('aria-label', label);
+  if (prefix) button.prepend(el('span', { class: 'forge-picker-prefix', text: prefix, 'aria-hidden': 'true' }));
+  return picker;
+}
 
 export function render(container, tabId, options = {}) {
   container.replaceChildren();
   const page = el('div', { class: 'view-constrained forge-home' });
   const banner = el('div', { class: 'forge-banner', 'aria-hidden': 'true' });
-  const message = el('textarea', { id: 'forge-message', rows: '3', placeholder: 'Describe a task, a bug to fix, or an idea to try.', 'aria-label': 'Message your agent' });
-  const pickers = el('div', { class: 'forge-composer-controls' });
-  const send = el('button', { type: 'submit', class: 'btn primary', text: 'Start session', disabled: true });
-  const locationNote = el('p', { class: 'meta forge-location-note', role: 'status' });
+  const message = el('textarea', { id: 'forge-message', rows: '3', placeholder: 'Describe the task...', 'aria-label': 'Message your agent' });
+  const inputLeft = el('div', { class: 'chat-input-left' });
+  const agentPill = el('div', { class: 'model-pill', role: 'group', 'aria-label': 'Agent and model' });
+  const send = el('button', { type: 'submit', class: 'btn forge-composer-send', 'aria-label': 'Start session', title: 'Start session', disabled: true });
+  send.innerHTML = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+  const inputRight = el('div', { class: 'chat-input-right' }, [agentPill, send]);
+  const pickers = el('div', { class: 'chat-input-bottom' }, [inputLeft, inputRight]);
+  const hint = el('div', { class: 'composer-hint forge-composer-hint', role: 'status' });
   const firstCommitNote = el('p', { class: 'meta', role: 'status' });
   const firstCommitButton = el('button', { type: 'button', class: 'btn', text: 'Make the first commit' });
   const recovery = el('div', { class: 'forge-first-commit forge-warning', hidden: true }, [firstCommitNote, firstCommitButton]);
-  const composer = el('form', { class: 'forge-composer' }, [message, pickers, locationNote, recovery, el('div', { class: 'forge-composer-bottom' }, [send])]);
+  const composer = el('form', { class: 'forge-composer chat-input-bar' }, [el('div', { class: 'chat-input-top' }, [message]), recovery, pickers]);
   const hero = el('section', { class: 'forge-hero' }, [banner, el('div', { class: 'forge-hero-copy' }, [
     el('div', { class: 'eyebrow' }, ['Forge ', el('small', { class: 'forge-preview', text: 'Preview' })]),
-    el('h1', { text: 'What should your agents work on?' }), composer,
-    el('p', { class: 'meta', text: 'Build in an isolated worktree, or plan before changing files.' }),
+    el('h1', { text: 'What should your agents work on?' }), composer, hint,
   ])]);
   const grid = el('div', { class: 'forge-widget-grid' });
   const customize = el('button', { type: 'button', class: 'btn quiet', text: 'Customize' });
@@ -44,7 +57,7 @@ export function render(container, tabId, options = {}) {
   // The exact model for the chosen agent (e.g. Sonnet 5, gpt-6.1-sol), from the
   // same catalog as Chat's model picker; hidden for agents without one.
   let models = [], variantSelect = null, variantVersion = 0;
-  const variantField = el('label', { class: 'forge-picker-field', hidden: true });
+  const variantField = el('div', { class: 'forge-variant-pill', hidden: true });
   let isolationSelect, modeSelect, branchSelect, branchField, branchVersion = 0, starting = false, branchesReady = false, sessionGroups = [];
   let pendingStart = null;
   const approvalController = new AbortController();
@@ -55,28 +68,28 @@ export function render(container, tabId, options = {}) {
   };
   const unsubscribe = subscribeAll(drawWorking);
   const updateSend = () => {
-    send.disabled = starting || !projectSelect?.value || !modelSelect?.value || (isolationSelect?.value === 'existing_branch' && (!branchesReady || !branchSelect?.value));
+    send.disabled = starting || !message.value.trim() || !projectSelect?.value || !modelSelect?.value || (isolationSelect?.value === 'existing_branch' && (!branchesReady || !branchSelect?.value));
     firstCommitButton.disabled = starting; message.readOnly = starting; pickers.inert = starting;
   };
   const clearRecovery = () => { if (!starting) { pendingStart = null; recovery.hidden = true; } };
   composer.addEventListener('input', clearRecovery);
   composer.addEventListener('change', clearRecovery, true);
-  const field = (label, picker) => el('label', { class: 'forge-picker-field' }, [el('span', { class: 'meta', text: label }), picker]);
+  message.addEventListener('input', updateSend);
   async function locationChanged() {
     const version = ++branchVersion;
     const isolation = isolationSelect.value;
     branchField.hidden = isolation !== 'existing_branch';
-    locationNote.classList.toggle('forge-warning', isolation === 'in_place');
-    locationNote.textContent = isolation === 'in_place' ? 'In place changes your project folder directly. There is no isolated worktree.' : isolation === 'existing_branch' ? 'Use an available branch in a separate worktree.' : 'A new branch and worktree keep your project folder untouched.';
+    hint.classList.toggle('forge-in-place-hint', isolation === 'in_place');
+    const locationCopy = isolation === 'in_place' ? 'In place changes your project folder directly. There is no isolated worktree.' : isolation === 'existing_branch' ? 'Use an available branch in a separate worktree.' : 'New worktree keeps your project folder untouched';
+    hint.textContent = `${locationCopy} · Enter to start · Shift + Enter for a new line`;
     branchesReady = false; updateSend();
     if (isolation !== 'existing_branch') return;
-    branchField.replaceChildren(el('span', { class: 'meta', text: 'Branch' }), el('span', { class: 'meta', text: 'Loading branches...' }));
+    branchField.replaceChildren(el('span', { class: 'meta', role: 'status', text: 'Loading branches...' }));
     try {
       const branches = await api(`/api/forge/projects/${encodeURIComponent(projectSelect.value)}/branches`);
       if (disposed || version !== branchVersion) return;
-      branchSelect = customSelect({}, [el('option', { value: '', text: 'Choose an available branch' }), ...branches.map(b => el('option', { value: b.name, text: b.worktree ? `${b.name} (already checked out)` : b.name, disabled: !!b.worktree }))]);
-      branchSelect.querySelector('button').setAttribute('aria-label', 'Branch for new session');
-      branchField.replaceChildren(el('span', { class: 'meta', text: 'Branch' }), branchSelect);
+      branchSelect = composerPicker('Branch', [el('option', { value: '', text: 'Choose an available branch' }), ...branches.map(b => el('option', { value: b.name, text: b.worktree ? `${b.name} (already checked out)` : b.name, disabled: !!b.worktree }))]);
+      branchField.replaceChildren(branchSelect);
       branchesReady = true; branchSelect.addEventListener('change', updateSend); updateSend();
     } catch { if (!disposed && version === branchVersion) branchField.textContent = 'Branches could not load. Choose a different location to retry.'; }
   }
@@ -158,22 +171,21 @@ export function render(container, tabId, options = {}) {
       if (results[0].status === 'rejected') throw results[0].reason;
       projects = results[0].value;
       models = results[1].status === 'fulfilled' ? results[1].value : [];
-      projectSelect = projectPicker(projects, 'Project for new session');
-      modelSelect = customSelect({}, models.map(m => el('option', { value: m.id, text: `${m.name} · ${m.model || 'CLI default'}` })));
-      modelSelect.querySelector('button').setAttribute('aria-label', 'Agent for new session');
+      projectSelect = composerPicker('Project', projects.map(p => el('option', { value: p.id, text: p.name })));
+      modelSelect = composerPicker('Agent', models.map(m => el('option', { value: m.id, text: `${m.name} · ${m.model || 'CLI default'}` })));
       projectSelect.disabled = !projects.length; modelSelect.disabled = !models.length;
-      isolationSelect = customSelect({}, [el('option', { value: 'new_worktree', text: 'New worktree' }), el('option', { value: 'existing_branch', text: 'Existing branch' }), el('option', { value: 'in_place', text: 'In place' })]);
-      isolationSelect.querySelector('button').setAttribute('aria-label', 'Where it runs');
-      modeSelect = customSelect({}, [el('option', { value: 'build', text: 'Build' }), el('option', { value: 'plan', text: 'Plan' })]);
-      modeSelect.querySelector('button').setAttribute('aria-label', 'Mode for new session');
-      branchField = el('label', { class: 'forge-picker-field', hidden: true });
-      pickers.append(field('Project', projectSelect), field('Where it runs', isolationSelect), field('Agent', modelSelect), variantField, field('Mode', modeSelect), branchField);
+      isolationSelect = composerPicker('Where it runs', [el('option', { value: 'new_worktree', text: 'New worktree' }), el('option', { value: 'existing_branch', text: 'Existing branch' }), el('option', { value: 'in_place', text: 'In place' })]);
+      modeSelect = composerPicker('Mode', [el('option', { value: 'build', text: 'Build' }), el('option', { value: 'plan', text: 'Plan' })], 'Mode');
+      modeSelect.classList.add('forge-mode-pill');
+      branchField = el('div', { class: 'forge-branch-pill', hidden: true });
+      inputLeft.append(projectSelect, isolationSelect, branchField, modeSelect);
+      agentPill.append(modelSelect, variantField);
       projectSelect.addEventListener('change', locationChanged); isolationSelect.addEventListener('change', locationChanged);
       modelSelect.addEventListener('change', () => { updateSend(); loadVariants(); });
       loadVariants();
       if (options.projectId && projects.some(p => p.id === options.projectId)) projectSelect.value = options.projectId;
       locationChanged();
-      if (!projects.length || !models.length) pickers.append(el('button', { type: 'button', class: 'btn quiet', text: !projects.length ? 'Add a project' : 'Add a model', onclick: event => !projects.length ? openProjectForm('existing', { owner: page, opener: event.currentTarget, onSaved: () => { document.dispatchEvent(new Event('kairos:forge-projects')); navigate('forgeHome'); } }) : navigate('settings', { section: 'add-models' }) }));
+      if (!projects.length || !models.length) inputLeft.append(el('button', { type: 'button', class: 'btn quiet', text: !projects.length ? 'Add a project' : 'Add a model', onclick: event => !projects.length ? openProjectForm('existing', { owner: page, opener: event.currentTarget, onSaved: () => { document.dispatchEvent(new Event('kairos:forge-projects')); navigate('forgeHome'); } }) : navigate('settings', { section: 'add-models' }) }));
       lifespanSelect = projectPicker(projects, 'Repository for lifespan');
       lifespanSelect.disabled = !projects.length;
       if (options.projectId && projects.some(p => p.id === options.projectId)) projectSelect.value = lifespanSelect.value = options.projectId;
@@ -229,11 +241,10 @@ export function render(container, tabId, options = {}) {
     if (!endpoint || !['claude_cli', 'codex_cli', 'api'].includes(endpoint.kind)) return;
     let choices = [];
     try { choices = await api(`/api/models/${encodeURIComponent(endpoint.id)}/catalog`); } catch { /* Default model only. */ }
-    if (disposed || version !== variantVersion) return;
-    variantSelect = customSelect({}, [el('option', { value: '', text: 'Default model' }),
+    if (disposed || version !== variantVersion || !choices.length) return;
+    variantSelect = composerPicker('Model for new session', [el('option', { value: '', text: 'Default model' }),
       ...choices.map(m => el('option', { value: m.id, text: m.display_name || m.id }))]);
-    variantSelect.querySelector('button').setAttribute('aria-label', 'Model for new session');
-    variantField.replaceChildren(el('span', { class: 'meta', text: 'Model' }), variantSelect);
+    variantField.replaceChildren(variantSelect);
     variantField.hidden = false;
   }
   message.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); composer.requestSubmit(); } };

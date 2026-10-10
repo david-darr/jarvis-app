@@ -252,12 +252,8 @@
 @media (prefers-reduced-motion: reduce) {
   .forge-project-row.busy .forge-project-name { animation: none; color: var(--text); background: none; }
 }
-.forge-composer .forge-composer-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); text-align: left; }
 .forge-session-row .status-dot:not(.ok) { background: var(--border-strong); }
-.forge-picker-field { display: grid; gap: 5px; min-width: 0; }
-.forge-picker-field[hidden], .forge-session [hidden], .session-chat [hidden] { display: none !important; }
-.forge-composer-controls .forge-picker-field .custom-select { width: 100%; max-width: none; }
-.forge-location-note { text-align: left; margin: 12px 0 0; }
+.forge-composer [hidden], .forge-session [hidden], .session-chat [hidden] { display: none !important; }
 .forge-warning { color: var(--warn); background: rgba(var(--warn-rgb), .08); border: 1px solid rgba(var(--warn-rgb), .35); padding: 10px; border-radius: 8px; font-size: 12px; overflow-wrap: anywhere; }
 .forge-chat-tag { margin-left: auto; border: 1px solid var(--border-strong); border-radius: 5px; padding: 2px 5px; font-size: 9px; flex: none; color: var(--accent); }
 .session-item:has(.forge-chat-tag) { position: relative; padding-right: 52px; }
@@ -278,12 +274,22 @@
 :root:not([data-halftone='on']) .forge-banner { display: none; }
 .forge-hero-copy { width: min(100%, 680px); margin: auto; text-align: center; }
 .forge-hero h1 { font-family: var(--font-display); font-style: italic; font-weight: 500; font-size: clamp(28px, 3vw, 40px); line-height: 1.15; margin: 18px 0 24px; }
-.forge-composer { padding: 14px; background: var(--bg-panel-solid); border: 1px solid var(--border-strong); border-radius: 16px; box-shadow: var(--shadow-elevated); }
-.forge-composer textarea { resize: vertical; border: none; background: none; width: 100%; min-height: 80px; }
-.forge-composer-bottom, .forge-composer-controls, .forge-project-actions, .forge-toolbar, .forge-panel-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.forge-composer-bottom { justify-content: space-between; margin-top: 8px; }
-.forge-composer-controls { min-width: 0; flex: 1; }
-.forge-composer-controls .custom-select { max-width: 230px; flex: 1 1 130px; }
+.forge-composer { text-align: left; }
+.forge-composer textarea { resize: vertical; border: none; background: transparent; width: 100%; min-width: 0; min-height: 80px; padding: 4px 10px 8px; box-shadow: none; }
+.forge-composer textarea:focus { outline: none; box-shadow: none; }
+.forge-composer textarea::placeholder { color: var(--text-faint); }
+.forge-composer .chat-input-left, .forge-composer .chat-input-right { min-width: 0; max-width: 100%; }
+.forge-composer .chat-input-right { flex-shrink: 1; gap: 4px; }
+.forge-composer .model-pill { max-width: calc(100% - 38px); flex-shrink: 1; }
+.forge-composer .forge-composer-picker, .forge-variant-pill, .forge-branch-pill { min-width: 0; max-width: 100%; }
+.forge-composer.chat-input-bar .custom-select-btn { width: auto; height: 30px; min-height: 30px; max-width: min(180px, 100%); padding: 0 8px; gap: 5px; border: 0; border-radius: 999px; background: transparent; box-shadow: none; font-size: 11.5px; }
+.forge-composer .custom-select-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.forge-composer .forge-mode-pill { border: 1px solid var(--hairline-soft); border-radius: 999px; background: rgba(var(--ink-rgb), .025); }
+.forge-picker-prefix { color: var(--text-faint); font-size: 10px; flex: none; }
+.forge-variant-pill { border-left: 1px solid var(--border); }
+.forge-first-commit { margin-top: 8px; }
+.forge-composer-hint.forge-in-place-hint { color: var(--warn); }
+.forge-project-actions, .forge-toolbar, .forge-panel-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .forge-toolbar { justify-content: space-between; padding: 20px 0 12px; }
 .forge-widget-grid, .forge-analysis-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
 .forge-panel { border: 1px solid var(--border); border-radius: 14px; background: var(--bg-panel); padding: 20px; min-width: 0; }
@@ -336,7 +342,7 @@
   .forge-panel { padding: 16px; }
   .forge-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .forge-stat { border-bottom: 1px solid var(--border); }
-  .forge-composer-bottom > .btn { margin-left: auto; }
+  .forge-composer.chat-input-bar .custom-select-btn { max-width: min(150px, 100%); font-size: 10px; padding-inline: 6px; }
   .forge-donut { justify-content: center; }
 }
 @media (prefers-reduced-motion: reduce) { .forge-bar rect { transition: none; } }
@@ -1227,9 +1233,9 @@ input[type="checkbox"]:checked::after {
 /* A narrow chat column wraps the controls instead of crushing the model pill. */
 .chat-input-bottom { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 8px; gap: 6px 10px; }
 /* Circular send button, matching the composer's rounded language. */
-#chat-send {
+#chat-send, .forge-composer-send {
   width: 34px; height: 34px; padding: 0; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: center; justify-content: center; flex: none;
   background: var(--text); color: var(--bg-panel-solid); border-color: transparent;
 }
 .chat-input-left { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
