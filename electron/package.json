@@ -1,6 +1,6 @@
 {
   "name": "jarvis-app",
-  "version": "2.0.0-rc.1",
+  "version": "2.0.0",
   "description": "Kairos — a self-hosted AI workspace and agent harness.",
   "//build.files": "build.files uses *.js rather than naming main.js and preload.js individually. It is an ALLOWLIST, so a new main-process module is silently omitted from the package: electron/browser.js was, and 1.9.0 shipped an app whose main process died on require() before starting the backend, so it never opened at all. The glob means the next module added here is packaged automatically. Verify with scripts/verify-packaged-app.cjs, which checks main.js's relative requires against the real asar and then launches the packaged app. This note lives at the top level because electron-builder rejects unknown keys inside build.",
   "//build.extraResources": "The backend **/* filter includes tabs/** exactly as it includes routes/**. Prebuilt tabs must ship even while disabled; data/** remains excluded so user tabs stay in the user's data folder. scripts/verify-packaged-app.cjs checks the actual School files in the packaged backend.",
