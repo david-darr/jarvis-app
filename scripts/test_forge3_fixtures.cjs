@@ -6,6 +6,24 @@ const state = {};
 const { fixture, mutate } = require('../demo/fixtures.js')({ state });
 const read = url => fixture(new URL(url, 'http://fixture'));
 const base = '/api/forge/sessions/fs1';
+const originalChanges = structuredClone(read(base + '/changes').files);
+const hunkFile = originalChanges[0];
+assert.equal(hunkFile.hunks.length, 2);
+assert.ok(hunkFile.hunks.every(h => hunkFile.patch.includes(h.patch)));
+const hunkBody = { path: hunkFile.path, hunk_hash: hunkFile.hunks[0].hash, confirmed: true };
+assert.equal(mutate(base + '/revert-hunk', 'POST', { ...hunkBody, confirmed: false })._status, 400);
+assert.equal(mutate(base + '/revert-hunk', 'POST', hunkBody).restored, true);
+const remaining = read(base + '/changes').files[0];
+assert.deepEqual(remaining.hunks, [hunkFile.hunks[1]]);
+assert.ok(!remaining.patch.includes(hunkFile.hunks[0].patch));
+assert.ok(remaining.patch.includes(hunkFile.hunks[1].patch));
+assert.equal(remaining.added, 1);
+assert.equal(mutate(base + '/revert-hunk', 'POST', hunkBody)._status, 409);
+state.forgeHunkConflict = true;
+assert.equal(mutate(base + '/revert-hunk', 'POST', { ...hunkBody, hunk_hash: remaining.hunks[0].hash })._status, 409);
+assert.equal(read(base + '/changes').files[0].hunks[0].hash, '3'.repeat(64));
+assert.ok(read(base + '/changes').files[0].patch.includes('@@ -5,1 +5,1 @@'));
+state.forgeReviews.fs1.files = originalChanges;
 state.forgeNoCommits.fp1 = true;
 assert.equal(read('/api/forge/projects/fp1/summary').lifespan.commits, 0);
 assert.equal(read('/api/forge/projects').find(p => p.id === 'fp1').git.state, 'empty');
@@ -62,3 +80,20 @@ require('./forge3-checks.cjs')({ js: async code => { new Script(code); return tr
   waitFor: async code => { new Script(code); }, capture: async () => {},
   writes: { length: 0, slice: () => smokeWrites }, demoState: {}, label: 'syntax', forgeSessionId: 'fs1', width: 1440,
 }).then(() => console.log('Forge smoke expressions parse.')).catch(error => { console.error(error); process.exitCode = 1; });
+const hunkWrites = [], hunkReads = [];
+let confirmedHunks = 0;
+require('./forge-hunk-revert-checks.cjs')({
+  js: async code => {
+    new Script(code);
+    if (code.includes("b.textContent === 'Revert hunk'")) {
+      hunkWrites.push({ path: base + '/revert-hunk', method: 'POST', body: JSON.stringify({ path: hunkFile.path, hunk_hash: String(++confirmedHunks).repeat(64), confirmed: true }) });
+      hunkReads.push({ path: base + '/changes' });
+    }
+    return code.includes("filter(n => n.textContent.includes('hunk changed')).length") ? 0 : true;
+  },
+  waitFor: async code => { new Script(code); }, capture: async () => {},
+  writes: hunkWrites, reads: hunkReads, demoState: {}, label: 'syntax', forgeSessionId: 'fs1',
+}).then(() => {
+  assert.equal(hunkWrites.length, 0, 'hunk checks remove their writes');
+  console.log('Hunk smoke expressions parse.');
+}).catch(error => { console.error(error); process.exitCode = 1; });

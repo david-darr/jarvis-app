@@ -498,6 +498,7 @@ app.whenReady().then(async () => {
       await waitFor("!!document.querySelector('.forge-pane .forge-diff-line.diff-add') && !!document.querySelector('.forge-pane .forge-diff-line.diff-remove')");
       assert.ok(await js("document.querySelector('.diff-add .forge-diff-number:nth-child(2)').textContent === '1'"), label + ' unified diff line numbers');
       if (width > 768) await capture(label + '-forge-shell-changes');
+      await require('./forge-hunk-revert-checks.cjs')({ js, waitFor, capture, writes, reads, demoState, label, forgeSessionId });
       if (width <= 768) await js("document.querySelector('[aria-label=\"Open project sidebar\"]').click()");
       const revertStart = writes.length;
       await js("document.querySelector('.forge-revert').click()");
@@ -571,8 +572,14 @@ app.whenReady().then(async () => {
       await js(`document.querySelector('.forge-home .forge-session-row[data-session-id="${forgeSessionId}"]').click()`);
       await waitFor("document.getElementById('view-content').dataset.view === 'forgeShell' && !!document.querySelector('.forge-transcript-layout') && !document.querySelector('.forge-project-sidebar').hidden");
       assert.ok(writes.slice(workingStart).some(w => w.path === '/api/chat/stream' && JSON.parse(w.body).session_id === forgeSessionId), label + ' Working now uses this pass session');
+      await js("document.querySelector('[data-sidebar-tab=changes]').click()");
+      await waitFor("!!document.querySelector('.forge-change-open')");
+      await js("document.querySelector('.forge-change-open').click()");
+      await waitFor("document.querySelectorAll('.forge-pane .forge-revert-hunk').length === 2");
+      assert.ok(await js("[...document.querySelectorAll('.forge-revert-hunk, .forge-revert')].every(b => b.disabled)"), label + ' running agent disables file and hunk revert');
       demoState.forgeRelease = true;
       await waitFor("document.querySelector('.side-chat-send')?.textContent === 'Send'");
+      await waitFor("[...document.querySelectorAll('.forge-pane .forge-revert-hunk')].every(b => !b.disabled)");
       delete demoState.forgeHeldSession; delete demoState.forgeRelease;
       await navigate('home');
       if (label === 'desktop') {

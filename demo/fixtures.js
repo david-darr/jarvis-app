@@ -48,7 +48,7 @@
         { hash: '1'.repeat(64), old_start: 1, old_count: 1, new_start: 1, new_count: 1, patch: '@@ -1 +1 @@\n-export const shortcut = "Send";\n+export const shortcut = "Enter";\n' },
         { hash: '2'.repeat(64), old_start: 4, old_count: 1, new_start: 4, new_count: 1, patch: '@@ -4 +4 @@\n-  return "Start a chat";\n+  return "Build in a worktree";\n' },
       ];
-      forgeReviews[id] = { files: [{ path: 'src/garden.js', added: 2, removed: 2, binary: false, untracked: false, patch: 'diff --git a/src/garden.js b/src/garden.js\n', hunks }],
+      forgeReviews[id] = { files: [{ path: 'src/garden.js', added: 2, removed: 2, binary: false, untracked: false, patch: 'diff --git a/src/garden.js b/src/garden.js\n--- a/src/garden.js\n+++ b/src/garden.js\n' + hunks.map(h => h.patch).join(''), hunks }],
         checkpoints: [{ id: 'fc-' + id, created: now - 300, finished: now - 290, source: 'chat:' + id, status: 'changed', overlap: false,
           roots: [{ path: forgeSessions[id]?.workspace_dir || 'garden', changes: [{ path: 'src/garden.js', before: 'a'.repeat(40), after: 'b'.repeat(40) }], skipped: [] }] }] };
     }
@@ -393,12 +393,22 @@
         session.forge.removed = true; if (forgeApps[session.id]) { forgeApps[session.id].running = forgeApps[session.id].ready = false; forgeApps[session.id].ports = []; } return { ok: true };
       }
       if (['revert-file', 'revert-hunk'].includes(action) || /^checkpoints\/.+\/undo$/.test(action || '')) {
-        if (!body.confirmed) return { _status: 400, detail: 'Confirm this operation first.' };
+        if (body.confirmed !== true) return { _status: 400, detail: 'Confirm this operation first.' };
         if (action === 'revert-file') review.files = review.files.filter(file => file.path !== body.path);
         else if (action === 'revert-hunk') {
           const file = review.files.find(file => file.path === body.path);
+          const header = file?.patch.split(/^@@ /m)[0] || '';
+          if (state.forgeHunkConflict && file?.hunks.length) {
+            state.forgeHunkConflict = false;
+            const moved = file.hunks.find(h => h.hash === body.hunk_hash) || file.hunks[0];
+            moved.hash = '3'.repeat(64); moved.old_start++; moved.new_start++;
+            moved.patch = moved.patch.replace(/^@@ .* @@/, `@@ -${moved.old_start},${moved.old_count} +${moved.new_start},${moved.new_count} @@`);
+            file.patch = header + file.hunks.map(h => h.patch).join('');
+            return { _status: 409, detail: 'This hunk changed. Refresh Changes before reverting it.' };
+          }
           if (!file?.hunks.some(hunk => hunk.hash === body.hunk_hash)) return { _status: 409, detail: 'The hunk changed. Refresh before reverting it.' };
           file.hunks = file.hunks.filter(hunk => hunk.hash !== body.hunk_hash); file.added = file.removed = file.hunks.length;
+          file.patch = header + file.hunks.map(h => h.patch).join('');
           if (!file.hunks.length) review.files = review.files.filter(item => item !== file);
         } else {
           if (state.forgeUndoConflict) return { _status: 409, detail: 'src/garden.js changed since this turn. Undo cannot overwrite later edits.' };

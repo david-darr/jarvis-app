@@ -233,6 +233,8 @@
 .diff-add .forge-diff-number { background: rgba(var(--success-rgb), .25); }
 .diff-remove .forge-diff-number { background: rgba(var(--danger-rgb), .25); }
 .forge-diff-line.diff-hunk { color: var(--accent); min-height: 22px; background: var(--accent-dim); }
+.forge-revert-hunk { align-self: center; margin: 2px 8px 2px 0; color: var(--accent); }
+.forge-revert-hunk:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .forge-shell .forge-sidebar-panel, .forge-shell .forge-session-cards { overscroll-behavior: contain; }
 @media (min-width: 769px) {
   .sidebar-collapsed .forge-project-section > header > span, .sidebar-collapsed .forge-project-name, .sidebar-collapsed .forge-project-row > .forge-counts { display: none; }

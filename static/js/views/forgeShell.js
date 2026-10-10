@@ -1,8 +1,8 @@
-import { api, el, modelMark, confirmDialog } from '../api.js';
+import { api, el, modelMark, confirmDialog, toast } from '../api.js';
 import { subscribeAll } from '../chatStream.js';
 import { navigateForge, sessionStatus, changeTotals, diffCounts, forgeRunning } from '../forgeUi.js';
 import { mountForgeSession } from '../forgeSessionPane.js';
-import { fileView, diffView, changeRole, revertFile } from '../forgeSurfaces.js';
+import { fileView, diffView, changeRole, revertFile, revertHunk } from '../forgeSurfaces.js';
 import { mountArtifactPane, hideArtifact, setArtifactContext } from '../chatContent.js';
 import { mountAppPreview } from '../forgeAppPreview.js';
 import { mountForgeEditor } from '../forgeEditor.js';
@@ -61,9 +61,10 @@ export async function render(container, tabId, options = {}) {
   artifactHost.append(panes); workspace.append(artifactHost);
   panes.append(left, divider, right); shell.append(sidebar, workspace, parked); container.replaceChildren(shell);
   let disposed = false, project, projects = [], models = [], sessions = [], layout, navigation = 0, reviewsVersion = 0, explorerVersion = 0;
-  let explorerContext = null, activePane = 'left', tabDrag = null, cancelResize = null, reviewBusy = false;
+  let explorerContext = null, activePane = 'left', tabDrag = null, cancelResize = null, reviewsTask = null;
   let width = Number(readStorage('kairos:forge-sidebar-width', 228)) || 228;
   const panels = new Map(), reviews = new Map();
+  const reverting = new Set();
   const tabButtons = new Map();
   const cleanupPanels = () => { for (const panel of panels.values()) { panel._cleanup?.(); panel.remove(); } panels.clear(); };
   const cleanup = () => {
@@ -110,7 +111,7 @@ export async function render(container, tabId, options = {}) {
   }
   const unsubscribe = subscribeAll(id => {
     if (!layout || disposed) return;
-    drawCards(); drawChanges();
+    drawCards(); drawChanges(); syncHunkControls();
     if (sessions.some(s => s.id === id) && !forgeRunning(id)) refreshReviews();
   });
   const timer = setInterval(() => { if (!document.hidden && project) refreshReviews(); }, 30000);
@@ -153,7 +154,7 @@ export async function render(container, tabId, options = {}) {
       if (!chosen) { status.textContent = 'Open a project folder to begin.'; return; }
       const changedProject = project?.id !== id;
       if (changedProject) {
-        cleanupPanels(); ++explorerVersion; ++reviewsVersion; reviewBusy = false; explorerContext = null; reviews.clear(); search.value = ''; sessions = [];
+        cleanupPanels(); ++explorerVersion; ++reviewsVersion; reviewsTask = null; explorerContext = null; reviews.clear(); search.value = ''; sessions = [];
         project = chosen;
         if (!layouts.has(id)) layouts.set(id, { tabs: [], left: null, right: null, split: false, ratio: .5, sessionId: null, directories: new Set() });
         layout = layouts.get(id); activePane = 'left';
@@ -275,24 +276,66 @@ export async function render(container, tabId, options = {}) {
     const minutes = Math.max(0, Math.floor((Date.now() / 1000 - at) / 60));
     return minutes < 1 ? 'now' : minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1440)}d`;
   }
-  async function refreshReviews() {
-    if (!layout || disposed || reviewBusy) return;
+  async function refreshReviews(force = false) {
+    if (!layout || disposed) return;
+    if (reviewsTask) {
+      await reviewsTask;
+      // A mutation must read again if an earlier refresh was already in flight.
+      if (force === true) return refreshReviews(true);
+      return;
+    }
+    const task = loadReviews(); reviewsTask = task;
+    try { await task; } finally { if (reviewsTask === task) reviewsTask = null; }
+  }
+  async function loadReviews() {
     const version = ++reviewsVersion, id = project.id;
-    reviewBusy = true;
+    const results = await Promise.allSettled(sessions.map(async session => [session.id, session.forge.removed ? [] : (await api(`${sessionBase(session.id)}/changes`)).files]));
+    if (disposed || version !== reviewsVersion || project.id !== id) return;
+    for (const result of results) if (result.status === 'fulfilled') reviews.set(...result.value);
+    const failed = results.find(r => r.status === 'rejected');
+    status.textContent = failed ? `Changes could not load: ${failed.reason.message}` : '';
+    drawCards(); drawChanges();
+    for (const tab of layout.tabs.filter(t => t.type === 'diff')) {
+      const panel = panels.get(tab.id);
+      if (panel) drawDiff(tab, panel);
+    }
+    if (!explorerPanel.hidden) await loadExplorer(true);
+    document.dispatchEvent(new Event('kairos:forge-review'));
+  }
+  function reviewBlocked(id, file) {
+    const session = sessions.find(s => s.id === id);
+    return disposed || !session || !!session.forge.removed || forgeRunning(id) || !!file.unavailable;
+  }
+  function reviewDisabled(id, file) { return reviewBlocked(id, file) || reverting.has(id); }
+  function syncHunkControls() {
+    for (const tab of layout.tabs.filter(t => t.type === 'diff')) {
+      const file = reviews.get(tab.sessionId)?.find(f => f.path === tab.path);
+      panels.get(tab.id)?.querySelectorAll('.forge-revert-hunk').forEach(button => { button.disabled = !file || reviewDisabled(tab.sessionId, file); });
+    }
+  }
+  function drawDiff(tab, panel) {
+    const file = reviews.get(tab.sessionId)?.find(f => f.path === tab.path) || { path: tab.path, patch: '', hunks: [] };
+    panel.replaceChildren(diffView(file, { disabled: reviewDisabled(tab.sessionId, file), onRevertHunk: hunk => revertChange(tab.sessionId, file, hunk) }));
+  }
+  async function revertChange(id, file, hunk = null) {
+    if (reviewDisabled(id, file)) return;
+    reverting.add(id); drawChanges(); syncHunkControls();
     try {
-      const results = await Promise.allSettled(sessions.map(async session => [session.id, session.forge.removed ? [] : (await api(`${sessionBase(session.id)}/changes`)).files]));
-      if (disposed || version !== reviewsVersion || project.id !== id) return;
-      for (const result of results) if (result.status === 'fulfilled') reviews.set(...result.value);
-      const failed = results.find(r => r.status === 'rejected');
-      status.textContent = failed ? `Changes could not load: ${failed.reason.message}` : '';
-      drawCards(); drawChanges();
-      for (const tab of layout.tabs.filter(t => t.type === 'diff')) {
-        const panel = panels.get(tab.id), file = reviews.get(tab.sessionId)?.find(f => f.path === tab.path);
-        if (panel) panel.replaceChildren(diffView(file || { path: tab.path, patch: '', hunks: [] }));
+      const blocked = () => reviewBlocked(id, file);
+      const changed = hunk ? await revertHunk(id, file, hunk, blocked) : await revertFile(id, file, blocked);
+      if (changed) await refreshReviews(true);
+    } catch (error) {
+      if (hunk && error.message.startsWith('409:')) {
+        await refreshReviews(true);
+        if (!disposed) toast('This change moved since you opened it. The view has been refreshed.');
+      } else if (!disposed) {
+        if (hunk) toast(error.message.replace(/^\d+: /, ''), 'error');
+        else status.textContent = error.message;
       }
-      if (!explorerPanel.hidden) await loadExplorer(true);
-      document.dispatchEvent(new Event('kairos:forge-review'));
-    } finally { if (version === reviewsVersion) reviewBusy = false; }
+    } finally {
+      reverting.delete(id);
+      if (!disposed) { drawChanges(); syncHunkControls(); }
+    }
   }
   function drawChanges() {
     if (!layout) return;
@@ -303,8 +346,8 @@ export async function render(container, tabId, options = {}) {
     changesTab.setAttribute('aria-label', `Changes${totals.added || totals.removed ? ` +${totals.added} -${totals.removed}` : ''}`);
     changesList.replaceChildren(...files.map(file => {
       const id = layout.sessionId;
-      const revert = el('button', { class: 'forge-small-button forge-revert', text: 'Revert', 'aria-label': `Revert ${file.path}`, disabled: forgeRunning(id) || !!file.unavailable,
-        onclick: async () => { revert.disabled = true; try { if (await revertFile(id, file)) await refreshReviews(); } catch (error) { status.textContent = error.message; } finally { if (revert.isConnected) revert.disabled = forgeRunning(id); } } });
+      const revert = el('button', { class: 'forge-small-button forge-revert', text: 'Revert', 'aria-label': `Revert ${file.path}`, disabled: reviewDisabled(id, file),
+        onclick: () => revertChange(id, file) });
       return el('div', { class: 'forge-change-row', 'data-change-path': file.path }, [el('button', { class: 'forge-change-open', onclick: () => openSurface('diff', file.path, true), title: file.path }, [
         el('span', { class: `forge-change-letter role-${changeRole(file)}`, text: changeRole(file), 'aria-label': ({ M: 'Modified', A: 'Added', D: 'Deleted', U: 'Untracked' })[changeRole(file)] }),
         el('span', { class: 'forge-change-path', text: file.path }), diffCounts(changeTotals([file])),
@@ -454,7 +497,7 @@ export async function render(container, tabId, options = {}) {
           if (tab.sessionId) { await mountForgeEditor(panel, tab, drawTabs); return; }
           const file = await api(`${tab.base}/file?${new URLSearchParams({ path: tab.path })}`);
           if (!disposed && panels.get(tab.id) === panel) panel.replaceChildren(fileView(file));
-        } else panel.replaceChildren(diffView(reviews.get(tab.sessionId)?.find(f => f.path === tab.path) || { path: tab.path, patch: '', hunks: [] }));
+        } else drawDiff(tab, panel);
       } catch (error) { if (!disposed && panels.get(tab.id) === panel) panel.textContent = `Cannot open this tab: ${error.message}`; }
     });
     return panel;
